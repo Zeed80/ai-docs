@@ -4517,22 +4517,6 @@ async def read_spec_by_fragments(
                 bore=bore,
             )
             body.update(feature_result)
-            # ПОСЛЕ update, а не раньше: пазы попадают в тело именно здесь.
-            # Поставленный выше вызов отрабатывал вхолостую — тело ещё не
-            # содержало keyways, и функция молча возвращалась на первой строке.
-            # Поймано живьём: поля появились, но пустые.
-
-            from app.ai.cad_recognize.keyway_standard import ground_keyways
-
-            keyway_summary = ground_keyways(body, unresolved)
-            from app.ai.cad_process_log import record_cad_process_event
-
-            await record_cad_process_event(
-                "reader.keyways",
-                "completed" if keyway_summary["examined"] else "skipped",
-                "Шпоночные пазы сверены со ступенями и ГОСТ 23360",
-                keyway_summary,
-            )
             unresolved.extend(
                 f"малые элементы: {item}"
                 for item in profile_evidence.get("feature_unresolved") or []
@@ -5142,14 +5126,46 @@ def _flag_unconfirmed_outer_bore_diameters(spec: dict) -> dict:
     return spec
 
 
-def _finalize_spec(spec: dict, image_bytes: bytes) -> dict:
+async def _finalize_spec(spec: dict, image_bytes: bytes) -> dict:
     """Shared post-processing chain applied to every read_spec_best_effort exit."""
     from app.ai.cad_recognize.spec_vectorize import assign_stable_feature_ids
 
     enriched = _enrich_post_consensus_source_geometry(spec, image_bytes)
     marked = _mark_observation_only_if_no_geometry(enriched)
     with_ids = assign_stable_feature_ids(marked)
+    # Сверка пазов — здесь, а не в сборке тела: во-первых, идентификаторы
+    # ступеней проставляет строка выше, и раньше `on_section_id` записывался
+    # пустым; во-вторых, это общий хвост ВСЕХ выходов чтения, а сборка тела —
+    # только фрагментный путь, и полное чтение листа сверку не проходило вовсе.
+    summary = _ground_all_keyways(with_ids)
+    # Событием, а не полем спека: ключ вне схемы молча исчезнет на первой же
+    # валидации, а холостая сверка обязана быть видимой — ноль рассмотренных
+    # выглядит как «проверено, всё хорошо».
+    from app.ai.cad_process_log import record_cad_process_event
+
+    await record_cad_process_event(
+        "reader.keyways",
+        "completed" if summary["examined"] else "skipped",
+        "Шпоночные пазы сверены со ступенями и ГОСТ 23360",
+        summary,
+    )
     return _flag_unconfirmed_outer_bore_diameters(with_ids)
+
+
+def _ground_all_keyways(spec: dict) -> dict[str, int]:
+    """Свести пазы со ступенями во всех телах спека."""
+    from app.ai.cad_recognize.keyway_standard import ground_keyways
+
+    unresolved = spec.setdefault("unresolved", [])
+    total = {"examined": 0, "straddling": 0, "corrected_values": 0, "flagged": 0}
+    bodies = [spec.get("main_view"), *(spec.get("parts") or [])]
+    for body in bodies:
+        if not isinstance(body, dict):
+            continue
+        summary = ground_keyways(body, unresolved)
+        for key, value in summary.items():
+            total[key] = total.get(key, 0) + value
+    return total
 
 
 async def read_spec_best_effort(
@@ -5225,7 +5241,7 @@ async def read_spec_best_effort(
             fragments.setdefault("optional_unresolved", []).append(
                 "полное чтение не запускалось: сохранён лучший consensus в пределах времени"
             )
-        return _finalize_spec(fragments, image_bytes)
+        return await _finalize_spec(fragments, image_bytes)
 
     # Ground the whole-sheet fallback in what the fragment pass already
     # confirmed, if anything -- its own schema omits evidence entirely to
@@ -5245,7 +5261,7 @@ async def read_spec_best_effort(
         known_diameters_mm=known_diameters_mm or None,
     )
     if not whole:
-        return _finalize_spec(fragments, image_bytes)
+        return await _finalize_spec(fragments, image_bytes)
     if fragments:
         whole_outer_before = len((whole.get("main_view") or {}).get("outer") or [])
         fragment_outer = len((fragments.get("main_view") or {}).get("outer") or [])
@@ -5285,4 +5301,4 @@ async def read_spec_best_effort(
                 "unresolved": whole.get("unresolved") or [],
             },
         )
-    return _finalize_spec(whole, image_bytes)
+    return await _finalize_spec(whole, image_bytes)

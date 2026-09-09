@@ -230,5 +230,51 @@ def test_the_summary_counts_what_actually_happened():
     summary = ground_keyways(body, [])
 
     assert summary["examined"] == 2
-    assert summary["corrected"] == 1
+    assert summary["corrected_values"] == 1
     assert summary["straddling"] == 0
+
+
+# ── Место вызова: тесты функции его не проверяли ────────────────────────────
+
+
+def test_grounding_runs_on_the_shared_tail_of_every_read_path():
+    """Дефект был не в функции, а в том, ГДЕ её звали.
+
+    Сначала вызов стоял в сборке тела, до того как туда попадают пазы, — и
+    молча возвращался на первой строке. Потом, после переноса ниже, он работал,
+    но записывал пустой `on_section_id`: идентификаторы ступеней проставляются
+    позже, в `assign_stable_feature_ids`. И всё это время сверку проходил
+    только фрагментный путь — полное чтение листа шло мимо неё целиком.
+
+    Общий хвост `_finalize_spec` снимает все три вопроса разом: он идёт после
+    простановки идентификаторов и через него выходят ВСЕ пути чтения.
+    """
+    import inspect
+
+    from app.ai.cad_recognize import spec_fragments
+
+    tail = inspect.getsource(spec_fragments._finalize_spec)
+
+    assert "assign_stable_feature_ids" in tail
+    assert tail.index("assign_stable_feature_ids") < tail.index("_ground_all_keyways")
+
+    read = inspect.getsource(spec_fragments.read_spec_best_effort)
+    # Каждый выход чтения — через общий хвост, иначе путь снова окажется мимо.
+    assert read.count("return await _finalize_spec(") == 3
+    assert "return fragments" not in read
+
+
+def test_every_body_is_grounded_not_just_the_main_view():
+    body = {
+        "outer": OUTER,
+        "keyways": [{"axial_start_mm": 58.0, "length_mm": 12.0, "width_mm": 3.5, "depth_mm": 4.0}],
+    }
+    spec = {"main_view": dict(body), "parts": [dict(body)]}
+
+    from app.ai.cad_recognize.spec_fragments import _ground_all_keyways
+
+    total = _ground_all_keyways(spec)
+
+    assert total["examined"] == 2
+    assert spec["main_view"]["keyways"][0]["width_mm"] == 8.0
+    assert spec["parts"][0]["keyways"][0]["width_mm"] == 8.0

@@ -96,7 +96,7 @@ def ground_keyways(body: dict[str, Any], unresolved: list[str]) -> dict[str, int
     подмены не происходит ни в одном из двух случаев — обе ветки пишут в
     ``unresolved``.
     """
-    summary = {"examined": 0, "straddling": 0, "corrected": 0, "flagged": 0}
+    summary = {"examined": 0, "straddling": 0, "corrected_values": 0, "flagged": 0}
     keyways = [item for item in (body.get("keyways") or []) if isinstance(item, dict)]
     if not keyways:
         return summary
@@ -167,7 +167,7 @@ def _reconcile_section(
                 f"а ГОСТ 23360 даёт {expected:g} мм — проверьте выноску"
             )
             continue
-        summary["corrected"] += 1
+        summary["corrected_values"] += 1
         keyway[field] = expected
         keyway["standard_ref"] = "ГОСТ 23360"
         unresolved.append(
