@@ -1145,7 +1145,12 @@ async def _ask(
 _OCR_MODEL = "glm-ocr:latest"  # fallback only; the assignment decides
 # It repeats its answer when given room, so the budget is small and repeated
 # blocks are collapsed.
+# Прозаический ответ укладывается в семьсот токенов, ответ С КООРДИНАТАМИ — нет:
+# каждая строка несёт ещё четыре числа и служебные символы JSON. Замерено на
+# z4-r4.jpg: при 700 модель вернула 18 токенов и оборвалась, при 3000 — 52,
+# включая «195», от которого зависит вся калибровка листа.
 _OCR_NUM_PREDICT = 700
+_OCR_NUM_PREDICT_GROUNDED = 3000
 
 # Вопрос подбирается под модель, ответ приводится к одному контракту.
 #
@@ -1327,13 +1332,78 @@ def _text_layer_from_answer(answer: str, *, model: str, image: Any, prompt: str 
     )
 
 
-async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
+def _merge_ocr_callouts(callouts: dict, ocr: dict) -> None:
+    """Слить выноски текстового слоя, не теряя их координат.
+
+    Совпадающая по значению выноска не отбрасывается, а ОТДАЁТ свою рамку той,
+    что уже есть. Раньше из двух копий одного числа выживала первая — от
+    общего читателя, без координат, — и рамки терялись ровно на тех значениях,
+    которые оба источника прочитали одинаково, то есть на самых надёжных.
+    Живой z4-r4: 76 выносок в спеке и ни одной с координатами при
+    `grounded: true` у слоя.
+    """
+    for group, key_field in (("dimensions", "value"), ("annotations", "text")):
+        existing_by_key: dict[str, dict] = {}
+        for item in callouts.get(group) or []:
+            if isinstance(item, dict):
+                existing_by_key.setdefault(str(item.get(key_field) or "").strip().lower(), item)
+        fresh: list[dict] = []
+        for item in ocr.get(group) or []:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get(key_field) or "").strip().lower()
+            existing = existing_by_key.get(key)
+            if existing is None:
+                fresh.append(item)
+                existing_by_key[key] = item
+            elif not existing.get("bbox") and item.get("bbox"):
+                existing["bbox"] = item["bbox"]
+        callouts.setdefault(group, []).extend(fresh)
+
+
+def _rescale_callout_boxes(callouts: dict, *, overview_size, source_size) -> None:
+    """Перевести рамки из системы обзора в систему полного листа."""
+    if not source_size or tuple(source_size) == tuple(overview_size):
+        return
+    scale_x = float(source_size[0]) / float(overview_size[0])
+    scale_y = float(source_size[1]) / float(overview_size[1])
+    for group in ("dimensions", "annotations"):
+        for item in callouts.get(group) or []:
+            box = item.get("bbox") if isinstance(item, dict) else None
+            if isinstance(box, (list, tuple)) and len(box) == 4:
+                item["bbox"] = [
+                    round(float(box[0]) * scale_x, 1),
+                    round(float(box[1]) * scale_y, 1),
+                    round(float(box[2]) * scale_x, 1),
+                    round(float(box[3]) * scale_y, 1),
+                ]
+
+
+def _ocr_context_window(default: int = 8192) -> int:
+    """Окно контекста модели текстового слоя из каталога."""
+    try:
+        from app.ai.task_routing import _registry
+
+        key = _ocr_model_key()
+        cap = _registry().models.get(key) if key else None
+        window = getattr(cap, "max_context_tokens", None)
+        return int(window) if window else default
+    except Exception:  # noqa: BLE001 — каталог недоступен: прежнее значение
+        return default
+
+
+async def read_callouts_with_ocr(image, *, router: Any = None, source_size=None) -> dict:
     """Dimensions and annotations transcribed by the document model.
 
     Returns the same shape as the callout question so the two can be merged.
     Lines are deduplicated because the model loops, and nothing is invented:
     a line becomes a dimension only if it carries a number, an annotation only
     if it names a known kind.
+
+    ``source_size`` — размеры ПОЛНОГО листа, если сюда передан уменьшенный
+    обзор. Координаты возвращаются в системе листа: локализаторы работают на
+    полном разрешении, и рамка в масштабе обзора легла бы мимо, что хуже её
+    отсутствия — отсутствие видно, а смещение нет.
     """
     import base64
     import hashlib
@@ -1370,7 +1440,8 @@ async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
             {"model": model, "reason": "model_has_no_vision", "slot": "cad_text_ocr"},
         )
         return {}
-    prompt, _wants_grounding = _ocr_prompt_for(_ocr_model_key())
+    prompt, wants_grounding = _ocr_prompt_for(_ocr_model_key())
+    num_predict = _OCR_NUM_PREDICT_GROUNDED if wants_grounding else _OCR_NUM_PREDICT
     buffer = _io.BytesIO()
     image.save(buffer, format="PNG")
     payload = {
@@ -1381,9 +1452,12 @@ async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
         "think": False,
         "chat_template_kwargs": {"enable_thinking": False},
         "options": {
-            "num_predict": _OCR_NUM_PREDICT,
+            "num_predict": num_predict,
             "temperature": 0,
-            "num_ctx": 8192,
+            # Окно берётся у модели, а не зашивается: этот вызов идёт мимо
+            # роутера, прямо в Ollama, и восьми тысяч ему никто не назначал —
+            # они просто оказались написаны здесь. Модель на слоте держит 65536.
+            "num_ctx": _ocr_context_window(),
         },
     }
     started = time.monotonic()
@@ -1426,6 +1500,10 @@ async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
     # и это видно в слое, а не выясняется потерей значений ниже по конвейеру.
     layer = _text_layer_from_answer(text, model=model, image=image, prompt=prompt)
     callouts = layer.as_callouts()
+    if source_size:
+        _rescale_callout_boxes(
+            callouts, overview_size=(image.width, image.height), source_size=source_size
+        )
     dimensions = callouts["dimensions"]
     annotations = callouts["annotations"]
     await record_cad_process_event(
@@ -4304,28 +4382,18 @@ async def read_spec_by_fragments(
     if shared_layers is not None and "ocr" in shared_layers:
         ocr = shared_layers["ocr"]
     else:
-        ocr = await read_callouts_with_ocr(overview, router=router)
+        ocr = await read_callouts_with_ocr(
+            overview, router=router, source_size=(image.width, image.height)
+        )
         if shared_layers is not None:
             shared_layers["ocr"] = ocr
     if ocr:
-        known = {
-            str((d or {}).get("value") or "").strip().lower()
-            for d in (callouts.get("dimensions") or [])
-        }
-        callouts.setdefault("dimensions", []).extend(
-            d
-            for d in ocr.get("dimensions") or []
-            if str(d.get("value") or "").strip().lower() not in known
-        )
-        known_notes = {
-            str((a or {}).get("text") or "").strip().lower()
-            for a in (callouts.get("annotations") or [])
-        }
-        callouts.setdefault("annotations", []).extend(
-            a
-            for a in ocr.get("annotations") or []
-            if str(a.get("text") or "").strip().lower() not in known_notes
-        )
+        # Совпадающая по значению выноска не отбрасывается, а ОТДАЁТ свои
+        # координаты той, что уже есть. Раньше из двух копий одного числа
+        # выживала первая — от общего читателя, без рамки, — и координаты
+        # текстового слоя терялись ровно на тех значениях, которые оба
+        # источника прочитали одинаково. То есть на самых надёжных.
+        _merge_ocr_callouts(callouts, ocr)
 
     # A free-form "describe everything" pass catches numbers a single
     # schema-constrained _CALLOUT_PROMPT call misses on a dense sheet — see
