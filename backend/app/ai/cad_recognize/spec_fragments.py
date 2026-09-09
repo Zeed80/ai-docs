@@ -4486,6 +4486,12 @@ async def read_spec_by_fragments(
             body["outer"] = outer
         else:
             unresolved.append("ступенчатый контур не прочитан")
+        # Паз фрезеруется в ОДНОЙ ступени, и его сечение однозначно задано её
+        # диаметром. До этого не проверялось ни то, ни другое: паз мог лежать
+        # верхом на границе двух ступеней, а ширина — прийти с чужой выноски.
+        from app.ai.cad_recognize.keyway_standard import ground_keyways
+
+        ground_keyways(body, unresolved)
         if bore:
             body["bore"] = bore
         elif bore_problem:

@@ -158,6 +158,12 @@ class SpecKeyway(BaseModel):
     angle_deg: float = 0.0
     end_type: Literal["closed", "open", "runout"] = "closed"
     standard_ref: str | None = None
+    # На какой ступени лежит паз и нужно ли его смотреть человеку. Поля схемы,
+    # а не приложенные сбоку ключи: консенсус пересобирает спек с нуля и
+    # оставляет только то, что описано контрактом, — иначе пометка молча
+    # исчезала бы на многопроходном пути.
+    on_section_id: str | None = None
+    review_required: bool = False
     evidence: list[SpecEvidence] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -511,12 +517,32 @@ class SpecBody(BaseModel):
                 )
             if groove.depth_mm and max_radius and groove.depth_mm >= max_radius:
                 raise ValueError(f"groove {index} is deeper than the part's radius")
+        stations: list[tuple[float, float, float]] = []
+        position = 0.0
+        for section in self.outer:
+            if not section.length_mm:
+                continue
+            stations.append((position, position + section.length_mm, section.diameter_mm))
+            position += section.length_mm
         for index, keyway in enumerate(self.keyways):
             if keyway.axial_start_mm < 0 or (
                 keyway.axial_start_mm + keyway.length_mm > total_length + 1e-6
             ):
                 raise ValueError(f"keyway {index} runs past the end of the part")
-            if max_radius and keyway.depth_mm >= max_radius:
+            # Глубина сравнивается с радиусом ТОЙ ступени, в которой паз лежит.
+            # Сравнение с самой толстой пропускало паз 4 мм на ступени Ø22
+            # только потому, что где-то на валу есть Ø35.
+            middle = keyway.axial_start_mm + keyway.length_mm / 2.0
+            local = next(
+                (
+                    diameter
+                    for low, high, diameter in stations
+                    if low - 1e-6 <= middle <= high + 1e-6
+                ),
+                None,
+            )
+            radius = (local / 2.0) if local else max_radius
+            if radius and keyway.depth_mm >= radius:
                 raise ValueError(f"keyway {index} is deeper than the part's radius")
         for index, hole in enumerate(self.cross_holes):
             if not (0.0 <= hole.axial_position_mm <= total_length):
@@ -709,7 +735,14 @@ def _whole_sheet_reader_schema() -> dict[str, Any]:
     # review_required/disputed_values are conclusions the CONSENSUS draws about
     # the reads; asking a single read to fill them in would invite it to declare
     # its own answer confirmed.
-    _audit_only = {"evidence", "features", "review_required", "disputed_values", "bbox"}
+    _audit_only = {
+        "evidence",
+        "features",
+        "review_required",
+        "disputed_values",
+        "bbox",
+        "on_section_id",
+    }
 
     def strip_audit_fields(node: Any) -> None:
         if isinstance(node, dict):
