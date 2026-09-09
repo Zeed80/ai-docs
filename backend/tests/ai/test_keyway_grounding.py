@@ -278,3 +278,73 @@ def test_every_body_is_grounded_not_just_the_main_view():
     assert total["examined"] == 2
     assert spec["main_view"]["keyways"][0]["width_mm"] == 8.0
     assert spec["parts"][0]["keyways"][0]["width_mm"] == 8.0
+
+
+# ── Корень целого класса жалоб: профиль короче листа ────────────────────────
+
+
+def test_a_profile_shorter_than_the_sheet_is_reported():
+    """Замерено на `z4-r4.jpg`: ступени дают 153 мм при габарите 195.
+
+    Сорок два миллиметра недочитанной длины сдвигают ВСЁ, что привязано к
+    осевой координате: пазы оказываются на соседних ступенях, канавки — не
+    там, где нарисованы. Оператор видит следствие («пазы не на тех
+    элементах») и правит не ту величину. Проверки на это не было вовсе.
+    """
+    from app.ai.cad_recognize.spec_fragments import _flag_profile_length_mismatch
+
+    spec = {
+        "main_view": {"outer": OUTER},  # 153 мм суммарно
+        "dimensions": [{"value": "195"}, {"value": "22"}],
+    }
+
+    _flag_profile_length_mismatch(spec)
+
+    assert any("профиль короче листа" in item for item in spec["unresolved"])
+    assert any("153" in item and "195" in item for item in spec["unresolved"])
+
+
+def test_a_profile_that_matches_the_sheet_says_nothing():
+    from app.ai.cad_recognize.spec_fragments import _flag_profile_length_mismatch
+
+    spec = {
+        "main_view": {"outer": OUTER},
+        "dimensions": [{"value": "153"}, {"value": "22"}],
+    }
+
+    _flag_profile_length_mismatch(spec)
+
+    assert spec.get("unresolved", []) == []
+
+
+def test_a_diameter_callout_is_not_mistaken_for_the_overall_length():
+    """Ø470 — не длина. Линейные выноски отбираются тем же проходом, что везде."""
+    from app.ai.cad_recognize.spec_fragments import _flag_profile_length_mismatch
+
+    spec = {
+        "main_view": {"outer": OUTER},
+        "dimensions": [{"value": "Ø470"}, {"value": "150"}],
+    }
+
+    _flag_profile_length_mismatch(spec)
+
+    assert spec.get("unresolved", []) == []
+
+
+def test_the_straddle_message_does_not_blame_the_keyway_when_the_step_is_suspect():
+    """Паз, начинающийся ровно на границе ступени, прочитан скорее верно.
+
+    Виновата тогда длина ступени, и посылать человека править паз — значит
+    посылать его править не то.
+    """
+    body = {
+        "outer": OUTER,
+        # Ступень Ø25 идёт 78..93; паз начинается ровно с её начала.
+        "keyways": [{"axial_start_mm": 78.0, "length_mm": 25.0, "width_mm": 8.0, "depth_mm": 4.0}],
+    }
+    unresolved: list[str] = []
+
+    ground_keyways(body, unresolved)
+
+    message = next(item for item in unresolved if "выходит за ступень" in item)
+    assert "под подозрением длина ступени" in message

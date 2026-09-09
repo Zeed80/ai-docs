@@ -125,10 +125,17 @@ def ground_keyways(body: dict[str, Any], unresolved: list[str]) -> dict[str, int
         if not contained:
             summary["straddling"] += 1
             keyway["review_required"] = True
+            # Виноват не обязательно паз. Замерено на z4-r4.jpg: ступени дают
+            # в сумме 153 мм при 195 на листе, то есть длины ступеней недочитаны
+            # — и паз «съезжает» за границу сам, будучи прочитанным верно.
+            # Называть виновным паз значило бы отправить человека править не то.
+            suspect = (
+                "длина ступени" if abs(start - low) <= 1e-6 else "положение паза или длина ступени"
+            )
             unresolved.append(
                 f"шпоночный паз {index}: {start:g}..{start + length:g} мм выходит за "
                 f"ступень Ø{diameter:g} ({low:g}..{high:g} мм) — паз фрезеруется "
-                "в одной ступени, положение или длина прочитаны неверно"
+                f"в одной ступени; под подозрением {suspect}"
             )
         if not diameter:
             continue

@@ -1469,6 +1469,15 @@ async def read_callouts_with_ocr(image, *, router: Any = None) -> dict:
 # только до «ГОСТ 1050», а хвост «‑2014» доезжал до списка размеров как число.
 # Живой прогон: проверка калибровки честно отвергла масштаб, но причиной
 # назвала «лист несёт больший размер 2014 мм» — год издания стандарта.
+# Насколько прочитанный профиль может недобрать до габарита на листе, оставаясь
+# тем же профилем. Порог СВОЙ, а не позаимствованный у проверки калибровки:
+# там полуторакратный разрыв отличает выносной элемент 5:1 от главного вида,
+# здесь же вопрос другой — накопилась ли погрешность или потеряна ступень.
+# Длины ступеней читаются по отдельности и каждая может быть неточна на
+# проценты; на восьми ступенях это даёт единицы процентов, но не десятки.
+# Живой z4-r4.jpg недобирал 27 % — это потерянная длина, а не округление.
+_PROFILE_SHORTFALL_TOLERANCE = 0.1
+
 _STANDARD_REFERENCE = re.compile(
     r"(?:ГОСТ|ОСТ|СТП|ТУ|ISO|DIN|EN|ANSI|ASME)\s*[Рр]?\s*[\d]+"
     r"(?:[.\u2010-\u2015\u2212\-]\d+)*",
@@ -5137,6 +5146,7 @@ async def _finalize_spec(spec: dict, image_bytes: bytes) -> dict:
     # ступеней проставляет строка выше, и раньше `on_section_id` записывался
     # пустым; во-вторых, это общий хвост ВСЕХ выходов чтения, а сборка тела —
     # только фрагментный путь, и полное чтение листа сверку не проходило вовсе.
+    _flag_profile_length_mismatch(with_ids)
     summary = _ground_all_keyways(with_ids)
     # Событием, а не полем спека: ключ вне схемы молча исчезнет на первой же
     # валидации, а холостая сверка обязана быть видимой — ноль рассмотренных
@@ -5150,6 +5160,50 @@ async def _finalize_spec(spec: dict, image_bytes: bytes) -> dict:
         summary,
     )
     return _flag_unconfirmed_outer_bore_diameters(with_ids)
+
+
+def _flag_profile_length_mismatch(spec: dict) -> None:
+    """Сумма ступеней обязана сходиться с габаритом, который несёт лист.
+
+    Проверки не было, а расхождение объясняет целый класс жалоб. Замерено на
+    `z4-r4.jpg`: ступени дают в сумме 153 мм при габарите 195 — сорок два
+    миллиметра недочитанной длины. От этого «съезжает» всё, что привязано к
+    осевой координате: шпоночные пазы оказываются на соседних ступенях,
+    канавки — не там, где нарисованы. Оператор при этом видит следствие
+    («пазы не на тех элементах») и правит не ту величину.
+
+    Габаритом считается наибольшая линейная выноска — та же посылка, на
+    которой стоит проверка калибровки, и по той же причине: диаметры,
+    шероховатости и углы из линейных выносок уже отсеяны.
+    """
+    body = spec.get("main_view")
+    if not isinstance(body, dict):
+        return
+    sections = [item for item in (body.get("outer") or []) if isinstance(item, dict)]
+    total = sum(
+        float(item["length_mm"])
+        for item in sections
+        if isinstance(item.get("length_mm"), (int, float))
+        and not isinstance(item.get("length_mm"), bool)
+    )
+    if total <= 0:
+        return
+    callouts = {
+        "dimensions": spec.get("dimensions") or [],
+        "annotations": spec.get("annotations") or [],
+    }
+    linear = _callout_numbers(callouts, "linear")
+    if not linear:
+        return
+    stated = max(linear)
+    if stated <= total * (1.0 + _PROFILE_SHORTFALL_TOLERANCE):
+        return
+    unresolved = spec.setdefault("unresolved", [])
+    unresolved.append(
+        f"профиль короче листа: ступени дают {total:g} мм, а наибольший линейный "
+        f"размер на чертеже — {stated:g} мм; осевые положения пазов, канавок и "
+        "отверстий смещены на эту разницу"
+    )
 
 
 def _ground_all_keyways(spec: dict) -> dict[str, int]:
