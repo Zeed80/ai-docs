@@ -2033,6 +2033,48 @@ async def _derive_solid_views(candidate, report: dict) -> dict | None:
     }
 
 
+def _candidate_without_disputed_cuts(candidate, spec: dict):
+    """Тот же feature tree без вырезов, которые чтение пометило спорными.
+
+    Спорный — это `review_required` у шпоночного паза: чтение само сказало,
+    что паз не укладывается в одну ступень, то есть его положение или длина
+    прочитаны неверно. Такой вырез и без ядра под вопросом, поэтому именно им
+    жертвуют, когда ядро отказалось собрать деталь целиком.
+
+    Возвращает ``None``, если жертвовать нечем: тогда отказ ядра остаётся
+    отказом, а не превращается в тихо урезанную деталь.
+    """
+    # Пометка берётся из СПЕКА, а не из параметров элемента: параметры входят
+    # в канонический хэш feature tree, и лишнее поле в них ломает
+    # детерминированный golden-гейт EMG — проверено, ломает.
+    starts = {
+        round(float(item["axial_start_mm"]), 3)
+        for body in [spec.get("main_view"), *(spec.get("parts") or [])]
+        if isinstance(body, dict)
+        for item in (body.get("keyways") or [])
+        if isinstance(item, dict)
+        and item.get("review_required")
+        and isinstance(item.get("axial_start_mm"), (int, float))
+    }
+    disputed = [
+        feature
+        for feature in candidate.features
+        if feature.kind == "keyway"
+        and round(float((feature.params or {}).get("axial_start_mm", -1)), 3) in starts
+    ]
+    if not disputed:
+        return None
+    kept = [feature for feature in candidate.features if feature not in disputed]
+    dropped = [
+        "шпоночный паз "
+        f"{(feature.params or {}).get('axial_start_mm')}"
+        f"..{(feature.params or {}).get('axial_start_mm', 0) + (feature.params or {}).get('length_mm', 0)}"
+        " мм — не построен: ядро отклонило сборку с ним"
+        for feature in disputed
+    ]
+    return candidate.model_copy(update={"features": kept}), dropped
+
+
 async def _build_spec_solid(
     spec: dict,
     generation_id: str,
@@ -2269,24 +2311,62 @@ async def _build_spec_solid(
             },
         )
     except CadKernelError as exc:
-        logger.warning("cad_solid_failed", generation_id=generation_id, error=str(exc))
-        await record_cad_process_event(
-            "kernel.compile",
-            "failed",
-            "CAD-ядро отклонило feature tree",
-            {"error": str(exc)[:400]},
-        )
-        return {
-            "built": False,
-            "build_status": "blocked",
-            "error": str(exc)[:400],
-            "label": candidate.label,
-            **(
-                {"_engineering_model_graph": engineering_graph}
-                if engineering_graph is not None
-                else {}
-            ),
-        }
+        # Ядро — единственный судья тому, режется ли эта геометрия. Правило по
+        # признаку выводить нечем: замерено, что паз 8 мм через уступ Ø35/Ø30
+        # даёт невалидное тело, он же внутри одной ступени строится, а на
+        # эталонном detal_126 через уступ Ø80→Ø72 спокойно проходит паз 12 мм.
+        # Поэтому вместо догадки — вторая попытка без тех элементов, которые
+        # ЧТЕНИЕ САМО пометило противоречивыми (review_required). Ничего не
+        # выдумывается и не подставляется: спорное откладывается человеку, а
+        # остальная деталь перестаёт пропадать целиком из-за одного выреза.
+        retry = _candidate_without_disputed_cuts(candidate, spec)
+        if retry is not None:
+            await record_cad_process_event(
+                "kernel.compile",
+                "review_required",
+                "Ядро отклонило сборку; повтор без спорных вырезов",
+                {"error": str(exc)[:200], "dropped": retry[1]},
+            )
+            try:
+                artifacts = await compile_candidate(
+                    retry[0],
+                    confirm_assumptions=confirm_assumptions,
+                    metadata={
+                        "generation_id": generation_id,
+                        "source": "spec_reader",
+                        "preview_review_required": True,
+                        "excluded_geometry": " | ".join(retry[1]),
+                    },
+                )
+                candidate = retry[0]
+                preview_mode = True
+                preview_gate = {
+                    **preview_gate,
+                    "excluded": [*preview_gate.get("excluded", []), *retry[1]],
+                }
+            except Exception:  # noqa: BLE001 — не помогло, отдаём исходный отказ
+                artifacts = None
+        else:
+            artifacts = None
+        if artifacts is None:
+            logger.warning("cad_solid_failed", generation_id=generation_id, error=str(exc))
+            await record_cad_process_event(
+                "kernel.compile",
+                "failed",
+                "CAD-ядро отклонило feature tree",
+                {"error": str(exc)[:400]},
+            )
+            return {
+                "built": False,
+                "build_status": "blocked",
+                "error": str(exc)[:400],
+                "label": candidate.label,
+                **(
+                    {"_engineering_model_graph": engineering_graph}
+                    if engineering_graph is not None
+                    else {}
+                ),
+            }
     except Exception as exc:  # noqa: BLE001
         logger.warning("cad_solid_error", generation_id=generation_id, error=str(exc))
         await record_cad_process_event(

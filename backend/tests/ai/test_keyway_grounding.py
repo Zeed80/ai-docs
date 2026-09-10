@@ -357,3 +357,77 @@ def test_the_straddle_message_does_not_blame_the_keyway_when_the_step_is_suspect
 
     message = next(item for item in unresolved if "выходит за ступень" in item)
     assert "под подозрением длина ступени" in message
+
+
+# ── Отказ ядра: жертвуем спорным вырезом, а не всей деталью ─────────────────
+
+
+def test_the_retry_drops_only_the_cuts_the_reader_itself_disputed():
+    """Правило по признаку вывести нечем — судьёй остаётся ядро.
+
+    Замерено: паз 8 мм через уступ Ø35/Ø30 даёт невалидное тело, он же внутри
+    одной ступени строится, а на эталонном detal_126 через уступ Ø80→Ø72
+    спокойно проходит паз 12 мм. Одного правила из этого не следует, а запрет
+    по неверному признаку выбрасывает законную геометрию.
+
+    Поэтому при отказе ядра жертвуют тем, что ЧТЕНИЕ САМО пометило спорным.
+    Ничего не выдумывается: спорное откладывается человеку, а остальная деталь
+    перестаёт пропадать целиком из-за одного выреза.
+    """
+    from app.ai.cad_ir.feature_tree import Feature3D, FeatureTreeCandidate
+    from app.tasks.cad_trace import _candidate_without_disputed_cuts
+
+    def keyway(start: float) -> Feature3D:
+        return Feature3D(
+            kind="keyway",
+            params={"axial_start_mm": start, "length_mm": 20.0, "width_mm": 8.0, "depth_mm": 4.0},
+        )
+
+    candidate = FeatureTreeCandidate(
+        label="test",
+        score=1.0,
+        features=[keyway(46.0), keyway(120.0), Feature3D(kind="chamfer", params={})],
+    )
+    spec = {
+        "main_view": {
+            "keyways": [
+                {"axial_start_mm": 46.0, "review_required": True},
+                {"axial_start_mm": 120.0},
+            ]
+        }
+    }
+
+    retry, dropped = _candidate_without_disputed_cuts(candidate, spec)
+
+    kinds = [(f.kind, (f.params or {}).get("axial_start_mm")) for f in retry.features]
+    assert ("keyway", 46.0) not in kinds
+    assert ("keyway", 120.0) in kinds  # бесспорный паз остаётся
+    assert ("chamfer", None) in kinds  # прочая геометрия не трогается
+    assert len(dropped) == 1 and "46" in dropped[0]
+
+
+def test_nothing_disputed_means_the_refusal_stays_a_refusal():
+    """Иначе отказ ядра превратился бы в тихо урезанную деталь."""
+    from app.ai.cad_ir.feature_tree import Feature3D, FeatureTreeCandidate
+    from app.tasks.cad_trace import _candidate_without_disputed_cuts
+
+    candidate = FeatureTreeCandidate(
+        label="test",
+        score=1.0,
+        features=[Feature3D(kind="keyway", params={"axial_start_mm": 46.0})],
+    )
+
+    assert _candidate_without_disputed_cuts(candidate, {"main_view": {"keyways": []}}) is None
+
+
+def test_the_flag_never_enters_the_feature_params():
+    """Параметры входят в канонический хэш — лишнее поле ломает golden-гейт.
+
+    Проверено: положив пометку в params, я уронил детерминированный
+    четырёхдоменный гейт EMG. Она берётся из спека.
+    """
+    import inspect
+
+    from app.ai import cad_solid
+
+    assert "review_required" not in inspect.getsource(cad_solid._cut_features)
