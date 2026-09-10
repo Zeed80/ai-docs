@@ -138,6 +138,12 @@ def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
         views.append(section)
     elif part_class in ("flange", "plate"):
         views.append({"kind": "section", "label": "А-А", "section_symbol": "А"})
+        # Вид ВДОЛЬ оси выдавливания — это и есть пластина в плане: контур,
+        # отверстия, окружность болтов, прорези. Его не было вовсе: лист нёс
+        # только главный вид и разрез, оба ребром, и фланец Ø250 с шестью
+        # отверстиями перечерчивался полоской 12 мм. `side` у ядра смотрит
+        # вдоль −Z, куда деталь и выдавлена.
+        views.append({"kind": "side"})
 
     requested = {str(view.get("kind")) for view in source_views}
     # A view the reader saw on the source sheet is reproduced. "top" used to be
@@ -385,7 +391,7 @@ def _dimension_requests(drawing: dict, spec: dict, plan: SheetPlan) -> list[dict
 
     parts = _rotation_parts(spec)
     if not parts:
-        return requests
+        return _prismatic_dimension_requests(views, spec, plan)
     outer = parts[0].get("outer") or []
     if not outer:
         return requests
@@ -442,6 +448,195 @@ def _dimension_requests(drawing: dict, spec: dict, plan: SheetPlan) -> list[dict
             if overall is not None:
                 requests.append(overall)
     return requests
+
+
+# Углы диаметральных линий для концентрических окружностей, по очереди.
+_CONCENTRIC_ANGLES = (45.0, 135.0, 20.0, 160.0, 70.0, 110.0)
+
+
+def _diameters_from_circles(drawing: dict, requests: list[dict], plan: SheetPlan) -> None:
+    """Диаметр окружности, который TechDraw без GUI меряет как ноль.
+
+    Размер типа ``Diameter`` на окружности вида headless-сборка TechDraw
+    возвращает со значением 0 — и лист справедливо отбрасывал его как
+    неизмеренный. У вала это не проявлялось: там диаметры меряются парой
+    образующих. А у фланца пропадали ВСЕ диаметры — наружный, центрального
+    отверстия, отверстий под болты.
+
+    Значение от этого не становится выдуманным: окружность ядро уже измерило,
+    проецируя вид, её радиус лежит в геометрии вида. Размер строится по ней —
+    диаметральная линия через центр под 45°, значение 2r / масштаб листа.
+    """
+    import math
+
+    dimensions = drawing.get("dimensions") or []
+    ratio = plan.ratio or 1.0
+    wanted = [
+        request
+        for request in requests
+        if request.get("kind") == "Diameter" and request.get("_circle")
+    ]
+    for request in wanted:
+        circle = request["_circle"]
+        radius = float(circle.get("radius") or 0.0)
+        if radius <= 0:
+            continue
+        # Тот же размер мог и измериться — тогда он уже стоит.
+        present = any(
+            item.get("view_index") == request["view_index"]
+            and item.get("kind") == "Diameter"
+            and isinstance(item.get("value_mm"), (int, float))
+            and abs(float(item["value_mm"]) - 2.0 * radius / ratio) <= 0.05
+            for item in dimensions
+        )
+        if present:
+            continue
+        cu, cv = (float(value) for value in circle.get("center") or (0.0, 0.0))
+        # Концентрические окружности — под РАЗНЫМИ углами: под одним 45° их
+        # подписи ложились в центр друг на друга («Ø2560» из Ø250 и Ø66).
+        concentric = sum(
+            1
+            for item in dimensions
+            if item.get("measured_by") == "view_circle"
+            and item.get("view_index") == request["view_index"]
+            and item.get("_centre") == [round(cu, 3), round(cv, 3)]
+        )
+        angle = math.radians(_CONCENTRIC_ANGLES[concentric % len(_CONCENTRIC_ANGLES)])
+        dx, dy = radius * math.cos(angle), radius * math.sin(angle)
+        # Убрать ноль, который вернул TechDraw за этот же запрос: нарисованный,
+        # он был бы выносной линией с «0».
+        for item in list(dimensions):
+            if (
+                item.get("view_index") == request["view_index"]
+                and item.get("kind") == "Diameter"
+                and not item.get("value_mm")
+            ):
+                dimensions.remove(item)
+                break
+        dimensions.append(
+            {
+                "view_index": request["view_index"],
+                "kind": "Diameter",
+                "label": "",
+                "anchors_mm": [[cu - dx, cv - dy], [cu + dx, cv + dy]],
+                "value_mm": round(2.0 * radius / ratio, 3),
+                "measured_by": "view_circle",
+                "_centre": [round(cu, 3), round(cv, 3)],
+            }
+        )
+    drawing["dimensions"] = dimensions
+
+
+def _prismatic_dimension_requests(
+    views: list[dict], spec: dict, plan: SheetPlan
+) -> list[dict[str, Any]]:
+    """Размеры пластины и фланца: контур, толщина, диаметры отверстий.
+
+    Раньше их не было НИ ОДНОГО: простановка выходила сразу, если деталь не
+    тело вращения, и перечерченная пластина уходила пользователю картинкой без
+    размеров. Здесь то, что меряется по рёбрам вида: диаметры — по окружностям,
+    ширина и высота — между крайними рёбрами вида в плане, толщина — между
+    крайними рёбрами вида ребром. Координаты отверстий и окружность болтов —
+    не рёбра (центр отверстия и PCD ядро как ребро не назовёт), это следующий шаг.
+    """
+    from app.ai.cad_recognize.spec_vectorize import _prismatic_profiles
+
+    profiles = _prismatic_profiles(spec)
+    if not profiles:
+        return []
+    profile = profiles[0]
+    ratio = plan.ratio or 1.0
+
+    wanted_diameters: list[float] = []
+    if profile.get("shape") == "circle" and profile.get("diameter_mm"):
+        wanted_diameters.append(float(profile["diameter_mm"]))
+    for hole in profile.get("holes") or []:
+        if hole.get("diameter_mm"):
+            wanted_diameters.append(float(hole["diameter_mm"]))
+    for pattern in profile.get("hole_patterns") or []:
+        if pattern.get("hole_diameter_mm"):
+            wanted_diameters.append(float(pattern["hole_diameter_mm"]))
+    wanted_diameters = sorted(set(wanted_diameters))
+
+    # Один размер — один раз на ЛИСТ. Словарь заводился заново для каждого
+    # вида, и толщина 16 вставала дважды, ширина 60 — трижды.
+    extent = {
+        "width": profile.get("width_mm") if profile.get("shape") == "rectangle" else None,
+        "height": profile.get("height_mm") if profile.get("shape") == "rectangle" else None,
+        "thickness": profile.get("thickness_mm"),
+    }
+    requests: list[dict[str, Any]] = []
+    for view_index, view in enumerate(views):
+        if view_index in plan.scaffold_views:
+            continue
+        for item in view.get("visible") or []:
+            index = item.get("edge_index")
+            if index is None or item.get("type") != "circle" or not wanted_diameters:
+                continue
+            match = _closest(2.0 * float(item.get("radius") or 0.0) / ratio, wanted_diameters)
+            if match is None:
+                continue
+            wanted_diameters.remove(match)
+            requests.append(
+                {
+                    "view_index": view_index,
+                    "edge_index": int(index),
+                    "kind": "Diameter",
+                    "label": "",
+                    "_nominal_mm": match,
+                    "_is_diameter": True,
+                    # Окружность уже измерена ядром при проекции вида — если
+                    # TechDraw не измерит сам размер, строим его по ней.
+                    "_circle": {
+                        "center": list(item.get("center") or [0.0, 0.0]),
+                        "radius": float(item.get("radius") or 0.0),
+                    },
+                }
+            )
+        spans = _extreme_edge_pairs(view)
+        for axis, (span_mm, first, second) in spans.items():
+            size = span_mm / ratio
+            for name, value in extent.items():
+                if not value or abs(size - float(value)) > max(0.05, float(value) * 0.01):
+                    continue
+                extent[name] = None  # один размер — один раз на лист
+                requests.append(
+                    {
+                        "view_index": view_index,
+                        "edge_index": first,
+                        "second_edge_index": second,
+                        "kind": "DistanceX" if axis == "u" else "DistanceY",
+                        "label": "",
+                        "_nominal_mm": float(value),
+                        "_is_diameter": False,
+                    }
+                )
+                break
+    return requests
+
+
+def _extreme_edge_pairs(view: dict) -> dict[str, tuple[float, int, int]]:
+    """Самые удалённые друг от друга рёбра вида по u и по v: габарит вида."""
+    verticals: list[tuple[float, int]] = []
+    horizontals: list[tuple[float, int]] = []
+    for item in view.get("visible") or []:
+        index = item.get("edge_index")
+        points = item.get("points") or []
+        if index is None or item.get("type") != "line" or len(points) != 2:
+            continue
+        (u1, v1), (u2, v2) = points
+        if abs(u2 - u1) <= 1e-6:
+            verticals.append((float(u1), int(index)))
+        elif abs(v2 - v1) <= 1e-6:
+            horizontals.append((float(v1), int(index)))
+    pairs: dict[str, tuple[float, int, int]] = {}
+    if len(verticals) >= 2:
+        verticals.sort()
+        pairs["u"] = (verticals[-1][0] - verticals[0][0], verticals[0][1], verticals[-1][1])
+    if len(horizontals) >= 2:
+        horizontals.sort()
+        pairs["v"] = (horizontals[-1][0] - horizontals[0][0], horizontals[0][1], horizontals[-1][1])
+    return pairs
 
 
 def _step_length_requests(
@@ -773,6 +968,7 @@ async def build_sheet_from_solid(
         if dimensioned and dimensioned.get("views"):
             drawing = dimensioned
             warnings = list(drawing.get("warnings") or [])
+    _diameters_from_circles(drawing, requests, plan)
     # A dimension TechDraw could not measure comes back reading zero. Drawn, it
     # is a stray witness line with "0" on it — worse than the dimension being
     # absent, because a reader has to work out that it means nothing.

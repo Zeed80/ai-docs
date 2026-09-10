@@ -26,6 +26,44 @@ class ProjectionMismatch(RuntimeError):
     """A derived view does not measure what the solid measures."""
 
 
+def _arc_image_angles(
+    center: Any,
+    first: Any,
+    last: Any,
+    mid: Any = None,
+) -> tuple[float, float]:
+    """Углы дуги в кадре IR (y вниз), от начала к концу по возрастанию угла.
+
+    Ядро отдаёт дугу центром, радиусом и двумя концами — направления в этом
+    нет. Прежний перевод приводил оба угла к 0…360° и СОРТИРОВАЛ их, отбрасывая
+    направление: четверть окружности от 0° до 270° (то есть до −90°) выходила
+    дугой на 270°. Так рисовался правый конец каждой прорези и каждый
+    скруглённый угол пластины — в PNG, SVG и DXF.
+
+    Точка на середине дуги снимает неоднозначность полностью. Без неё берётся
+    меньшая дуга (≤ 180°): так нарисована любая прорезь и скругление, а дуги
+    больше полуокружности ядро теперь отдаёт вместе с серединой. Конец может
+    быть больше 360°: переход через 0° честно остаётся переходом.
+    """
+    import math
+
+    cu, cv = (float(value) for value in center)
+
+    def angle(point: Any) -> float:
+        # Кадр IR — y вниз, поэтому v отражается ДО atan2, а не после.
+        return math.degrees(math.atan2(-(float(point[1]) - cv), float(point[0]) - cu)) % 360.0
+
+    a_first, a_last = angle(first), angle(last)
+    forward = (a_last - a_first) % 360.0
+    if mid is not None:
+        through_mid = (angle(mid) - a_first) % 360.0 <= forward
+    else:
+        through_mid = forward <= 180.0
+    if through_mid:
+        return a_first, a_first + forward
+    return a_last, a_last + (360.0 - forward)
+
+
 def _entities_from_items(
     items: list[dict[str, Any]],
     *,
@@ -62,16 +100,13 @@ def _entities_from_items(
                 )
             )
         elif kind == "arc":
+            start, end = _arc_image_angles(
+                item["center"],
+                item["points"][0],
+                item["points"][-1],
+                item.get("mid"),
+            )
             cu, cv = item["center"]
-            (u1, v1), (u2, v2) = item["points"][0], item["points"][-1]
-            import math
-
-            # Angles are measured in the flipped (y-down) frame the IR uses, so
-            # they are computed AFTER the flip rather than converted afterwards.
-            start = math.degrees(math.atan2(-(v1 - cv), u1 - cu)) % 360.0
-            end = math.degrees(math.atan2(-(v2 - cv), u2 - cu)) % 360.0
-            if end < start:
-                start, end = end, start
             entities.append(
                 Arc(
                     center=to_px(cu, cv),
@@ -456,16 +491,23 @@ def dimensions_from_kernel(
         # Offset the dimension line perpendicular to what is being measured,
         # away from the part: a dimension drawn ON the contour is unreadable.
         nu, nv = -dv / span, du / span
-        ou, ov = nu * DIM_OFFSET_MM, nv * DIM_OFFSET_MM
-        eu, ev = nu * (DIM_OFFSET_MM + DIM_EXTENSION_MM), nv * (DIM_OFFSET_MM + DIM_EXTENSION_MM)
+        # Диаметр окружности идёт ЧЕРЕЗ центр, по самой окружности — без
+        # отступа и без выносных, как по ГОСТ 2.307. Сдвинутый в сторону, он
+        # мерил бы хорду, а не диаметр.
+        through_centre = str(item.get("kind") or "") == "Diameter"
+        offset = 0.0 if through_centre else DIM_OFFSET_MM
+        extension = 0.0 if through_centre else DIM_EXTENSION_MM
+        ou, ov = nu * offset, nv * offset
+        eu, ev = nu * (offset + extension), nv * (offset + extension)
 
         style = {"line_class": "dim", "width_class": "thin", **_ORIGIN}
         # Witness lines from the feature out past the dimension line. They
         # start at the ORIGINAL anchor: for a DistanceX between end faces at
         # different heights the witness lines differ in length, and that is
         # exactly what keeps the dimension line itself horizontal.
-        entities.append(Segment(p1=to_point(a1u, a1v), p2=to_point(u1 + eu, v1 + ev), **style))
-        entities.append(Segment(p1=to_point(a2u, a2v), p2=to_point(u2 + eu, v2 + ev), **style))
+        if not through_centre:
+            entities.append(Segment(p1=to_point(a1u, a1v), p2=to_point(u1 + eu, v1 + ev), **style))
+            entities.append(Segment(p1=to_point(a2u, a2v), p2=to_point(u2 + eu, v2 + ev), **style))
         # The dimension line itself.
         entities.append(
             Segment(p1=to_point(u1 + ou, v1 + ov), p2=to_point(u2 + ou, v2 + ov), **style)
@@ -501,8 +543,11 @@ def dimensions_from_kernel(
         )
         semantic = parse_dimension(text) or {}
         if text:
-            mid_u = (u1 + u2) / 2.0 + ou + nu * 1.5
-            mid_v = (v1 + v2) / 2.0 + ov + nv * 1.5
+            # Подпись диаметра окружности — не в центре, а ближе к концу линии:
+            # в центре сходятся все концентрические размеры.
+            share = 0.75 if through_centre else 0.5
+            mid_u = u1 + (u2 - u1) * share + ou + nu * 1.5
+            mid_v = v1 + (v2 - v1) * share + ov + nv * 1.5
             entities.append(
                 TextEntity(
                     position=to_point(mid_u, mid_v),

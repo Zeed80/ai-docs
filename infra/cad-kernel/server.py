@@ -2471,11 +2471,17 @@ def _project_edge(
         closed = len(edge.Vertexes) <= 1 or points[0] == points[-1]
         if closed:
             return {"type": "circle", "center": centre, "radius": round(circle.Radius, 6)}
+        # Середина дуги: без неё по центру и двум концам нельзя понять, какую из
+        # двух дуг имели в виду — меньшую или большую. Конвертер листа
+        # сортировал углы и на дуге через 0° рисовал три четверти окружности
+        # вместо четверти (правый конец каждой прорези пластины).
+        mid = edge.valueAt((edge.FirstParameter + edge.LastParameter) / 2.0)
         return {
             "type": "arc",
             "center": centre,
             "radius": round(circle.Radius, 6),
             "points": points,
+            "mid": uv(mid),
         }
     # Anything else (spline silhouette, edge-on circle) is sampled along the edge.
     try:

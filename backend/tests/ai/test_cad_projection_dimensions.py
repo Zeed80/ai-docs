@@ -89,3 +89,38 @@ def test_the_drawn_dimension_line_is_horizontal():
     dimension_line = segments[2]  # две выносные, затем размерная
 
     assert dimension_line.p1.y == dimension_line.p2.y
+
+
+# ── Дуга: направление не теряется ───────────────────────────────────────────
+
+
+def test_a_quarter_arc_through_zero_is_a_quarter_not_three_quarters():
+    """Правый конец прорези пластины рисовался дугой на 270°.
+
+    Ядро отдаёт полукруг двумя четвертями; вторая идёт от 0° к −90°. Перевод
+    приводил углы к 0…360 и сортировал — выходила дуга 0→270.
+    """
+    from app.ai.cad_projection import _arc_image_angles
+
+    # Центр (12.5, -15), от (15.5, -15) к (12.5, -12): v вверх → в кадре IR
+    # (y вниз) это 0° и 270°, и настоящая дуга — четверть 270→360.
+    start, end = _arc_image_angles((12.5, -15.0), (15.5, -15.0), (12.5, -12.0))
+
+    assert end - start == 90.0
+    assert (start, end) == (270.0, 360.0)
+
+
+def test_the_midpoint_decides_for_an_arc_longer_than_a_half_circle():
+    from app.ai.cad_projection import _arc_image_angles
+
+    # Три четверти окружности: концы те же, середина — с противоположной стороны.
+    start, end = _arc_image_angles((0.0, 0.0), (1.0, 0.0), (0.0, 1.0), mid=(-0.7071, -0.7071))
+
+    assert round(end - start) == 270
+
+
+def test_without_a_midpoint_the_minor_arc_is_taken():
+    from app.ai.cad_projection import _arc_image_angles
+
+    start, end = _arc_image_angles((0.0, 0.0), (0.0, 1.0), (1.0, 0.0))
+    assert round(end - start) == 90

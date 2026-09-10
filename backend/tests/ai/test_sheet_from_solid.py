@@ -589,3 +589,122 @@ def test_a_groove_wall_next_to_a_shoulder_does_not_stand_in_for_it():
     requests = _step_length_requests(view, 0, outer, [18.0], ratio=1.0)
 
     assert requests == []
+
+
+# ── Пластины и фланцы (найдено генератором эталона) ─────────────────────────
+
+
+def test_a_flat_part_is_drawn_in_plan_too_not_only_edge_on():
+    """Фланец Ø250 с шестью отверстиями перечерчивался полоской 12 мм.
+
+    Лист нёс главный вид и разрез — оба ребром. Вида вдоль оси выдавливания,
+    где видны контур, отверстия и окружность болтов, не было вовсе.
+    """
+    assert any(view["kind"] == "side" for view in plan_views("flange", _FLANGE))
+    assert any(view["kind"] == "side" for view in plan_views("plate", _FLANGE))
+
+
+def test_a_flat_part_gets_its_outline_thickness_and_hole_sizes():
+    """Простановка выходила сразу, если деталь не тело вращения: НИ ОДНОГО размера."""
+    from app.ai.cad_ir.sheet_from_solid import _prismatic_dimension_requests
+
+    spec = {
+        "main_view": {
+            "type": "пластина",
+            "profile": {
+                "shape": "rectangle",
+                "width_mm": 60.0,
+                "height_mm": 100.0,
+                "thickness_mm": 16.0,
+                "holes": [{"center_x_mm": 10.0, "center_y_mm": 5.0, "diameter_mm": 5.5}],
+            },
+        }
+    }
+    plan = plan_sheet(spec, {"bounds_mm": {"x": 60, "y": 100, "z": 16}})
+    plan.ratio, plan.scaffold_views = 1.0, set()
+    edge_view = {"visible": _lines([(1, (0, 0), (0, 60)), (2, (16, 0), (16, 60))])}
+    plan_view = {
+        "visible": [
+            *_lines([(3, (0, 0), (0, 100)), (4, (60, 0), (60, 100))]),
+            *_lines([(5, (0, 0), (60, 0)), (6, (0, 100), (60, 100))]),
+            {"type": "circle", "edge_index": 7, "center": [40.0, 55.0], "radius": 2.75},
+        ]
+    }
+    requests = _prismatic_dimension_requests([edge_view, plan_view], spec, plan)
+    sizes = sorted(request["_nominal_mm"] for request in requests)
+
+    assert sizes == [5.5, 16.0, 60.0, 100.0]
+
+
+def test_each_size_is_dimensioned_once_per_sheet_not_once_per_view():
+    """Толщина 16 вставала дважды, ширина 60 — трижды."""
+    from app.ai.cad_ir.sheet_from_solid import _prismatic_dimension_requests
+
+    spec = {
+        "main_view": {
+            "profile": {
+                "shape": "rectangle",
+                "width_mm": 60.0,
+                "height_mm": 100.0,
+                "thickness_mm": 16.0,
+            }
+        }
+    }
+    plan = plan_sheet(spec, {"bounds_mm": {"x": 60, "y": 100, "z": 16}})
+    plan.ratio, plan.scaffold_views = 1.0, set()
+    same = {"visible": _lines([(1, (0, 0), (0, 60)), (2, (16, 0), (16, 60))])}
+    requests = _prismatic_dimension_requests([same, same, same], spec, plan)
+
+    assert [request["_nominal_mm"] for request in requests].count(16.0) == 1
+
+
+def test_a_diameter_techdraw_measured_as_zero_is_rebuilt_from_the_view_circle():
+    """Headless TechDraw меряет Diameter на окружности как 0 — пропадали ВСЕ Ø фланца.
+
+    Значение не выдумывается: радиус окружности ядро уже измерило при проекции.
+    """
+    from app.ai.cad_ir.sheet_from_solid import _diameters_from_circles
+
+    plan = plan_sheet(_FLANGE, _FLANGE_REPORT)
+    plan.ratio = 0.5
+    drawing = {"dimensions": [{"view_index": 2, "kind": "Diameter", "value_mm": 0.0}]}
+    requests = [
+        {
+            "view_index": 2,
+            "kind": "Diameter",
+            "_nominal_mm": 250.0,
+            "_circle": {"center": [0.0, 0.0], "radius": 62.5},
+        }
+    ]
+    _diameters_from_circles(drawing, requests, plan)
+
+    values = [item["value_mm"] for item in drawing["dimensions"]]
+    assert values == [250.0]  # ноль TechDraw убран, диаметр — из окружности
+
+
+def test_concentric_diameters_do_not_share_one_line():
+    """Ø250 и Ø66 под одним 45° легли подписями в центр: «Ø2560»."""
+    from app.ai.cad_ir.sheet_from_solid import _diameters_from_circles
+
+    plan = plan_sheet(_FLANGE, _FLANGE_REPORT)
+    plan.ratio = 1.0
+    drawing = {"dimensions": []}
+    requests = [
+        {
+            "view_index": 0,
+            "kind": "Diameter",
+            "_nominal_mm": d,
+            "_circle": {"center": [0.0, 0.0], "radius": d / 2},
+        }
+        for d in (250.0, 66.0)
+    ]
+    _diameters_from_circles(drawing, requests, plan)
+
+    directions = {
+        (
+            round(item["anchors_mm"][1][0] / (item["value_mm"] / 2), 2),
+            round(item["anchors_mm"][1][1] / (item["value_mm"] / 2), 2),
+        )
+        for item in drawing["dimensions"]
+    }
+    assert len(directions) == 2
