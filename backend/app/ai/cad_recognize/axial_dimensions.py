@@ -25,6 +25,13 @@ _NUMBER_TOKEN = re.compile(r"[^0-9]*([0-9]+(?:[.,][0-9]+)?)[^0-9]*")
 # толщины штриха, а не от разных видов: чужой вид ошибается кратно.
 _SCALE_AGREEMENT_TOLERANCE = 0.12
 
+# Измерение линии по чернилам рядом с подписью. Все три — в долях высоты
+# текста: зазор, который считается разрывом одной линии (стрелка, просвет под
+# числом), насколько далеко от подписи искать и какой пролёт уже не шум.
+_INK_GAP = 1.2
+_INK_REACH = 3.5
+_INK_MIN_SPAN = 3.0
+
 
 def _matches(value: float, candidates: list[float], relative: float = 0.005) -> bool:
     return any(
@@ -206,10 +213,71 @@ def _text_unit(tokens: list[dict[str, Any]]) -> float:
     return max(4.0, heights[len(heights) // 2])
 
 
+def _ink_rows(image: Any) -> Any:
+    """Чернила листа: тёмное на светлом, без разделения на деталь и рамку."""
+    import numpy as np
+
+    return np.asarray(image.convert("L")) < 160
+
+
+def _span_from_ink(ink: Any, bbox: list[float], unit: float) -> list[float] | None:
+    """Измерить размерную линию РЯДОМ С ПОДПИСЬЮ, а не искать её на листе.
+
+    Hough находит размерную линию обрывками: её рвут стрелки, пересечения с
+    выносными, разрыв под числом и слабый контраст скана. Замерено на
+    `z4-r4.jpg`: линия габарита 195 существует на y=60, а Hough отдаёт
+    467..513 и 972..1036 — подпись стоит на x=576, ровно между кусками, и
+    пара не складывается. Склейка коллинеарных отрезков это чинила, но
+    ломала `detal_126`: склеенные пролёты вытесняли верные пары.
+
+    Здесь задача другая и куда более узкая. Отличать штрихи детали от рамки
+    листа не нужно: VLM уже сказал, ГДЕ стоит число, и мы смотрим только в его
+    окрестность. Берётся ближайшая к подписи строка, в которой чернила идут
+    прогоном, накрывающим подпись, — с допуском на разрывы. Ближайшая, а не
+    самая длинная: над одной длинной линией стоит несколько чисел, и по
+    длине все они получали бы её пролёт.
+
+    Это тот самый мост «геометрия измерением, надписи чтением», а не оживление
+    отдельной трассировки: измерение существует только затем, чтобы дать
+    прочитанному числу длину.
+    """
+    import numpy as np
+
+    x0, y0, x1, y1 = (float(value) for value in bbox)
+    height, width = ink.shape
+    centre = (x0 + x1) / 2.0
+    max_gap = max(4, int(_INK_GAP * unit))
+    minimum = _INK_MIN_SPAN * unit
+    best: tuple[tuple[float, float], list[float]] | None = None
+    top = max(0, int(y0 - _INK_REACH * unit))
+    bottom = min(height, int(y1 + _INK_REACH * unit))
+    for y in range(top, bottom):
+        if int(y0) <= y <= int(y1):
+            continue  # строки самой подписи
+        columns = np.flatnonzero(ink[y])
+        if columns.size < 2:
+            continue
+        breaks = np.flatnonzero(np.diff(columns) > max_gap)
+        starts = np.concatenate(([0], breaks + 1))
+        ends = np.concatenate((breaks, [columns.size - 1]))
+        for start, end in zip(starts, ends, strict=True):
+            left, right = float(columns[start]), float(columns[end])
+            if right - left < minimum:
+                continue
+            if not (left - unit <= centre <= right + unit):
+                continue
+            key = (min(abs(y - y0), abs(y - y1)), -(right - left))
+            if best is None or key < best[0]:
+                best = (key, [left, float(y), right, float(y)])
+    return best[1] if best else None
+
+
 def _pair_tokens_with_lines(
     tokens: list[dict[str, Any]],
     horizontal: list[list[float]],
     vertical: list[list[float]],
+    *,
+    ink: Any = None,
 ) -> list[dict[str, Any]]:
     """Связать число с его размерной линией, где бы оно ни стояло.
 
@@ -295,7 +363,48 @@ def _pair_tokens_with_lines(
                 "span_px": round(right[0] - left[0], 1),
             }
         )
+    if ink is not None:
+        paired.extend(_ink_paired(tokens, paired, ink, unit, min_span))
     return paired
+
+
+def _ink_paired(
+    tokens: list[dict[str, Any]],
+    paired: list[dict[str, Any]],
+    ink: Any,
+    unit: float,
+    min_span: float,
+) -> list[dict[str, Any]]:
+    """Второй заход по чернилам — только для подписей, которым Hough не помог.
+
+    Добавляется, а не заменяет: то, что уже спарено векторно, надёжнее, и
+    трогать его незачем. Так же и поведение на листах, где Hough справляется,
+    остаётся прежним.
+    """
+    already = {id(item) for item in paired}
+    extra: list[dict[str, Any]] = []
+    for token in tokens:
+        if any(item.get("label_bbox") == token["label_bbox"] for item in paired):
+            continue
+        if id(token) in already:
+            continue
+        line = _span_from_ink(ink, token["label_bbox"], unit)
+        if line is None or line[2] - line[0] < min_span:
+            continue
+        extra.append(
+            {
+                **token,
+                "line": [
+                    round(line[0], 1),
+                    round(line[1], 1),
+                    round(line[2], 1),
+                    round(line[3], 1),
+                ],
+                "span_px": round(line[2] - line[0], 1),
+                "line_source": "ink",
+            }
+        )
+    return extra
 
 
 def _deduplicate(observations: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -435,13 +544,14 @@ def localize_axial_dimensions(
     try:
         tokens = _merge_callout_tokens(_ocr_numeric_tokens(image), callout_entries)
         horizontal, vertical = _hough_lines(image)
+        ink = _ink_rows(image)
     except Exception as exc:  # noqa: BLE001 — localisation is an optional reader aid
         return {
             "status": "unavailable",
             "observations": [],
             "blockers": [f"локализатор размерных линий недоступен: {type(exc).__name__}"],
         }
-    paired = _deduplicate(_pair_tokens_with_lines(tokens, horizontal, vertical))
+    paired = _deduplicate(_pair_tokens_with_lines(tokens, horizontal, vertical, ink=ink))
     overall_candidates = [item for item in paired if _matches(item["ocr_value_mm"], known)]
     # The callout VLM may miss a number that Tesseract has already tied to a
     # real dimension line. In that case the widest paired line is the only
