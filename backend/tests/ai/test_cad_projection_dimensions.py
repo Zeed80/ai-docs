@@ -1,0 +1,91 @@
+"""Размер рисуется по тому типу, который у ядра запрошен."""
+
+from __future__ import annotations
+
+from app.ai.cad_ir.schema import Segment
+from app.ai.cad_projection import (
+    _length_tiers,
+    _projected_dimension_points,
+    dimensions_from_kernel,
+)
+
+
+def test_a_horizontal_distance_between_faces_at_different_heights_stays_horizontal():
+    """Живой синтетический вал: габарит «103» лёг ПО ДИАГОНАЛИ через деталь.
+
+    Точки привязки DistanceX между торцами ступенчатого вала лежат на разной
+    высоте — одна на верху толстой ступени, другая на тонком конце. Линия,
+    проведённая прямо между ними, пересекала деталь наискось.
+    """
+    (a1, b1), (a2, b2) = _projected_dimension_points("DistanceX", (0.0, 14.0), (103.0, 10.0))
+
+    assert b1[1] == b2[1] == 14.0  # без границ вида — у верхней привязки
+    assert (a1, a2) == ((0.0, 14.0), (103.0, 10.0))  # выносные — от настоящих точек
+
+
+def test_a_length_is_placed_outside_the_view_not_inside_the_part():
+    """Привязки TechDraw лежат на торцах, а не на верху контура.
+
+    Выровняв линию по верхней привязке, я получил габарит ВНУТРИ детали, через
+    паз. Длина выносится за контур вида — над его верхней границей.
+    """
+    (_a1, b1), (_a2, b2) = _projected_dimension_points(
+        "DistanceX", (0.0, 3.0), (103.0, -2.0), top=14.0
+    )
+    assert b1[1] == b2[1] == 14.0
+
+
+def test_overlapping_lengths_go_to_separate_rows_and_touching_ones_share_a_row():
+    """Цепочка — в один ряд, габарит поверх неё — вторым рядом."""
+    dimensions = [
+        {"view_index": 0, "kind": "DistanceX", "anchors_mm": [[0, 0], [70, 0]]},
+        {"view_index": 0, "kind": "DistanceX", "anchors_mm": [[70, 0], [88, 0]]},
+        {"view_index": 0, "kind": "DistanceX", "anchors_mm": [[0, 0], [103, 0]]},
+    ]
+    tiers = _length_tiers(dimensions)
+
+    assert tiers[0] == tiers[1] == 0  # звенья цепочки касаются — один ряд
+    assert tiers[2] == 1  # габарит перекрывает цепочку — выше
+
+
+def test_the_order_of_anchors_does_not_flip_the_dimension_into_the_part():
+    """Направление «от детали» задаётся порядком — иначе линия уйдёт внутрь."""
+    forward = _projected_dimension_points("DistanceX", (0.0, 14.0), (103.0, 10.0))
+    backward = _projected_dimension_points("DistanceX", (103.0, 10.0), (0.0, 14.0))
+
+    assert forward == backward
+
+
+def test_a_diameter_is_drawn_across_its_own_step():
+    """Моя первая попытка ставила его левее левой привязки — на СОСЕДНЮЮ ступень.
+
+    Ø25 уехал на ступень Ø28, и подписи легли одна на другую.
+    """
+    (_a1, b1), (_a2, b2) = _projected_dimension_points("DistanceY", (5.0, 0.0), (3.0, 30.0))
+    assert b1[0] == b2[0] == 4.0
+
+
+def test_a_point_to_point_distance_is_left_alone():
+    (a1, b1), (a2, b2) = _projected_dimension_points("Distance", (0.0, 0.0), (3.0, 4.0))
+    assert (a1, a2) == (b1, b2) == ((0.0, 0.0), (3.0, 4.0))
+
+
+def test_the_drawn_dimension_line_is_horizontal():
+    entities = dimensions_from_kernel(
+        [
+            {
+                "view_index": 0,
+                "kind": "DistanceX",
+                "label": "",
+                "anchors_mm": [[0.0, 14.0], [103.0, 10.0]],
+                "value_mm": 103.0,
+            }
+        ],
+        {"front": {"offset_u": 10.0, "offset_v": 100.0}},
+        ["front"],
+        px_per_mm=4.0,
+    )
+    segments = [item for item in entities if isinstance(item, Segment)]
+    dimension_line = segments[2]  # две выносные, затем размерная
+
+    assert dimension_line.p1.y == dimension_line.p2.y

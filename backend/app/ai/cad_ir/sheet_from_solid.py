@@ -22,7 +22,6 @@ technical requirements, and the exact text of a callout (``Ø80js6``, not "80").
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -432,31 +431,115 @@ def _dimension_requests(drawing: dict, spec: dict, plan: SheetPlan) -> list[dict
                             "_is_diameter": True,
                         }
                     )
-            elif item.get("type") == "line" and len(item.get("points") or []) == 2:
-                (u1, v1), (u2, v2) = item["points"]
-                length_mm = math.hypot(u2 - u1, v2 - v1) / ratio
-                horizontal = abs(v2 - v1) < abs(u2 - u1)
-                if not horizontal:
-                    continue  # a vertical edge is a shoulder, handled below
-                match = _closest(length_mm, wanted_lengths)
-                if match is None:
-                    continue
-                wanted_lengths.remove(match)
-                requests.append(
-                    {
-                        "view_index": view_index,
-                        "edge_index": int(index),
-                        "kind": "DistanceX",
-                        "label": "",
-                        "_nominal_mm": match,
-                        "_is_diameter": False,
-                    }
-                )
+        requests.extend(_step_length_requests(view, view_index, outer, wanted_lengths, ratio))
+        # Запасной путь — длина ребра, как было. Он нужен виду, где ядро не дало
+        # рёбер уступов; когда даёт, уступы находят длину надёжнее, а этот
+        # подбирает только то, что осталось.
+        requests.extend(_edge_length_requests(view, view_index, wanted_lengths, ratio))
         requests.extend(_diameter_requests(view, view_index, wanted_diameters, ratio))
         if total_length > 0 and not any(request.get("_is_overall") for request in requests):
             overall = _overall_length_request(view, view_index, total_length, ratio)
             if overall is not None:
                 requests.append(overall)
+    return requests
+
+
+def _step_length_requests(
+    view: dict,
+    view_index: int,
+    outer: list[dict],
+    wanted: list[float],
+    ratio: float,
+) -> list[dict[str, Any]]:
+    """Each step's length as the distance between the SHOULDERS that bound it.
+
+    Before this the length was found by matching a horizontal edge's length to
+    the reading, 1 % tolerance. It fails on any real part: a chamfer shortens
+    the end step's generatrix (15 mm reads 14.x), a groove splits it, a keyway
+    cuts it — on a synthetic three-step shaft two of the three lengths went
+    undimensioned. A length is a distance along the axis between two faces
+    across it, so it is measured between the vertical edges standing at the
+    step's two stations. Stations come from the reading, anchored at the left
+    end face; an edge is accepted only within a hair of its station, so a
+    groove wall next to the shoulder cannot stand in for it.
+    """
+    verticals: list[tuple[float, int]] = []
+    for item in view.get("visible") or []:
+        index = item.get("edge_index")
+        points = item.get("points") or []
+        if index is None or item.get("type") != "line" or len(points) != 2:
+            continue
+        (u1, _v1), (u2, _v2) = points
+        if abs(u2 - u1) > 1e-6:
+            continue
+        verticals.append((float(u1), int(index)))
+    if len(verticals) < 2 or not wanted:
+        return []
+    verticals.sort()
+    left = verticals[0][0]
+    tolerance = 0.2 * ratio  # 0.2 mm of the PART, whatever the sheet scale
+
+    def edge_at(station_u: float) -> int | None:
+        best = min(verticals, key=lambda item: abs(item[0] - station_u))
+        return best[1] if abs(best[0] - station_u) <= tolerance else None
+
+    requests: list[dict[str, Any]] = []
+    position = 0.0
+    for section in outer:
+        length = float(section.get("l") or 0.0)
+        start, end = position, position + length
+        position = end
+        match = _closest(length, wanted) if length > 0 else None
+        if match is None:
+            continue
+        first = edge_at(left + start * ratio)
+        second = edge_at(left + end * ratio)
+        if first is None or second is None or first == second:
+            continue
+        wanted.remove(match)
+        requests.append(
+            {
+                "view_index": view_index,
+                "edge_index": first,
+                "second_edge_index": second,
+                "kind": "DistanceX",
+                "label": "",
+                "_nominal_mm": match,
+                "_is_diameter": False,
+            }
+        )
+    return requests
+
+
+def _edge_length_requests(
+    view: dict, view_index: int, wanted: list[float], ratio: float
+) -> list[dict[str, Any]]:
+    """Длина ступени как длина горизонтального ребра — прежний способ, запасной."""
+    import math
+
+    requests: list[dict[str, Any]] = []
+    for item in view.get("visible") or []:
+        index = item.get("edge_index")
+        points = item.get("points") or []
+        if index is None or item.get("type") != "line" or len(points) != 2 or not wanted:
+            continue
+        (u1, v1), (u2, v2) = points
+        if abs(v2 - v1) >= abs(u2 - u1):
+            continue  # вертикальное ребро — уступ, не длина
+        match = _closest(math.hypot(u2 - u1, v2 - v1) / ratio, wanted)
+        if match is None:
+            continue
+        wanted.remove(match)
+        requests.append(
+            {
+                "view_index": view_index,
+                "edge_index": int(index),
+                "kind": "DistanceX",
+                "label": "",
+                "_nominal_mm": match,
+                "_is_diameter": False,
+            }
+        )
     return requests
 
 
@@ -526,42 +609,59 @@ def _diameter_requests(
             continue
         lines.append((v1, min(u1, u2), max(u1, u2), int(index)))
 
-    requests: list[dict[str, Any]] = []
-    used: set[int] = set()
-    # Every line ABOVE the axis, against every line below it — searching only
+    # Every line ABOVE the axis against every line below it — searching only
     # the tail of the list found a pair solely when the upper generatrix
     # happened to come first, which on a section it usually does not: two of a
     # shaft's three diameters went undimensioned for that reason alone.
+    #
+    # Mirrored about the axis and OVERLAPPING along it: the two generatrices of
+    # one step. Requiring them to span the identical stretch left a step
+    # undimensioned whenever something cut one side only — a keyway splits the
+    # upper generatrix of its step in two, and Ø28 of a synthetic shaft went
+    # missing for exactly that. The diameter is the distance between the lines;
+    # how long each line happens to be is not part of it.
+    candidates: list[tuple[float, float, int, int, float, float]] = []
     for v_a, u0_a, u1_a, edge_a in lines:
-        if edge_a in used or v_a <= 0:
+        if v_a <= 0:
             continue
         for v_b, u0_b, u1_b, edge_b in lines:
-            if edge_b in used or edge_b == edge_a:
+            if edge_b == edge_a or abs(v_a + v_b) > 1e-6:
                 continue
-            # Mirrored about the axis and spanning the same stretch of it: the
-            # two generatrices of one step.
-            if abs(v_a + v_b) > 1e-6:
+            lo, hi = max(u0_a, u0_b), min(u1_a, u1_b)
+            if hi - lo <= 1e-6:
                 continue
-            if abs(u0_a - u0_b) > 1e-6 or abs(u1_a - u1_b) > 1e-6:
-                continue
-            diameter_mm = (v_a - v_b) / ratio
-            match = _closest(diameter_mm, wanted)
-            if match is None:
-                continue
-            wanted.remove(match)
-            used.update({edge_a, edge_b})
-            requests.append(
-                {
-                    "view_index": view_index,
-                    "edge_index": edge_a,
-                    "second_edge_index": edge_b,
-                    "kind": "DistanceY",
-                    "label": "",
-                    "_nominal_mm": match,
-                    "_is_diameter": True,
-                }
-            )
-            break
+            candidates.append((hi - lo, (v_a - v_b) / ratio, edge_a, edge_b, lo, hi))
+
+    # Longest shared stretch first, over ALL pairs at once. Choosing per upper
+    # edge let a short leftover piece next to the keyway claim the diameter
+    # simply by coming first in the list, and the dimension went across the
+    # keyway.
+    requests: list[dict[str, Any]] = []
+    used: set[int] = set()
+    for _shared, diameter_mm, edge_a, edge_b, lo, hi in sorted(candidates, key=lambda c: -c[0]):
+        if edge_a in used or edge_b in used:
+            continue
+        match = _closest(diameter_mm, wanted)
+        if match is None:
+            continue
+        wanted.remove(match)
+        used.update({edge_a, edge_b})
+        requests.append(
+            {
+                "view_index": view_index,
+                "edge_index": edge_a,
+                "second_edge_index": edge_b,
+                "kind": "DistanceY",
+                "label": "",
+                "_nominal_mm": match,
+                "_is_diameter": True,
+                # Где рисовать: середина участка, на котором ОБЕ образующие
+                # есть. Привязки TechDraw — начальные вершины рёбер, и у
+                # соседних ступеней это одна и та же точка на уступе: Ø25 и
+                # Ø28 синтетического вала легли друг на друга ровно там.
+                "_place_u": (lo + hi) / 2.0,
+            }
+        )
     return requests
 
 
@@ -620,6 +720,8 @@ def _label_dimensions(dimensions: list[dict], requests: list[dict], spec: dict) 
         # so, or it reaches the IR (and the DXF) as a plain distance and the
         # part appears to have no diameters at all.
         dimension["ir_kind"] = "diameter" if is_diameter else "linear"
+        if isinstance(match.get("_place_u"), (int, float)):
+            dimension["place_u"] = float(match["_place_u"])
 
 
 async def build_sheet_from_solid(
@@ -765,7 +867,13 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
     )
     entities += dimensions_from_kernel(
         drawing.get("dimensions") or [],
-        {index: placement for index, placement in enumerate(placements) if placement},
+        {
+            # Границы вида едут вместе с размещением: без них длину некуда
+            # вынести за контур, и она ложится внутрь детали.
+            index: {**placement, "bounds_mm": (views[index] or {}).get("bounds_mm") or {}}
+            for index, placement in enumerate(placements)
+            if placement
+        },
         list(range(len(views))),
         px_per_mm=PAPER_PX_PER_MM,
     )

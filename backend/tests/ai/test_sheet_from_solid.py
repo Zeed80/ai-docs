@@ -488,3 +488,104 @@ def test_a_callout_that_is_not_a_size_never_labels_a_dimension():
     spec = {"dimensions": [{"value": "R4"}, {"value": "4"}, {"value": "M75x1,5"}]}
     index = _read_dimension_index(spec)
     assert [text for _value, text, _is_d in index] == ["4", "M75x1,5"]
+
+
+# ── Простановка размеров на реалистичной детали (найдено генератором эталона) ─
+
+
+def _lines(items):
+    """(edge_index, (u0, v0), (u1, v1)) → рёбра вида, в том числе вертикальные."""
+    return [
+        {"type": "line", "edge_index": index, "points": [list(p0), list(p1)]}
+        for index, p0, p1 in items
+    ]
+
+
+def test_a_diameter_is_found_when_a_keyway_splits_its_upper_generatrix():
+    """Синтетический вал: Ø28 не был образмерен вовсе.
+
+    Паз разрезает верхнюю образующую своей ступени на два куска, а пара
+    образующих искалась только с ТОЧНО совпадающими концами — нижняя целая,
+    верхние короче, пары нет. Диаметр — расстояние между линиями, их длина к
+    нему не относится.
+    """
+    from app.ai.cad_ir.sheet_from_solid import _diameter_requests
+
+    view = {
+        "visible": _lines(
+            [
+                (1, (0.0, 14.0), (20.0, 14.0)),  # верх до паза
+                (2, (50.0, 14.0), (70.0, 14.0)),  # верх после паза
+                (3, (0.0, -14.0), (70.0, -14.0)),  # низ целиком
+            ]
+        )
+    }
+    requests = _diameter_requests(view, 0, [28.0], ratio=1.0)
+
+    assert [request["_nominal_mm"] for request in requests] == [28.0]
+
+
+def test_the_longest_shared_stretch_is_chosen_and_the_dimension_is_placed_in_it():
+    """Первая подошедшая пара клала Ø28 поперёк паза — на короткий обрезок."""
+    from app.ai.cad_ir.sheet_from_solid import _diameter_requests
+
+    view = {
+        "visible": _lines(
+            [
+                (1, (0.0, 14.0), (5.0, 14.0)),  # короткий обрезок у паза
+                (2, (20.0, 14.0), (70.0, 14.0)),  # длинный чистый участок
+                (3, (0.0, -14.0), (70.0, -14.0)),
+            ]
+        )
+    }
+    # Короткий обрезок стоит в списке ПЕРВЫМ — и всё равно не выигрывает.
+    requests = _diameter_requests(view, 0, [28.0], ratio=1.0)
+
+    assert requests[0]["edge_index"] == 2
+    assert requests[0]["_place_u"] == 45.0
+
+
+def test_step_lengths_are_measured_between_shoulders_not_by_edge_length():
+    """Фаска укорачивает образующую крайней ступени: 15 мм читается как 14,x.
+
+    Длина искалась совпадением длины ребра со спеком в пределах 1 %, и на
+    синтетическом трёхступенчатом вале две длины из трёх остались без размера.
+    Длина — расстояние вдоль оси между торцами поперёк неё.
+    """
+    from app.ai.cad_ir.sheet_from_solid import _step_length_requests
+
+    outer = [{"d": 28.0, "l": 70.0}, {"d": 25.0, "l": 18.0}, {"d": 20.0, "l": 15.0}]
+    view = {
+        "visible": _lines(
+            [
+                (10, (0.0, -14.0), (0.0, 14.0)),  # левый торец
+                (11, (70.0, 12.5), (70.0, 14.0)),  # уступ 28→25 (только кольцо)
+                (12, (88.0, 10.0), (88.0, 12.5)),  # уступ 25→20
+                (13, (103.0, -9.0), (103.0, 9.0)),  # правый торец за фаской
+                (20, (88.0, 10.0), (102.0, 10.0)),  # образующая, укорочена фаской
+            ]
+        )
+    }
+    requests = _step_length_requests(view, 0, outer, [18.0, 15.0], ratio=1.0)
+
+    assert sorted(request["_nominal_mm"] for request in requests) == [15.0, 18.0]
+    assert all(request["kind"] == "DistanceX" for request in requests)
+
+
+def test_a_groove_wall_next_to_a_shoulder_does_not_stand_in_for_it():
+    """Стенка канавки у уступа — вертикаль в 0,8 мм от станции, не уступ."""
+    from app.ai.cad_ir.sheet_from_solid import _step_length_requests
+
+    outer = [{"d": 28.0, "l": 70.0}, {"d": 25.0, "l": 18.0}]
+    view = {
+        "visible": _lines(
+            [
+                (10, (0.0, -14.0), (0.0, 14.0)),
+                (11, (70.8, 12.0), (70.8, 12.5)),  # стенка канавки, не уступ
+                (12, (88.0, -12.5), (88.0, 12.5)),
+            ]
+        )
+    }
+    requests = _step_length_requests(view, 0, outer, [18.0], ratio=1.0)
+
+    assert requests == []

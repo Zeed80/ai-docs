@@ -313,6 +313,87 @@ DIM_ARROW_MM = 3.5
 DIM_TEXT_MM = 3.5
 
 
+# Шаг между рядами размеров, мм листа (ГОСТ 2.307: не менее 7 мм между
+# параллельными размерными линиями).
+DIM_TIER_STEP_MM = 7.0
+
+
+def _projected_dimension_points(
+    kind: str,
+    first: tuple[float, float],
+    second: tuple[float, float],
+    *,
+    top: float | None = None,
+    tier: int = 0,
+    place_u: float | None = None,
+) -> tuple[tuple[tuple[float, float], tuple[float, float]], ...]:
+    """Where the dimension line is measured from, per the kind TechDraw was asked.
+
+    Returns ``((anchor, base), (anchor, base))``: the witness line runs from the
+    anchor, the dimension line between the bases.
+
+    **DistanceX** (a length along the axis). Anchors of a DistanceX between the
+    end faces of a stepped shaft sit at different heights, and drawing straight
+    between them put the overall length on a DIAGONAL across the part (live:
+    «103» from (1012,803) to (1823,850) on a synthetic shaft). Levelling it at
+    the higher anchor was not enough either: TechDraw puts anchors somewhere on
+    the end faces, not at the top of the outline, so the line still ran INSIDE
+    the part, through the keyway. A length is placed outside the view — above
+    its top (``top``) — and ``tier`` lifts it into its own row when it would
+    overlap another length (the overall length over the chain).
+
+    **DistanceY** (a diameter across a longitudinal view). Drawn across the
+    part inside its own step, per ГОСТ 2.307: halfway between the anchors.
+    Pushing it left of the leftmost anchor — my first attempt — moved Ø25 onto
+    the Ø28 step and stacked the two labels on top of each other.
+
+    Anything else keeps the old behaviour: point to point.
+    """
+    (u1, v1), (u2, v2) = first, second
+    if kind == "DistanceX":
+        if u1 > u2:
+            (u1, v1), (u2, v2) = (u2, v2), (u1, v1)
+        level = (top if top is not None else max(v1, v2)) + tier * DIM_TIER_STEP_MM
+        return ((u1, v1), (u1, level)), ((u2, v2), (u2, level))
+    if kind == "DistanceY":
+        if v1 > v2:
+            (u1, v1), (u2, v2) = (u2, v2), (u1, v1)
+        # Лучше всего — место, которое знает запрос: середина участка, где есть
+        # обе образующие. Иначе — середина между привязками.
+        level = place_u if place_u is not None else (u1 + u2) / 2.0
+        return ((u1, v1), (level, v1)), ((u2, v2), (level, v2))
+    return ((u1, v1), (u1, v1)), ((u2, v2), (u2, v2))
+
+
+def _length_tiers(dimensions: list[dict[str, Any]]) -> dict[int, int]:
+    """Row for each DistanceX on its view: overlapping lengths never share a row.
+
+    Greedy by span, shortest first, so the chain sits nearest the part and the
+    overall length — which overlaps every link of the chain — goes outside.
+    Links that merely TOUCH at a shoulder share a row: that is what a chain is.
+    """
+    by_view: dict[Any, list[tuple[float, float, int]]] = {}
+    for position, item in enumerate(dimensions):
+        anchors = item.get("anchors_mm") or []
+        if str(item.get("kind") or "") != "DistanceX" or len(anchors) < 2:
+            continue
+        lo, hi = sorted((float(anchors[0][0]), float(anchors[1][0])))
+        by_view.setdefault(item.get("view_index"), []).append((lo, hi, position))
+    tiers: dict[int, int] = {}
+    for spans in by_view.values():
+        rows: list[list[tuple[float, float]]] = []
+        for lo, hi, position in sorted(spans, key=lambda item: item[1] - item[0]):
+            for row_index, row in enumerate(rows):
+                if all(hi <= a + 1e-6 or lo >= b - 1e-6 for a, b in row):
+                    row.append((lo, hi))
+                    tiers[position] = row_index
+                    break
+            else:
+                rows.append([(lo, hi)])
+                tiers[position] = len(rows) - 1
+    return tiers
+
+
 def dimensions_from_kernel(
     dimensions: list[dict[str, Any]],
     placements: dict[str, dict[str, float]],
@@ -337,7 +418,8 @@ def dimensions_from_kernel(
     from app.ai.cad_semantics import parse_dimension
 
     entities: list[Any] = []
-    for item in dimensions:
+    tiers = _length_tiers(dimensions)
+    for position, item in enumerate(dimensions):
         anchors = item.get("anchors_mm") or []
         if len(anchors) < 2:
             continue
@@ -354,10 +436,19 @@ def dimensions_from_kernel(
                 y=(placement["offset_v"] - v) * px_per_mm,
             )
 
-        (u1, v1), (u2, v2) = (
+        bounds = placement.get("bounds_mm") or {}
+        anchor_1, anchor_2 = _projected_dimension_points(
+            str(item.get("kind") or ""),
             (float(anchors[0][0]), float(anchors[0][1])),
             (float(anchors[1][0]), float(anchors[1][1])),
+            top=float(bounds["v_max"]) if "v_max" in bounds else None,
+            tier=tiers.get(position, 0),
+            place_u=float(item["place_u"])
+            if isinstance(item.get("place_u"), (int, float))
+            else None,
         )
+        (a1u, a1v), (u1, v1) = anchor_1
+        (a2u, a2v), (u2, v2) = anchor_2
         du, dv = u2 - u1, v2 - v1
         span = math.hypot(du, dv)
         if span <= 1e-6:
@@ -369,9 +460,12 @@ def dimensions_from_kernel(
         eu, ev = nu * (DIM_OFFSET_MM + DIM_EXTENSION_MM), nv * (DIM_OFFSET_MM + DIM_EXTENSION_MM)
 
         style = {"line_class": "dim", "width_class": "thin", **_ORIGIN}
-        # Witness lines from the feature out past the dimension line.
-        entities.append(Segment(p1=to_point(u1, v1), p2=to_point(u1 + eu, v1 + ev), **style))
-        entities.append(Segment(p1=to_point(u2, v2), p2=to_point(u2 + eu, v2 + ev), **style))
+        # Witness lines from the feature out past the dimension line. They
+        # start at the ORIGINAL anchor: for a DistanceX between end faces at
+        # different heights the witness lines differ in length, and that is
+        # exactly what keeps the dimension line itself horizontal.
+        entities.append(Segment(p1=to_point(a1u, a1v), p2=to_point(u1 + eu, v1 + ev), **style))
+        entities.append(Segment(p1=to_point(a2u, a2v), p2=to_point(u2 + eu, v2 + ev), **style))
         # The dimension line itself.
         entities.append(
             Segment(p1=to_point(u1 + ou, v1 + ov), p2=to_point(u2 + ou, v2 + ov), **style)
