@@ -95,12 +95,15 @@ def render_sheet(ir: CadIR, *, dpi: int, ir_px_per_mm: float) -> RenderedSheet:
         elif isinstance(entity, Arc):
             cx, cy = xy(entity.center)
             r = float(entity.radius) * scale
-            # IR: градусы против часовой в пространстве изображения (y вниз);
-            # PIL.arc идёт по часовой — меняем знак и порядок концов.
+            # Соглашение ровно как у рендера продукта (`png_render`, cv2.ellipse):
+            # углы передаются как есть, а при start > end cv2 меняет их местами.
+            # Моя первая версия меняла знак углов — и правый конец прорези
+            # рисовался вывернутой дугой, ровно на тех дугах, что идут через 0°.
+            low, high = sorted((float(entity.start_angle), float(entity.end_angle)))
             draw.arc(
                 [cx - r, cy - r, cx + r, cy + r],
-                start=-float(entity.end_angle),
-                end=-float(entity.start_angle),
+                start=low,
+                end=high,
                 fill=0,
                 width=stroke(entity),
             )

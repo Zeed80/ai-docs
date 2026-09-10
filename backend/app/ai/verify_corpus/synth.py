@@ -17,7 +17,12 @@ import random
 from typing import Any
 
 from app.ai.cad_recognize.keyway_standard import standard_section
-from app.ai.lora_synth_specs import _MATERIALS, _NAMES_SHAFT
+from app.ai.lora_synth_specs import (
+    _MATERIALS,
+    _NAMES_PLATE_CIRCLE,
+    _NAMES_PLATE_RECT,
+    _NAMES_SHAFT,
+)
 
 # Ряд нормальных диаметров (ГОСТ 6636, Ra40) — то, что конструктор ставит на вал.
 _DIAMETERS = (12, 14, 16, 18, 20, 22, 25, 28, 30, 32, 35, 40, 45, 50, 55, 60, 70, 80)
@@ -27,7 +32,7 @@ _STEP_LENGTHS = (12, 15, 18, 20, 25, 30, 35, 40, 50, 60, 70, 80)
 def synth_spec(kind: str, seed: int) -> dict[str, Any]:
     """Спек детали заданного типа. Детерминирован по ``seed``."""
     rng = random.Random(f"{kind}:{seed}")
-    builders = {"shaft": _shaft}
+    builders = {"shaft": _shaft, "plate": _plate, "flange": _flange}
     if kind not in builders:
         raise ValueError(f"генератор для типа «{kind}» ещё не написан")
     return builders[kind](rng)
@@ -212,3 +217,138 @@ def _bore(rng: random.Random, outer, total: float) -> list[dict[str, Any]]:
     thinnest = min(item["diameter_mm"] for item in outer)
     diameter = max(4.0, round(thinnest * rng.uniform(0.3, 0.5)))
     return [{"diameter_mm": float(diameter), "length_mm": float(total)}]
+
+
+# ── Пластины и фланцы ───────────────────────────────────────────────────────
+
+_THICKNESSES = (5, 6, 8, 10, 12, 16, 20, 25)
+_HOLES = (5.5, 6.6, 9, 11, 13.5, 17.5)  # под крепёж М5..М16, ГОСТ 11284
+
+
+def _plate(rng: random.Random) -> dict[str, Any]:
+    """Прямоугольная пластина: отверстия по координатам, массивы, прорези.
+
+    Отверстия ставятся по координатам, а не только в центр: координаты
+    отверстий пластины фрагментный путь продукта сейчас не читает вовсе (только
+    центральное (0,0)), и эталон обязан это показывать.
+    """
+    width = float(rng.choice((60, 80, 100, 120, 150, 200)))
+    height = float(rng.choice((40, 50, 60, 80, 100)))
+    profile: dict[str, Any] = {
+        "shape": "rectangle",
+        "width_mm": width,
+        "height_mm": height,
+        "thickness_mm": float(rng.choice(_THICKNESSES)),
+        "holes": [],
+        "hole_patterns": [],
+        "slots": [],
+    }
+    if rng.random() < 0.4:
+        profile["corner_radius_mm"] = float(rng.choice((3, 5, 8, 10)))
+    occupied: list[tuple[float, float, float]] = []  # (x, y, радиус с запасом)
+    margin = 0.12 * min(width, height)
+
+    def free(x: float, y: float, radius: float) -> bool:
+        inside = (
+            abs(x) + radius <= width / 2 - margin / 2 and abs(y) + radius <= height / 2 - margin / 2
+        )
+        clear = all(
+            (x - ox) ** 2 + (y - oy) ** 2 >= (radius + orad) ** 2 for ox, oy, orad in occupied
+        )
+        return inside and clear
+
+    if rng.random() < 0.5:
+        # Прямоугольный массив по углам — самый частый крепёж пластины.
+        hole = rng.choice(_HOLES)
+        sx = round(width - 2 * margin, 0)
+        sy = round(height - 2 * margin, 0)
+        if sx > hole * 2 and sy > hole * 2:
+            profile["hole_patterns"].append(
+                {
+                    "kind": "rectangular",
+                    "hole_diameter_mm": hole,
+                    "rows": 2,
+                    "columns": 2,
+                    "spacing_x_mm": sx,
+                    "spacing_y_mm": sy,
+                    "start_x_mm": -sx / 2,
+                    "start_y_mm": -sy / 2,
+                }
+            )
+            for cx in (-sx / 2, sx / 2):
+                for cy in (-sy / 2, sy / 2):
+                    occupied.append((cx, cy, hole / 2 + 2))
+    for _ in range(rng.randint(0, 4)):
+        hole = rng.choice(_HOLES)
+        for _attempt in range(20):
+            x = round(rng.uniform(-width / 2, width / 2), 0)
+            y = round(rng.uniform(-height / 2, height / 2), 0)
+            if free(x, y, hole / 2 + 2):
+                profile["holes"].append({"center_x_mm": x, "center_y_mm": y, "diameter_mm": hole})
+                occupied.append((x, y, hole / 2 + 2))
+                break
+    if rng.random() < 0.35:
+        slot_width = float(rng.choice((6, 8, 10, 12)))
+        slot_length = float(rng.choice((20, 25, 30, 40)))
+        for _attempt in range(20):
+            x = round(rng.uniform(-width / 4, width / 4), 0)
+            y = round(rng.uniform(-height / 4, height / 4), 0)
+            if free(x, y, slot_length / 2 + 2):
+                profile["slots"].append(
+                    {
+                        "center_x_mm": x,
+                        "center_y_mm": y,
+                        "length_mm": slot_length,
+                        "width_mm": slot_width,
+                    }
+                )
+                occupied.append((x, y, slot_length / 2 + 2))
+                break
+    return _prismatic_spec(rng, profile, rng.choice(_NAMES_PLATE_RECT), "пластина")
+
+
+def _flange(rng: random.Random) -> dict[str, Any]:
+    """Круглый фланец: центральное отверстие и окружность болтов со СЛУЧАЙНОЙ фазой.
+
+    У продукта фаза массива сейчас всегда 0° — эталон обязан это ловить, иначе
+    проверяльщику фазы нечего проверять.
+    """
+    diameter = float(rng.choice((80, 100, 120, 140, 160, 200, 250)))
+    bore = float(round(diameter * rng.uniform(0.2, 0.35)))
+    hole = rng.choice(_HOLES)
+    inner = bore / 2 + hole / 2 + 4
+    outer = diameter / 2 - hole / 2 - 4
+    pcd = float(round(2 * rng.uniform(inner, outer)))
+    count = rng.choice((3, 4, 6, 8))
+    start = float(rng.choice((0, 15, 22.5, 30, 45))) if rng.random() < 0.6 else 0.0
+    profile = {
+        "shape": "circle",
+        "diameter_mm": diameter,
+        "thickness_mm": float(rng.choice(_THICKNESSES)),
+        "holes": [{"center_x_mm": 0.0, "center_y_mm": 0.0, "diameter_mm": bore}],
+        "hole_patterns": [
+            {
+                "kind": "bolt_circle",
+                "hole_diameter_mm": hole,
+                "count": count,
+                "bolt_circle_diameter_mm": pcd,
+                "start_angle_deg": start,
+            }
+        ],
+        "slots": [],
+    }
+    return _prismatic_spec(rng, profile, rng.choice(_NAMES_PLATE_CIRCLE), "фланец")
+
+
+def _prismatic_spec(
+    rng: random.Random, profile: dict[str, Any], name: str, kind: str
+) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "main_view": {"name": name, "type": kind, "profile": profile},
+        "views": [{"kind": "front", "body_index": 0}],
+        "dimensions": [],
+        "annotations": [],
+        "title_block": {"name": name, "material": rng.choice(_MATERIALS)},
+        "unresolved": [],
+    }
