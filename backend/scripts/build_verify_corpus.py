@@ -36,12 +36,25 @@ def split_for(kind: str, seed: int) -> str:
 
 
 def needed_dimensions(spec: dict) -> dict[str, list[float]]:
-    """Что обязан нести лист вала, чтобы по нему можно было изготовить деталь.
+    """Что обязан нести лист, чтобы по нему можно было изготовить деталь.
 
-    Диаметры всех ступеней и отверстия, длины всех ступеней кроме самой длинной
-    (цепочка по ГОСТ 2.307 остаётся открытой) и габарит.
+    Вал: диаметры ступеней и отверстия, длины ступеней кроме самой длинной
+    (цепочка по ГОСТ 2.307 остаётся открытой) и габарит. Пластина и фланец:
+    контур, толщина и диаметры отверстий. Координаты отверстий и окружность
+    болтов сюда пока НЕ входят: их не проставляет и продукт (задача X1 плана) —
+    метрика мерит то, что лист обязан нести уже сейчас, а не мечту.
     """
     body = spec["main_view"]
+    profile = body.get("profile")
+    if isinstance(profile, dict):
+        diameters = {h["diameter_mm"] for h in profile.get("holes") or []}
+        diameters |= {p["hole_diameter_mm"] for p in profile.get("hole_patterns") or []}
+        lengths = [profile["thickness_mm"]]
+        if profile.get("shape") == "circle":
+            diameters.add(profile["diameter_mm"])
+        else:
+            lengths += [profile["width_mm"], profile["height_mm"]]
+        return {"diameters": sorted(diameters), "lengths": sorted(set(lengths)), "overall": []}
     outer = body["outer"]
     diameters = sorted(
         {s["diameter_mm"] for s in outer} | {s["diameter_mm"] for s in body.get("bore") or []}
