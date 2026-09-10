@@ -89,9 +89,20 @@ def _stepped_profile(rng: random.Random) -> list[dict[str, Any]]:
 
 
 def _neighbour(diameter: int, rng: random.Random) -> int:
+    """Соседний диаметр ряда — обязательно ДРУГОЙ.
+
+    На краю ряда сдвиг «наружу» упирался в границу и возвращал тот же диаметр:
+    у shaft-21 две соседние ступени получили Ø12. На теле это один цилиндр,
+    уступа между ними нет, и «длина ступени 25 мм» у детали физически не
+    существует — лист справедливо её не проставил, а метрика полноты сочла это
+    пропуском. У края идём внутрь ряда.
+    """
     index = _DIAMETERS.index(diameter)
-    shift = rng.choice((-1, 1))
-    return _DIAMETERS[min(len(_DIAMETERS) - 1, max(0, index + shift))] or diameter
+    if index == 0:
+        return _DIAMETERS[1]
+    if index == len(_DIAMETERS) - 1:
+        return _DIAMETERS[-2]
+    return _DIAMETERS[index + rng.choice((-1, 1))]
 
 
 def _stations(outer: list[dict[str, Any]]) -> list[tuple[float, float, float]]:

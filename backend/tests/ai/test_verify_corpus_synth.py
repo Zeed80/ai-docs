@@ -69,3 +69,16 @@ def test_the_corpus_actually_contains_the_features_verifiers_need():
 def test_an_unwritten_part_type_says_so():
     with pytest.raises(ValueError, match="ещё не написан"):
         synth_spec("weldment", 0)
+
+
+def test_adjacent_steps_never_share_a_diameter():
+    """Две соседние Ø12 — это один цилиндр, а не две ступени.
+
+    Лист справедливо не проставил «длину ступени», которой у тела нет, а
+    метрика полноты сочла это пропуском размера. Эталон обязан описывать
+    деталь, которая действительно такая.
+    """
+    for seed in SEEDS:
+        outer = synth_spec("shaft", seed)["main_view"]["outer"]
+        for left, right in zip(outer, outer[1:], strict=False):
+            assert left["diameter_mm"] != right["diameter_mm"], seed
