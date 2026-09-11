@@ -4,7 +4,7 @@
         clean rebuild nuke \
         setup health logs ps shell-backend shell-celery shell-frontend \
         migrate migrate-new seed \
-        test test-frontend test-cov e2e regression emg-schema emg-schema-check emg-validate emg-regression emg-live-regression agent-regression agent-test agent-ws-smoke \
+        test test-frontend test-cov e2e regression emg-schema emg-schema-check emg-validate emg-regression emg-live-regression cad-verify-eval cad-verify-corpus agent-regression agent-test agent-ws-smoke \
         studio-queue-smoke cad-kernel-smoke cad-regression cad-candidate-gate cad-drawing-graph-eval cad-emg-corruption emg-artifact-regression emg-mechanical-live emg-domain-builds cad-class-balanced-dev cad-class-balanced-check cad-class-balanced-cycle \
         cad-final-freeze cad-final-leakage \
         cad-corpus-acquire cad-corpus-generate cad-pmi-truth \
@@ -83,6 +83,8 @@ help:
 	@echo "    make emg-schema-check — fail when checked-in EMG Schemas are stale"
 	@echo "    make emg-validate     — validate checked-in .emg.json examples"
 	@echo "    make emg-regression   — four-domain EngineeringModelGraph golden gate"
+	@echo "    make cad-verify-eval  — CAD verifiers vs generated ground truth (degradation ladder)"
+	@echo "    make cad-verify-corpus — build the verifier corpus inside the backend container"
 	@echo "    make emg-live-regression — live CAD/STEP/IFC/system matrix in production stack"
 	@echo "    make cad-regression   — scan-to-DXF golden regression"
 	@echo "    make cad-candidate-gate — fail-closed entity-level model promotion gate"
@@ -267,6 +269,32 @@ emg-regression:
 	cd backend && PYTHONPATH=. python3 scripts/eval_emg_domains.py \
 		--manifest tests/fixtures/emg_domain_golden.json \
 		--out ../test-results/emg_domain_regression.json
+
+# Проверяльщики оцифровки против сгенерированного эталона (план «гипотеза →
+# проверка», задачи M1/M3). Корпус не в git: собирается `cad-verify-corpus`.
+VERIFY_CORPUS ?= cad-dataset-out/verify-corpus-v2
+VERIFY_MIN_CORRECT ?= 0.9
+
+cad-verify-eval:
+	@test -f $(VERIFY_CORPUS)-ladder/manifest.jsonl || { \
+		echo "нет $(VERIFY_CORPUS)-ladder — сначала make cad-verify-corpus"; exit 2; }
+	cd backend && PYTHONPATH=. python3 scripts/eval_verify.py \
+		--corpus ../$(VERIFY_CORPUS)-ladder --verifier dimension_line --split dev \
+		--min-correct $(VERIFY_MIN_CORRECT) \
+		--report ../test-results/cad_verify_dimension_line.json
+
+# Каталог внутри контейнера — новый на каждый прогон: сборщик ДОПИСЫВАЕТ
+# manifest.jsonl, и повтор в тот же каталог задвоил бы листы.
+cad-verify-corpus:
+	@test ! -e $(VERIFY_CORPUS) || { echo "$(VERIFY_CORPUS) уже есть — задайте другой VERIFY_CORPUS"; exit 2; }
+	out=$$(docker compose $(COMPOSE_PROD) exec -T backend mktemp -d /tmp/verify-corpus.XXXXXX) && \
+	for kind in shaft plate flange; do \
+		docker compose $(COMPOSE_PROD) exec -T backend sh -c \
+			"cd /app && python scripts/build_verify_corpus.py --kind $$kind --seeds 0:30 --dpi 300 --out $$out" || exit 1; \
+	done && \
+	docker compose $(COMPOSE_PROD) cp backend:$$out $(VERIFY_CORPUS)
+	cd backend && python3 scripts/degrade_verify_corpus.py \
+		--src ../$(VERIFY_CORPUS) --out ../$(VERIFY_CORPUS)-ladder
 
 emg-artifact-regression:
 	PYTHONPATH=backend python3 backend/scripts/eval_emg_artifacts.py \

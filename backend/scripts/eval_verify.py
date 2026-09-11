@@ -123,6 +123,11 @@ def main() -> int:
     parser.add_argument(
         "--raw", action="store_true", help="без нормализации продукта (выпрямления фото)"
     )
+    parser.add_argument(
+        "--min-correct",
+        type=float,
+        help="гейт: код 1, если доля верных на какой-либо ступени ниже порога",
+    )
     args = parser.parse_args()
 
     rows = [
@@ -181,7 +186,17 @@ def main() -> int:
             f"{dewarp_count[step]:>11}"
         )
     if args.report:
+        args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
+    if args.min_correct is not None:
+        below = {
+            step: item["correct"]
+            for step, item in report["by_step"].items()
+            if item["correct"] is not None and item["correct"] < args.min_correct
+        }
+        if below:
+            print(f"ГЕЙТ НЕ ПРОЙДЕН (< {args.min_correct:.0%}): {below}")
+            return 1
     return 0
 
 
