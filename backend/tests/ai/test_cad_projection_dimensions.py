@@ -91,6 +91,50 @@ def test_the_drawn_dimension_line_is_horizontal():
     assert dimension_line.p1.y == dimension_line.p2.y
 
 
+def _drawn(length_mm: float) -> tuple[Segment, list]:
+    from app.ai.cad_ir.schema import Polyline
+
+    entities = dimensions_from_kernel(
+        [
+            {
+                "view_index": 0,
+                "kind": "DistanceX",
+                "label": "",
+                "anchors_mm": [[0.0, 0.0], [length_mm, 0.0]],
+                "value_mm": length_mm,
+            }
+        ],
+        {"front": {"offset_u": 0.0, "offset_v": 100.0}},
+        ["front"],
+        px_per_mm=1.0,
+    )
+    segments = [item for item in entities if isinstance(item, Segment)]
+    arrows = [item for item in entities if isinstance(item, Polyline)]
+    return segments[2], arrows
+
+
+def test_arrows_that_do_not_fit_stand_outside_the_witness_lines():
+    """Размер 6 мм рисовался двумя стрелками, слитыми в «бантик», без линии.
+
+    По ГОСТ 2.307 стрелки, которым не хватает места, ставятся снаружи, а
+    размерная линия продлевается за выносные.
+    """
+    line, arrows = _drawn(6.0)
+
+    assert line.p1.x < 0.0 and line.p2.x > 6.0  # линия продлена за выносные
+    left_back = [point.x for point in arrows[0].points[1:]]
+    right_back = [point.x for point in arrows[1].points[1:]]
+    assert arrows[0].points[0].x == 0.0 and all(x < 0.0 for x in left_back)
+    assert arrows[1].points[0].x == 6.0 and all(x > 6.0 for x in right_back)
+
+
+def test_arrows_that_fit_stay_inside():
+    line, arrows = _drawn(30.0)
+
+    assert (line.p1.x, line.p2.x) == (0.0, 30.0)
+    assert all(0.0 <= point.x <= 30.0 for arrow in arrows for point in arrow.points)
+
+
 # ── Дуга: направление не теряется ───────────────────────────────────────────
 
 

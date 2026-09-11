@@ -345,6 +345,7 @@ _DIMENSION_KINDS = {
 DIM_OFFSET_MM = 8.0  # dimension line stands off the measured feature
 DIM_EXTENSION_MM = 2.0  # extension line runs past the dimension line
 DIM_ARROW_MM = 3.5
+DIM_ARROW_GAP_MM = 1.0  # bare line wanted between two inside arrowheads
 DIM_TEXT_MM = 3.5
 
 
@@ -501,6 +502,14 @@ def dimensions_from_kernel(
         eu, ev = nu * (offset + extension), nv * (offset + extension)
 
         style = {"line_class": "dim", "width_class": "thin", **_ORIGIN}
+        tu, tv = du / span, dv / span
+        # Two arrowheads that do not fit between the witness lines go OUTSIDE
+        # them, and the dimension line is carried past (ГОСТ 2.307). Drawn
+        # inside, a 6 mm dimension was two arrows fused into a bow tie with no
+        # line left at all — unreadable to a person and unmeasurable to the
+        # dimension-line verifier (40 % of plate and flange lengths).
+        outside = span < 2.0 * DIM_ARROW_MM + DIM_ARROW_GAP_MM
+        carry = DIM_ARROW_MM + DIM_EXTENSION_MM if outside else 0.0
         # Witness lines from the feature out past the dimension line. They
         # start at the ORIGINAL anchor: for a DistanceX between end faces at
         # different heights the witness lines differ in length, and that is
@@ -510,14 +519,19 @@ def dimensions_from_kernel(
             entities.append(Segment(p1=to_point(a2u, a2v), p2=to_point(u2 + eu, v2 + ev), **style))
         # The dimension line itself.
         entities.append(
-            Segment(p1=to_point(u1 + ou, v1 + ov), p2=to_point(u2 + ou, v2 + ov), **style)
+            Segment(
+                p1=to_point(u1 + ou - tu * carry, v1 + ov - tv * carry),
+                p2=to_point(u2 + ou + tu * carry, v2 + ov + tv * carry),
+                **style,
+            )
         )
-        # Arrowheads: a closed sliver at each end, pointing outward.
-        tu, tv = du / span, dv / span
+        # Arrowheads: a closed sliver at each end, pointing outward — or, when
+        # they do not fit, standing outside and pointing in.
+        inward = -1.0 if outside else 1.0
         for sign, (bu, bv) in ((1.0, (u1 + ou, v1 + ov)), (-1.0, (u2 + ou, v2 + ov))):
             tip_u, tip_v = bu, bv
-            back_u = bu + sign * tu * DIM_ARROW_MM
-            back_v = bv + sign * tv * DIM_ARROW_MM
+            back_u = bu + inward * sign * tu * DIM_ARROW_MM
+            back_v = bv + inward * sign * tv * DIM_ARROW_MM
             wing = DIM_ARROW_MM * 0.28
             entities.append(
                 Polyline(

@@ -31,6 +31,18 @@ _SCALE_AGREEMENT_TOLERANCE = 0.12
 _INK_GAP = 1.2
 _INK_REACH = 3.5
 _INK_MIN_SPAN = 3.0
+# Выносная линия у размерной: насколько далеко смотреть вверх и вниз от строки и
+# сколько чернил подряд нужно с КАЖДОЙ стороны, чтобы признать пересечение. Выход
+# выносной за размерную линию по ГОСТ 2.307 — 1…5 мм, текст — 3,5…5 мм, отсюда
+# доли высоты текста. Стрелка ниже порога: её крыло — треть её длины.
+_WITNESS_REACH = 2.0
+_WITNESS_MIN = 0.3
+# И одна сторона обязана быть ДЛИННОЙ — выносная идёт к детали. Без этого резал
+# задник залитой стрелки: он тоже пересекает строку и вверх, и вниз. Замерено
+# на эталоне: выносная — вверх 23 px и вниз 441, задник стрелки — 11 и 13, а
+# стрелка ближе к подписи и выигрывала; «15» мерилось как 94 px вместо 177.
+_WITNESS_LONG = 1.2
+_WITNESS_MIN_SPAN = 1.0
 
 
 def _matches(value: float, candidates: list[float], relative: float = 0.005) -> bool:
@@ -269,7 +281,62 @@ def _span_from_ink(ink: Any, bbox: list[float], unit: float) -> list[float] | No
             key = (min(abs(y - y0), abs(y - y1)), -(right - left))
             if best is None or key < best[0]:
                 best = (key, [left, float(y), right, float(y)])
-    return best[1] if best else None
+    if best is None:
+        return None
+    line = best[1]
+    return _cut_at_witness_lines(ink, line, centre, unit)
+
+
+def _cut_at_witness_lines(ink: Any, line: list[float], centre: float, unit: float) -> list[float]:
+    """Обрезать прогон по выносным линиям, пересекающим его рядом с подписью.
+
+    Звенья размерной цепочки лежат на одной прямой и касаются друг друга, и
+    чернила идут одним прогоном через всю цепочку. Замерено на корпусе с
+    эталоном: у вала shaft-0 размеры 142, 177, 295 и 213 px все измерились как
+    829 — длина всей цепочки; так было в 66 случаях из 164 горизонтальных.
+
+    Конец размерной линии задаёт выносная: она пересекает строку и уходит
+    вверх (на выход за размерную линию) и вниз (к детали). Такие пересечения
+    режут прогон, и берётся отрезок между ближайшими к подписи. Выносная —
+    граница размера даже точнее стрелки. Если пересечений с одной стороны
+    нет, та сторона остаётся концом прогона, как было.
+    """
+    import numpy as np
+
+    left, row, right = int(line[0]), int(line[1]), int(line[2])
+    height = ink.shape[0]
+    # Сколько чернил подряд над и под строкой в каждом столбце прогона.
+    reach = max(3, int(round(_WITNESS_REACH * unit)))
+    top = max(0, row - reach)
+    bottom = min(height, row + reach + 1)
+    band = ink[top:bottom, left : right + 1]
+    centre_row = row - top
+    above = band[:centre_row][::-1]
+    below = band[centre_row + 1 :]
+    up = np.cumprod(above, axis=0).sum(axis=0) if above.size else np.zeros(band.shape[1])
+    down = np.cumprod(below, axis=0).sum(axis=0) if below.size else np.zeros(band.shape[1])
+    need = max(2, int(round(_WITNESS_MIN * unit)))
+    long = max(need + 1, int(round(_WITNESS_LONG * unit)))
+    crossing = (
+        np.flatnonzero((np.minimum(up, down) >= need) & (np.maximum(up, down) >= long)) + left
+    )
+    if crossing.size == 0:
+        return line
+    # Выносная толщиной в несколько столбцов — один конец, по её середине:
+    # внутренняя кромка давала размер короче на толщину линии.
+    runs = np.split(crossing, np.flatnonzero(np.diff(crossing) > 1) + 1)
+    middles = np.array([(run[0] + run[-1]) / 2.0 for run in runs])
+    before = middles[middles < centre]
+    after = middles[middles > centre]
+    new_left = float(before.max()) if before.size else line[0]
+    new_right = float(after.min()) if after.size else line[2]
+    # Порог здесь ниже, чем у самого прогона: пересечение уже подтверждено
+    # длинной стороной, а цифра подписи строку размерной линии не пересекает.
+    # С порогом прогона (3 высоты текста) короткий размер 6 мм — 71 px при
+    # цифре 31 px — молча мерился всей линией вместе с выносом за стрелки.
+    if new_right - new_left < _WITNESS_MIN_SPAN * unit:
+        return line
+    return [new_left, line[1], new_right, line[3]]
 
 
 def _pair_tokens_with_lines(
