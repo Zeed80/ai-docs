@@ -42,6 +42,38 @@ _KIND_PROMPT = (
     "Кириллицу пиши буквами, не экранируй. Только JSON."
 )
 
+# Тип, выбранный оператором, — не догадка модели. Сузить класс он может
+# только у «тела вращения»: «произвольная деталь» не говорит, пластина это,
+# фланец или корпус.
+_OPERATOR_KIND = {"rotation_body": "rotation"}
+
+
+def _kind_prompt(digitization_type: str | None) -> str:
+    prior = _OPERATOR_KIND.get(str(digitization_type or ""))
+    if prior is None:
+        return _KIND_PROMPT
+    return (
+        _KIND_PROMPT + "\nОператор указал тип детали: тело вращения (kind=rotation). "
+        "Если на листе явно не тело вращения — всё равно ответь честно, это "
+        "расхождение будет показано оператору."
+    )
+
+
+def _apply_operator_kind(kind: str, digitization_type: str | None) -> tuple[str, list[str]]:
+    """Класс детали с учётом выбора оператора и заметка о расхождении.
+
+    Решение оператора сильнее классификации модели, но расхождение не
+    прячется: оно и есть сигнал, что тип мог быть выбран неверно.
+    """
+    operator_kind = _OPERATOR_KIND.get(str(digitization_type or ""))
+    if operator_kind is None or kind == operator_kind:
+        return kind, []
+    return operator_kind, [
+        f"модель сочла деталь «{_type_label(kind) or 'не определено'}», "
+        f"а оператор выбрал «{_type_label(operator_kind)}» — построено по выбору оператора"
+    ]
+
+
 _STAMP_PROMPT = (
     "Перед тобой основная надпись (штамп) чертежа по ГОСТ 2.104. Прочитай "
     "поля и верни ОДНОЙ строкой JSON без пояснений:\n"
@@ -4266,8 +4298,13 @@ async def read_spec_by_fragments(
     router: Any | None = None,
     confidential: bool = True,
     shared_layers: dict[str, Any] | None = None,
+    digitization_type: str | None = None,
 ) -> dict:
-    """Assemble a spec from several narrow reads of the same sheet."""
+    """Assemble a spec from several narrow reads of the same sheet.
+
+    ``digitization_type`` — тип, выбранный оператором (долг D4 плана): раньше он
+    до ридера не доходил, и модель классифицировала деталь сама.
+    """
     from PIL import Image
     from pydantic import ValidationError
 
@@ -4318,9 +4355,12 @@ async def read_spec_by_fragments(
         "audit": fragment_answers,
     }
 
-    kind_answer = await _ask(_KIND_PROMPT, overview, num_predict=400, schema=_KIND_SCHEMA, **ask)
+    kind_answer = await _ask(
+        _kind_prompt(digitization_type), overview, num_predict=400, schema=_KIND_SCHEMA, **ask
+    )
     kind = str(kind_answer.get("kind") or "").strip().lower()
     part = str(kind_answer.get("part") or "").strip()
+    kind, operator_notes = _apply_operator_kind(kind, digitization_type)
 
     stamp = await _ask(
         _STAMP_PROMPT, _stamp_crop(image), num_predict=600, schema=_STAMP_SCHEMA, **ask
@@ -4663,7 +4703,7 @@ async def read_spec_by_fragments(
             if key in ("designation", "name", "material", "scale", "mass") and value
         },
         "unresolved": unresolved,
-        "optional_unresolved": [],
+        "optional_unresolved": operator_notes,
         # Which questions actually answered — a fragment read that lost the
         # stamp is a different result from one that lost the profile.
         "fragments": {
@@ -4813,9 +4853,24 @@ def _type_label(kind: str) -> str:
     }.get(kind, kind or "")
 
 
-def _has_geometry(spec: dict) -> bool:
-    body = spec.get("main_view") or {}
-    return bool(body.get("outer") or (body.get("profile") or {}).get("shape"))
+def spec_has_geometry(spec: dict | None) -> bool:
+    """Есть ли у спека хоть одно тело с геометрией — контур вращения или профиль.
+
+    Одно определение на весь путь «по описанию». `cad_trace` судил по одному
+    `main_view.outer`, и прочитанная пластина логировалась «без геометрии», а
+    её частичный consensus восстанавливался поверх готового итога.
+    """
+    if not spec:
+        return False
+    bodies = [spec.get("main_view") or {}, *(spec.get("parts") or [])]
+    return any(
+        isinstance(body, dict)
+        and bool(body.get("outer") or (body.get("profile") or {}).get("shape"))
+        for body in bodies
+    )
+
+
+_has_geometry = spec_has_geometry
 
 
 def _mark_observation_only_if_no_geometry(spec: dict[str, Any]) -> dict[str, Any]:
@@ -5039,6 +5094,7 @@ async def read_fragments_consensus(
     router: Any | None = None,
     confidential: bool = True,
     deadline_monotonic: float | None = None,
+    digitization_type: str | None = None,
 ) -> dict:
     """Read the sheet in fragments several times and keep what agrees.
 
@@ -5100,6 +5156,7 @@ async def read_fragments_consensus(
             router=router,
             confidential=confidential,
             shared_layers=shared_layers,
+            digitization_type=digitization_type,
         )
         pass_durations.append(time.monotonic() - pass_started)
         if spec:
@@ -5297,6 +5354,7 @@ async def read_spec_best_effort(
     router: Any | None = None,
     confidential: bool = True,
     budget_seconds: float = 750.0,
+    digitization_type: str | None = None,
 ) -> dict:
     """Fragments first, whole-sheet consensus as the fallback for geometry.
 
@@ -5327,6 +5385,7 @@ async def read_spec_best_effort(
         router=router,
         confidential=confidential,
         deadline_monotonic=deadline,
+        digitization_type=digitization_type,
     )
     fragment_unresolved = (
         [str(item) for item in (fragments.get("unresolved") or []) if str(item)]

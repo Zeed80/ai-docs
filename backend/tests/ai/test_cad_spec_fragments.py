@@ -1520,3 +1520,63 @@ async def test_geometry_code_pass_none_when_no_code_extracted(monkeypatch):
         audit=[],
     )
     assert result is None
+
+
+def test_a_plate_and_a_multi_body_read_count_as_geometry():
+    """Статус «есть геометрия» судил по одному `main_view.outer` (долг D7).
+
+    Прочитанная пластина логировалась «без геометрии», и поверх готового итога
+    восстанавливался частичный consensus.
+    """
+    from app.ai.cad_recognize.spec_fragments import spec_has_geometry
+
+    plate = {"main_view": {"profile": {"shape": "rectangle", "width_mm": 80}}}
+    second_body = {"main_view": {}, "parts": [{"outer": [{"diameter_mm": 20, "length_mm": 5}]}]}
+
+    assert spec_has_geometry(plate)
+    assert spec_has_geometry(second_body)
+    assert not spec_has_geometry({"main_view": {"profile": None}, "parts": []})
+    assert not spec_has_geometry(None)
+
+
+def test_the_operator_rotation_type_is_a_prior_and_a_disagreement_is_shown():
+    """Тип, выбранный оператором, не доходил до ридера (долг D4 плана)."""
+    from app.ai.cad_recognize.spec_fragments import (
+        _KIND_PROMPT,
+        _apply_operator_kind,
+        _kind_prompt,
+    )
+
+    assert "тело вращения" in _kind_prompt("rotation_body").split(_KIND_PROMPT, 1)[1]
+    # «Произвольная деталь» не сужает класс — вопрос не меняется.
+    assert _kind_prompt("arbitrary_mechanical_part") == _KIND_PROMPT
+    assert _kind_prompt(None) == _KIND_PROMPT
+
+    kind, notes = _apply_operator_kind("plate", "rotation_body")
+    assert kind == "rotation"
+    assert notes and "пластина" in notes[0] and "оператор" in notes[0]
+
+    assert _apply_operator_kind("rotation", "rotation_body") == ("rotation", [])
+    assert _apply_operator_kind("plate", "arbitrary_mechanical_part") == ("plate", [])
+    assert _apply_operator_kind("flange", "auto") == ("flange", [])
+
+
+@pytest.mark.asyncio
+async def test_the_operator_type_reaches_every_fragment_pass(monkeypatch):
+    seen: list[object] = []
+
+    async def fake_fragments(*_a, **kwargs):
+        seen.append(kwargs.get("digitization_type"))
+        return {"main_view": {"outer": [{"diameter_mm": 20, "length_mm": 50}]}}
+
+    async def fake_finalize(spec, _image):
+        return spec
+
+    monkeypatch.setattr(
+        "app.ai.cad_recognize.spec_fragments.read_spec_by_fragments", fake_fragments
+    )
+    monkeypatch.setattr("app.ai.cad_recognize.spec_fragments._finalize_spec", fake_finalize)
+
+    await read_spec_best_effort(b"x", passes=2, digitization_type="rotation_body")
+
+    assert seen == ["rotation_body", "rotation_body"]

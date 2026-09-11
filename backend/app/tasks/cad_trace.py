@@ -3532,6 +3532,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     return await _fail("Метод «по описанию»: нужен исходный скан/фото.")
                 from app.ai.cad_recognize.spec_fragments import (
                     read_spec_best_effort,
+                    spec_has_geometry,
                 )
                 from app.ai.cad_recognize.spec_vectorize import (
                     SpecReaderNotVisionError,
@@ -3562,6 +3563,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                             content,
                             passes=passes,
                             budget_seconds=_READER_BUDGET_SECONDS,
+                            digitization_type=digitization_type.normalized,
                         )
                     await _record(
                         "reader",
@@ -3573,9 +3575,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         ),
                         {
                             "attempts": len(spec.get("reader_attempts") or []) if spec else 0,
-                            "has_geometry": bool(
-                                spec and (spec.get("main_view") or {}).get("outer")
-                            ),
+                            "has_geometry": spec_has_geometry(spec),
                         },
                     )
                 except TimeoutError:
@@ -3597,7 +3597,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         "сохранённого consensus",
                         {
                             "timeout_seconds": _READER_TIMEOUT_SECONDS,
-                            "has_geometry": bool((spec.get("main_view") or {}).get("outer")),
+                            "has_geometry": spec_has_geometry(spec),
                             "partial_spec_sequence": "latest",
                             "_partial_spec": spec,
                             "_progress_pct": 60,
@@ -3611,14 +3611,14 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     # A misconfigured slot and a cut-off answer are both
                     # actionable, and neither means "unreadable drawing".
                     return await _fail(f"Метод «по описанию»: {exc}")
-                if not spec or not (spec.get("main_view") or {}).get("outer"):
+                if not spec_has_geometry(spec):
                     # Частичный consensus сохраняется по ходу чтения и лежит в
                     # params.cad_partial_spec. Раньше его подхватывала ТОЛЬКО
                     # ветка таймаута, поэтому при «чтение закончилось, а
                     # геометрии нет» работа выбрасывалась при том, что данные
                     # лежали в БД. Ветка восстановления одна на оба случая.
                     recovered = await _load_cad_partial_spec(gen_uuid)
-                    if recovered and (recovered.get("main_view") or {}).get("outer"):
+                    if spec_has_geometry(recovered):
                         recovered.setdefault("optional_unresolved", []).append(
                             "итоговое чтение не дало геометрии; использован последний "
                             "сохранённый consensus"
