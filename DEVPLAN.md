@@ -3,7 +3,8 @@
 > Актуальный план и фактический остаток агентской переработки: [`AGENT_EMPLOYEE_IMPLEMENTATION_PLAN.md`](./AGENT_EMPLOYEE_IMPLEMENTATION_PLAN.md). Указанные ниже завершённые архивные фазы не означают завершение нового цифрового сотрудника.
 
 Пилот `/api/agent/chat-runs` сохраняет запросы и события в БД и исполняется worker;
-основной WebSocket, продолжение после подтверждения и checkpoint/resume ещё в плане.
+основной UI переключён на HTTP и восстанавливает события. Архивные чаты только
+для чтения; продолжение после подтверждения и checkpoint/resume ещё в плане.
 Проверка: `python3 -m pytest backend/tests/test_durable_chat.py backend/tests/test_work_order_checkpoint.py -q`.
 
 > Подробный план и фактический статус инженерного направления «Оцифровка в DXF» находятся в [`DXF_CAD_DEVELOPMENT_PLAN.md`](./DXF_CAD_DEVELOPMENT_PLAN.md).

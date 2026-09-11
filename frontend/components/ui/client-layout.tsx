@@ -21,7 +21,7 @@ function isChromeless(pathname: string | null): boolean {
   return !!pathname && CHROMELESS_ROUTE.test(pathname);
 }
 
-// AssistantPanel uses WebSocket, localStorage, and client-only state — never SSR it.
+// AssistantPanel uses durable HTTP polling, localStorage and client-only state.
 // ssr: false eliminates hydration mismatches on disabled/placeholder attributes.
 const AssistantPanel = dynamic(
   () =>

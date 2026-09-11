@@ -5,9 +5,8 @@ import { useRouter } from "next/navigation";
 import {
   buildAgentApprovalMessage,
   buildAgentUserMessage,
-  normalizeAgentMessages,
-  resolveAgentWsConfig,
 } from "@/lib/agent-ws";
+import { DurableChatTransport } from "@/lib/durable-chat";
 import { useDegradedMode } from "@/lib/degraded-mode";
 import { useAgentName } from "@/lib/agent-name";
 import { mutFetch } from "@/lib/auth";
@@ -314,6 +313,7 @@ export function AssistantPanel() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isConnected, setIsConnected] = useState(false);
+  const [isLegacyChat, setIsLegacyChat] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -326,7 +326,7 @@ export function AssistantPanel() {
   const [lastTurnTools, setLastTurnTools] = useState<string[]>([]);
   const [ratings, setRatings] = useState<Record<string, 1 | -1>>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const wsRef = useRef<WebSocket | null>(null);
+  const wsRef = useRef<DurableChatTransport | null>(null);
   const streamingIdRef = useRef<string | null>(null);
   const tgStreamingIdRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -405,6 +405,7 @@ export function AssistantPanel() {
         })
         .filter(Boolean) as ChatMessage[];
       setMessages(nextMessages);
+      await wsRef.current?.watchSession(sessionId, new Set(nextMessages.map((message) => message.id)));
     } catch {
       if (activeHistoryLoadRef.current === sessionId) {
         setMessages([]);
@@ -463,36 +464,8 @@ export function AssistantPanel() {
   }, []);
 
   const connect = useCallback(() => {
-    void (async () => {
-      try {
-        const config = await resolveAgentWsConfig();
-        const ws = new WebSocket(config.endpoint);
-        ws.onopen = () => setIsConnected(true);
-        ws.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data) as Record<string, unknown>;
-            for (const message of normalizeAgentMessages(data)) {
-              handleServerMessage(message);
-            }
-          } catch {
-            appendAssistant(String(event.data));
-          }
-        };
-        ws.onclose = (event) => {
-          setIsConnected(false);
-          // 4001 = Unauthorized — session expired, redirect to login
-          if (event.code === 4001) {
-            window.location.href = `/api/auth/login?redirect_uri=${encodeURIComponent(window.location.href)}`;
-            return;
-          }
-          setTimeout(connect, 5000);
-        };
-        ws.onerror = () => setIsConnected(false);
-        wsRef.current = ws;
-      } catch {
-        setIsConnected(false);
-      }
-    })();
+    wsRef.current = new DurableChatTransport(handleServerMessage);
+    setIsConnected(true);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -602,6 +575,14 @@ export function AssistantPanel() {
 
   function handleServerMessage(data: Record<string, unknown>) {
     const type = data.type as string;
+    if (type === "durable_mode") {
+      setIsLegacyChat(Boolean(data.legacy));
+      return;
+    }
+    if (type === "durable_state") {
+      setIsStreaming(Boolean(data.active));
+      return;
+    }
     const isTelegram = data.source === "telegram";
 
     // ── Telegram user message (mirror) ──────────────────────────────────────
@@ -1013,6 +994,7 @@ export function AssistantPanel() {
   }
 
   function sendMessage() {
+    if (isLegacyChat || isStreaming || isHistoryLoading) return;
     const hasText = input.trim().length > 0;
     const uploadedFiles = attachedFiles.filter((f) => f.status === "uploaded");
     const hasFiles = uploadedFiles.length > 0;
@@ -1088,6 +1070,7 @@ export function AssistantPanel() {
   const pendingAskRef = useRef<string | null>(null);
   const sendAgentText = useCallback(
     (text: string) => {
+      if (isLegacyChat || isStreaming || isHistoryLoading) return;
       const content = text.trim();
       if (!content) return;
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
@@ -1105,7 +1088,7 @@ export function AssistantPanel() {
       setIsStreaming(true);
       inputRef.current?.focus();
     },
-    [currentSessionId, reasoningMode],
+    [currentSessionId, reasoningMode, isLegacyChat, isStreaming, isHistoryLoading],
   );
 
   useEffect(() => {
@@ -1272,8 +1255,6 @@ export function AssistantPanel() {
       return;
     }
     wsRef.current.send(JSON.stringify({ type: "stop" }));
-    streamingIdRef.current = null;
-    setIsStreaming(false);
   }
 
   async function handleCreateNewChat() {
@@ -1286,6 +1267,8 @@ export function AssistantPanel() {
         ...prev.filter((x) => x.id !== created.id),
       ]);
       setCurrentSessionId(created.id);
+      setIsLegacyChat(false);
+      await wsRef.current?.watchSession(created.id);
       persistSessionToStorage(created.id);
       setMessages([]);
       setInput("");
@@ -1362,7 +1345,7 @@ export function AssistantPanel() {
   }
 
   const isUploading = attachedFiles.some((f) => f.status === "uploading");
-  const effectivelyOffline = isDegraded && !isConnected;
+  const effectivelyOffline = (isDegraded && !isConnected) || isLegacyChat;
   const canSend =
     !effectivelyOffline &&
     !isStreaming &&
@@ -1394,6 +1377,10 @@ export function AssistantPanel() {
     >
       {/* Header */}
       <div className="border-b border-slate-700">
+        <p className="px-4 py-2 text-xs text-amber-200" role="status">
+          {isLegacyChat ? "Архивный чат: создайте новый для долговечного исполнения." :
+            "Долговечный чат: задача работает независимо от вкладки. Новые подтверждения пока блокируют запуск; автоматического повтора после сбоя нет."}
+        </p>
         <GpuStatusBar variant="dark" />
         <div className="px-4 py-2.5 flex min-w-0 items-center gap-2">
           <span

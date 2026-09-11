@@ -10,7 +10,7 @@ AI-сотрудник **Света** (AiAgent agent) обрабатывает с
 
 ## Ключевые документы
 - `AGENT_EMPLOYEE_IMPLEMENTATION_PLAN.md` — актуальный контракт цифрового сотрудника, реализованный срез и остаток работ; приоритет над архивными описаниями генерации скиллов и эвристического роутинга.
-- Долговечный чат пока доступен как отдельный HTTP-пилот `/api/agent/chat-runs`; основной WS не переведён, checkpoint/resume ещё нет. Проверки: `python3 -m pytest backend/tests/test_durable_chat.py backend/tests/test_work_order_checkpoint.py -q`.
+- Основной чат использует HTTP `/api/agent/chat-runs` и сохранённые события. Архивные WS-чаты в UI только для чтения; checkpoint/resume и продолжение после новых подтверждений ещё не реализованы. Проверки: `python3 -m pytest backend/tests/test_durable_chat.py backend/tests/test_work_order_checkpoint.py -q`.
 - `plan_claude.md` — полное ТЗ v2.0 (20 разделов)
 - `DEVPLAN.md` — план разработки с ToDo (~1530 строк, 7 эпиков, 52 skills, 8 scenarios)
 - `PLAN.md` — краткий стек и ToDo

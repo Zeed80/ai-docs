@@ -79,6 +79,7 @@ async def _run_durable_chat(
         restored = [{"role": m.role, "content": m.content or ""} for m in reversed(history)]
         step = await db.get(WorkStep, step_id)
         reasoning_mode = (step.input_ or {}).get("reasoning_mode", "normal")
+        workspace_context = (step.input_ or {}).get("workspace_context", {})
     chunks, errors = [], []
 
     async def collect(event):
@@ -138,7 +139,11 @@ async def _run_durable_chat(
             async with factory() as db:
                 await active(db)
 
-    execution = asyncio.create_task(agent.on_user_message(prompt, reasoning_mode=reasoning_mode))
+    execution = asyncio.create_task(
+        agent.on_user_message(
+            prompt, reasoning_mode=reasoning_mode, workspace_context=workspace_context
+        )
+    )
     watcher = asyncio.create_task(watch())
     try:
         done, _ = await asyncio.wait(

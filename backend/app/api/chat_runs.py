@@ -1,6 +1,7 @@
 """Pilot durable chat transport. No task is owned by the HTTP connection."""
 
 import hashlib
+import json
 import uuid
 from typing import Literal
 
@@ -11,13 +12,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.jwt import get_current_user, is_service_account
 from app.auth.models import UserInfo
-from app.chat.store import ChatSessionNotFoundError, append_chat_message, ensure_chat_session
+from app.chat.store import (
+    ChatSessionNotFoundError,
+    append_chat_attachment,
+    append_chat_message,
+    ensure_chat_session,
+)
 from app.db.agent_runtime_models import DurableChatRun
-from app.db.models import ChatMessage, ChatSession, WorkEvent, WorkOrder
+from app.db.models import ChatMessage, ChatSession, Document, WorkEvent, WorkOrder
 from app.db.session import get_db
 from app.domain.work_orders import ACTIVE_WORK_STATUSES, create_single_step_plan, create_work_order
 
 router = APIRouter(prefix="/api/agent/chat-runs", tags=["durable-chat"])
+
+
+class ChatRunAttachment(BaseModel):
+    document_id: uuid.UUID
+    file_name: str = ""
+    mime_type: str | None = None
+    size_bytes: int | None = None
 
 
 class ChatRunCreate(BaseModel):
@@ -26,6 +39,8 @@ class ChatRunCreate(BaseModel):
     session_id: uuid.UUID | None = None
     content: str = Field(min_length=1, max_length=12000)
     reasoning_mode: Literal["normal", "strict"] = "normal"
+    attachments: list[ChatRunAttachment] = Field(default_factory=list, max_length=20)
+    workspace_context: dict = Field(default_factory=dict)
 
 
 def describe(run, order):
@@ -50,6 +65,8 @@ async def submit_chat_run(
         raise HTTPException(403, "Chat intake requires a human owner")
     if not body.content.strip():
         raise HTTPException(422, "Message must not be empty")
+    if len(json.dumps(body.workspace_context).encode()) > 64000:
+        raise HTTPException(422, "Workspace context is too large")
     # Serialize retries even when both requests would create a new ChatSession.
     lock = int.from_bytes(
         hashlib.sha256(f"{user.sub}:{body.request_id}".encode()).digest()[:8], "big", signed=True
@@ -94,6 +111,24 @@ async def submit_chat_run(
     message = await append_chat_message(
         db, session_id=session.id, role="user", content=body.content
     )
+    for attachment in body.attachments:
+        document = await db.scalar(
+            select(Document).where(
+                Document.id == attachment.document_id,
+                Document.owner_sub == user.sub,
+            )
+        )
+        if document is None:
+            raise HTTPException(404, "Owned attachment not found")
+        await append_chat_attachment(
+            db,
+            session_id=session.id,
+            message_id=message.id,
+            document_id=document.id,
+            file_name=document.file_name,
+            mime_type=document.mime_type,
+            size_bytes=document.file_size,
+        )
     order = await create_work_order(
         db,
         owner_key=user.sub,
@@ -124,7 +159,11 @@ async def submit_chat_run(
         order,
         kind="agent_turn",
         title="Durable chat turn",
-        input_data={"runner": "durable_chat", "reasoning_mode": body.reasoning_mode},
+        input_data={
+            "runner": "durable_chat",
+            "reasoning_mode": body.reasoning_mode,
+            "workspace_context": body.workspace_context,
+        },
         max_attempts=1,
         timeout_seconds=7200,
     )
@@ -144,6 +183,41 @@ async def owned_run(db, run_id, user):
     if run is None:
         raise HTTPException(404, "Chat run not found")
     return run
+
+
+@router.get("")
+async def latest_chat_run(
+    session_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+):
+    session = await db.scalar(
+        select(ChatSession).where(
+            ChatSession.id == session_id,
+            ChatSession.user_key == user.sub,
+            ChatSession.deleted_at.is_(None),
+        )
+    )
+    if session is None:
+        raise HTTPException(404, "Chat session not found")
+    run = await db.scalar(
+        select(DurableChatRun)
+        .where(
+            DurableChatRun.session_id == session_id,
+            DurableChatRun.owner_key == user.sub,
+        )
+        .order_by(DurableChatRun.created_at.desc(), DurableChatRun.id.desc())
+        .limit(1)
+    )
+    return {
+        "run": describe(run, await db.get(WorkOrder, run.work_order_id)) if run else None,
+        "legacy": run is None
+        and bool(
+            await db.scalar(
+                select(ChatMessage.id).where(ChatMessage.session_id == session_id).limit(1)
+            )
+        ),
+    }
 
 
 @router.get("/{run_id}")

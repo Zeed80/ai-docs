@@ -440,3 +440,72 @@ async def test_cancel_between_preparation_and_dispatch_preserves_fence(test_engi
         call = await db.scalar(select(WorkToolCall).where(WorkToolCall.attempt_id == attempt))
         assert call.status == "outcome_unknown"
         assert (await db.get(WorkOrder, run["work_order_id"])).status == "canceled"
+
+
+@pytest.mark.asyncio
+async def test_latest_run_is_scoped_to_owned_session(client):
+    from app.auth.jwt import get_current_user
+    from app.main import app
+
+    run = (await client.post("/api/agent/chat-runs", json=request())).json()
+    response = await client.get(f"/api/agent/chat-runs?session_id={run['session_id']}")
+    assert response.json()["run"]["id"] == run["id"]
+    original = app.dependency_overrides.copy()
+    try:
+        app.dependency_overrides[get_current_user] = lambda: _DEV_USER.model_copy(
+            update={"sub": "other"}
+        )
+        assert (
+            await client.get(f"/api/agent/chat-runs?session_id={run['session_id']}")
+        ).status_code == 404
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(original)
+
+
+@pytest.mark.asyncio
+async def test_foreign_attachment_rejects_entire_intake(client, db_session):
+    body = request(attachments=[{"document_id": str(uuid.uuid4()), "file_name": "forged.pdf"}])
+    response = await client.post("/api/agent/chat-runs", json=body)
+    assert response.status_code == 404
+    assert (
+        await db_session.scalar(
+            select(DurableChatRun.id).where(
+                DurableChatRun.request_id == uuid.UUID(body["request_id"])
+            )
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_owned_attachment_uses_server_metadata(client, db_session):
+    from app.db.models import ChatMessageAttachment, Document
+
+    doc = Document(
+        owner_sub=_DEV_USER.sub,
+        file_name="real.pdf",
+        file_hash="0" * 64,
+        file_size=10,
+        mime_type="application/pdf",
+        storage_path="test/attachment",
+    )
+    db_session.add(doc)
+    await db_session.flush()
+    response = await client.post(
+        "/api/agent/chat-runs",
+        json=request(
+            attachments=[{"document_id": str(doc.id), "file_name": "forged.exe"}],
+            workspace_context={"active_tabular_surface": {"id": "surface"}},
+        ),
+    )
+    assert response.status_code == 202, response.text
+    run = await db_session.get(DurableChatRun, uuid.UUID(response.json()["id"]))
+    attachment = await db_session.scalar(
+        select(ChatMessageAttachment).where(ChatMessageAttachment.message_id == run.user_message_id)
+    )
+    assert attachment.file_name == "real.pdf"
+    step = await db_session.scalar(
+        select(WorkStep).where(WorkStep.work_order_id == run.work_order_id)
+    )
+    assert step.input_["workspace_context"]["active_tabular_surface"]["id"] == "surface"

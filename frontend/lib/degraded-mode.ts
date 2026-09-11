@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { resolveAgentWsConfig } from "@/lib/agent-ws";
 
 export function useDegradedMode() {
   const [isAgentAvailable, setIsAgentAvailable] = useState(false);
@@ -9,40 +8,16 @@ export function useDegradedMode() {
   useEffect(() => {
     let cancelled = false;
 
-    function probe(endpoint: string, onDone: (available: boolean) => void) {
+    async function check() {
       try {
-        const ws = new WebSocket(endpoint);
-        const timer = setTimeout(() => {
-          ws.close();
-          onDone(false);
-        }, 4000);
-
-        ws.onopen = () => {
-          clearTimeout(timer);
-          ws.close();
-          onDone(true);
-        };
-        ws.onerror = () => {
-          clearTimeout(timer);
-          onDone(false);
-        };
+        const response = await fetch("/health", {cache: "no-store", signal: AbortSignal.timeout(4000)});
+        if (!cancelled) setIsAgentAvailable(response.ok);
       } catch {
-        onDone(false);
+        if (!cancelled) setIsAgentAvailable(false);
       }
     }
 
-    async function check() {
-      const { healthCheckEndpoints } = await resolveAgentWsConfig();
-      const [primary] = healthCheckEndpoints;
-      probe(primary, (primaryAvailable) => {
-        if (cancelled) return;
-        setIsAgentAvailable(primaryAvailable);
-      });
-    }
-
-    // Delay first probe by 2 s — avoids false "degraded" on cold start when
-    // the backend container is still warming up but the WS chat connection
-    // (established by assistant-panel) succeeds shortly after.
+    // Probe the HTTP runtime, not the retired connection-owned chat transport.
     const initialTimer = setTimeout(() => {
       if (!cancelled) check();
     }, 2000);
