@@ -256,13 +256,21 @@ def _vote_sections(
 
 def _body_consensus(
     bodies: list[dict], *, minimum: int, total: int, label: str
-) -> tuple[dict, list[str]]:
-    """Consensus for one body: its type, its outer profile and its bore."""
+) -> tuple[dict, list[str], list[str]]:
+    """Consensus for one body: its type, its outer profile and its bore.
+
+    Returns ``(body, disagreements, notes)`` — disagreements block
+    construction, notes record features dropped as unconfirmed.
+    """
     disagreements: list[str] = []
+    notes: list[str] = []
     merged: dict[str, Any] = {}
 
     body_type, _count = _vote_text([body.get("type") for body in bodies], minimum=minimum)
     merged["type"] = body_type or ""
+    name, _count = _vote_text([body.get("name") for body in bodies], minimum=minimum)
+    if name is not None:
+        merged["name"] = name
 
     outer, _agreed, problem = _vote_sections(
         [body.get("outer") or [] for body in bodies], minimum=minimum, label=label
@@ -286,16 +294,26 @@ def _body_consensus(
         if bore_problem:
             # A cavity only some passes saw is a review item, not a silent solid.
             disagreements.append(f"{label} (расточка): {bore_problem}")
+        # Where the bore starts and whether it is blind. These were dropped
+        # here, so every bore left consensus as a through hole from the left
+        # face — the very defect the fields were added to fix.
+        if bore is not None:
+            placement = _bore_placement(bodies, minimum=minimum)
+            if placement is None:
+                disagreements.append(f"{label} (расточка): проходы не сошлись на её положении")
+            else:
+                merged.update(placement)
 
     profiles = [body.get("profile") for body in bodies if isinstance(body.get("profile"), dict)]
     if profiles:
-        profile, profile_problem = _profile_consensus(
+        profile, profile_problem, profile_notes = _profile_consensus(
             profiles, minimum=minimum, seen=len(profiles), total=total
         )
         if profile is not None:
             merged["profile"] = profile
         elif profile_problem:
             disagreements.append(f"{label} (контур): {profile_problem}")
+        notes.extend(f"{label}: {note}" for note in profile_notes)
 
     for field in (
         "chamfers",
@@ -307,18 +325,53 @@ def _body_consensus(
         "circular_hole_patterns",
     ):
         feature_reads = [body.get(field) or [] for body in bodies]
-        accepted = _agreed_feature_items(feature_reads, minimum=minimum)
+        accepted, dropped = _vote_feature_list(feature_reads, minimum=minimum)
         if accepted:
             merged[field] = accepted
+            if dropped:
+                notes.append(
+                    f"{label} ({field}): {dropped} элемент(ов) подтверждено меньшинством "
+                    "проходов — не построено"
+                )
         elif any(feature_reads):
             disagreements.append(f"{label} ({field}): проходы не сошлись на малых элементах")
-    return merged, disagreements
+    return merged, disagreements, notes
+
+
+def _bore_placement(bodies: list[dict], *, minimum: int) -> dict[str, Any] | None:
+    """Voted bore start, side and blindness; ``None`` when the passes disagree.
+
+    A field no pass stated takes the schema default — agreement that nothing
+    was said is agreement.
+    """
+    with_bore = [body for body in bodies if body.get("bore")]
+    need = min(minimum, len(with_bore))
+    placement: dict[str, Any] = {}
+    starts = [body.get("bore_start_mm", 0.0) or 0.0 for body in with_bore]
+    start, _votes = _vote_number(starts, minimum=need)
+    if start is None:
+        return None
+    placement["bore_start_mm"] = start
+    side, _votes = _vote_text(
+        [body.get("bore_from_end") or "left" for body in with_bore], minimum=need
+    )
+    if side is None:
+        return None
+    placement["bore_from_end"] = side
+    blind = [body.get("bore_blind") for body in with_bore]
+    counts = Counter(json.dumps(value) for value in blind)
+    key, votes = counts.most_common(1)[0]
+    if votes < need:
+        return None
+    placement["bore_blind"] = json.loads(key)
+    return placement
 
 
 def _feature_items_agree(left: dict, right: dict) -> bool:
     """Compare one cut feature without relying on list order or evidence."""
     keys = set(left) | set(right)
-    keys -= {"evidence", "note", "confidence", "source"}
+    # `id` is a label the reader assigns per pass ("hole-2"), not geometry.
+    keys -= {"evidence", "note", "confidence", "source", "id"}
     for key in keys:
         a, b = left.get(key), right.get(key)
         if a is None and b is None:
@@ -339,10 +392,20 @@ def _feature_items_agree(left: dict, right: dict) -> bool:
 
 def _agreed_feature_items(reads: list[list[dict]], *, minimum: int) -> list[dict]:
     """Keep only complete feature objects independently confirmed by passes."""
+    return _vote_feature_list(reads, minimum=minimum)[0]
+
+
+def _vote_feature_list(reads: list[list[dict]], *, minimum: int) -> tuple[list[dict], int]:
+    """Confirmed feature objects, and how many DISTINCT features were dropped.
+
+    The count is what keeps a rejection from being a silent loss: a feature
+    only a minority of passes saw is not built, but the spec says so.
+    """
     candidates = [item for read in reads for item in read if isinstance(item, dict)]
     accepted: list[dict] = []
+    rejected: list[dict] = []
     for candidate in candidates:
-        if any(_feature_items_agree(candidate, item) for item in accepted):
+        if any(_feature_items_agree(candidate, item) for item in accepted + rejected):
             continue
         votes = sum(
             1
@@ -351,9 +414,8 @@ def _agreed_feature_items(reads: list[list[dict]], *, minimum: int) -> list[dict
                 isinstance(item, dict) and _feature_items_agree(candidate, item) for item in read
             )
         )
-        if votes >= minimum:
-            accepted.append(candidate)
-    return accepted
+        (accepted if votes >= minimum else rejected).append(candidate)
+    return accepted, len(rejected)
 
 
 def _same_value(left: Any, right: Any) -> bool:
@@ -487,24 +549,88 @@ def _build_value_provenance(merged: dict, reads: list[dict]) -> dict[str, dict]:
 
 def _profile_consensus(
     profiles: list[dict], *, minimum: int, seen: int, total: int
-) -> tuple[dict | None, str | None]:
+) -> tuple[dict | None, str | None, list[str]]:
+    """Consensus for a flat profile: shape, sizes, sketch and cut features.
+
+    Returns ``(profile, problem, notes)``: ``problem`` blocks construction,
+    ``notes`` are features dropped as unconfirmed while others agreed.
+
+    Holes, patterns and slots used to be copied whole from the pass with the
+    most of them, unchecked — a hole one pass out of three imagined reached the
+    kernel, and the corner radius and the sketch were not carried at all (a
+    sketch profile came out as ``shape="sketch"`` with no edges). Now they are
+    voted like every other cut feature.
+    """
     if seen < minimum:
-        return None, (f"контур прочитан только в {seen} из {total} проходов")
+        return None, (f"контур прочитан только в {seen} из {total} проходов"), []
     merged: dict[str, Any] = {}
-    shape, shape_votes = _vote_text([p.get("shape") for p in profiles], minimum=minimum)
+    shape, _shape_votes = _vote_text([p.get("shape") for p in profiles], minimum=minimum)
     if shape is None:
-        return None, "проходы не сошлись на форме контура"
+        return None, "проходы не сошлись на форме контура", []
     merged["shape"] = shape
+    same_shape = [p for p in profiles if _text_key(p.get("shape")) == _text_key(shape)]
     for field in ("width_mm", "height_mm", "diameter_mm", "thickness_mm"):
-        value, _votes = _vote_number([p.get(field) for p in profiles], minimum=minimum)
+        value, _votes = _vote_number([p.get(field) for p in same_shape], minimum=minimum)
         merged[field] = value
-    # Holes and slots are kept from the passes that agreed on the shape, using
-    # the reading with the most features so a pass that simply saw less does
-    # not erase them; the count itself is surfaced for review.
-    richest = max(profiles, key=lambda p: len(p.get("holes") or []) + len(p.get("slots") or []))
+    if shape == "rectangle":
+        radii = [p.get("corner_radius_mm") for p in same_shape]
+        radius, _votes = _vote_number(radii, minimum=minimum)
+        if radius is not None:
+            merged["corner_radius_mm"] = radius
+        elif any(value is not None for value in radii):
+            return None, "проходы не сошлись на радиусе углов контура", []
+    if shape == "sketch":
+        sketch = _agreed_sketch([p.get("sketch") or [] for p in same_shape], minimum=minimum)
+        if sketch is None:
+            return None, "проходы не сошлись на эскизе контура", []
+        merged["sketch"] = sketch
+    notes: list[str] = []
     for field in ("holes", "hole_patterns", "slots"):
-        merged[field] = richest.get(field) or []
-    return merged, None
+        reads = [p.get(field) or [] for p in same_shape]
+        accepted, dropped = _vote_feature_list(reads, minimum=minimum)
+        merged[field] = accepted
+        if dropped and not accepted:
+            return None, f"проходы не сошлись на элементах контура ({field})", []
+        if dropped:
+            notes.append(
+                f"контур ({field}): {dropped} элемент(ов) подтверждено меньшинством "
+                "проходов — не построено"
+            )
+    return merged, None, notes
+
+
+def _sketches_agree(left: list[dict], right: list[dict]) -> bool:
+    if len(left) != len(right):
+        return False
+    for a, b in zip(left, right, strict=True):
+        if not isinstance(a, dict) or not isinstance(b, dict):
+            return False
+        if a.get("kind") != b.get("kind") or a.get("clockwise") != b.get("clockwise"):
+            return False
+        for key in ("to", "center"):
+            pa, pb = a.get(key), b.get(key)
+            if pa is None and pb is None:
+                continue
+            if pa is None or pb is None or len(pa) != len(pb):
+                return False
+            if not all(_numbers_agree(x, y) for x, y in zip(pa, pb, strict=True)):
+                return False
+    return True
+
+
+def _agreed_sketch(reads: list[list[dict]], *, minimum: int) -> list[dict] | None:
+    """One pass's whole sketch, if enough passes drew the same loop.
+
+    Taken whole, never merged edge by edge: a loop stitched from different
+    passes is a contour none of them saw, and it need not even close.
+    """
+    for candidate in reads:
+        if not candidate:
+            continue
+        votes = sum(1 for other in reads if _sketches_agree(candidate, other))
+        if votes >= minimum:
+            return candidate
+    return None
 
 
 def consensus_spec(specs: list[dict], *, minimum: int | None = None) -> dict:
@@ -549,15 +675,18 @@ def consensus_spec(specs: list[dict], *, minimum: int | None = None) -> dict:
         optional_conflicts = []
 
     main_bodies = [spec.get("main_view") or {} for spec in usable]
-    main, main_problems = _body_consensus(
+    main, main_problems, feature_notes = _body_consensus(
         main_bodies, minimum=minimum, total=total, label="главный вид"
     )
     merged["main_view"] = main
     disagreements.extend(main_problems)
+    parts, part_problems, part_notes = _parts_consensus(usable, minimum=minimum, total=total)
+    disagreements.extend(part_problems)
+    feature_notes.extend(part_notes)
 
     # Title-block metadata never blocks geometry, so a disagreement here is
     # optional rather than fatal.
-    optional: list[str] = list(optional_conflicts)
+    optional: list[str] = list(optional_conflicts) + feature_notes
     title: dict[str, Any] = {}
     title_reads = [spec.get("title_block") or {} for spec in usable]
     for field in ("material", "designation", "scale", "company", "mass"):
@@ -578,7 +707,7 @@ def consensus_spec(specs: list[dict], *, minimum: int | None = None) -> dict:
     merged["views"] = _agreed_items(
         [spec.get("views") or [] for spec in usable], "kind", minimum=minimum
     )
-    merged["parts"] = []
+    merged["parts"] = parts
     if usable[0].get("source_images"):
         merged["source_images"] = usable[0]["source_images"]
 
@@ -606,6 +735,51 @@ def consensus_spec(specs: list[dict], *, minimum: int | None = None) -> dict:
     }
     merged["value_provenance"] = _build_value_provenance(merged, usable)
     return merged
+
+
+def _parts_consensus(
+    usable: list[dict], *, minimum: int, total: int
+) -> tuple[list[dict], list[str], list[str]]:
+    """Additional bodies, voted body by body.
+
+    ``parts`` used to be reset to ``[]`` whenever two or more passes came
+    back, so a multi-body read survived only as a single pass and was lost the
+    moment consensus actually ran. The passes must first agree on HOW MANY
+    bodies there are; then each body is voted like the main one, matched by
+    position (by name when every pass named every body).
+    """
+    reads = [
+        [part for part in (spec.get("parts") or []) if isinstance(part, dict)] for spec in usable
+    ]
+    if not any(reads):
+        return [], [], []
+    count, votes = _vote_number([len(read) for read in reads], minimum=minimum)
+    if count is None or count == 0:
+        return (
+            [],
+            [
+                f"дополнительные тела: проходы не сошлись на их числе ({sorted({len(r) for r in reads})})"
+            ],
+            [],
+        )
+    count = int(count)
+    agreeing = [read for read in reads if len(read) == count]
+    if all(_text_key(part.get("name")) for read in agreeing for part in read):
+        agreeing = [sorted(read, key=lambda part: _text_key(part.get("name"))) for read in agreeing]
+    parts: list[dict] = []
+    problems: list[str] = []
+    notes: list[str] = []
+    for index in range(count):
+        body, body_problems, body_notes = _body_consensus(
+            [read[index] for read in agreeing],
+            minimum=min(minimum, len(agreeing)),
+            total=total,
+            label=f"тело {index + 2}",
+        )
+        parts.append(body)
+        problems.extend(body_problems)
+        notes.extend(body_notes)
+    return parts, problems, notes
 
 
 def _agreed_items(reads: list[list[dict]], key: str, *, minimum: int) -> list[dict]:

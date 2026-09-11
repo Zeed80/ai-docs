@@ -339,3 +339,93 @@ def test_a_single_usable_pass_is_passed_through_unchanged():
 def test_no_usable_reads_yield_nothing():
     assert consensus_spec([]) == {}
     assert consensus_spec([{}, {}]) == {}
+
+
+# ── Долги D5/D6: консенсус не терял и не пропускал непроверенное ───────────
+
+
+def _plate(holes, **profile) -> dict:
+    return {
+        "part": "Плита",
+        "main_view": {
+            "type": "плита",
+            "profile": {
+                "shape": profile.pop("shape", "rectangle"),
+                "width_mm": 120,
+                "height_mm": 80,
+                "thickness_mm": 10,
+                "holes": holes,
+                **profile,
+            },
+        },
+    }
+
+
+_HOLE_A = {"center_x_mm": -40, "center_y_mm": 20, "diameter_mm": 9}
+_HOLE_B = {"center_x_mm": 40, "center_y_mm": 20, "diameter_mm": 9}
+_GHOST = {"center_x_mm": 0, "center_y_mm": -30, "diameter_mm": 14}
+
+
+def test_a_hole_only_one_pass_imagined_is_not_built_but_is_reported():
+    """Отверстия копировались из «самого богатого» прохода без проверки."""
+    merged = consensus_spec(
+        [
+            _plate([_HOLE_A, _HOLE_B, _GHOST]),
+            _plate([_HOLE_A, _HOLE_B]),
+            _plate([{**_HOLE_B, "id": "hole-7"}, _HOLE_A]),
+        ]
+    )
+
+    holes = merged["main_view"]["profile"]["holes"]
+    assert len(holes) == 2
+    assert all(hole["diameter_mm"] == 9 for hole in holes)
+    assert any("holes" in note and "меньшинством" in note for note in merged["optional_unresolved"])
+    assert not merged["unresolved"]
+
+
+def test_holes_the_passes_never_agree_on_block_the_profile():
+    merged = consensus_spec([_plate([_HOLE_A]), _plate([_HOLE_B]), _plate([_GHOST])])
+
+    assert "profile" not in merged["main_view"]
+    assert any("holes" in item for item in merged["unresolved"])
+
+
+def test_the_corner_radius_and_the_sketch_survive_consensus():
+    square = [
+        {"kind": "line", "to": [50.0, 0.0]},
+        {"kind": "line", "to": [50.0, 30.0]},
+        {"kind": "line", "to": [0.0, 30.0]},
+        {"kind": "line", "to": [0.0, 0.0]},
+    ]
+    rounded = consensus_spec([_plate([], corner_radius_mm=6), _plate([], corner_radius_mm=6)])
+    sketched = consensus_spec(
+        [_plate([], shape="sketch", sketch=square), _plate([], shape="sketch", sketch=square)]
+    )
+
+    assert rounded["main_view"]["profile"]["corner_radius_mm"] == 6
+    assert sketched["main_view"]["profile"]["sketch"] == square
+
+
+def test_a_blind_offset_bore_is_not_turned_into_a_through_hole():
+    bore = [{"diameter_mm": 12, "length_mm": 30}]
+    read = _read(
+        _PROFILE,
+        main_view={"bore": bore, "bore_start_mm": 5, "bore_from_end": "right", "bore_blind": True},
+    )
+
+    merged = consensus_spec([read, read])
+
+    body = merged["main_view"]
+    assert (body["bore_start_mm"], body["bore_from_end"], body["bore_blind"]) == (5, "right", True)
+
+
+def test_additional_bodies_survive_consensus():
+    """`parts` обнулялся при любых двух и более проходах."""
+    second = {"name": "Втулка", "type": "втулка", "outer": [{"diameter_mm": 40, "length_mm": 20}]}
+    read = _read(_PROFILE, parts=[second])
+
+    merged = consensus_spec([read, read, _read(_PROFILE, parts=[])])
+
+    assert len(merged["parts"]) == 1
+    assert merged["parts"][0]["name"] == "Втулка"
+    assert merged["parts"][0]["outer"] == second["outer"]
