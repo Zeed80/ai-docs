@@ -368,3 +368,28 @@ def test_a_scale_resting_on_one_observation_says_so(monkeypatch):
     assert result["overall_mm"] == 840
     assert result["scale_support"] == 1
     assert result["scale_verified"] is False
+
+
+def test_scattered_mispairings_do_not_reject_a_confirmed_scale():
+    """Долг D1: на `z4-r4` верный габарит 195 отвергался из-за «6 из 10».
+
+    Замеры взяли соседние линии, а одно «число» было шероховатостью — их
+    отношения к масштабу разбросаны. Масштаб подтверждён независимой линией,
+    и соперника-масштаба, на который согласно указывали бы расхождения, нет.
+    """
+    from app.ai.cad_recognize.axial_dimensions import _calibration_blockers, _scale_support
+
+    observations = [
+        {"value_mm": 195.0, "span_check_mm": 195.0, "relation": "overall"},
+        {"value_mm": 34.0, "span_check_mm": 34.4, "relation": "from_left_datum"},
+        {"value_mm": 10.0, "span_check_mm": 34.0},
+        {"value_mm": 80.0, "span_check_mm": 40.0},
+        {"value_mm": 20.0, "span_check_mm": 29.2},
+        {"value_mm": 25.0, "span_check_mm": 14.4},
+        {"value_mm": 17.0, "span_check_mm": 23.1},
+        {"value_mm": 90.0, "span_check_mm": 195.0},
+    ]
+
+    assert _calibration_blockers(195.0, [195.0], observations) == []
+    support = _scale_support(observations)
+    assert (support["agreeing"], support["independent"]) == (2, 1)

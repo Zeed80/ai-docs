@@ -866,18 +866,54 @@ def localize_axial_dimensions(
         # ровно так же уверенно, как подтверждённая четырнадцатью. Отвергать
         # такую нельзя — на `shaft_detail.png` именно она даёт верные 840 мм,
         # совпадающие с эталоном, — но и выдавать её за проверенную тоже.
-        "scale_support": len(accepted),
-        "scale_verified": len(accepted) >= 2,
+        "scale_support": _scale_support(accepted)["agreeing"],
+        "scale_verified": _scale_support(accepted)["independent"] >= 1,
     }
 
 
-# Доля наблюдений, у которых напечатанное число и независимо измеренная длина
-# линии расходятся сильнее этого, при которой калибровке верить нельзя.
+# Напечатанное число и независимо измеренная длина линии, расходящиеся
+# сильнее этой доли, — не подтверждение масштаба.
 _SPAN_MISMATCH_TOLERANCE = 0.08
-_SPAN_MISMATCH_SHARE = 0.5
 # Во сколько раз выноска с листа должна превышать «общий» габарит, чтобы стало
 # ясно: за общий приняли не тот размер.
 _OVERALL_UNDERSHOOT = 1.5
+
+
+def _scale_support(accepted: list[dict[str, Any]]) -> dict[str, Any]:
+    """Сколько размерных линий подтверждает выбранный масштаб и есть ли соперник.
+
+    Раньше масштаб отвергался, если с ним расходилось больше половины
+    наблюдений. Так судилась вся популяция, включая неверные спаривания:
+    число шероховатости «0,80», прочитанное как «80» над контуром, или замер,
+    взявший соседнюю линию. На `z4-r4` верный габарит 195 (его независимо
+    подтвердила диаметральная стадия) отвергался из-за «6 из 10».
+
+    Неверный масштаб выглядит иначе: расхождения СОГЛАСОВАНЫ между собой —
+    все линии длиннее своих чисел в одно и то же число раз. Случайные ошибки
+    спаривания разбросаны. Поэтому считается группа-соперник: наблюдения,
+    которые согласно указывают один и тот же другой масштаб.
+    """
+    ratios = [
+        (
+            float(item["span_check_mm"]) / max(float(item["value_mm"]), 1e-6),
+            item.get("relation") == "overall",
+        )
+        for item in accepted
+        if float(item.get("value_mm") or 0.0) > 0
+    ]
+    agreeing = [base for ratio, base in ratios if abs(ratio - 1.0) <= _SPAN_MISMATCH_TOLERANCE]
+    off = [ratio for ratio, _base in ratios if abs(ratio - 1.0) > _SPAN_MISMATCH_TOLERANCE]
+    rival, rival_ratio = 0, 1.0
+    for ratio in off:
+        group = [other for other in off if abs(other - ratio) <= ratio * _SPAN_MISMATCH_TOLERANCE]
+        if len(group) > rival:
+            rival, rival_ratio = len(group), sum(group) / len(group)
+    return {
+        "agreeing": len(agreeing),
+        "independent": sum(1 for base in agreeing if not base),
+        "rival": rival,
+        "rival_ratio": rival_ratio,
+    }
 
 
 def _calibration_blockers(
@@ -891,17 +927,11 @@ def _calibration_blockers(
             f"общий габарит принят за {overall_value:g} мм, но лист несёт "
             f"больший размер {max(larger):g} мм — вероятно, измерен выносной элемент"
         )
-    if accepted:
-        mismatched = sum(
-            1
-            for item in accepted
-            if abs(float(item["span_check_mm"]) - float(item["value_mm"]))
-            / max(float(item["value_mm"]), 1e-6)
-            > _SPAN_MISMATCH_TOLERANCE
+    support = _scale_support(accepted)
+    if support["rival"] >= 2 and support["rival"] > support["agreeing"]:
+        blockers.append(
+            f"длины размерных линий не сходятся с числами на них: {support['rival']} "
+            f"согласованно указывают другой масштаб (×{support['rival_ratio']:.2f}), "
+            f"выбранный подтверждают {support['agreeing']} — масштаб определён неверно"
         )
-        if mismatched > len(accepted) * _SPAN_MISMATCH_SHARE:
-            blockers.append(
-                f"длины размерных линий не сходятся с числами на них "
-                f"({mismatched} из {len(accepted)}) — масштаб определён неверно"
-            )
     return blockers
