@@ -313,3 +313,130 @@ async def test_durable_schema_migration_round_trip(db_session):
         assert not inspect(sync).get_table_names(schema=schema)
 
     await connection.run_sync(verify)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dispatch", [False, True])
+async def test_cancel_interrupts_running_agent_without_later_effect(
+    test_engine, monkeypatch, dispatch
+):
+    from app.ai import orchestrator
+    from app.api.work_orders import cancel_order
+    from app.db.models import WorkStepAttempt, WorkToolCall
+    from app.tasks.work_orders import execute_claimed_step
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    run, step, attempt = await claimed_run(factory)
+    started, stopped = asyncio.Event(), asyncio.Event()
+    effects = []
+
+    class Agent(FakeAgent):
+        async def on_user_message(self, prompt, **kwargs):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+                effects.append("must not run after cancellation")
+            finally:
+                stopped.set()
+
+    monkeypatch.setattr(orchestrator, "AgentOrchestrator", Agent)
+    execution = asyncio.create_task(
+        execute_claimed_step(step, attempt, session_factory=factory)
+        if dispatch
+        else run_durable_chat(
+            run["work_order_id"], step, attempt, session_factory=factory, agent_factory=Agent
+        )
+    )
+    try:
+        await asyncio.wait_for(started.wait(), timeout=5)
+        async with factory() as db:
+            await cancel_order(run["work_order_id"], db, _DEV_USER)
+        if dispatch:
+            assert await asyncio.wait_for(execution, timeout=5) is False
+        else:
+            with pytest.raises(RuntimeError, match="Execution stopped"):
+                await asyncio.wait_for(execution, timeout=5)
+        assert stopped.is_set()
+        assert effects == []
+        async with factory() as db:
+            assert (await db.get(DurableChatRun, run["id"])).result_message_id is None
+            assert (await db.get(WorkOrder, run["work_order_id"])).status == "canceled"
+            assert (await db.get(WorkStep, step)).state == "canceled"
+            assert (await db.get(WorkStepAttempt, attempt)).status == "canceled"
+            if dispatch:
+                call = await db.scalar(
+                    select(WorkToolCall).where(WorkToolCall.attempt_id == attempt)
+                )
+                assert call.status == "outcome_unknown"
+            assert await reclaim_expired_leases(db) >= 0
+            assert (await db.get(WorkOrder, run["work_order_id"])).status == "canceled"
+    finally:
+        execution.cancel()
+        await asyncio.gather(execution, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_legacy_history_cannot_be_claimed_by_durable_intake(client, db_session):
+    from app.chat.store import append_chat_message, create_chat_session
+
+    session = await create_chat_session(db_session, user_key=_DEV_USER.sub)
+    await append_chat_message(db_session, session_id=session.id, role="user", content="Legacy turn")
+    await db_session.commit()
+    response = await client.post("/api/agent/chat-runs", json=request(session_id=str(session.id)))
+    assert response.status_code == 409
+    assert "Legacy conversation migration" in response.json()["detail"]
+    assert (
+        await db_session.scalar(
+            select(DurableChatRun.id).where(DurableChatRun.session_id == session.id)
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_oversized_event_stops_before_effect(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    run, step, attempt = await claimed_run(factory)
+    effects = []
+
+    class Agent(FakeAgent):
+        async def on_user_message(self, prompt, **kwargs):
+            await self.send(
+                {"type": "tool_call", "tool": "test", "args": {"text": "x" * 1_000_001}}
+            )
+            effects.append("effect")
+
+    with pytest.raises(RuntimeError, match="storage limit"):
+        await run_durable_chat(
+            run["work_order_id"], step, attempt, session_factory=factory, agent_factory=Agent
+        )
+    assert effects == []
+
+
+@pytest.mark.asyncio
+async def test_cancel_between_preparation_and_dispatch_preserves_fence(test_engine, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from app.api.work_orders import cancel_order
+    from app.db.models import WorkToolCall
+    from app.tasks import work_orders
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    run, step, attempt = await claimed_run(factory)
+    original = work_orders.append_event
+
+    async def cancel_after_prepare(db, order_id, event_type, **kwargs):
+        result = await original(db, order_id, event_type, **kwargs)
+        if event_type == "tool_call.prepared":
+            await cancel_order(order_id, db, _DEV_USER)
+        return result
+
+    runner = AsyncMock(side_effect=AssertionError("Canceled work must not execute"))
+    monkeypatch.setattr(work_orders, "append_event", cancel_after_prepare)
+    monkeypatch.setattr("app.tasks.durable_chat.run_durable_chat", runner)
+    assert not await work_orders.execute_claimed_step(step, attempt, session_factory=factory)
+    runner.assert_not_awaited()
+    async with factory() as db:
+        call = await db.scalar(select(WorkToolCall).where(WorkToolCall.attempt_id == attempt))
+        assert call.status == "outcome_unknown"
+        assert (await db.get(WorkOrder, run["work_order_id"])).status == "canceled"

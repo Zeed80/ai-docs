@@ -710,6 +710,17 @@ async def execute_claimed_step(
 
     worker = str(attempt.worker_id)
     async with factory() as db:
+        order_row = await db.get(WorkOrder, work_order_id, with_for_update=True)
+        step_row = await db.get(WorkStep, step_id, with_for_update=True)
+        attempt_row = await db.get(WorkStepAttempt, attempt_id, with_for_update=True)
+        if (
+            order_row is None
+            or order_row.status != "running"
+            or step_row is None
+            or attempt_row is None
+            or not attempt_owns_lease(step_row, attempt_row)
+        ):
+            return False
         call_row = await db.get(WorkToolCall, call_id, with_for_update=True)
         if call_row is not None:
             call_row.status = "running"

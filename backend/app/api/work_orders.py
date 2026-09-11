@@ -797,6 +797,57 @@ async def cancel_order(
     )
     for step in steps:
         await transition_step(db, step, "canceled", actor=user.sub)
+    if order.source == "durable_chat":
+        # Fence the running pilot as well: a late worker must not settle or
+        # requeue a canceled conversation. Already sent effects are unknown.
+        running = list(
+            await db.scalars(
+                select(WorkStep)
+                .where(
+                    WorkStep.work_order_id == order.id,
+                    WorkStep.state == "running",
+                )
+                .with_for_update()
+            )
+        )
+        now = datetime.now(UTC)
+        for step in running:
+            await transition_step(db, step, "canceled", actor=user.sub)
+            step.lease_owner = None
+            step.lease_expires_at = None
+            attempts = list(
+                await db.scalars(
+                    select(WorkStepAttempt)
+                    .where(
+                        WorkStepAttempt.step_id == step.id,
+                        WorkStepAttempt.status == "running",
+                    )
+                    .with_for_update()
+                )
+            )
+            for attempt in attempts:
+                attempt.status = "canceled"
+                attempt.finished_at = now
+                attempt.error = {"code": "canceled", "outcome": "unknown"}
+            calls = list(
+                await db.scalars(
+                    select(WorkToolCall)
+                    .where(
+                        WorkToolCall.step_id == step.id,
+                        WorkToolCall.status.in_(["prepared", "running"]),
+                    )
+                    .with_for_update()
+                )
+            )
+            for call in calls:
+                call.status = "outcome_unknown"
+                call.finished_at = now
+                call.error = {
+                    "code": "canceled",
+                    "message": "Already sent effects require reconciliation",
+                }
+        order.lease_owner = None
+        order.lease_expires_at = None
     await db.commit()
     await db.refresh(order)
     return order
