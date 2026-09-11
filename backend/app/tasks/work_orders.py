@@ -617,6 +617,7 @@ async def execute_claimed_step(
         if order is None or order.status != "running":
             return False
         kind = step.kind
+        durable_chat = order.source == "durable_chat"
         try:
             input_data, resolved_from = await resolve_step_input(db, step)
         except Exception as exc:  # noqa: BLE001 - invalid persisted dataflow is terminal
@@ -740,15 +741,22 @@ async def execute_claimed_step(
 
     set_acting_user(owner_key)
     try:
-        output = await _execute_step_kind(
-            kind,
-            input_data,
-            timeout_seconds,
-            capability=capability,
-            action=action,
-            idempotency_key=step_idempotency_key,
-            work_order_id=work_order_id,
-        )
+        if durable_chat:
+            from app.tasks.durable_chat import run_durable_chat
+
+            output = await run_durable_chat(
+                work_order_id, step_id, attempt_id, session_factory=factory
+            )
+        else:
+            output = await _execute_step_kind(
+                kind,
+                input_data,
+                timeout_seconds,
+                capability=capability,
+                action=action,
+                idempotency_key=step_idempotency_key,
+                work_order_id=work_order_id,
+            )
     except ApprovalRequiredError as exc:
         from app.db.models import Approval, ApprovalActionType
 

@@ -86,12 +86,41 @@
   отзыв — `DELETE /api/agent/channels/telegram/{id}`. Только администратор,
   после отдельной проверки принадлежности Telegram ID.
 
+### Пилот долговечного чата
+
+- `POST /api/agent/chat-runs` принимает `request_id` (UUID), `content`, необязательные
+  `session_id` и `reasoning_mode`. Ответ 202 содержит ID чата, запуска и WorkOrder.
+  Сообщение, задача, критерий приёмки и готовый шаг сохраняются одной транзакцией.
+- Повтор того же запроса возвращает исходный запуск; другой ввод с тем же ключом
+  даёт 409. PostgreSQL advisory lock защищает конкурентные повторы. В одном чате
+  допускается один активный запуск; чужой чат не раскрывается (404).
+- `GET /api/agent/chat-runs/{id}` возвращает состояние; `GET .../{id}/events?after=N`
+  — сохранённые события с последовательностью и `next_cursor`. Клиент должен
+  устранять повторы по sequence; событие `chat.done` не означает успешную приёмку.
+- Beat обнаруживает готовую запись в БД; HTTP-запрос не запускает LLM и не держит
+  исполнение. Worker использует ChatSession.id и сохраняет ответ в ChatMessage
+  с `verified=false`; семантическая проверка остаётся отдельной стадией WorkOrder.
+- Проверка аренды и сохранение события предшествуют вызову инструмента. Ошибка
+  записи событий, истёкшая аренда и отмена останавливают запуск. Это не атомарное
+  fencing внешнего сервиса: уже отправленное действие нельзя отозвать отменой.
+- Пилот ограничен 200 вызовами инструментов и 2 часами исполнения. После потери
+  worker — blocked, без автоматического повторения разговора: max_attempts=1,
+  max_replans=0. Неизвестный результат внешнего действия требует сверки человеком.
+- Постоянные разрешения применяются существующим шлюзом. Новое подтверждение
+  сохраняется как событие `chat.confirmation_required`, затем блокирует запуск
+  до действия; карточка продолжения ещё не реализована. Это не waiting_approval.
+- Смешивание старого WS и нового runtime в одном чате запрещено. Миграция старой
+  истории, вложения, frontend-переключение и checkpoint/resume ещё не реализованы.
+  Старые `/work-orders/{id}/run` и `/instructions` не запускают/не перепланируют
+  durable chat; отмена доступна через `/api/work-orders/{id}/cancel`.
+- Схема `20260911_0001` добавляет `durable_chat_runs`, не удаляя существующие данные.
+
 ## Оставшиеся этапы — не считать реализованными
 
 ### 1. Единый долговечный runtime — следующий основной этап
 
-1. Чат-запрос атомарно создаёт WorkOrder и пользовательскую запись; conversation_id
-   совпадает с ChatSession.id.
+1. Расширить реализованный HTTP-пилот на основной чат, вложения и остальные каналы;
+   ChatSession.id уже является идентификатором разговора в пилоте.
 2. WebSocket принимает команды и читает события; разрыв соединения не отменяет
    worker. Старый WS lifecycle пока требует замены.
 3. Устойчивый sequence событий, cursor возобновления, транзакционный outbox;
@@ -164,6 +193,7 @@ CAPTCHA. SSRF/private-network проверки редиректов и всех 
 
 ```bash
 python3 -m pytest backend/tests/test_agent_execution_boundary.py backend/tests/test_agent_delegations.py -q
+python3 -m pytest backend/tests/test_durable_chat.py backend/tests/test_work_order_checkpoint.py -q
 python3 -m pytest backend/tests/test_auth_acting.py backend/tests/test_capability_router.py backend/tests/test_work_order_verifier.py backend/tests/test_work_order_lease.py -q
 make prod-build
 curl -k https://localhost/health
@@ -191,3 +221,18 @@ Upgrade/downgrade проверяется в отдельной схеме тес
 - Без авторизации API разрешений → 401, UI → 307 на вход. Собранный модуль
   страницы существует; интерактивный E2E с входом пользователя не выполнялся.
 - Хеши ключевых файлов нового backend совпали с рабочей копией.
+
+### Дополнительная проверка пилота долговечного чата — 11 сентября 2026
+
+- 89 passed: `test_durable_chat`, `test_agent_execution_boundary`,
+  `test_agent_delegations`, `test_work_order_lease`, `test_work_order_checkpoint`,
+  `test_work_order_verifier`, `test_work_orders`. В том числе upgrade/downgrade
+  новой таблицы в отдельной схеме, конкурентный приём, worker dispatch, сохранение
+  события до действия и fail-closed при ошибке БД. Есть предупреждение pytest
+  о неизвестной существующей настройке `asyncio_loop_scope`.
+- Ruff и `git diff --check` прошли. `make prod-build` завершён; backend и workers
+  healthy, `/health` → `{"status":"ok"}`, новый API без входа → 401.
+  Alembic production: `20260911_0001 (head)`.
+- Исполнение в тестах использует подставной агент, не живую LLM. Реальные аварийные
+  рестарты worker посреди внешнего действия и браузерный E2E ещё не проверены;
+  это остаётся обязательным условием переключения основного чата.

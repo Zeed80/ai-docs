@@ -2,6 +2,10 @@
 
 > Актуальный план и фактический остаток агентской переработки: [`AGENT_EMPLOYEE_IMPLEMENTATION_PLAN.md`](./AGENT_EMPLOYEE_IMPLEMENTATION_PLAN.md). Указанные ниже завершённые архивные фазы не означают завершение нового цифрового сотрудника.
 
+Пилот `/api/agent/chat-runs` сохраняет запросы и события в БД и исполняется worker;
+основной WebSocket, продолжение после подтверждения и checkpoint/resume ещё в плане.
+Проверка: `python3 -m pytest backend/tests/test_durable_chat.py backend/tests/test_work_order_checkpoint.py -q`.
+
 > Подробный план и фактический статус инженерного направления «Оцифровка в DXF» находятся в [`DXF_CAD_DEVELOPMENT_PLAN.md`](./DXF_CAD_DEVELOPMENT_PLAN.md).
 > Исполнимый roadmap `чертёж → EngineeringDrawingGraph → CadIR/DXF` находится в [`CAD_DRAWING_GRAPH_PLAN.md`](./docs/archive/CAD_DRAWING_GRAPH_PLAN.md).
 > Актуальный TODO исправления точности `чертёж → чтение → 3D → виды → DXF` находится в [`CAD_REDRAW_ACCURACY_TODO.md`](./CAD_REDRAW_ACCURACY_TODO.md).

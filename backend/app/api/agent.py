@@ -7,6 +7,7 @@ import uuid
 
 import structlog
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from sqlalchemy import select
 
 from app.ai.actor_context import set_acting_user
 from app.ai.orchestrator import AgentOrchestrator
@@ -22,10 +23,16 @@ from app.chat.store import (
 )
 from app.chat.user_key import get_ws_user_key
 from app.core.chat_bus import chat_bus
+from app.db.agent_runtime_models import DurableChatRun
+from app.db.models import ChatSession
 from app.db.session import _get_session_factory
 
 router = APIRouter()
 logger = structlog.get_logger()
+
+
+class DurableChatSessionError(Exception):
+    """A conversation cannot mix connection-owned and worker-owned turns."""
 
 
 def _fallback_chat_title(first_message: str) -> str:
@@ -232,6 +239,17 @@ async def chat_ws(ws: WebSocket) -> None:
                                 user_key=user_key,
                                 session_id=incoming_session_id,
                             )
+                            await db.execute(
+                                select(ChatSession.id)
+                                .where(ChatSession.id == chat_session.id)
+                                .with_for_update()
+                            )
+                            if await db.scalar(
+                                select(DurableChatRun.id)
+                                .where(DurableChatRun.session_id == chat_session.id)
+                                .limit(1)
+                            ):
+                                raise DurableChatSessionError()
                             active_session_id = chat_session.id
                             user_message = await append_chat_message(
                                 db,
@@ -312,6 +330,16 @@ async def chat_ws(ws: WebSocket) -> None:
                                 ):
                                     asyncio.create_task(generate_session_title(session_id, content))
                             active_agent_session = agent_sessions[session_id]
+                    except DurableChatSessionError:
+                        await ws.send_text(
+                            json.dumps(
+                                {
+                                    "type": "error",
+                                    "content": "Этот чат использует API /api/agent/chat-runs; WebSocket-ввод недоступен.",
+                                }
+                            )
+                        )
+                        continue
                     except ChatSessionNotFoundError:
                         await send(
                             {

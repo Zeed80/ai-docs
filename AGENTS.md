@@ -14,6 +14,7 @@ The target implementation structure is:
 
 Актуальный агентский срез: `AGENT_EMPLOYEE_IMPLEMENTATION_PLAN.md`.
 Проверки границ и разрешений: `python3 -m pytest backend/tests/test_agent_execution_boundary.py backend/tests/test_agent_delegations.py -q`.
+Пилот долговечного чата: `python3 -m pytest backend/tests/test_durable_chat.py backend/tests/test_work_order_checkpoint.py -q`.
 Проверка frontend: `npm run typecheck` в `frontend/`. Перед выдачей изменений:
 `make prod-build`, затем `curl -k https://localhost/health` из корня проекта.
 Planned local workflow:

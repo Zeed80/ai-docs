@@ -191,6 +191,8 @@ async def create_order(
     user: UserInfo = Depends(get_current_user),
 ) -> WorkOrder:
     criteria = [criterion.model_dump() for criterion in body.acceptance_criteria] or None
+    if body.source == "durable_chat":
+        raise HTTPException(409, "Durable chat requests must use /api/agent/chat-runs")
     order = await create_work_order(
         db,
         owner_key=user.sub,
@@ -676,6 +678,8 @@ async def add_instruction(
     user: UserInfo = Depends(get_current_user),
 ) -> WorkOrder:
     order = await _get_owned_order(db, work_order_id, user, lock=True)
+    if order.source == "durable_chat":
+        raise HTTPException(409, "Durable chat checkpoint continuation is not enabled")
     if order.status in {"completed", "canceled"}:
         raise HTTPException(status_code=409, detail=f"Cannot revise a {order.status} work order")
     metadata = dict(order.metadata_ or {})
@@ -805,6 +809,8 @@ async def run_order(
     user: UserInfo = Depends(get_current_user),
 ) -> WorkOrder:
     order = await _get_owned_order(db, work_order_id, user)
+    if order.source == "durable_chat":
+        raise HTTPException(409, "Durable chat execution belongs to the background worker")
     if order.status not in {"ready", "running"}:
         raise HTTPException(status_code=409, detail=f"Work order is not runnable: {order.status}")
     from app.config import settings

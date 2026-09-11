@@ -1,12 +1,32 @@
 """Persistent identity, delegation and artifacts for agent execution."""
 
+import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db.base import Base, TimestampMixin, UUIDPrimaryKey
+from app.db.base import GUID, Base, TimestampMixin, UUIDPrimaryKey
+
+
+class DurableChatRun(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "durable_chat_runs"
+    __table_args__ = (UniqueConstraint("owner_key", "request_id", name="uq_chat_run_request"),)
+
+    owner_key: Mapped[str] = mapped_column(String(200), index=True)
+    request_id: Mapped[uuid.UUID] = mapped_column(GUID())
+    request_digest: Mapped[str] = mapped_column(String(64))
+    work_order_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("work_orders.id"), unique=True
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("chat_sessions.id"), index=True
+    )
+    user_message_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("chat_messages.id"))
+    result_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("chat_messages.id")
+    )
 
 
 class OwnedWorkspaceBlock(UUIDPrimaryKey, TimestampMixin, Base):

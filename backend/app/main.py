@@ -393,10 +393,11 @@ def create_app() -> FastAPI:
     app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
     # agent.router contains WebSocket endpoints — WS handler validates token internally
     app.include_router(agent.router, tags=["agent"])
-    from app.api import agent_channels, agent_delegations
+    from app.api import agent_channels, agent_delegations, chat_runs
 
     app.include_router(agent_delegations.router)
     app.include_router(agent_channels.router)
+    app.include_router(chat_runs.router)
 
     # ── Protected routers ──────────────────────────────────────────────────────
     app.include_router(

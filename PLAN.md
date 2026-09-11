@@ -36,6 +36,11 @@ isProject: false
 
 > Актуальная переработка агента: [`AGENT_EMPLOYEE_IMPLEMENTATION_PLAN.md`](./AGENT_EMPLOYEE_IMPLEMENTATION_PLAN.md). Модель выбирает действия; generated skills/replay отключены; полномочия задаются явно. Долговечный чат и изолированные скрипты ещё не завершены.
 
+Доступен HTTP-пилот долговечного чата `/api/agent/chat-runs`: атомарный приём,
+идемпотентность и сохранённые события. При потере worker запуск блокируется, а не
+повторяет внешние действия. Основной UI/WS пока не переключён.
+Проверка: `python3 -m pytest backend/tests/test_durable_chat.py backend/tests/test_work_order_checkpoint.py -q`.
+
 > Подробный план и фактический статус инженерного направления «Оцифровка в DXF» находятся в [`DXF_CAD_DEVELOPMENT_PLAN.md`](./DXF_CAD_DEVELOPMENT_PLAN.md).
 > Там же зафиксирован реализованный вертикальный срез `EngineeringModelGraph v1`; после mechanical live regression primary pipeline включён как production canary только для mechanical-профиля.
 > Контракт основного метода «По описанию» и последовательность реализации полного координатного графа находятся в [`CAD_DRAWING_GRAPH_PLAN.md`](./docs/archive/CAD_DRAWING_GRAPH_PLAN.md).
