@@ -6,6 +6,8 @@ import pytest
 from fastapi import HTTPException
 from httpx import AsyncClient
 
+from app.ai.agent_loop import capability_args_digest
+
 
 @pytest.mark.asyncio
 async def test_unknown_capability_returns_404(client: AsyncClient):
@@ -137,7 +139,16 @@ async def test_internal_approved_gate_action_dispatches(client: AsyncClient, mon
                 "action": "approve",
                 "invoice_id": "00000000-0000-0000-0000-000000000001",
             },
-            headers={"X-Internal-Agent": "1", "X-Agent-Approval": "granted"},
+            headers={
+                "X-Internal-Agent": "1",
+                "X-Agent-Approval": "granted",
+                "X-Agent-Approval-Digest": capability_args_digest(
+                    {
+                        "action": "approve",
+                        "invoice_id": "00000000-0000-0000-0000-000000000001",
+                    }
+                ),
+            },
         )
 
     assert r.status_code == 200
@@ -183,7 +194,16 @@ async def test_image_studio_accept_techdraw_dispatches_with_approval(
                 "action": "accept_techdraw",
                 "generation_id": "00000000-0000-0000-0000-000000000001",
             },
-            headers={"X-Internal-Agent": "1", "X-Agent-Approval": "granted"},
+            headers={
+                "X-Internal-Agent": "1",
+                "X-Agent-Approval": "granted",
+                "X-Agent-Approval-Digest": capability_args_digest(
+                    {
+                        "action": "accept_techdraw",
+                        "generation_id": "00000000-0000-0000-0000-000000000001",
+                    }
+                ),
+            },
         )
 
     assert r.status_code == 200

@@ -9,6 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 AI-сотрудник **Света** (AiAgent agent) обрабатывает счета, письма, чертежи.
 
 ## Ключевые документы
+- `AGENT_EMPLOYEE_IMPLEMENTATION_PLAN.md` — актуальный контракт цифрового сотрудника, реализованный срез и остаток работ; приоритет над архивными описаниями генерации скиллов и эвристического роутинга.
 - `plan_claude.md` — полное ТЗ v2.0 (20 разделов)
 - `DEVPLAN.md` — план разработки с ToDo (~1530 строк, 7 эпиков, 52 skills, 8 scenarios)
 - `PLAN.md` — краткий стек и ToDo

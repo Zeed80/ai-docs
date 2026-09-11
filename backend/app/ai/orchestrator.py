@@ -39,6 +39,9 @@ def _agent_headers() -> dict:
     actor = get_acting_user()
     if actor:
         headers["X-Acting-User"] = actor
+        from app.auth.execution_context import sign_execution_context
+
+        headers["X-Execution-Context"] = sign_execution_context(actor)
     return headers
 
 
@@ -73,7 +76,6 @@ from app.ai.model_tier import (
     Tier,
     aux_quality_budget,
     has_action_intent,
-    has_high_complexity_signal,
     inject_chain_of_draft,
     score_complexity,
     should_use_cod,
@@ -81,7 +83,6 @@ from app.ai.model_tier import (
 from app.ai.orchestrator_memory import (
     TurnFeedback,
     build_tool_preference_hint,
-    rank_skills_by_success,
     record_turn_feedback,
 )
 from app.ai.policy_engine import check_tool_execution
@@ -321,7 +322,7 @@ class AgentOrchestrator:
         # диспетчеризацией и выдавал человеку результат вместо запроса
         # подтверждения. Флаг отличает одно от другого.
         self._last_direct_tool_blocked: bool = False
-        self._plan_source: str = "heuristic"
+        self._plan_source: str = "unplanned"
         # Set by _decide_turn: True when the LLM router produced no usable
         # decision (degrade to the heuristic planner this turn).
         self._route_unavailable: bool = False
@@ -400,219 +401,19 @@ class AgentOrchestrator:
         self._tier = tier
         self._turn_grounding = "none"  # reset per turn; router sets it below
 
-        # Phase 3 — if the user is correcting the result of a just-replayed recipe,
-        # penalise that recipe so the fail-rate retire logic demotes it.
-        await self._penalise_recipe_on_correction(content)
-
-        # Learned recipes are deterministic plans. Check them before the LLM
-        # turn router so trusted repeated tasks run with 0 planner calls.
-        if config.use_turn_router:
-            from app.ai.turn_router import safe_default_decision
-
-            recipe_result = await self._try_recipe_for_turn(
-                content,
-                config,
-                turn_started_at,
-                safe_default_decision(content),
-            )
-            if recipe_result is True:
-                return
-
-        # LLM-first routing: one structured-output generation classifies the turn
-        # by meaning (no `marker in text`). Dispatches deterministic executors by
-        # decision.intent and never falls through to the keyword cascade below.
-        if config.use_turn_router:
-            decision = await self._decide_turn(content, config)
-            if self._route_unavailable:
-                # Degraded mode: the LLM router gave no usable decision. Fall
-                # back to the heuristic planner so obvious table/workspace turns
-                # still reach the desktop instead of a blind chat answer.
-                await self._run_heuristic_degraded(content, config, turn_started_at, reasoning_mode)
-                return
-            await self._dispatch_decision(
-                content, decision, config, turn_started_at, reasoning_mode
+        decision = await self._decide_turn(content, config)
+        if self._route_unavailable:
+            await self._outer_send(
+                {
+                    "type": "error",
+                    "error_code": "model_unavailable",
+                    "content": "Модель планирования недоступна. Выполнение не начато; повторите запрос после восстановления модели.",
+                }
             )
             return
-
-        # ───────────────────── Legacy keyword cascade ─────────────────────
-        # Retained behind `use_turn_router=False` for rollback. The substring
-        # gates below are exactly what the router replaces.
-
-        # Secretary direct path: flow-status questions are answered by the
-        # front-agent itself from live data — no planning, no dispatch, 0 LLM.
-        if _is_secretary_query(content):
-            handled = await self._answer_flow_status_directly(content, config, turn_started_at)
-            if handled:
-                return
-
-        # Spec-table edits: a recognised Russian edit command on an existing
-        # spec table («добавь столбец с НДС перед суммой», «отсортируй по…»,
-        # «покажи только…») is applied deterministically — 0 LLM, мгновенно.
-        if await self._try_sheet_edit_directly(content, config, turn_started_at):
-            return
-        if await self._try_spec_table_patch_directly(content, config, turn_started_at):
-            return
-
-        # Heuristic-first for workspace tables: if a cheap heuristic plan already
-        # resolves a self-sufficient canvas, execute it deterministically with
-        # NO planner/worker LLM. Placed BEFORE the recipe lookup so common
-        # "покажи таблицу/аналитику" turns skip the recipe embedding round-trip
-        # entirely (that embedding competes with APEX for VRAM → 2-7s stalls).
-        if (
-            reasoning_mode != "strict"
-            and not has_high_complexity_signal(content)
-            and not has_action_intent(content)
-        ):
-            heuristic_plan = self._plan_turn(content)
-            # Skipped only for explicit deep-reasoning verbs ("сравни",
-            # "проанализируй", "построй план"…) — those need real worker
-            # reasoning, not a short-circuit to a plain table. Analytical
-            # pivots ("популярнее", "больше всего") still fire here: stacked
-            # MEDIUM words shouldn't disqualify a deterministic pivot.
-            _proactive_route = route_table.match_route(_norm(content))
-            if (
-                heuristic_plan.workspace.canvas_id in self._PROACTIVE_SAFE_CANVASES
-                # Gate: message must be fully explained by routing vocabulary.
-                # "Выведи все счета" → ok. "Выведи все фрезы со всех счетов" →
-                # "фрезы" is residual filter content the static skill can't express;
-                # skip proactive and let LLM planning build the right spec_table.
-                and not route_table.has_specific_filter_content(content, _proactive_route)
-            ):
-                self._plan_source = "proactive_workspace"
-                plan = heuristic_plan
-                self._workspace_before = _workspace_updated_at_snapshot()
-                await self._announce_plan(plan)
-                executed = await self._try_proactive_workspace_execution(plan, config)
-                if not executed and self._last_direct_tool_blocked:
-                    # Инструмент требует подтверждения — человеку об этом уже
-                    # сказано. Уходить дальше к worker-LLM незачем: он упрётся
-                    # в тот же гейт, потратив прогон большой модели, а человек
-                    # увидит после «нужно подтверждение» ещё и попытку сделать
-                    # что-то другое.
-                    await self._outer_send({"type": "done", "action_chips": []})
-                    return
-                if executed:
-                    audit = await self._audit_turn(plan, config)
-                    await self._publish_audit(audit)
-                    _record_feedback_async(
-                        content=content,
-                        plan=plan,
-                        trace=self._trace,
-                        audit=audit,
-                        retries=0,
-                        duration_ms=int((time.time() - turn_started_at) * 1000),
-                    )
-                    duration_ms = int((time.time() - turn_started_at) * 1000)
-                    logger.info(
-                        "agent_turn_complete",
-                        intent=plan.intent,
-                        reasoning_mode=reasoning_mode,
-                        plan_source="proactive_workspace",
-                        tools_called=self._trace.tool_calls,
-                        tool_count=len(self._trace.tool_calls),
-                        parallel_used=self._trace.parallel_used,
-                        errors=self._trace.errors,
-                        workspace_required=plan.workspace.required,
-                        audit_passed=audit.passed,
-                        audit_issues=audit.issue_codes,
-                        retries=0,
-                        llm_calls=0,
-                        aux_llm_calls=self._aux_llm_calls,
-                        duration_ms=duration_ms,
-                    )
-                    try:
-                        from app.core.metrics import (
-                            agent_tool_calls_total,
-                            agent_turn_duration_seconds,
-                            agent_turns_total,
-                        )
-
-                        agent_turns_total.labels(
-                            outcome="success" if audit.passed else "audit_failed"
-                        ).inc()
-                        agent_turn_duration_seconds.observe(duration_ms / 1000)
-                        for tool in self._trace.tool_calls:
-                            agent_tool_calls_total.labels(tool=tool).inc()
-                    except Exception:
-                        pass
-                    chips = self._derive_action_chips(plan, content)
-                    await self._outer_send({"type": "done", "action_chips": chips})
-                    return
-
-        # Learned recipes: a high-similarity ACTIVE recipe with resolvable slots
-        # is replayed deterministically (0 planner LLM calls); a weaker match
-        # becomes a planner/worker hint. Gated to tool-shaped turns so smalltalk
-        # never pays the embedding round-trip.
-        recipe_hint = ""
-        if route_table.is_workspace_request(content) or tier >= Tier.SMALL:
-            from app.ai import recipes as recipes_module
-
-            recipe_hit = await recipes_module.find_recipe(content)
-            if recipe_hit is not None:
-                recipe, score, margin = recipe_hit
-                if score >= recipes_module.REPLAY_SCORE and recipe.status == "active":
-                    slots = recipes_module.resolve_slots(recipe.param_slots, content)
-                    # Component 2 — precision gate: ambiguity + intent-drift guard.
-                    gate_ok, gate_reason = recipes_module.replay_gate_ok(
-                        recipe, score, margin, content
-                    )
-                    if slots is not None and gate_ok:
-                        if await self._replay_recipe(
-                            recipe, slots, content, config, turn_started_at
-                        ):
-                            return
-                    elif not gate_ok:
-                        logger.info(
-                            "recipe_replay_gated",
-                            recipe=str(recipe.id),
-                            reason=gate_reason,
-                            score=score,
-                        )
-                if score >= recipes_module.HINT_SCORE:
-                    steps_text = " → ".join(
-                        f"{s.get('capability')}.{s.get('action') or 'call'}"
-                        for s in (recipe.steps or [])
-                    )
-                    recipe_hint = (
-                        f"Похожая задача уже решалась успешно шагами: {steps_text}. "
-                        "Используй эту последовательность как отправную точку."
-                    )
-
-        # When the heuristic already matched an explicit route (intent != general),
-        # the canvas + recommended skills are known — LLM planning adds nothing but
-        # latency (and on a busy GPU the planner call can stall for minutes while
-        # the model is reloaded). Use the heuristic plan directly. Only fall back
-        # to the model planner for genuinely unrouted SMALL+ turns.
-        heuristic_plan = self._plan_turn(content)
-        # _plan_turn sets canvas_id/workspace_required for supplier-name and
-        # supplier-grouping requests but — unlike _normalize_model_plan — never
-        # injects the matching skill into recommended_skills. Without it the
-        # worker on a heuristic-only (degraded) turn is told "memory.search"
-        # and has to improvise: it wanders through search/documents/invoices
-        # and either skips the workspace or hand-rolls a few sample rows
-        # instead of the real spec_table/fixed-table SQL result.
-        heuristic_plan = _normalize_model_plan(heuristic_plan, content)
-        route_matched = heuristic_plan.intent != "general"
-
-        # Detect filter-specific content ("фрезы", "за май", "из Москвы"…)
-        # beyond the routing vocabulary. Static skills (invoice_table etc.) have
-        # no filter params — when filter content is present, LLM planning must
-        # run to build the correct spec_table spec regardless of tier.
-        _plan_route = route_table.match_route(_norm(content))
-        _needs_filter_planning = route_table.has_specific_filter_content(content, _plan_route)
-
-        if route_matched and not _needs_filter_planning:
-            self._plan_source = "heuristic_route"
-            plan = heuristic_plan
-        elif reasoning_mode == "strict" or tier >= Tier.SMALL or _needs_filter_planning:
-            self._plan_source = "model"
-            plan = await self._plan_turn_with_model(content, config)
-        else:
-            self._plan_source = "heuristic"
-            plan = heuristic_plan
-        await self._run_planned_turn(
-            content, plan, config, turn_started_at, reasoning_mode, recipe_hint
-        )
+        self._turn_grounding = decision.grounding
+        plan = _decision_to_plan(decision, content)
+        await self._run_planned_turn(content, plan, config, turn_started_at, reasoning_mode)
 
     async def _run_planned_turn(
         self,
@@ -636,7 +437,7 @@ class AgentOrchestrator:
         # Phase 2 — adaptive clarify: a gated (expensive/external) action with an
         # ambiguous target asks BEFORE acting instead of guessing. Cheap turns are
         # never gated here — they build the best result and show assumptions.
-        question = needs_clarification(content, plan)
+        question = None  # Clarifications are model decisions, not keyword predicates.
         if question is not None:
             await self._outer_send({"type": "text", "content": question})
             await self._outer_send({"type": "done", "action_chips": []})
@@ -644,8 +445,6 @@ class AgentOrchestrator:
         # Phase 3 — order the worker's candidate skills by learned success so the
         # historically-reliable tool is tried first (deterministic link from the
         # feedback memory to routing).
-        if plan.worker.recommended_skills:
-            plan.worker.recommended_skills = rank_skills_by_success(plan.worker.recommended_skills)
         self._workspace_before = _workspace_updated_at_snapshot()
         await self._announce_plan(plan)
 
@@ -700,8 +499,6 @@ class AgentOrchestrator:
         # whenever a spec-table was actually published this turn — not only when the
         # PLAN's canvas was agent:spec-table (the worker often publishes there while
         # the plan guessed another canvas, which previously skipped reconcile).
-        if plan.workspace.canvas_id == "agent:spec-table" or bool(self._trace.workspace_events):
-            await self._reconcile_spec_table(content, config)
         audit = await self._audit_turn(plan, config)
         # Snapshot before any retry mutates `audit` — the reflection loop
         # needs to know what was WRONG originally to credit a later fix.
@@ -726,10 +523,6 @@ class AgentOrchestrator:
             self._llm_calls += 1
             await self._executor.on_user_message(_build_correction_request(plan, audit))
             audit = await self._audit_turn(plan, config)
-        if not audit.passed:
-            repaired = await self._try_execute_planned_workspace_tool(plan, audit, config)
-            if repaired:
-                audit = await self._audit_turn(plan, config)
         # Adaptive-by-risk: a cheap (desktop) turn that STILL has an empty/mismatched
         # table after retries must not ship a blank board silently — be honest and
         # invite a one-line clarification instead.
@@ -763,7 +556,7 @@ class AgentOrchestrator:
             duration_ms=int((time.time() - turn_started_at) * 1000),
         )
         # Self-learning: a clean multi-step turn becomes a draft recipe.
-        self._maybe_record_recipe(content, plan, audit)
+        # Experience is recorded as instructions, never executable recipe replay.
         # Reflection loop: a retry that actually fixed the turn becomes a
         # behavioural lesson for future similar mistakes.
         self._maybe_record_reflection_lesson(_original_audit_issues, audit, retry_count, config)
@@ -910,33 +703,8 @@ class AgentOrchestrator:
             if esc is not None:
                 decision, source = esc, f"escalated_{esc_source}"
 
-        # The LLM router was unavailable (timeout/error/unparseable on both
-        # tiers). Signal the caller to degrade to the heuristic planner instead
-        # of dispatching a blind chat specialist — otherwise obvious table turns
-        # silently drop to chat whenever the model hiccups (e.g. a reasoning
-        # model that ignores the JSON schema). This is degraded mode, not the
-        # hot path: the heuristic only runs here, never on a successful route.
-        # A DEFAULTED shell (specialist / conf 0.0 / no tools) means the model
-        # ignored the schema — it is NOT a real classification and must not be
-        # dispatched as a blind chat specialist. Rescue an obvious table request
-        # deterministically (catalog-grounded), else treat as unavailable and
-        # degrade to the heuristic planner.
         if decision is not None and turn_router._looks_defaulted(decision):
-            from app.domain.table_spec import is_spec_table_request
-
-            if is_spec_table_request(content):
-                decision = decision.model_copy(
-                    update={
-                        "intent": "analytical_table",
-                        "output_channel": "workspace",
-                        "grounding": "structured",
-                        "confidence": 0.5,
-                    }
-                )
-                source = "rescued_table"
-                logger.info("router_defaulted_rescued_table", content=content[:80])
-            else:
-                decision = None  # → heuristic planner below
+            decision = None
 
         self._route_unavailable = decision is None
         if decision is None:
@@ -2161,7 +1929,7 @@ class AgentOrchestrator:
         )
 
     async def _announce_plan(self, plan: OrchestratorPlan) -> None:
-        degraded = self._plan_source != "model"
+        degraded = self._route_unavailable
         status_text = (
             f"Оркестратор: понял задачу, назначаю роль {plan.worker.role}."
             if not degraded
@@ -4159,14 +3927,8 @@ def _decision_to_plan(decision: TurnDecision, content: str) -> OrchestratorPlan:
     path reuses the exact same machinery as the legacy planner path.
     """
     workspace_required = decision.output_channel == "workspace"
-    canvas_id: str | None = None
+    canvas_id = decision.workspace_canvas_id if workspace_required else None
     workspace_filters: dict[str, str] = {}
-    if workspace_required:
-        # Pick the specialised canvas from the request (grouped invoice items,
-        # by-supplier, the open table, …) instead of always the generic
-        # spec-table — the LLM already decided this is a table; we only choose
-        # which surface. Unmatched requests still fall back to agent:spec-table.
-        canvas_id, workspace_filters = _resolve_workspace_canvas(content)
     recommended_skills = [
         f"{r.capability}.{r.action}" if r.action else r.capability for r in decision.recommended
     ]

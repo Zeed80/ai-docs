@@ -11,6 +11,11 @@ The target implementation structure is:
 - `infra/` for `docker-compose`, Traefik, and deployment scripts
 
 ## Build, Test, and Development Commands
+
+Актуальный агентский срез: `AGENT_EMPLOYEE_IMPLEMENTATION_PLAN.md`.
+Проверки границ и разрешений: `python3 -m pytest backend/tests/test_agent_execution_boundary.py backend/tests/test_agent_delegations.py -q`.
+Проверка frontend: `npm run typecheck` в `frontend/`. Перед выдачей изменений:
+`make prod-build`, затем `curl -k https://localhost/health` из корня проекта.
 Planned local workflow:
 - `make dev` starts the full stack
 - `make test` runs unit, API, and integration tests

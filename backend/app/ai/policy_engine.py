@@ -157,7 +157,11 @@ def check_tool_execution(
     mode = (config.permission_mode or "workspace_write").lower()
     local_only = bool(args.get("local_only") is True or args.get("confidential") is True)
 
-    if mode in {"read_only", "read-only"} and risk != "low":
+    from app.ai.tool_catalog import TOOLS, get_tool
+
+    definition = get_tool(skill_name, str(action or "")) or TOOLS.get(skill_name)
+
+    if mode in {"read_only", "read-only"} and (definition is None or definition.effect != "read"):
         return PolicyDecision(
             allowed=False,
             reason=f"{skill_name} requires write/external permission in read-only mode",

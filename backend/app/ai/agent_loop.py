@@ -56,6 +56,9 @@ def internal_headers() -> dict:
     actor = get_acting_user()
     if actor:
         h["X-Acting-User"] = actor
+        from app.auth.execution_context import sign_execution_context
+
+        h["X-Execution-Context"] = sign_execution_context(actor)
     return h
 
 
@@ -587,45 +590,7 @@ def _load_capabilities() -> tuple[list[dict], dict[str, dict]]:
         if cap.get("gate_actions"):
             gate_actions[name] = set(cap["gate_actions"])
 
-    # Promoted agent-generated skills (separate auto-managed file; the
-    # hand-written capabilities.yml is never rewritten programmatically).
-    # They execute in the isolated skill-runner via their registered path.
-    gen_path = cap_path.with_name("capabilities.generated.yml")
-    if gen_path.exists():
-        try:
-            gen_data = yaml.safe_load(gen_path.read_text()) or {}
-            for entry in gen_data.get("generated") or []:
-                gen_name = str(entry.get("name") or "")
-                fn_name = sanitize_name(gen_name)
-                if not gen_name or fn_name in skill_map:
-                    continue
-                tools.append(
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": fn_name,
-                            "description": str(entry.get("description") or gen_name)[:1500],
-                            "parameters": {
-                                "type": "object",
-                                "properties": {
-                                    "args": {
-                                        "type": "object",
-                                        "description": "Skill-specific arguments",
-                                    },
-                                },
-                                "required": [],
-                            },
-                        },
-                    }
-                )
-                skill_map[fn_name] = {
-                    "name": gen_name,
-                    "method": str(entry.get("method") or "POST"),
-                    "path": str(entry.get("path") or f"/api/agent/generated-skill/{gen_name}"),
-                    "gate_actions": entry.get("gate_actions") or [],
-                }
-        except Exception as exc:
-            log_degraded("agent_loop.generated_capabilities", exc)
+    # Generated registries are archival data and never expand the executable catalog.
 
     _CAPABILITY_GATE_ACTIONS = gate_actions
     logger.info("capabilities_loaded", count=len(tools))
@@ -2752,40 +2717,31 @@ class AgentSession:
             return fn_name, result, tc_id
 
         approval_granted = False
-        _authorized_by = None
-        if original_name in current_gates:
-            if self._explicit_send_authorized(original_name, args):
-                _authorized_by = (
-                    "user:explicit_instruction",
-                    "Отправка по вашему прямому указанию.",
+        delegated = None
+        if original_name in current_gates and "." not in original_name:
+            from app.ai.actor_context import get_acting_user
+            from app.domain.delegations import matching_delegation
+
+            try:
+                delegated = await matching_delegation(
+                    get_acting_user(),
+                    f"{original_name}.{args.get('action', '')}",
+                    args,
                 )
-            elif self._confirms_pending_send(original_name, args):
-                # Человек только что ответил «да» на показанный черновик.
-                _authorized_by = (
-                    "user:confirmed_proposal",
-                    "Отправляю — вы подтвердили это письмо.",
-                )
-        if _authorized_by:
-            # Согласие человека заменяет запрос подтверждения. Полностью
-            # аудируется: в журнале видно, что именно послужило разрешением.
-            asyncio.create_task(
-                self._log_action(
-                    iteration=iteration,
-                    action_type="approval_decision",
-                    tool_name=original_name,
-                    tool_args=args,
-                    tool_result={"approved": True, "actor": _authorized_by[0]},
-                )
-            )
+            except Exception:
+                # An unavailable grant store cannot create implicit authority.
+                delegated = None
+        if delegated is not None:
+            # Do not send approval proof: the gateway must recheck and consume
+            # the grant atomically, including revocation and remaining budget.
             await self._send(
                 {
                     "type": "approval_auto",
                     "tool": original_name,
-                    "message": _authorized_by[1],
+                    "message": "Выполнение в рамках выданного разрешения.",
+                    "delegation_id": str(delegated),
                 }
             )
-            self._granted_approvals.add(self._approval_key(original_name, args))
-            approval_granted = True
         elif (
             original_name in current_gates
             and self._approval_key(original_name, args) in self._granted_approvals

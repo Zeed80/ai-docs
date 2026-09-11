@@ -15,6 +15,7 @@ import structlog
 
 from app.domain.work_orders import (
     append_event,
+    attempt_owns_lease,
     claim_ready_step,
     complete_attempt,
     enforce_budgets,
@@ -166,6 +167,7 @@ async def _heartbeat_step(
                 or step.state != "running"
                 or attempt.status != "running"
                 or step.lease_owner != worker_id
+                or not attempt_owns_lease(step, attempt)
             ):
                 return
             now = utcnow()
@@ -208,6 +210,11 @@ async def _execute_capability(
         expected = _action_digest(capability, action, arguments)
         if approval.get("action_digest") == expected:
             headers["X-Agent-Approval"] = "granted"
+            from app.ai.agent_loop import capability_args_digest
+
+            headers["X-Agent-Approval-Digest"] = capability_args_digest(
+                {"action": action, **arguments}
+            )
     payload = {"action": action, **arguments}
     base_url = get_builtin_agent_config().backend_url.rstrip("/")
     async with httpx.AsyncClient(timeout=float(timeout_seconds)) as client:
@@ -248,7 +255,9 @@ async def _execute_capability(
             raise PartialProgressError(message, checkpoint=checkpoint)
         raise RuntimeError(message)
     result = response.json() if response.content else {}
-    if isinstance(result, dict) and (result.get("error") or result.get("error_code")):
+    from app.ai.tool_result import result_failed
+
+    if result_failed(result):
         message = str(result.get("error") or result.get("message") or result)
         checkpoint = result.get("checkpoint")
         if isinstance(checkpoint, dict):
@@ -519,6 +528,15 @@ async def verify_semantic_criteria(
                 )
             ).scalars()
         )
+        verification_revision = order.plan_revision
+        from app.db.models import WorkPlan
+
+        active_plan_id = await db.scalar(
+            select(WorkPlan.id).where(
+                WorkPlan.work_order_id == order.id, WorkPlan.revision == verification_revision
+            )
+        )
+        steps = [step for step in steps if step.plan_id == active_plan_id]
         evidence = {
             "objective": order.objective,
             "description": order.description,
@@ -546,11 +564,19 @@ evidence is missing, contradictory, or does not demonstrate the objective. JSON 
         max_tokens=4096,
         timeout_seconds=120,
     )
-    by_id = {str(item.get("criterion_id")): item for item in verdict.get("verdicts", [])}
+    from pydantic import ValidationError
+
+    from app.ai.tool_result import VerifierResponse
+
+    try:
+        checked = VerifierResponse.model_validate(verdict)
+        by_id = {item.criterion_id: item.model_dump() for item in checked.verdicts}
+    except ValidationError:
+        by_id = {}
     completed = False
     async with factory() as db:
         order = await db.get(WorkOrder, work_order_id, with_for_update=True)
-        if order is None:
+        if order is None or order.plan_revision != verification_revision:
             return False
         for criterion_id in [row.id for row in criteria]:
             criterion = await db.get(WorkAcceptanceCriterion, criterion_id, with_for_update=True)
@@ -561,7 +587,7 @@ evidence is missing, contradictory, or does not demonstrate the objective. JSON 
                 db,
                 order=order,
                 criterion=criterion,
-                ok=bool(item.get("ok", False)),
+                ok=item.get("ok") is True,
                 reason=str(item.get("reason") or "Verifier returned no supported verdict"),
                 evidence_payload={"checks": item.get("checks") or [], "model": model.model},
                 actor="automatic-semantic-verifier",
@@ -585,7 +611,7 @@ async def execute_claimed_step(
     async with factory() as db:
         step = await db.get(WorkStep, step_id)
         attempt = await db.get(WorkStepAttempt, attempt_id)
-        if step is None or attempt is None or attempt.status != "running":
+        if step is None or attempt is None or not attempt_owns_lease(step, attempt):
             return False
         order = await db.get(WorkOrder, step.work_order_id)
         if order is None or order.status != "running":
@@ -732,7 +758,7 @@ async def execute_claimed_step(
             step_row = await db.get(WorkStep, step_id, with_for_update=True)
             attempt_row = await db.get(WorkStepAttempt, attempt_id, with_for_update=True)
             call_row = await db.get(WorkToolCall, call_id, with_for_update=True)
-            if order and step_row and attempt_row and attempt_row.status == "running":
+            if order and step_row and attempt_row and attempt_owns_lease(step_row, attempt_row):
                 approval = Approval(
                     action_type=ApprovalActionType.agent_tool_call,
                     entity_type="work_order",
@@ -804,7 +830,7 @@ async def execute_claimed_step(
             step_row = await db.get(WorkStep, step_id, with_for_update=True)
             attempt_row = await db.get(WorkStepAttempt, attempt_id, with_for_update=True)
             call_row = await db.get(WorkToolCall, call_id, with_for_update=True)
-            if order and step_row and attempt_row and attempt_row.status == "running":
+            if order and step_row and attempt_row and attempt_owns_lease(step_row, attempt_row):
                 await fail_attempt(
                     db,
                     order=order,
@@ -832,7 +858,7 @@ async def execute_claimed_step(
             step_row = await db.get(WorkStep, step_id, with_for_update=True)
             attempt_row = await db.get(WorkStepAttempt, attempt_id, with_for_update=True)
             call_row = await db.get(WorkToolCall, call_id, with_for_update=True)
-            if order and step_row and attempt_row and attempt_row.status == "running":
+            if order and step_row and attempt_row and attempt_owns_lease(step_row, attempt_row):
                 await fail_attempt(
                     db,
                     order=order,
@@ -855,7 +881,7 @@ async def execute_claimed_step(
             step_row = await db.get(WorkStep, step_id, with_for_update=True)
             attempt_row = await db.get(WorkStepAttempt, attempt_id, with_for_update=True)
             call_row = await db.get(WorkToolCall, call_id, with_for_update=True)
-            if order and step_row and attempt_row and attempt_row.status == "running":
+            if order and step_row and attempt_row and attempt_owns_lease(step_row, attempt_row):
                 await fail_attempt(
                     db,
                     order=order,
@@ -881,7 +907,12 @@ async def execute_claimed_step(
         step_row = await db.get(WorkStep, step_id, with_for_update=True)
         attempt_row = await db.get(WorkStepAttempt, attempt_id, with_for_update=True)
         call_row = await db.get(WorkToolCall, call_id, with_for_update=True)
-        if not order or not step_row or not attempt_row or attempt_row.status != "running":
+        if (
+            not order
+            or not step_row
+            or not attempt_row
+            or not attempt_owns_lease(step_row, attempt_row)
+        ):
             return False
         await complete_attempt(
             db,

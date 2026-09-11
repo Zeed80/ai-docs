@@ -58,65 +58,7 @@ async def run_generated_skill(
     args: dict[str, Any] = Body(default_factory=dict),
     _user: UserInfo = Depends(require_role(UserRole.admin)),
 ) -> dict[str, Any]:
-    """Execute an agent-generated skill in the isolated runner."""
-    # Check cache first (read-only skills only)
-    try:
-        from app.ai.skill_cache import get_cached
-
-        cached = await get_cached(skill_name, args)
-        if cached is not None:
-            logger.debug("generated_skill_cache_hit", skill=skill_name)
-            return cached
-    except Exception:
-        pass  # cache miss is fine
-
-    try:
-        # Shadow routing for A/B testing (skill evolver)
-        from app.ai.skill_evolver import maybe_route_to_shadow, record_shadow_outcome
-
-        shadow_name = await maybe_route_to_shadow(skill_name, args)
-        if shadow_name:
-            try:
-                result = await _run_in_runner(shadow_name, args)
-                await record_shadow_outcome(
-                    skill_name, is_v2=True, success=result.get("status") == "ok"
-                )
-                return result
-            except Exception:
-                pass  # shadow failed → fall through to v1
-    except Exception:
-        pass
-
-    try:
-        result = await _run_in_runner(skill_name, args)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error("generated_skill_runner_unreachable", skill=skill_name, error=str(exc))
-        raise HTTPException(
-            status_code=503,
-            detail="Skill runner is unavailable; generated skills never run in-process.",
-        )
-
-    logger.info("generated_skill_executed", skill=skill_name)
-
-    # Cache successful read results
-    try:
-        from app.ai.skill_cache import set_cached
-
-        await set_cached(skill_name, args, result)
-    except Exception:
-        pass
-
-    # Record outcome for skill evolver
-    try:
-        from app.ai.skill_evolver import record_shadow_outcome
-
-        await record_shadow_outcome(skill_name, is_v2=False, success=result.get("status") == "ok")
-    except Exception:
-        pass
-
-    return result
+    raise HTTPException(410, "Generated skills are archived; use a task-scoped script")
 
 
 @router.get("/api/agent/skill-evolution/audit", tags=["agent-generated"])

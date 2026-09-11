@@ -324,6 +324,7 @@ async def search_memory(
     compatibility hint only; users should not have to choose SQL vs vector vs
     graph manually.
     """
+    await _authorize_memory_scope(payload.scope, payload.session_id, user, db)
     if payload.scope is None:
         payload = payload.model_copy(update={"scope": f"owner:{user.sub}"})
     offset = _decode_cursor(payload.cursor)
@@ -385,6 +386,7 @@ async def search_memory(
 async def store_chat_turn_memory(
     payload: MemoryChatTurnRequest,
     db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_effective_user),
 ) -> MemoryFact:
     """Store an episodic chat turn as long-term memory."""
     user_text = " ".join((payload.user_text or "").split())
@@ -400,7 +402,11 @@ async def store_chat_turn_memory(
         ]
         if part
     )
-    scope, metadata = _normalize_chat_turn_scope(payload.scope, payload.metadata)
+    await _authorize_memory_scope(payload.scope, payload.session_id, user, db)
+    metadata = dict(payload.metadata or {})
+    metadata.pop("trusted", None)
+    metadata.pop("promoted", None)
+    scope = "session" if payload.session_id else f"owner:{user.sub}"
     fact = MemoryFact(
         scope=scope,
         kind="chat_turn",
@@ -408,7 +414,7 @@ async def store_chat_turn_memory(
         summary=summary[:4000],
         source="chat",
         confidence=payload.confidence,
-        metadata_={"session_id": payload.session_id, **metadata},
+        metadata_={**metadata, "session_id": payload.session_id, "owner_key": user.sub},
     )
     db.add(fact)
     await db.commit()
@@ -420,8 +426,16 @@ async def store_chat_turn_memory(
 async def pin_memory_fact(
     payload: MemoryPinRequest,
     db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_effective_user),
 ) -> MemoryFact:
     """Pin a verified memory fact so retrieval ranks it above ordinary turns."""
+    await _authorize_memory_scope(
+        payload.scope, (payload.metadata or {}).get("session_id"), user, db
+    )
+    if payload.scope in {"project", "global"} and (
+        user.via_agent or not set(user.roles).intersection({UserRole.admin, UserRole.manager})
+    ):
+        raise HTTPException(403, "Shared memory requires a human manager")
     fact = MemoryFact(
         scope=payload.scope,
         kind=payload.kind,
@@ -430,7 +444,7 @@ async def pin_memory_fact(
         source="user_pin",
         confidence=payload.confidence,
         pinned=True,
-        metadata_=payload.metadata,
+        metadata_={**(payload.metadata or {}), "owner_key": user.sub},
     )
     db.add(fact)
     await db.commit()
@@ -442,13 +456,19 @@ async def pin_memory_fact(
 async def propose_memory_promotion(
     payload: MemoryPromotionRequest,
     db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_effective_user),
 ) -> MemoryFact:
     """Promote session evidence into a reviewable project-memory proposal."""
     source_fact: MemoryFact | None = None
+    if user.via_agent:
+        raise HTTPException(403, "Publishing private evidence requires a human decision")
     if payload.source_fact_id:
         source_fact = await db.get(MemoryFact, payload.source_fact_id)
         if not source_fact:
             raise HTTPException(status_code=404, detail="Source memory fact not found")
+        await _authorize_memory_scope(
+            source_fact.scope, (source_fact.metadata_ or {}).get("session_id"), user, db
+        )
     title = payload.title or (source_fact.title if source_fact else None)
     summary = payload.summary or (source_fact.summary if source_fact else None)
     if not title or not summary:
@@ -457,9 +477,10 @@ async def propose_memory_promotion(
             detail="title/summary are required when source_fact_id is not provided",
         )
     metadata = {
+        **(payload.metadata or {}),
         "promotion_status": "pending",
         "source": "memory_promotion",
-        **(payload.metadata or {}),
+        "owner_key": user.sub,
     }
     if source_fact:
         metadata.update(
@@ -1002,6 +1023,25 @@ async def _search_graph_nodes(
     return hits
 
 
+async def _authorize_memory_scope(scope, session_id, user, db) -> None:
+    """Scope selects within the caller's access; it never grants access."""
+    allowed = {None, "project", "global", "session", f"owner:{user.sub}"}
+    if user.department_id:
+        allowed.add(f"department:{user.department_id}")
+    if scope not in allowed:
+        raise HTTPException(403, "Memory scope is not accessible")
+    if session_id:
+        from app.db.models import ChatSession
+
+        try:
+            parsed = uuid.UUID(str(session_id))
+        except ValueError as exc:
+            raise HTTPException(403, "Invalid memory session") from exc
+        session = await db.get(ChatSession, parsed)
+        if session is None or session.user_key != user.sub:
+            raise HTTPException(403, "Memory session is not accessible")
+
+
 def _resolve_visible_scopes(
     payload: MemorySearchRequest,
     *,
@@ -1435,7 +1475,18 @@ async def _search_sql_memory(
     if remaining > 0:
         rank_expr = _fts_rank(ChatMessage.content, payload.query)
         chat_cond = _fts_condition(ChatMessage.content, payload.query)
-        base_where = [ChatMessage.role.in_(["user", "assistant"]), chat_cond]
+        from app.ai.actor_context import get_acting_user
+        from app.db.models import ChatSession
+
+        base_where = [
+            ChatMessage.role.in_(["user", "assistant"]),
+            chat_cond,
+            ChatMessage.session_id.in_(
+                select(ChatSession.id).where(
+                    ChatSession.user_key == (get_acting_user() or "__no_actor__")
+                )
+            ),
+        ]
         if rank_expr is not None:
             stmt = select(ChatMessage, rank_expr.label("r")).where(*base_where)
             order_col = rank_expr.desc()

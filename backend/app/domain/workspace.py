@@ -1,35 +1,40 @@
-"""Workspace block store — Redis-backed with in-memory fallback.
-
-Blocks survive backend restarts thanks to Redis persistence.
-If Redis is unavailable the store degrades to the previous in-memory dict.
-TTL defaults to 24 h so blocks are cleaned up automatically without manual
-intervention while still surviving routine container restarts.
-"""
+"""Owned workspace artifacts. PostgreSQL is authoritative; no implicit expiry."""
 
 from __future__ import annotations
 
+import copy
 import json
-import logging
+import uuid
 from datetime import UTC, datetime
+from functools import lru_cache
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from fastapi import HTTPException
+from sqlalchemy import create_engine, delete, select
+from sqlalchemy.dialects.postgresql import insert
 
-_REDIS_KEY = "workspace:blocks"
-_BLOCK_TTL = 86_400  # 24 h in seconds
+from app.ai.actor_context import get_acting_user
+from app.config import settings
+from app.db.agent_runtime_models import OwnedWorkspaceBlock
 
-# In-memory fallback (used when Redis is unavailable)
-_FALLBACK: dict[str, dict[str, Any]] = {}
+# Unit tests use an isolated store; never a production outage fallback.
+_FALLBACK: dict[str, dict] = {}
 
 
-def _redis():
-    """Return sync Redis client or None on error."""
-    try:
-        from app.utils.redis_client import get_sync_redis
+def _owner() -> str:
+    actor = get_acting_user()
+    if actor:
+        return actor
+    if not settings.auth_enabled:
+        from app.auth.jwt import _DEV_USER
 
-        return get_sync_redis()
-    except Exception:
-        return None
+        return _DEV_USER.sub
+    raise HTTPException(403, "Workspace owner is required")
+
+
+@lru_cache(maxsize=1)
+def _engine():
+    return create_engine(settings.database_url_sync, pool_pre_ping=True, pool_size=5)
 
 
 def _now_iso() -> str:
@@ -37,107 +42,82 @@ def _now_iso() -> str:
 
 
 def upsert_workspace_block(block_id: str, block: dict[str, Any]) -> dict[str, Any]:
+    owner = _owner()
     now = _now_iso()
-    r = _redis()
-    existing: dict[str, Any] | None = None
-
-    if r is not None:
-        try:
-            raw = r.hget(_REDIS_KEY, block_id)
-            if raw:
-                existing = json.loads(raw)
-        except Exception:
-            pass
-
-    if existing is None:
-        existing = _FALLBACK.get(block_id)
-
-    stored = {
-        **block,
-        "id": block_id,
-        "created_at": existing.get("created_at") if existing else now,
-        "updated_at": now,
-    }
-
-    if r is not None:
-        try:
-            r.hset(_REDIS_KEY, block_id, json.dumps(stored, default=str))
-            r.expire(_REDIS_KEY, _BLOCK_TTL)
-        except Exception as exc:
-            logger.warning("workspace_redis_write_failed", extra={"error": str(exc)})
-            _FALLBACK[block_id] = stored
+    existing = get_workspace_block(block_id)
+    stored = json.loads(
+        json.dumps(
+            {
+                **block,
+                "id": block_id,
+                "owner_key": owner,
+                "created_at": existing.get("created_at") if existing else now,
+                "updated_at": now,
+            },
+            default=str,
+        )
+    )
+    if settings.app_env == "test":
+        _FALLBACK[f"{owner}:{block_id}"] = copy.deepcopy(stored)
     else:
-        _FALLBACK[block_id] = stored
-
+        statement = (
+            insert(OwnedWorkspaceBlock)
+            .values(id=uuid.uuid4(), owner_key=owner, block_key=block_id, payload=stored)
+            .on_conflict_do_update(
+                index_elements=["owner_key", "block_key"],
+                set_={"payload": stored, "updated_at": datetime.now(UTC)},
+            )
+        )
+        with _engine().begin() as conn:
+            conn.execute(statement)
     return stored
 
 
 def append_workspace_block(block: dict[str, Any]) -> dict[str, Any]:
-    block_id = str(block.get("id") or f"workspace:{_count() + 1}")
-    return upsert_workspace_block(block_id, block)
-
-
-def _count() -> int:
-    r = _redis()
-    if r is not None:
-        try:
-            return int(r.hlen(_REDIS_KEY))
-        except Exception:
-            pass
-    return len(_FALLBACK)
+    return upsert_workspace_block(str(block.get("id") or f"workspace:{uuid.uuid4()}"), block)
 
 
 def list_workspace_blocks() -> list[dict[str, Any]]:
-    r = _redis()
-    items: list[dict[str, Any]] = []
-
-    if r is not None:
-        try:
-            raw_map = r.hgetall(_REDIS_KEY)
-            for v in raw_map.values():
-                try:
-                    items.append(json.loads(v))
-                except Exception:
-                    pass
-        except Exception:
-            items = list(_FALLBACK.values())
+    owner = _owner()
+    if settings.app_env == "test":
+        items = [copy.deepcopy(v) for v in _FALLBACK.values() if v.get("owner_key") == owner]
     else:
-        items = list(_FALLBACK.values())
-
+        with _engine().connect() as conn:
+            items = list(
+                conn.execute(
+                    select(OwnedWorkspaceBlock.payload).where(
+                        OwnedWorkspaceBlock.owner_key == owner
+                    )
+                ).scalars()
+            )
     return sorted(items, key=lambda b: str(b.get("updated_at", "")), reverse=True)
 
 
 def get_workspace_block(block_id: str) -> dict[str, Any] | None:
-    r = _redis()
-    if r is not None:
-        try:
-            raw = r.hget(_REDIS_KEY, block_id)
-            if raw:
-                return json.loads(raw)
-        except Exception:
-            pass
-    return _FALLBACK.get(block_id)
+    owner = _owner()
+    if settings.app_env == "test":
+        return copy.deepcopy(_FALLBACK.get(f"{owner}:{block_id}"))
+    with _engine().connect() as conn:
+        return conn.execute(
+            select(OwnedWorkspaceBlock.payload).where(
+                OwnedWorkspaceBlock.owner_key == owner, OwnedWorkspaceBlock.block_key == block_id
+            )
+        ).scalar_one_or_none()
 
 
 def delete_workspace_block(block_id: str) -> bool:
-    deleted = False
-    r = _redis()
-    if r is not None:
-        try:
-            deleted = bool(r.hdel(_REDIS_KEY, block_id))
-        except Exception:
-            pass
-    if block_id in _FALLBACK:
-        _FALLBACK.pop(block_id)
-        deleted = True
-    return deleted
+    owner = _owner()
+    if settings.app_env == "test":
+        return _FALLBACK.pop(f"{owner}:{block_id}", None) is not None
+    with _engine().begin() as conn:
+        result = conn.execute(
+            delete(OwnedWorkspaceBlock).where(
+                OwnedWorkspaceBlock.owner_key == owner, OwnedWorkspaceBlock.block_key == block_id
+            )
+        )
+        return bool(result.rowcount)
 
 
 def clear_workspace_blocks() -> None:
-    r = _redis()
-    if r is not None:
-        try:
-            r.delete(_REDIS_KEY)
-        except Exception:
-            pass
-    _FALLBACK.clear()
+    for block in list_workspace_blocks():
+        delete_workspace_block(block["id"])

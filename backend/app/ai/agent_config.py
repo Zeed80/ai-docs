@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.ai.gateway_config import gateway_config
 
@@ -17,6 +17,14 @@ _REDIS_KEY = "agent_config"
 
 
 class BuiltinAgentConfig(BaseModel):
+    @model_validator(mode="after")
+    def retire_implicit_execution(self):
+        self.use_turn_router = True
+        self.allow_capability_builder = False
+        self.capability_builder_requires_approval = True
+        self.fallback_providers = []
+        return self
+
     enabled: bool = True
     agent_name: str = "Света"
     model: str = "qwen3.5:9b"

@@ -79,6 +79,7 @@ class TurnDecision(BaseModel):
     # is the fallback. Keep keys stable so recipes resolve consistently.
     entities: dict[str, str] = Field(default_factory=dict)
     goal: str = ""
+    workspace_canvas_id: str | None = Field(default=None, max_length=300)
     confidence: float = 0.0
 
     @model_validator(mode="before")

@@ -150,7 +150,11 @@ async def chat_ws(ws: WebSocket) -> None:
                     await db.commit()
 
     # Mirror Telegram conversations to this WebSocket client
-    sub_id = chat_bus.subscribe(send)
+    async def deliver_bus_event(data: dict) -> None:
+        # Bus delivery must never persist into or settle another active turn.
+        await ws.send_text(json.dumps(data, ensure_ascii=False))
+
+    sub_id = chat_bus.subscribe(deliver_bus_event, user_sub=user_key)
 
     current_turn: asyncio.Task | None = None
 
@@ -205,11 +209,13 @@ async def chat_ws(ws: WebSocket) -> None:
                     # either signal — the frame going out, or the task simply
                     # finishing (incl. via exception) — is enough to unblock.
                     if turn_in_progress and current_turn and not current_turn.done():
-                        await send(
-                            {
-                                "type": "error",
-                                "content": "Предыдущая задача ещё выполняется.",
-                            }
+                        await ws.send_text(
+                            json.dumps(
+                                {
+                                    "type": "busy",
+                                    "content": "Предыдущая задача ещё выполняется.",
+                                }
+                            )
                         )
                         continue
                     raw_session_id = data.get("session_id")
@@ -297,6 +303,7 @@ async def chat_ws(ws: WebSocket) -> None:
                                     and msg.id != user_message.id
                                 ]
                                 agent = AgentOrchestrator(send)
+                                agent._executor._session_id = str(session_id)
                                 agent.hydrate_history(restored)
                                 agent_sessions[session_id] = agent
                                 if (
@@ -380,4 +387,4 @@ async def chat_ws(ws: WebSocket) -> None:
         if current_turn and not current_turn.done():
             current_turn.cancel()
     finally:
-        chat_bus.unsubscribe(sub_id)
+        chat_bus.unsubscribe(sub_id, user_sub=user_key)

@@ -173,79 +173,14 @@ async def _build_evolution_context(skill_name: str) -> str:
 
 
 async def evolve_skill(skill_name: str) -> bool:
-    """Attempt to improve a skill. Returns True if a new version was deployed.
-
-    Gated by the protected setting `capability_builder_requires_approval`
-    (default True): autonomous evolution generates and shadow-executes new
-    code, so it may only run when an admin has explicitly waived approval.
-    """
-    from app.ai.agent_config import get_builtin_agent_config
-
-    if get_builtin_agent_config().capability_builder_requires_approval:
-        logger.info(
-            "skill_evolver_skipped_approval_required",
-            skill=skill_name,
-            reason="capability_builder_requires_approval is enabled",
-        )
-        return False
-
-    logger.info("skill_evolver_start", skill=skill_name)
-
-    try:
-        gap_context = await _build_evolution_context(skill_name)
-
-        # Generate improved version with CapabilityBuilder + self_refine
-        from app.ai.capability_builder import build_capability
-
-        v2_name = f"{skill_name}.v2.{int(time.time())}"
-
-        result = await build_capability(
-            gap_description=gap_context,
-            skill_name=v2_name,
-        )
-
-        if not result.ok:
-            logger.warning("skill_evolver_build_failed", skill=skill_name, errors=result.errors)
-            return False
-
-        # Register shadow deployment
-        config = ShadowConfig(
-            skill_name=skill_name,
-            v2_name=v2_name,
-            started_at=time.time(),
-        )
-        await _save_shadow_config(config)
-
-        logger.info(
-            "skill_evolver_shadow_deployed",
-            skill=skill_name,
-            v2=v2_name,
-            path=result.skill_path,
-        )
-        await _audit_log("shadow_deployed", skill_name, {"v2_name": v2_name})
-        return True
-
-    except Exception as exc:
-        logger.error("skill_evolver_exception", skill=skill_name, error=str(exc))
-        return False
+    return False
 
 
 # ── A/B decision ───────────────────────────────────────────────────────────────
 
 
 async def evaluate_shadow_results() -> None:
-    """Check all active shadow deployments and promote or rollback."""
-    configs = await _load_all_shadow_configs()
-
-    for config in configs:
-        if config.total_calls < MIN_AB_CALLS:
-            continue  # not enough data yet
-
-        v2_wins = (config.v2_rate - config.v1_rate) >= WIN_MARGIN
-        if v2_wins:
-            await _promote_v2(config)
-        else:
-            await _rollback_v2(config)
+    return
 
 
 async def _promote_v2(config: ShadowConfig) -> None:
@@ -305,20 +240,7 @@ async def _rollback_v2(config: ShadowConfig) -> None:
 
 
 async def maybe_route_to_shadow(skill_name: str, args: dict) -> str | None:
-    """Return shadow skill name if this call should be routed to v2, else None.
-
-    Called by the skill dispatcher before executing a skill.
-    """
-    import random
-
-    if random.random() > SHADOW_TRAFFIC_PCT:
-        return None
-
-    config = await _load_shadow_config(skill_name)
-    if config is None:
-        return None
-
-    return config.v2_name
+    return None
 
 
 async def record_shadow_outcome(skill_name: str, *, is_v2: bool, success: bool) -> None:

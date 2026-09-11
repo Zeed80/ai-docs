@@ -85,7 +85,7 @@ class SvetaTelegramBot:
     # ── Auth helpers ─────────────────────────────────────────────────────────
 
     def _is_allowed(self, user_id: int) -> bool:
-        return not self._allowed or user_id in self._allowed
+        return user_id in self._allowed
 
     # ── Session management ───────────────────────────────────────────────────
 
@@ -290,6 +290,49 @@ class SvetaTelegramBot:
     # ── Core dispatch ─────────────────────────────────────────────────────────
 
     async def _process_message(self, update: Update, user_id: int, text: str) -> None:
+        from sqlalchemy import select
+
+        from app.ai.actor_context import get_acting_user, set_acting_user
+        from app.db.agent_runtime_models import AgentChannelIdentity
+        from app.db.models import User
+        from app.db.session import _get_session_factory
+
+        if update.effective_chat.type != "private":
+            await update.message.reply_text(
+                "Работа с личными данными доступна только в личном чате."
+            )
+            return
+        async with _get_session_factory()() as db:
+            owner = await db.scalar(
+                select(AgentChannelIdentity.owner_key)
+                .join(
+                    User,
+                    User.sub == AgentChannelIdentity.owner_key,
+                )
+                .where(
+                    AgentChannelIdentity.channel == "telegram",
+                    AgentChannelIdentity.external_id == str(user_id),
+                    User.is_active.is_(True),
+                )
+            )
+        if owner is None:
+            await update.message.reply_text(
+                "Telegram не связан с учётной записью. Обратитесь к администратору."
+            )
+            return
+        previous_actor = get_acting_user()
+        set_acting_user(owner)
+        try:
+            existing = self._sessions.get(user_id)
+            if existing is not None and getattr(existing, "_channel_owner", None) != owner:
+                await self._reset_session(user_id)
+            session = await self._get_session(user_id)
+            session._channel_owner = owner
+            await self._process_owned_message(update, user_id, text)
+        finally:
+            set_acting_user(previous_actor)
+
+    async def _process_owned_message(self, update: Update, user_id: int, text: str) -> None:
         session = await self._get_session(user_id)
         queue: asyncio.Queue[dict] = session._tg_queue  # type: ignore[attr-defined]
 

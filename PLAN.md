@@ -34,6 +34,8 @@ isProject: false
 
 # Единое рабочее пространство ИИ-документооборота для производства
 
+> Актуальная переработка агента: [`AGENT_EMPLOYEE_IMPLEMENTATION_PLAN.md`](./AGENT_EMPLOYEE_IMPLEMENTATION_PLAN.md). Модель выбирает действия; generated skills/replay отключены; полномочия задаются явно. Долговечный чат и изолированные скрипты ещё не завершены.
+
 > Подробный план и фактический статус инженерного направления «Оцифровка в DXF» находятся в [`DXF_CAD_DEVELOPMENT_PLAN.md`](./DXF_CAD_DEVELOPMENT_PLAN.md).
 > Там же зафиксирован реализованный вертикальный срез `EngineeringModelGraph v1`; после mechanical live regression primary pipeline включён как production canary только для mechanical-профиля.
 > Контракт основного метода «По описанию» и последовательность реализации полного координатного графа находятся в [`CAD_DRAWING_GRAPH_PLAN.md`](./docs/archive/CAD_DRAWING_GRAPH_PLAN.md).

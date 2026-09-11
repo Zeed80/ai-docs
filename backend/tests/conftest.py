@@ -16,7 +16,7 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.db.base import Base
@@ -178,13 +178,20 @@ async def db_session(test_engine) -> AsyncIterator[AsyncSession]:
 
 
 @pytest_asyncio.fixture
-async def client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
+async def client(db_session: AsyncSession, monkeypatch) -> AsyncIterator[AsyncClient]:
     from app.config import settings
     from app.db.session import get_db
     from app.main import app
 
     settings.rate_limit_api_per_minute = 0
     settings.rate_limit_login_per_minute = 0
+
+    # Internal HTTP helpers open sessions without Depends(get_db). Keep those
+    # writes inside the same test transaction, never the configured app database.
+    factory = async_sessionmaker(
+        bind=db_session.bind, expire_on_commit=False, join_transaction_mode="create_savepoint"
+    )
+    monkeypatch.setattr("app.db.session._get_session_factory", lambda: factory)
 
     async def override_get_db():
         yield db_session

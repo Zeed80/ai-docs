@@ -42,10 +42,7 @@ def test_compose_runner_is_locked_down():
 
     mounts = runner.get("volumes") or []
     skills_mounts = [m for m in mounts if "generated_skills" in str(m)]
-    assert skills_mounts, "generated_skills must be mounted"
-    assert all(str(m).endswith(":ro") for m in skills_mounts), (
-        "generated_skills mount must be read-only"
-    )
+    assert not skills_mounts, "archived generated skills must not be mounted for execution"
 
 
 def test_backend_module_never_imports_generated_code():
@@ -63,8 +60,8 @@ def test_backend_module_never_imports_generated_code():
 
 
 @pytest.mark.asyncio
-async def test_run_generated_skill_proxies_to_runner(client, monkeypatch):
-    """The endpoint forwards execution to SKILL_RUNNER_URL over HTTP."""
+async def test_run_generated_skill_is_retired(client, monkeypatch):
+    """No generated code is sent to a runner, regardless of cache state."""
     import httpx
 
     from app.api import dynamic_skill_runner as dsr
@@ -98,15 +95,8 @@ async def test_run_generated_skill_proxies_to_runner(client, monkeypatch):
     monkeypatch.setattr(dsr, "_GENERATED_ROOT", Path("/nonexistent"))
 
     resp = await client.post("/api/agent/generated-skill/some_skill", json={"x": 1})
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
-    assert posted, "execution must be proxied to the skill-runner"
-    url, payload = posted[0]
-    from app.config import settings
-
-    assert url.startswith(settings.skill_runner_url)
-    assert url.endswith("/run/some_skill")
-    assert payload == {"args": {"x": 1}}
+    assert resp.status_code == 410
+    assert not posted
 
 
 def test_generated_capability_registration(tmp_path, monkeypatch):

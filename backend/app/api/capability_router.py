@@ -8,660 +8,32 @@ from __future__ import annotations
 
 import httpx
 import structlog
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from app.ai.agent_config import get_builtin_agent_config
 from app.ai.capability_manifest import load_capability_manifest
 from app.ai.policy_engine import check_tool_execution, classify_capability_action_risk
+from app.auth.jwt import get_current_user
+from app.auth.models import UserInfo, UserRole
 from app.config import settings
 
-router = APIRouter(tags=["capabilities"])
+
+async def _bind_actor(request: Request, user: UserInfo = Depends(get_current_user)) -> None:
+    request.state.execution_user = user
+    from app.ai.actor_context import set_acting_user
+
+    set_acting_user(user.sub)
+
+
+router = APIRouter(tags=["capabilities"], dependencies=[Depends(_bind_actor)])
 logger = structlog.get_logger()
 
 # Maps capability → action → (method, path_template, path_params)
 # path_params: list of arg keys that get interpolated into the URL
-_DISPATCH: dict[str, dict[str, tuple[str, str, list[str]]]] = {
-    "computer_use": {
-        "browser_fetch": ("POST", "/api/computer-use/execute", []),
-        # Ф2.A (AGENT_AUTONOMY_ROADMAP.md): search + read, scoped by the same
-        # grant as browser_fetch — see app.api.computer_use.web_discover.
-        "web_discover": ("POST", "/api/computer-use/web-discover", []),
-        "desktop_snapshot": ("POST", "/api/computer-use/execute", []),
-        "desktop_start": ("POST", "/api/computer-use/execute", []),
-        "desktop_click": ("POST", "/api/computer-use/execute", []),
-        "desktop_type": ("POST", "/api/computer-use/execute", []),
-        "desktop_read": ("POST", "/api/computer-use/execute", []),
-        "desktop_close": ("POST", "/api/computer-use/execute", []),
-        "file_read": ("POST", "/api/computer-use/execute", []),
-        "file_write": ("POST", "/api/computer-use/execute", []),
-        "shell": ("POST", "/api/computer-use/execute", []),
-    },
-    # Ф3 (AGENT_AUTONOMY_ROADMAP.md): draft-first ingestion of web-discovered
-    # supplier catalogs into the existing ToolSupplier/ToolCatalogEntry
-    # domain, structured through the same entry-creation/embed/graph pipeline
-    # as manual catalog uploads (app.tasks.drawing_analysis).
-    "tool_catalog": {
-        "create_supplier": ("POST", "/api/tool-catalog/suppliers", []),
-        # Name → Party → ToolSupplier. The agent never has a UUID at hand in a
-        # chat turn; without these two the "найди каталог и прикрепи к
-        # поставщику" turn had no reachable path at all (live finding).
-        "resolve_supplier": ("POST", "/api/tool-catalog/resolve-supplier", []),
-        "discover_catalogs": ("POST", "/api/tool-catalog/discover-catalogs", []),
-        "attach_web_catalog": ("POST", "/api/tool-catalog/attach-web-catalog", []),
-        "ingest_status": ("POST", "/api/tool-catalog/ingest-status", []),
-        "ingest_web_source": (
-            "POST",
-            "/api/tool-catalog/suppliers/{supplier_id}/ingest-web-source",
-            ["supplier_id"],
-        ),
-        "list_entries": ("GET", "/api/tool-catalog/by-supplier/{party_id}/entries", ["party_id"]),
-        "approve": ("POST", "/api/tool-catalog/entries/{entry_id}/approve", ["entry_id"]),
-        # Uploaded catalog files: the agent must be able to see what it (or a
-        # human) uploaded and how far the parse got, and to re-run one file.
-        "crawl_site": ("POST", "/api/tool-catalog/crawl-site", []),
-        # Browsing side: which catalogs a supplier has, what is on a page, and a
-        # search that returns the position's picture and page — without these the
-        # agent can find a catalog but cannot answer "покажи фрезу Ø12 из него".
-        "list_catalogs": ("GET", "/api/catalogs", []),
-        "catalog_pages": ("GET", "/api/catalogs/{document_id}/pages", ["document_id"]),
-        "search_positions": ("POST", "/api/catalogs/search", []),
-        "pause_parsing": ("POST", "/api/catalogs/{document_id}/pause", ["document_id"]),
-        # "Чем заменить эту позицию" — by meaning, since a replacement's article
-        # number differs by definition between manufacturers.
-        "similar_positions": ("POST", "/api/catalogs/similar", []),
-        # By PICTURE: a photo of the tool, a crop from a drawing, or "покажи
-        # похожие на эту позицию" (entry_id). Images and words share one vector
-        # space, so this also answers a plain text query — and it says openly
-        # when the visual index is unavailable instead of pretending.
-        "search_visual": ("POST", "/api/catalogs/search-visual", []),
-        "list_uploads": ("GET", "/api/tool-catalog/by-supplier/{party_id}/uploads", ["party_id"]),
-        "reingest_upload": (
-            "POST",
-            "/api/tool-catalog/uploads/{document_id}/reingest",
-            ["document_id"],
-        ),
-        "refresh": ("POST", "/api/tool-catalog/suppliers/{supplier_id}/refresh", ["supplier_id"]),
-    },
-    "documents": {
-        "list": ("GET", "/api/documents", []),
-        "get": ("GET", "/api/documents/{document_id}", ["document_id"]),
-        "search": ("POST", "/api/search/documents", []),
-        "ingest": ("POST", "/api/documents/ingest", []),
-        "classify": ("POST", "/api/documents/{document_id}/classify", ["document_id"]),
-        "extract": ("POST", "/api/documents/{document_id}/extract", ["document_id"]),
-        "summarize": ("POST", "/api/documents/{document_id}/summarize", ["document_id"]),
-        "update": ("PATCH", "/api/documents/{document_id}", ["document_id"]),
-        "delete": ("DELETE", "/api/documents/{document_id}", ["document_id"]),
-        "bulk_delete": ("DELETE", "/api/documents/bulk-delete", []),
-        "link": ("POST", "/api/documents/{document_id}/links", ["document_id"]),
-        "dependencies": ("GET", "/api/documents/{document_id}/dependencies", ["document_id"]),
-        # Processing-queue visibility & control (sequential GPU pipeline)
-        "queue": ("GET", "/api/documents/workspace", []),
-        "processing_status": ("GET", "/api/documents/{document_id}/management", ["document_id"]),
-        "reprocess": ("POST", "/api/documents/{document_id}/classify", ["document_id"]),
-    },
-    "invoices": {
-        "list": ("GET", "/api/invoices", []),
-        "get": ("GET", "/api/invoices/{invoice_id}", ["invoice_id"]),
-        "validate": ("POST", "/api/invoices/{invoice_id}/validate", ["invoice_id"]),
-        "approve": ("POST", "/api/invoices/{invoice_id}/approve", ["invoice_id"]),
-        "reject": ("POST", "/api/invoices/{invoice_id}/reject", ["invoice_id"]),
-        "compare_prices": ("GET", "/api/invoices/{invoice_id}/price-check", ["invoice_id"]),
-        # Against the supplier's CATALOG (VAT/pack normalised), not past invoices.
-        "catalog_price_check": (
-            "GET",
-            "/api/invoices/{invoice_id}/catalog-price-check",
-            ["invoice_id"],
-        ),
-        "export_excel": ("POST", "/api/invoices/{invoice_id}/export", ["invoice_id"]),
-        "export_1c": ("POST", "/api/invoices/{invoice_id}/export-1c", ["invoice_id"]),
-        "update": ("PATCH", "/api/invoices/{invoice_id}", ["invoice_id"]),
-        "delete": ("DELETE", "/api/invoices/{invoice_id}", ["invoice_id"]),
-        "bulk_delete": ("DELETE", "/api/invoices", []),
-        "bulk_approve": ("POST", "/api/invoices/bulk-approve", []),
-        "bulk_reject": ("POST", "/api/invoices/bulk-reject", []),
-        "receive": ("POST", "/api/invoices/{invoice_id}/receive", ["invoice_id"]),
-    },
-    "suppliers": {
-        "list": ("GET", "/api/suppliers", []),
-        "get": ("GET", "/api/suppliers/{supplier_id}", ["supplier_id"]),
-        "search": ("POST", "/api/suppliers/search", []),
-        "price_history": ("GET", "/api/suppliers/{supplier_id}/price-history", ["supplier_id"]),
-        "trust_score": ("GET", "/api/suppliers/{supplier_id}/trust-score", ["supplier_id"]),
-        "alerts": ("GET", "/api/suppliers/{supplier_id}/alerts", ["supplier_id"]),
-        "update": ("PATCH", "/api/suppliers/{supplier_id}", ["supplier_id"]),
-        "check_requisites": (
-            "POST",
-            "/api/suppliers/{supplier_id}/check-requisites",
-            ["supplier_id"],
-        ),
-    },
-    "warehouse": {
-        "list_inventory": ("GET", "/api/warehouse/inventory", []),
-        "get_item": ("GET", "/api/warehouse/inventory/{item_id}", ["item_id"]),
-        "low_stock": ("GET", "/api/warehouse/inventory/low-stock", []),
-        "create_receipt": ("POST", "/api/warehouse/receipts", []),
-        "confirm_receipt": ("POST", "/api/warehouse/receipts/{receipt_id}/confirm", ["receipt_id"]),
-        "issue_stock": ("POST", "/api/warehouse/inventory/{item_id}/issue", ["item_id"]),
-        "adjust_stock": ("POST", "/api/warehouse/inventory/{item_id}/adjust", ["item_id"]),
-        "list_receipts": ("GET", "/api/warehouse/receipts", []),
-        "get_receipt": ("GET", "/api/warehouse/receipts/{receipt_id}", ["receipt_id"]),
-        "list_movements": ("GET", "/api/warehouse/movements", []),
-        "create_item": ("POST", "/api/warehouse/inventory", []),
-        "update_item": ("PATCH", "/api/warehouse/inventory/{item_id}", ["item_id"]),
-        "delete_item": ("DELETE", "/api/warehouse/inventory/{item_id}", ["item_id"]),
-        "bulk_confirm": ("POST", "/api/warehouse/receipts/bulk-confirm", []),
-        "update_status": ("PATCH", "/api/warehouse/receipts/{receipt_id}/status", ["receipt_id"]),
-    },
-    "email": {
-        "list": ("GET", "/api/email/threads", []),
-        "search": ("POST", "/api/email/search", []),
-        "get": ("GET", "/api/email/threads/{thread_id}", ["thread_id"]),
-        "draft": ("POST", "/api/email/drafts", []),
-        "send": ("POST", "/api/email/drafts/{draft_id}/send", ["draft_id"]),
-        "fetch_new": ("POST", "/api/email/fetch", []),
-        "risk_check": ("POST", "/api/email/drafts/{draft_id}/risk-check", ["draft_id"]),
-        # Templates live in their own router mounted at /api/email-templates
-        # (app.main), not under /api/email — the trailing slash on the list route
-        # matters: httpx does not follow the 307 FastAPI issues without it.
-        "list_templates": ("GET", "/api/email-templates/", []),
-        "get_template": ("GET", "/api/email-templates/{template_id}", ["template_id"]),
-        "render_template": ("POST", "/api/email-templates/{template_id}/render", ["template_id"]),
-        "delete_template": ("DELETE", "/api/email-templates/{template_id}", ["template_id"]),
-        "suggest_template": ("POST", "/api/email/suggest-template", []),
-        "style_match": ("POST", "/api/email/style-analyze", []),
-        # Personal mailbox: the agent's own view of "моя почта" for the user it
-        # acts for (app.auth.acting) — read-only, no provisioning from the agent.
-        "my_mailbox": ("GET", "/api/mailbox/me", []),
-        "process_attachment": (
-            "POST",
-            "/api/email/messages/{message_id}/attachments/process",
-            ["message_id"],
-        ),
-        # Email client v2 additions:
-        "list_threads": ("GET", "/api/email/threads", []),
-        "get_thread": ("GET", "/api/email/threads/{thread_id}", ["thread_id"]),
-        "read": ("GET", "/api/email/{email_id}", ["email_id"]),
-        "list_drafts": ("GET", "/api/email/drafts", []),
-        # Перечитать ОДИН черновик — штатный выход из 409 «черновик изменился»
-        # и единственный способ получить свежий content_digest. Описание
-        # capability отсылало к этому шагу давно, а действия не было: агенту
-        # оставалось перебирать список.
-        "get_draft": ("GET", "/api/email/drafts/{draft_id}", ["draft_id"]),
-        "mailboxes": ("GET", "/api/email/mailboxes", []),
-        "labels": ("GET", "/api/email/labels", []),
-        "label": ("POST", "/api/email/threads/actions", []),
-        "compose": ("POST", "/api/email/compose/generate", []),
-        "compose_assist": ("POST", "/api/email/compose/assist", []),
-        "reply": ("POST", "/api/email/threads/{thread_id}/reply-draft", ["thread_id"]),
-        "get_attachment": (
-            "GET",
-            "/api/email/messages/{message_id}/attachments/{filename}/content",
-            ["message_id", "filename"],
-        ),
-        "recognize_attachment": (
-            "POST",
-            "/api/email/messages/{message_id}/attachments/recognize",
-            ["message_id"],
-        ),
-        # Canonical template action names (aliases kept above for back-compat).
-        "templates.list": ("GET", "/api/email-templates/", []),
-        "templates.get": ("GET", "/api/email-templates/{template_id}", ["template_id"]),
-        "templates.render": ("POST", "/api/email-templates/{template_id}/render", ["template_id"]),
-        "templates.delete": ("DELETE", "/api/email-templates/{template_id}", ["template_id"]),
-        # Ф6.9 — these three were in gateway.yml's allowlist and in no dispatch
-        # table, so an agent explicitly granted the right got "unknown action".
-        # The endpoints existed the whole time.
-        "templates.create": ("POST", "/api/email-templates/", []),
-        "templates.update": ("PATCH", "/api/email-templates/{template_id}", ["template_id"]),
-        "templates.from_message": ("POST", "/api/email-templates/from-message", []),
-    },
-    "procurement": {
-        "list_requests": ("GET", "/api/purchase-requests", []),
-        "create_request": ("POST", "/api/purchase-requests", []),
-        "get_request": ("GET", "/api/purchase-requests/{request_id}", ["request_id"]),
-        "update_request": ("PATCH", "/api/purchase-requests/{request_id}", ["request_id"]),
-        "send_rfq": ("POST", "/api/purchase-requests/{request_id}/send-rfq", ["request_id"]),
-        "list_contracts": ("GET", "/api/compare", []),
-        "create_contract": ("POST", "/api/compare", []),
-        "get_contract": ("GET", "/api/compare/{contract_id}", ["contract_id"]),
-        "update_contract": ("PATCH", "/api/supplier-contracts/{contract_id}", ["contract_id"]),
-    },
-    "payments": {
-        "list_schedule": ("GET", "/api/payment-schedules", []),
-        "overdue": ("GET", "/api/payment-schedules/overdue", []),
-        "upcoming": ("GET", "/api/payment-schedules/upcoming", []),
-        "mark_paid": ("POST", "/api/payment-schedules/{schedule_id}/mark-paid", ["schedule_id"]),
-        "create_schedule": ("POST", "/api/payment-schedules", []),
-        "calendar": ("GET", "/api/calendar/upcoming", []),
-    },
-    "anomalies": {
-        "list": ("GET", "/api/anomalies", []),
-        "check_all": ("POST", "/api/anomalies/check", []),
-        "explain": ("GET", "/api/anomalies/{anomaly_id}/explain", ["anomaly_id"]),
-        "resolve": ("POST", "/api/anomalies/{anomaly_id}/resolve", ["anomaly_id"]),
-        "create_card": ("POST", "/api/anomalies", []),
-    },
-    "normalization": {
-        "list_rules": ("GET", "/api/normalization/rules", []),
-        "suggest_rule": ("POST", "/api/normalization/suggest", []),
-        "activate_rule": ("POST", "/api/normalization/rules/{rule_id}/activate", ["rule_id"]),
-        "apply_rules": ("POST", "/api/normalization/apply", []),
-        "list_norm_cards": ("GET", "/api/normalization/norm-cards", []),
-        "create_norm_card": ("POST", "/api/normalization/norm-cards", []),
-        "update_norm_card": ("PATCH", "/api/normalization/norm-cards/{card_id}", ["card_id"]),
-        "list_canonical_items": ("GET", "/api/normalization/canonical-items", []),
-        "get_canonical_item": ("GET", "/api/normalization/canonical-items/{item_id}", ["item_id"]),
-        "update_canonical_item": (
-            "PATCH",
-            "/api/normalization/canonical-items/{item_id}",
-            ["item_id"],
-        ),
-    },
-    "workspace": {
-        # Spec-driven tables: LLM supplies only the spec, data flows SQL→table.
-        "spec_table": ("POST", "/api/workspace/agent/spec-table", []),
-        "spec_table_patch": ("POST", "/api/workspace/agent/spec-table/patch", []),
-        "spec_table_catalog": ("GET", "/api/workspace/agent/spec-table/catalog", []),
-        # Approval-gated: queues a DraftAction, never writes the DB directly.
-        "spec_table_cell_edit": ("POST", "/api/workspace/agent/spec-table/cell-edit", []),
-        "invoice_table": ("POST", "/api/workspace/agent/invoices/table", []),
-        "invoice_items_table": ("POST", "/api/workspace/agent/invoices/items-table", []),
-        "invoice_items_grouped": ("POST", "/api/workspace/agent/invoices/items-grouped-table", []),
-        "invoice_items_by_supplier": (
-            "POST",
-            "/api/workspace/agent/invoices/items-by-supplier-table",
-            [],
-        ),
-        "invoice_pivot": ("POST", "/api/workspace/agent/invoices/pivot-table", []),
-        "general": ("POST", "/api/workspace/agent/generated/general", []),
-        # Guarded free SQL (SELECT-only, validated) when no spec source fits.
-        "sql_table": ("POST", "/api/workspace/agent/generated/sql-table", []),
-        "compare_table_data": ("POST", "/api/workspace/agent/compare-table-data", []),
-        # No workspace endpoint ever existed for this; supplier search is the
-        # real implementation (the workspace path 404'd on every call).
-        "supplier_lookup": ("POST", "/api/suppliers/search", []),
-        "verify": ("POST", "/api/workspace/agent/verify-block", []),
-        "get_block": ("GET", "/api/workspace/blocks/{canvas_id}", ["canvas_id"]),
-    },
-    "sheets": {
-        # Ad-hoc editable spreadsheets ("листы") — never touch production data.
-        "create": ("POST", "/api/workspace/sheets/create", []),
-        "list": ("GET", "/api/workspace/sheets", []),
-        "get": ("GET", "/api/workspace/sheets/{sheet_id}", ["sheet_id"]),
-        "patch_cells": ("POST", "/api/workspace/sheets/{sheet_id}/patch-cells", ["sheet_id"]),
-        "add_row": ("POST", "/api/workspace/sheets/{sheet_id}/add-row", ["sheet_id"]),
-        "add_column": ("POST", "/api/workspace/sheets/{sheet_id}/add-column", ["sheet_id"]),
-        "set_formula": ("POST", "/api/workspace/sheets/{sheet_id}/set-formula", ["sheet_id"]),
-        "rename_column": ("POST", "/api/workspace/sheets/{sheet_id}/rename-column", ["sheet_id"]),
-        "merge_cells": ("POST", "/api/workspace/sheets/{sheet_id}/merge-cells", ["sheet_id"]),
-        "unmerge_cells": ("POST", "/api/workspace/sheets/{sheet_id}/unmerge-cells", ["sheet_id"]),
-        "delete": ("DELETE", "/api/workspace/sheets/{sheet_id}", ["sheet_id"]),
-        "from_spec": ("POST", "/api/workspace/sheets/from-spec", []),
-        "from_template": ("POST", "/api/workspace/sheets/from-template", []),
-        "templates": ("GET", "/api/workspace/sheets/templates/list", []),
-    },
-    "search": {
-        "hybrid": ("POST", "/api/search/hybrid", []),
-        "nl": ("POST", "/api/search/nl", []),
-        "nl_to_query": ("POST", "/api/search/nl", []),
-        "web": ("POST", "/api/web-search/query", []),
-        # Open a specific URL and read it like a human (headless Chromium +
-        # stealth): JS renders, basic bot walls clear. Returns readable text
-        # (and optionally a screenshot) for the agent to reason over.
-        "browse": ("POST", "/api/web-search/fetch", []),
-        # Deep research in one call: search several angles, open and read many
-        # sources (HTML + PDF catalogs), collate them, and optionally publish a
-        # report to the workspace desktop. Use this instead of stopping at the
-        # first result.
-        "research": ("POST", "/api/web-search/research", []),
-        "explain": ("POST", "/api/memory/explain", []),
-        "similar": (
-            "GET",
-            "/api/search/similar/{entity_type}/{entity_id}",
-            ["entity_type", "entity_id"],
-        ),
-        "saved_queries": ("GET", "/api/search/saved-queries", []),
-    },
-    "memory": {
-        "query": ("POST", "/api/memory/query", []),
-        "search": ("POST", "/api/memory/search", []),
-        "explain": ("POST", "/api/memory/explain", []),
-        "promote": ("POST", "/api/memory/promotions", []),
-        "promotion_list": ("GET", "/api/memory/promotions", []),
-        "promotion_evaluate": (
-            "POST",
-            "/api/memory/promotions/{entity_id}/evaluate",
-            ["entity_id"],
-        ),
-        "promotion_decide": ("POST", "/api/memory/promotions/{entity_id}/decide", ["entity_id"]),
-        "source_propose": ("POST", "/api/memory/sources/propose", []),
-        "source_list": ("GET", "/api/memory/sources", []),
-        "source_discover": ("POST", "/api/memory/sources/discover", []),
-        "source_decide": ("POST", "/api/memory/sources/{entity_id}/decide", ["entity_id"]),
-        "reindex": ("POST", "/api/memory/reindex", []),
-        "embeddings_stats": ("GET", "/api/memory/embeddings/stats", []),
-        # Обслуживание эмбеддингов памяти. Эндпоинты сами объявляют себя
-        # skill'ами в докстрингах, gateway.yml выдавал на них права, но
-        # маршрутов здесь не было.
-        "embeddings_rebuild": ("POST", "/api/memory/embeddings/rebuild", []),
-        "embeddings_rebuild_active": ("POST", "/api/memory/embeddings/rebuild-active", []),
-        "embeddings_index_active": ("POST", "/api/memory/embeddings/index-active", []),
-        "prune": ("POST", "/api/memory/prune", []),
-        # Multi-hop graph traversal — relational questions ("что связано с
-        # этим поставщиком", "цепочка согласования по счёту") need this
-        # instead of lexical/vector memory.search.
-        "neighborhood": ("GET", "/api/graph/nodes/{node_id}/neighborhood", ["node_id"]),
-        "path": ("GET", "/api/graph/path", []),
-    },
-    "tech": {
-        "process_plan_list": ("GET", "/api/technology/process-plans", []),
-        "process_plan_get": ("GET", "/api/technology/process-plans/{entity_id}", ["entity_id"]),
-        "process_plan_create": ("POST", "/api/technology/process-plans", []),
-        "process_plan_validate": (
-            "POST",
-            "/api/technology/process-plans/{entity_id}/validate",
-            ["entity_id"],
-        ),
-        "process_plan_approve": (
-            "POST",
-            "/api/technology/process-plans/{entity_id}/approve",
-            ["entity_id"],
-        ),
-        "operation_add": (
-            "POST",
-            "/api/technology/process-plans/{entity_id}/operations",
-            ["entity_id"],
-        ),
-        "operation_template_list": ("GET", "/api/technology/operation-templates", []),
-        "norm_estimate_create": (
-            "POST",
-            "/api/technology/process-plans/{entity_id}/norm-estimates",
-            ["entity_id"],
-        ),
-        "norm_estimate_suggest": (
-            "POST",
-            "/api/technology/process-plans/{entity_id}/estimate-norms",
-            ["entity_id"],
-        ),
-        "norm_estimate_approve": (
-            "POST",
-            "/api/technology/norm-estimates/{entity_id}/approve",
-            ["entity_id"],
-        ),
-        "resource_list": ("GET", "/api/technology/resources", []),
-        "resource_create": ("POST", "/api/technology/resources", []),
-        "bom_list": ("GET", "/api/boms", []),
-        "bom_get": ("GET", "/api/boms/{entity_id}", ["entity_id"]),
-        "bom_create": ("POST", "/api/boms", []),
-        "bom_update": ("PATCH", "/api/boms/{entity_id}", ["entity_id"]),
-        "bom_approve": ("POST", "/api/boms/{entity_id}/approve", ["entity_id"]),
-        "bom_stock_check": ("GET", "/api/boms/{entity_id}/stock-check", ["entity_id"]),
-        "bom_purchase_request": (
-            "POST",
-            "/api/boms/{entity_id}/create-purchase-request",
-            ["entity_id"],
-        ),
-        "ntd_list": ("GET", "/api/ntd/documents", []),
-        "ntd_get": ("GET", "/api/ntd/checks/{entity_id}", ["entity_id"]),
-        "ntd_run_check": ("POST", "/api/ntd/checks/run", []),
-        "ntd_findings": ("GET", "/api/ntd/requirements/search", []),
-        "learning_suggest": ("GET", "/api/technology/learning-suggestions", []),
-        "learning_rule_list": ("GET", "/api/technology/learning-rules", []),
-        "learning_rule_create": ("POST", "/api/technology/learning-rules", []),
-        "learning_rule_activate": (
-            "POST",
-            "/api/technology/learning-rules/{entity_id}/activate",
-            ["entity_id"],
-        ),
-        "learning_rule_reject": (
-            "POST",
-            "/api/technology/learning-rules/{entity_id}/reject",
-            ["entity_id"],
-        ),
-        "correction_record": ("POST", "/api/technology/corrections", []),
-        "process_plan_draft_from_document": (
-            "POST",
-            "/api/technology/process-plans/draft-from-document",
-            [],
-        ),
-        # Вторая половина роли технолога. Эндпоинты существовали всё это время,
-        # gateway.yml раздавал на них права, но маршрутов здесь не было — агент
-        # получал "unknown action", неотличимое от собственной ошибки.
-        "generate_tp_from_drawing": (
-            "POST",
-            "/api/technology/process-plans/generate-from-drawing",
-            [],
-        ),
-        "analyze_surfaces": (
-            "POST",
-            "/api/technology/process-plans/{entity_id}/analyze-surfaces",
-            ["entity_id"],
-        ),
-        "select_equipment_for_op": (
-            "POST",
-            "/api/technology/process-plans/{entity_id}/select-equipment",
-            ["entity_id"],
-        ),
-        "calculate_cutting_params": (
-            "POST",
-            "/api/technology/process-plans/{entity_id}/calculate-cutting-params",
-            ["entity_id"],
-        ),
-        "normcontrol_check": (
-            "POST",
-            "/api/technology/process-plans/{entity_id}/normcontrol",
-            ["entity_id"],
-        ),
-        "normcontrol_resolve": (
-            "POST",
-            "/api/technology/process-plans/{entity_id}/normcontrol/{check_id}/resolve",
-            ["entity_id", "check_id"],
-        ),
-        "blank_spec_set": (
-            "POST",
-            "/api/technology/process-plans/{entity_id}/blank-spec",
-            ["entity_id"],
-        ),
-        "surface_specs_list": (
-            "GET",
-            "/api/technology/process-plans/{entity_id}/surface-specs",
-            ["entity_id"],
-        ),
-        "export_gost_forms": (
-            "POST",
-            "/api/technology/process-plans/{entity_id}/export-gost",
-            ["entity_id"],
-        ),
-        "operation_template_create": ("POST", "/api/technology/operation-templates", []),
-    },
-    "engineering": {
-        "material_list": ("GET", "/api/engineering/materials", []),
-        "material_create": ("POST", "/api/engineering/materials", []),
-        "project_list": ("GET", "/api/engineering/projects", []),
-        "project_get": ("GET", "/api/engineering/projects/{entity_id}", ["entity_id"]),
-        "project_create": ("POST", "/api/engineering/projects", []),
-        "revision_create": (
-            "POST",
-            "/api/engineering/projects/{entity_id}/revisions",
-            ["entity_id"],
-        ),
-        "projection_list": (
-            "GET",
-            "/api/engineering/revisions/{entity_id}/projections",
-            ["entity_id"],
-        ),
-        "projection_create": (
-            "POST",
-            "/api/engineering/revisions/{entity_id}/projections",
-            ["entity_id"],
-        ),
-        "material_assignment_list": (
-            "GET",
-            "/api/engineering/revisions/{entity_id}/materials",
-            ["entity_id"],
-        ),
-        "material_assign": (
-            "POST",
-            "/api/engineering/revisions/{entity_id}/materials",
-            ["entity_id"],
-        ),
-        "assembly_list": (
-            "GET",
-            "/api/engineering/revisions/{entity_id}/assemblies",
-            ["entity_id"],
-        ),
-        "assembly_create": (
-            "POST",
-            "/api/engineering/revisions/{entity_id}/assemblies",
-            ["entity_id"],
-        ),
-        "assembly_component_add": (
-            "POST",
-            "/api/engineering/assemblies/{entity_id}/components",
-            ["entity_id"],
-        ),
-        "assembly_mate_add": (
-            "POST",
-            "/api/engineering/assemblies/{entity_id}/mates",
-            ["entity_id"],
-        ),
-        "assembly_validate": (
-            "POST",
-            "/api/engineering/assemblies/{entity_id}/validate",
-            ["entity_id"],
-        ),
-        "revision_validate": (
-            "POST",
-            "/api/engineering/revisions/{entity_id}/validate",
-            ["entity_id"],
-        ),
-        "validation_run_list": (
-            "GET",
-            "/api/engineering/revisions/{entity_id}/validation-runs",
-            ["entity_id"],
-        ),
-        "analysis_case_list": (
-            "GET",
-            "/api/engineering/revisions/{entity_id}/analysis-cases",
-            ["entity_id"],
-        ),
-        "analysis_case_create": (
-            "POST",
-            "/api/engineering/revisions/{entity_id}/analysis-cases",
-            ["entity_id"],
-        ),
-        "analysis_case_run": (
-            "POST",
-            "/api/engineering/analysis-cases/{entity_id}/run",
-            ["entity_id"],
-        ),
-        "revision_approve": (
-            "POST",
-            "/api/engineering/revisions/{entity_id}/approve",
-            ["entity_id"],
-        ),
-    },
-    "analytics": {
-        "dashboard_today": ("GET", "/api/dashboard/today", []),
-        "table_query": ("POST", "/api/tables/query", []),
-        "table_export_excel": ("POST", "/api/tables/export", []),
-        "table_export_1c": ("POST", "/api/tables/export-1c", []),
-        "table_import_excel": ("POST", "/api/tables/import", []),
-        "table_apply_diff": ("POST", "/api/tables/apply-diff", []),
-        "table_inline_edit": ("POST", "/api/tables/inline-edit", []),
-        "table_list_views": ("GET", "/api/tables/views", []),
-        "table_create_view": ("POST", "/api/tables/views", []),
-        "compare_list": ("GET", "/api/compare", []),
-        "compare_create": ("POST", "/api/compare", []),
-        "compare_get": ("GET", "/api/compare/{entity_id}", ["entity_id"]),
-        "compare_align": ("POST", "/api/compare/{entity_id}/align", ["entity_id"]),
-        "compare_decide": ("POST", "/api/compare/{entity_id}/decide", ["entity_id"]),
-        "compare_summary": ("GET", "/api/compare/{entity_id}/summary", ["entity_id"]),
-        "collection_list": ("GET", "/api/collections", []),
-        "collection_create": ("POST", "/api/collections", []),
-        "collection_get": ("GET", "/api/collections/{entity_id}", ["entity_id"]),
-        "collection_summarize": ("POST", "/api/collections/{entity_id}/summarize", ["entity_id"]),
-        "collection_search": ("GET", "/api/collections/{entity_id}/search", ["entity_id"]),
-        "collection_add_item": ("POST", "/api/collections/{entity_id}/items", ["entity_id"]),
-        "collection_suggest": ("GET", "/api/collections/{entity_id}/suggest", ["entity_id"]),
-        "collection_timeline": ("GET", "/api/collections/{entity_id}/timeline", ["entity_id"]),
-        "collection_close": ("POST", "/api/collections/{entity_id}/close", ["entity_id"]),
-        "calendar_events": ("GET", "/api/calendar/events", []),
-        "calendar_upcoming": ("GET", "/api/calendar/upcoming", []),
-        "calendar_create_reminder": ("POST", "/api/calendar/reminders", []),
-        "calendar_extract_dates": ("POST", "/api/calendar/extract-dates", []),
-        "calendar_generate_followup": (
-            "POST",
-            "/api/calendar/reminders/{entity_id}/generate-followup",
-            ["entity_id"],
-        ),
-        "auto_approval_list": ("GET", "/api/auto-approval-rules", []),
-        "auto_approval_create": ("POST", "/api/auto-approval-rules", []),
-        "auto_approval_check": ("POST", "/api/auto-approval-rules/check", []),
-    },
-    "agent_control": {
-        "task_create": ("POST", "/api/agent/tasks", []),
-        "task_propose": ("POST", "/api/agent/tasks/propose", []),
-        "task_decide": ("POST", "/api/agent/tasks/{entity_id}/decide", ["entity_id"]),
-        "task_run": ("POST", "/api/agent/tasks/{entity_id}/run", ["entity_id"]),
-        "capability_propose": ("POST", "/api/agent/capabilities/propose", []),
-        "capability_status": (
-            "GET",
-            "/api/agent/capabilities/{proposal_id}/status",
-            ["proposal_id"],
-        ),
-        "approval_list": ("GET", "/api/approvals/pending", []),
-        "approval_status": ("GET", "/api/approvals/{entity_id}", ["entity_id"]),
-        "config_status": ("GET", "/api/agent/control-plane/status", []),
-        # AI / auto-approval settings: read freely; changing them is gated.
-        "ai_config_get": ("GET", "/api/ai/config", []),
-        "ai_config_set": ("PATCH", "/api/ai/config", []),
-    },
-    "image_studio": {
-        "generate": ("POST", "/api/image-gen/generate", []),
-        "list": ("GET", "/api/image-gen", []),
-        "get": ("GET", "/api/image-gen/{generation_id}", ["generation_id"]),
-        "accept": ("POST", "/api/image-gen/{generation_id}/accept", ["generation_id"]),
-        "iterate": ("POST", "/api/image-gen/{generation_id}/iterate", ["generation_id"]),
-        "prompt_help": ("POST", "/api/image-gen/prompt-help", []),
-        "list_workflows": ("GET", "/api/image-gen/workflows/list", []),
-        "techdraw": ("POST", "/api/image-gen/techdraw", []),
-        # Deliberately a DIFFERENT REST path than "accept": approval headers
-        # from the gate check never reach the proxied HTTP call (see _proxy),
-        # so the only way for this gate to mean anything is for the two
-        # actions to be REST-distinguishable. accept_generation() in
-        # image_generation.py additionally refuses plain /accept for a
-        # techdraw record when the caller is the internal agent service —
-        # otherwise an agent could dodge the gate by just calling "accept".
-        "accept_techdraw": (
-            "POST",
-            "/api/image-gen/{generation_id}/accept-techdraw",
-            ["generation_id"],
-        ),
-        # Same gate pattern for vectorized (scan→DXF) drawings; plain /accept
-        # likewise refuses agent-service calls for operation=vectorize.
-        "accept_vectorize": (
-            "POST",
-            "/api/image-gen/{generation_id}/accept-vectorize",
-            ["generation_id"],
-        ),
-        "get_ir": ("GET", "/api/image-gen/{generation_id}/ir", ["generation_id"]),
-    },
-    # Ф8.1: normcontrol — read-only over the SAME CAD IR data as image_studio,
-    # deliberately a NARROWER action set (no generate/accept/PATCH-editing) so
-    # a critic role structurally cannot approve or change geometry, only read
-    # it and run the levels 6-7 LLM/VLM review. Separate capability, not a
-    # restricted view of image_studio, because roles grant whole capabilities
-    # (see gateway_config.role_capabilities) — there is no per-action carve-out.
-    "cad_review": {
-        "list": ("GET", "/api/image-gen", []),
-        "get": ("GET", "/api/image-gen/{generation_id}", ["generation_id"]),
-        "get_ir": ("GET", "/api/image-gen/{generation_id}/ir", ["generation_id"]),
-        "full_check": ("POST", "/api/image-gen/{generation_id}/ir/full-check", ["generation_id"]),
-    },
-}
+from app.ai.tool_catalog import dispatch_routes
+
+_DISPATCH = dispatch_routes()
 
 
 def capability_action_map() -> dict[str, list[str]]:
@@ -774,9 +146,9 @@ def validate_capability_catalog() -> list[str]:
 
 
 def _acting_user(request: Request) -> str | None:
-    """The human this agent call acts for, if the agent stated one."""
-    value = (request.headers.get("x-acting-user") or "").strip()
-    return value or None
+    """Identity established by authentication, never a caller-supplied header."""
+    user = getattr(request.state, "execution_user", None)
+    return user.sub if user and user.sub != "agent-service" else None
 
 
 def _service_headers(acting_user: str | None = None) -> dict:
@@ -794,6 +166,9 @@ def _service_headers(acting_user: str | None = None) -> dict:
         headers["X-API-Key"] = settings.agent_service_key
     if acting_user:
         headers["X-Acting-User"] = acting_user
+        from app.auth.execution_context import sign_execution_context
+
+        headers["X-Execution-Context"] = sign_execution_context(acting_user)
     return headers
 
 
@@ -920,9 +295,13 @@ async def _proxy(
                 sent=sorted(set(query) | set(payload)),
                 detail=resp.text[:300],
             )
-        return {"error": f"HTTP {resp.status_code}", "detail": resp.text[:300]}
+        raise HTTPException(
+            resp.status_code, {"error": f"HTTP {resp.status_code}", "detail": resp.text[:300]}
+        )
+    except HTTPException:
+        raise
     except Exception as exc:
-        return {"error": str(exc)}
+        raise HTTPException(502, "Downstream service unavailable") from exc
 
 
 def _validate_capability_contract(
@@ -1010,7 +389,7 @@ def _request_has_internal_approval(request: Request, raw_body: dict | None = Non
 
     claimed = (request.headers.get("X-Agent-Approval-Digest") or "").strip()
     if not claimed:
-        return True
+        return False
     from app.ai.agent_loop import capability_args_digest
 
     return claimed == capability_args_digest(raw_body or {})
@@ -1022,9 +401,24 @@ def _enforce_capability_policy(
     body: dict,
     request: Request,
     raw_body: dict | None = None,
+    *,
+    approval_authorized: bool = False,
 ) -> None:
     """Apply the same risk/approval policy at the HTTP dispatcher boundary."""
     config = get_builtin_agent_config()
+    from app.ai.tool_catalog import get_tool
+
+    definition = get_tool(capability_name, action)
+    user = getattr(request.state, "execution_user", None)
+    if user is not None:
+        if user.sub == "agent-service":
+            raise HTTPException(403, "Agent execution requires a human owner")
+        if definition and definition.admin_only and UserRole.admin not in user.roles:
+            raise HTTPException(403, "This operation requires administrator rights")
+        if set(user.roles) <= {UserRole.viewer} and (
+            definition is None or definition.effect != "read"
+        ):
+            raise HTTPException(403, "Viewer cannot execute write operations")
     gate_actions = _capability_gate_actions(capability_name)
     approval_gates = set(config.approval_gates)
 
@@ -1034,7 +428,7 @@ def _enforce_capability_policy(
     # MCP tool call requires approval by default rather than enumerating names.
     if action in gate_actions or "*" in gate_actions:
         approval_gates.add(capability_name)
-        if not _request_has_internal_approval(request, raw_body):
+        if not approval_authorized and not _request_has_internal_approval(request, raw_body):
             raise HTTPException(
                 status_code=423,
                 detail={
@@ -1227,7 +621,27 @@ async def dispatch_capability(capability_name: str, request: Request) -> JSONRes
     if "body" in body and isinstance(body["body"], dict):
         body.update(body.pop("body"))
 
-    _enforce_capability_policy(capability_name, action, body, request, raw_body)
+    # A grant never bypasses role, mode or tool policy. Validate these first,
+    # then atomically reserve standing authority before any downstream effect.
+    _enforce_capability_policy(
+        capability_name, action, body, request, raw_body, approval_authorized=True
+    )
+    delegated = None
+    if action in _capability_gate_actions(capability_name) and not _request_has_internal_approval(
+        request, raw_body
+    ):
+        from app.domain.delegations import matching_delegation
+
+        delegated = await matching_delegation(
+            _acting_user(request),
+            f"{capability_name}.{action}",
+            body,
+            consume=True,
+        )
+    _enforce_capability_policy(
+        capability_name, action, body, request, raw_body, approval_authorized=delegated is not None
+    )
+    request.state.delegation_id = str(delegated) if delegated else None
 
     await _audit_tool_call(capability_name, action, reason, request)
 
@@ -1260,7 +674,7 @@ async def _audit_tool_call(
         from app.audit.service import log_action
         from app.db.session import _get_session_factory
 
-        actor = _acting_user(request) or request.headers.get("x-agent-actor") or "agent"
+        actor = _acting_user(request) or "agent"
         async with _get_session_factory()() as db:
             await log_action(
                 db,
@@ -1271,8 +685,14 @@ async def _audit_tool_call(
                     "capability": capability_name,
                     "action": action,
                     "reason": (reason or "")[:1000] or None,
+                    "delegation_id": getattr(request.state, "delegation_id", None),
                 },
             )
             await db.commit()
     except Exception as exc:  # noqa: BLE001
         logger.error("capability_audit_failed", capability=capability_name, error=str(exc))
+        from app.ai.tool_catalog import get_tool
+
+        definition = get_tool(capability_name, action)
+        if definition is None or definition.effect != "read":
+            raise HTTPException(503, "Durable audit unavailable; operation not executed") from exc

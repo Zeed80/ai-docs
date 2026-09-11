@@ -81,7 +81,7 @@ async def test_agent_service_with_no_acting_header_stays_the_bare_service_accoun
 
 
 @pytest.mark.asyncio
-async def test_agent_service_with_acting_header_resolves_to_that_human(_patched_session_factory):
+async def test_raw_acting_header_cannot_resolve_a_human(_patched_session_factory):
     factory = _patched_session_factory
     async with factory() as db:
         db.add(
@@ -100,9 +100,7 @@ async def test_agent_service_with_acting_header_resolves_to_that_human(_patched_
         _request({"x-acting-user": "local:bob"}), _agent_service_user()
     )
 
-    assert result.sub == "local:bob"
-    assert result.roles == [UserRole.engineer]
-    assert result.name == "Bob"
+    assert result.sub == AGENT_SERVICE_SUB
 
 
 @pytest.mark.asyncio

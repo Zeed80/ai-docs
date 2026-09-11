@@ -49,24 +49,34 @@ def should_vault(content_json: str) -> bool:
 
 async def vault_store(session_id: str, result: dict) -> str:
     """Persist *result* in Redis and return the opaque vault_ref key."""
+    from app.domain.workspace import _owner
     from app.utils.redis_client import get_async_redis
 
-    ref = f"vault:{session_id}:{uuid.uuid4().hex[:12]}"
+    ref = f"vault:v2:{uuid.uuid4().hex}"
     r = get_async_redis()
-    await r.set(ref, json.dumps(result, ensure_ascii=False), ex=VAULT_TTL)
+    await r.set(
+        ref, json.dumps({"owner_key": _owner(), "data": result}, ensure_ascii=False), ex=VAULT_TTL
+    )
     logger.debug("vault_store ref=%s session=%s", ref, session_id)
     return ref
 
 
 async def vault_get(ref: str, offset: int = 0, limit: int = 20) -> dict | None:
     """Retrieve a paginated slice of the vaulted result. Returns None if expired."""
+    from app.domain.workspace import _owner
     from app.utils.redis_client import get_async_redis
 
+    if not ref.startswith("vault:v2:") or len(ref) != 41:
+        return None
     r = get_async_redis()
     raw = await r.get(ref)
     if not raw:
         return None
-    data = json.loads(raw)
+    stored = json.loads(raw)
+    if not isinstance(stored, dict) or stored.get("owner_key") != _owner():
+        return None
+    data = stored["data"]
+    offset, limit = max(0, offset), max(1, min(limit, 100))
     lk = _list_key(data)
     if lk:
         items: list = data[lk]

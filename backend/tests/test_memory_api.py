@@ -49,13 +49,18 @@ async def test_memory_search_returns_structure(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_store_chat_turn(client: AsyncClient):
+async def test_store_chat_turn(client: AsyncClient, db_session):
+    from app.db.models import ChatSession
+
+    session = ChatSession(user_key="dev-user", title="Test")
+    db_session.add(session)
+    await db_session.flush()
     resp = await client.post(
         "/api/memory/chat-turn",
         json={
             "user_text": "Покажи счета от ООО АКМЕ",
             "assistant_text": "Нашел 3 счёта от ООО АКМЕ на сумму 50 000 руб.",
-            "session_id": "test-session-001",
+            "session_id": str(session.id),
             "scope": "project",
             "confidence": 0.8,
         },
@@ -65,12 +70,12 @@ async def test_store_chat_turn(client: AsyncClient):
     assert "id" in data
     assert data["scope"] == "session"
     assert data["kind"] == "chat_turn"
-    assert data["metadata"]["requested_scope"] == "project"
-    assert data["metadata"]["scope_policy"] == "chat_turn_demoted_to_session"
+    assert data["metadata"]["owner_key"] == "dev-user"
+    assert data["metadata"]["session_id"] == str(session.id)
 
 
 @pytest.mark.asyncio
-async def test_store_chat_turn_project_scope_requires_trusted_metadata(client: AsyncClient):
+async def test_client_trusted_flag_cannot_publish_chat_globally(client: AsyncClient):
     resp = await client.post(
         "/api/memory/chat-turn",
         json={
@@ -82,7 +87,7 @@ async def test_store_chat_turn_project_scope_requires_trusted_metadata(client: A
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert data["scope"] == "project"
+    assert data["scope"] == "owner:dev-user"
     assert data["kind"] == "chat_turn"
 
 

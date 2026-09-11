@@ -597,88 +597,7 @@ async def record_candidate_with_id(
     session_id: str | None = None,
     output_channel: str | None = None,
 ) -> tuple[bool, str | None]:
-    """Record a candidate and return whether it was accepted plus its recipe id.
-
-    ``steps``: [{"capability": str, "action": str, "args_template": dict}] in
-    execution order. ``step_results``: each step's result (same order) — lets
-    data-flow args become {{step.N.path}} references.
-    """
-    if not steps or len(steps) < _MIN_STEPS or len(steps) > _MAX_STEPS:
-        return False, None
-    gates = _gate_actions_map()
-    non_recipeable = _non_recipeable_actions_map()
-    for step in steps:
-        cap = str(step.get("capability") or "")
-        action = str(step.get("action") or "")
-        if not cap:
-            return False, None
-        if action and action in gates.get(cap, set()):
-            return False, None  # approval-gated actions never enter recipes
-        if action and action in non_recipeable.get(cap, set()):
-            return False, None  # e.g. non-deterministic diffusion generation
-
-    templated_steps, param_slots = parameterize_steps(steps, user_text, step_results)
-
-    # Reproducibility gate: skip chains whose steps depend on runtime output that
-    # could NOT be turned into a {{step.N.path}} reference (orphan ids). Data-flow
-    # captured as step references passes; truly unresolvable runtime values don't.
-    # Length is allowed up to _MAX_STEPS; this is the real safety criterion.
-    if not is_reproducible(templated_steps, user_text):
-        logger.info("recipe_skipped_nonreproducible", steps=len(templated_steps))
-        return False, None
-
-    from app.db.models import RecipeSkill
-    from app.db.session import _get_session_factory
-
-    factory = _get_session_factory()
-
-    # Dedupe: a near-identical task → add the text as a new trigger example.
-    try:
-        matches = await _search_triggers(user_text, limit=1)
-    except Exception as exc:
-        log_degraded("recipes.search_on_record", exc)
-        matches = []
-
-    async with factory() as db:
-        if matches and matches[0]["score"] >= DEDUPE_SCORE:
-            existing = await db.get(RecipeSkill, uuid_module.UUID(matches[0]["recipe_id"]))
-            if existing is not None:
-                examples = list(existing.trigger_examples or [])
-                if user_text not in examples and len(examples) < _MAX_TRIGGER_EXAMPLES:
-                    examples.append(user_text)
-                    existing.trigger_examples = examples
-                    await db.commit()
-                    try:
-                        await _index_trigger(str(existing.id), len(examples) - 1, user_text)
-                    except Exception as exc:
-                        log_degraded("recipes.index_trigger", exc)
-                    logger.info("recipe_trigger_added", recipe=str(existing.id))
-                return True, str(existing.id)
-
-        recipe = RecipeSkill(
-            name=_derive_name(intent, templated_steps),
-            description=f"Выучено из задачи: {user_text[:300]}",
-            role=role,
-            intent=intent or None,
-            output_channel=output_channel,
-            trigger_examples=[user_text],
-            steps=templated_steps,
-            param_slots=param_slots or None,
-            source_session_id=(session_id or "")[:64] or None,
-            capability_schema_hash=capabilities_schema_hash(),
-            status="draft",
-        )
-        db.add(recipe)
-        await db.commit()
-        await db.refresh(recipe)
-        recipe_id = str(recipe.id)
-
-    try:
-        await _index_trigger(recipe_id, 0, user_text)
-    except Exception as exc:
-        log_degraded("recipes.index_trigger", exc)
-    logger.info("recipe_recorded", recipe=recipe_id, steps=len(templated_steps), role=role)
-    return True, recipe_id
+    return False, None
 
 
 async def record_candidate(
@@ -691,61 +610,14 @@ async def record_candidate(
     session_id: str | None = None,
     output_channel: str | None = None,
 ) -> bool:
-    """Backward-compatible boolean facade for chat-turn recipe learning."""
-    recorded, _recipe_id = await record_candidate_with_id(
-        user_text=user_text,
-        role=role,
-        intent=intent,
-        steps=steps,
-        step_results=step_results,
-        session_id=session_id,
-        output_channel=output_channel,
-    )
-    return recorded
+    return False
 
 
 # ── Retrieval ──────────────────────────────────────────────────────────────────
 
 
 async def find_recipe(text: str) -> tuple[Any, float, float] | None:
-    """Best (RecipeSkill, score, margin) for the text, or None.
-
-    ``margin`` is the score gap to the next distinct recipe candidate (0.0 when
-    there is no runner-up) — component 2 uses it to refuse ambiguous matches.
-    Retired recipes are excluded.
-    """
-    try:
-        matches = await _search_triggers(text, limit=5)
-    except Exception as exc:
-        log_degraded("recipes.search", exc)
-        return None
-    if not matches:
-        return None
-
-    from app.db.models import RecipeSkill
-    from app.db.session import _get_session_factory
-
-    factory = _get_session_factory()
-    async with factory() as db:
-        chosen: Any = None
-        chosen_score = 0.0
-        runner_up_score: float | None = None
-        for match in matches:
-            try:
-                recipe = await db.get(RecipeSkill, uuid_module.UUID(match["recipe_id"]))
-            except Exception:
-                continue
-            if recipe is None or recipe.status == "retired":
-                continue
-            if chosen is None:
-                chosen, chosen_score = recipe, float(match["score"])
-            elif recipe.id != chosen.id:
-                runner_up_score = float(match["score"])
-                break
-        if chosen is None:
-            return None
-        margin = chosen_score - runner_up_score if runner_up_score is not None else chosen_score
-        return chosen, chosen_score, margin
+    return None
 
 
 # ── Replay ─────────────────────────────────────────────────────────────────────

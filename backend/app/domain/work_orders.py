@@ -957,6 +957,19 @@ async def reclaim_expired_leases(db: AsyncSession, *, actor: str = "scheduler") 
     return len(steps)
 
 
+def attempt_owns_lease(step: WorkStep, attempt: WorkStepAttempt) -> bool:
+    """A worker name alone is not a fence: retries may reuse the same worker."""
+    return bool(
+        step.state == "running"
+        and attempt.status == "running"
+        and attempt.step_id == step.id
+        and attempt.attempt_no == step.attempt_count
+        and attempt.worker_id == step.lease_owner
+        and step.lease_expires_at is not None
+        and step.lease_expires_at > utcnow()
+    )
+
+
 async def complete_attempt(
     db: AsyncSession,
     *,
@@ -966,6 +979,8 @@ async def complete_attempt(
     output: dict[str, Any],
     actor: str,
 ) -> None:
+    if not attempt_owns_lease(step, attempt):
+        raise ValueError("Stale execution attempt cannot publish a result")
     now = utcnow()
     attempt.status = "succeeded"
     attempt.output = output

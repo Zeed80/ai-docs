@@ -789,8 +789,6 @@ services:
     mem_limit: 512m
     cpus: 0.5
     pids_limit: 64
-    volumes:
-      - ../backend/app/ai/generated_skills:/skills:ro
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8077/health', timeout=3).status==200 else 1)\""]
       interval: 30s

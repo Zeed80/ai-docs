@@ -1,11 +1,26 @@
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
 
 from app.ai import orchestrator as orchestrator_module
 from app.ai.agent_config import BuiltinAgentConfig
 from app.ai.orchestrator import AgentOrchestrator
 from app.domain.workspace import clear_workspace_blocks, upsert_workspace_block
+
+
+def _use_model_decision(monkeypatch, canvas_id=None, action=""):
+    from app.ai.turn_router import RecommendedTool, TurnDecision
+
+    decision = TurnDecision(
+        intent="analytical_table" if canvas_id else "specialist",
+        output_channel="workspace" if canvas_id else "chat",
+        workspace_canvas_id=canvas_id,
+        confidence=1.0,
+        recommended=[RecommendedTool(capability="workspace", action=action)] if action else [],
+    )
+    monkeypatch.setattr(AgentOrchestrator, "_decide_turn", AsyncMock(return_value=decision))
 
 
 class FakeExecutor:
@@ -62,6 +77,7 @@ class FakeExecutor:
 
 @pytest.mark.asyncio
 async def test_orchestrator_assigns_worker_and_audits_workspace(monkeypatch):
+    _use_model_decision(monkeypatch, "agent:invoice-items-grouped", "invoice_items_grouped_table")
     clear_workspace_blocks()
     upsert_workspace_block(
         "agent:invoice-items-grouped",
@@ -115,6 +131,7 @@ async def test_orchestrator_assigns_worker_and_audits_workspace(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_orchestrator_reports_capability_gap_when_workspace_missing(monkeypatch):
+    _use_model_decision(monkeypatch, "agent:document-list", "document_table")
     clear_workspace_blocks()
     config = BuiltinAgentConfig(
         department_enabled=True,
@@ -142,13 +159,13 @@ async def test_orchestrator_reports_capability_gap_when_workspace_missing(monkey
     await session.on_user_message("Выведи полный список документов в таблицу")
 
     assert any(event["type"] == "audit.failed" for event in sent)
-    assert any(event["type"] == "capability_gap.detected" for event in sent)
-    assert any(event["type"] == "capability_gap.builder_draft" for event in sent)
+    assert not any(event["type"] == "capability_gap.builder_draft" for event in sent)
     assert sent[-1]["type"] == "done"
 
 
 @pytest.mark.asyncio
 async def test_orchestrator_rejects_stale_workspace_block(monkeypatch):
+    _use_model_decision(monkeypatch, "agent:invoice-items-grouped", "invoice_items_grouped_table")
     clear_workspace_blocks()
     upsert_workspace_block(
         "agent:invoice-items-grouped",
@@ -287,6 +304,9 @@ def test_orchestrator_targets_latest_open_table_for_vague_followup(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_orchestrator_retries_when_executor_uses_wrong_workspace_tool(monkeypatch):
+    _use_model_decision(
+        monkeypatch, "agent:invoice-items-by-supplier", "invoice_items_by_supplier_table"
+    )
     clear_workspace_blocks()
     config = BuiltinAgentConfig(
         department_enabled=True,
@@ -357,7 +377,10 @@ async def test_orchestrator_retries_when_executor_uses_wrong_workspace_tool(monk
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_directly_executes_expected_tool_when_retry_disabled(monkeypatch):
+async def test_orchestrator_does_not_execute_heuristic_repair_when_retry_disabled(monkeypatch):
+    _use_model_decision(
+        monkeypatch, "agent:invoice-items-by-supplier", "invoice_items_by_supplier_table"
+    )
     clear_workspace_blocks()
     config = BuiltinAgentConfig(
         department_enabled=True,
@@ -429,12 +452,9 @@ async def test_orchestrator_directly_executes_expected_tool_when_retry_disabled(
 
     await session.on_user_message("Выведи товары в таблицу, сгруппируй по поставщикам")
 
-    assert posted
-    assert posted[0][0] == "http://backend/api/workspace/agent/invoices/items-by-supplier-table"
-    assert posted[0][1]["canvas_id"] == "agent:invoice-items-by-supplier"
-    assert any(event["type"] == "orchestrator.direct_tool_started" for event in sent)
-    assert any(event["type"] == "audit.passed" for event in sent)
-    assert not any(event["type"] == "capability_gap.detected" for event in sent)
+    assert not posted
+    assert not any(event["type"] == "orchestrator.direct_tool_started" for event in sent)
+    assert any(event["type"] == "audit.failed" for event in sent)
 
 
 @pytest.mark.asyncio
@@ -573,16 +593,14 @@ async def test_orchestrator_loads_role_context_and_flags_degraded(monkeypatch):
     # "проанализируй" is a high-complexity signal → forces the model planning path.
     await session.on_user_message("Проанализируй и сравни цены поставщиков подробно")
 
-    # Heuristic fallback was used → status must be honestly marked degraded.
-    status = next(e for e in sent if e["type"] == "orchestrator.status")
-    assert status["degraded"] is True
-    assert status["plan_source"] == "heuristic"
-    # The default heuristic role (data_analyst) has a prompt file → non-empty context.
-    assert role_contexts and role_contexts[-1].strip()
+    assert any(e.get("error_code") == "model_unavailable" for e in sent)
+    assert not role_contexts
+    assert not any(e["type"] == "tool_call" for e in sent)
 
 
 @pytest.mark.asyncio
 async def test_semantic_audit_emits_soft_warning(monkeypatch):
+    _use_model_decision(monkeypatch)
     """The semantic audit surfaces a soft quality warning without failing the turn."""
     from types import SimpleNamespace
 
@@ -630,6 +648,7 @@ async def test_semantic_audit_emits_soft_warning(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_reactive_refine_revises_flagged_generative_answer(monkeypatch):
+    _use_model_decision(monkeypatch)
     """A failed semantic audit on a text answer triggers one revise pass."""
     from types import SimpleNamespace
 
@@ -676,6 +695,7 @@ async def test_reactive_refine_revises_flagged_generative_answer(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_tier_based_model_routing(monkeypatch):
+    _use_model_decision(monkeypatch)
     """Simple turns route to fast_model; complex turns use the default model."""
     config = BuiltinAgentConfig(
         department_enabled=True,

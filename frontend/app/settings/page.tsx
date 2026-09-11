@@ -1632,6 +1632,9 @@ export default function SettingsPage() {
   return (
     <div className="p-6 max-w-3xl mx-auto">
       <h1 className="text-2xl font-bold mb-5">Настройки</h1>
+      <Link href="/settings/delegations" className="inline-block underline mb-5">
+        Ограниченные разрешения агенту
+      </Link>
 
       {pageError && (
         <div

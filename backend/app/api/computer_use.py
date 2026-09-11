@@ -5,8 +5,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import os
-import shlex
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -153,33 +151,9 @@ async def _perform(
         await asyncio.to_thread(path.write_bytes, content)
         digest = hashlib.sha256(content).hexdigest()
         return {"path": str(path), "size": len(content), "sha256": digest}, {"sha256": digest}
-    argv = shlex.split(target)
-    if not argv or argv[0] not in set(grant.allowed_commands or []):
-        raise HTTPException(status_code=403, detail="Command is outside granted allowlist")
-    cwd = _safe_path(
-        str(body.get("cwd") or (grant.allowed_roots or [""])[0]), list(grant.allowed_roots or [])
+    raise HTTPException(
+        410, "Host shell execution is retired; isolated task scripts are not yet enabled"
     )
-    process = await asyncio.create_subprocess_exec(
-        *argv,
-        cwd=str(cwd),
-        env={"PATH": os.environ.get("PATH", "")},
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(), timeout=min(int(body.get("timeout", 60)), 120)
-        )
-    except TimeoutError:
-        process.kill()
-        await process.wait()
-        raise HTTPException(status_code=408, detail="Brokered command timed out") from None
-    result = {
-        "exit_code": process.returncode,
-        "stdout": stdout.decode(errors="replace")[:200000],
-        "stderr": stderr.decode(errors="replace")[:200000],
-    }
-    return result, {"output_sha256": hashlib.sha256(stdout + stderr).hexdigest()}
 
 
 @router.post("/execute")

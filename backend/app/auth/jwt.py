@@ -79,12 +79,33 @@ async def get_current_user(
     Priority: X-API-Key header → httpOnly cookie → Bearer token.
     """
     if not settings.auth_enabled:
+        from app.ai.actor_context import set_acting_user
+
+        set_acting_user(_DEV_USER.sub)
+        conn.state.execution_user = _DEV_USER
         return _DEV_USER
 
     # Service-account API key
     api_key_raw = conn.headers.get("x-api-key") or conn.headers.get("X-API-Key")
     if api_key_raw:
-        return await _verify_api_key(api_key_raw)
+        user = await _verify_api_key(api_key_raw)
+        if user.sub == "agent-service":
+            from app.auth.execution_context import (
+                resolve_execution_actor,
+                verify_execution_context,
+            )
+
+            token = conn.headers.get("x-execution-context")
+            if token:
+                context = verify_execution_context(token)
+                user = await resolve_execution_actor(context.actor)
+            elif conn.headers.get("x-acting-user"):
+                raise HTTPException(401, "Signed execution context required")
+        from app.ai.actor_context import set_acting_user
+
+        set_acting_user(user.sub)
+        conn.state.execution_user = user
+        return user
 
     # Cookie may also be in conn.cookies (WebSocket context)
     cookie_token = access_token or conn.cookies.get("access_token")
@@ -94,7 +115,12 @@ async def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
         )
-    return await _verify_token(token)
+    user = await _verify_token(token)
+    from app.ai.actor_context import set_acting_user
+
+    set_acting_user(user.sub)
+    conn.state.execution_user = user
+    return user
 
 
 async def get_current_user_optional(
@@ -102,20 +128,8 @@ async def get_current_user_optional(
     access_token: str | None = Cookie(default=None),
 ) -> UserInfo | None:
     """Same as get_current_user but returns None instead of raising."""
-    if not settings.auth_enabled:
-        return _DEV_USER
-    api_key_raw = conn.headers.get("x-api-key") or conn.headers.get("X-API-Key")
-    if api_key_raw:
-        try:
-            return await _verify_api_key(api_key_raw)
-        except HTTPException:
-            return None
-    cookie_token = access_token or conn.cookies.get("access_token")
-    token = cookie_token or _extract_bearer(conn)
-    if not token:
-        return None
     try:
-        return await _verify_token(token)
+        return await get_current_user(conn, access_token=access_token)
     except HTTPException:
         return None
 
@@ -361,8 +375,9 @@ async def _verify_api_key(raw_key: str) -> UserInfo:
             email="agent@internal",
             name="AI Agent (Света)",
             preferred_username="agent",
-            roles=[UserRole.admin],
+            roles=[UserRole.viewer],
             groups=["agents"],
+            via_agent=True,
         )
 
     key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
@@ -712,7 +727,7 @@ def require_role(*roles: UserRole):
 
 def is_service_account(user: UserInfo) -> bool:
     """The internal agent service identity must not stand in for a human reviewer."""
-    return user.sub == "agent-service" or "agents" in (user.groups or [])
+    return user.via_agent or user.sub == "agent-service" or "agents" in (user.groups or [])
 
 
 def require_human_role(*roles: UserRole):

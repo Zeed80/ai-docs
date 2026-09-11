@@ -24,7 +24,6 @@ from app.ai.agent_config import (
     get_builtin_agent_config,
     update_builtin_agent_config,
 )
-from app.ai.capability_sandbox import promote_capability, run_capability_sandbox
 from app.ai.gateway_config import gateway_config
 from app.ai.policy_engine import classify_skill_risk, is_protected_setting
 from app.auth.jwt import require_human_role, require_role
@@ -1341,125 +1340,7 @@ async def sandbox_apply_capability(
     db: AsyncSession = Depends(get_db),
     _user: UserInfo = Depends(require_role(UserRole.admin)),
 ) -> CapabilityProposal:
-    """Skill: capability.sandbox_apply — Prepare sandbox validation for a draft capability."""
-    proposal = await db.get(CapabilityProposal, proposal_id)
-    if not proposal:
-        raise HTTPException(status_code=404, detail="Capability proposal not found")
-    if proposal.status in {"approved", "rejected", "promoted", "rolled_back"}:
-        raise HTTPException(status_code=409, detail="Capability proposal already decided")
-
-    now = datetime.now(UTC)
-    result = run_capability_sandbox(proposal)
-    if not result.ok:
-        proposal.status = "draft"
-        proposal.sandbox_status = "failed"
-        proposal.test_status = result.test_status
-        proposal.audit_status = result.audit_status
-        metadata = dict(proposal.metadata_ or {})
-        metadata["sandbox_validation"] = {
-            "validated_at": now.isoformat(),
-            "recognized_keys": result.recognized_keys,
-            "mode": "artifact_runner",
-            "sandbox_dir": result.sandbox_dir,
-            "files": result.files,
-            "errors": result.validation_errors,
-            "warnings": result.validation_warnings,
-        }
-        proposal.metadata_ = metadata
-        await db.commit()
-        await db.refresh(proposal)
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": "Capability draft failed sandbox validation",
-                "errors": result.validation_errors,
-                "warnings": result.validation_warnings,
-                "sandbox_dir": result.sandbox_dir,
-            },
-        )
-
-    metadata = dict(proposal.metadata_ or {})
-    metadata["sandbox_validation"] = {
-        "validated_at": now.isoformat(),
-        "recognized_keys": result.recognized_keys,
-        "mode": "artifact_runner",
-        "sandbox_dir": result.sandbox_dir,
-        "files": result.files,
-        "errors": result.validation_errors,
-        "warnings": result.validation_warnings,
-    }
-    proposal.metadata_ = metadata
-    proposal.status = "sandbox_ready"
-    proposal.sandbox_status = "ready"
-    proposal.test_status = result.test_status
-    proposal.audit_status = result.audit_status
-    auto_reason = None
-    config = get_builtin_agent_config()
-    if config.safe_auto_apply_enabled:
-        auto_reason = _safe_auto_approval_reason(proposal)
-    if auto_reason and result.test_status == "passed":
-        proposal.status = "approved"
-        proposal.decided_by = "auto-policy"
-        proposal.decided_at = now
-        proposal.decision_comment = auto_reason
-        if proposal.audit_status == "pending":
-            proposal.audit_status = "passed"
-
-    auto_promoted = False
-    if auto_reason and result.test_status == "passed":
-        # Auto-promote: add skill to gateway immediately
-        promote_result = promote_capability(proposal)
-        if promote_result.ok:
-            proposal.status = "promoted"
-            auto_promoted = True
-            metadata["promotion"] = {
-                "promoted_at": now.isoformat(),
-                "staging_dir": promote_result.staging_dir,
-                "files": promote_result.files,
-                "skill_name": promote_result.skill_name,
-                "gateway_updated": promote_result.gateway_updated,
-                "auto": True,
-            }
-            proposal.metadata_ = metadata
-            # Reload gateway so new skill is visible immediately
-            from app.ai.gateway_config import gateway_config as _gw
-
-            _gw.reload()
-        else:
-            # Promote failed — stay approved, user promotes manually
-            metadata["promotion_errors"] = promote_result.errors
-            proposal.metadata_ = metadata
-    else:
-        proposal.metadata_ = metadata
-
-    # Record sandbox task as immediately completed (sandbox ran synchronously)
-    task = AgentTask(
-        objective=f"Sandbox validate capability proposal: {proposal.title}",
-        description=proposal.missing_capability,
-        role="integration_tester",
-        status="completed",
-        metadata_={
-            "capability_proposal_id": str(proposal.id),
-            "draft": proposal.draft or {},
-            "risk_level": proposal.risk_level,
-            "sandbox_mode": "artifact_runner",
-            "sandbox_dir": result.sandbox_dir,
-            "files": result.files,
-            "diff_preview": result.diff_preview,
-            "auto_approved": bool(auto_reason and result.test_status == "passed"),
-            "auto_promoted": auto_promoted,
-            "auto_approval_reason": auto_reason,
-        },
-    )
-    db.add(task)
-
-    # Notify chat if still needs human review
-    if proposal.status in {"sandbox_ready", "approved"} and not auto_promoted:
-        await _publish_capability_approval_request(proposal)
-
-    await db.commit()
-    await db.refresh(proposal)
-    return proposal
+    raise HTTPException(410, "Capability generation is retired; use task-scoped scripts")
 
 
 @router.post("/capabilities/{proposal_id}/decide", response_model=CapabilityProposalOut)
@@ -1469,50 +1350,7 @@ async def decide_capability_proposal(
     db: AsyncSession = Depends(get_db),
     _user: UserInfo = Depends(require_role(UserRole.admin)),
 ) -> CapabilityProposal:
-    proposal = await db.get(CapabilityProposal, proposal_id)
-    if not proposal:
-        raise HTTPException(status_code=404, detail="Capability proposal not found")
-    if proposal.status == "rejected":
-        raise HTTPException(status_code=409, detail="Capability proposal already rejected")
-    # Already promoted (e.g. auto-promoted during sandbox) — return as-is so the
-    # frontend can still send the "continue" WS trigger without blocking on 409.
-    if proposal.status in {"promoted", "rolled_back"}:
-        return proposal
-
-    now = datetime.now(UTC)
-    proposal.decided_by = payload.decided_by
-    proposal.decided_at = now
-    proposal.decision_comment = payload.comment
-
-    if not payload.approved:
-        proposal.status = "rejected"
-        await db.commit()
-        await db.refresh(proposal)
-        return proposal
-
-    # Approved — auto-promote unless already promoted
-    proposal.status = "approved"
-    if proposal.status != "promoted" and proposal.risk_level != "critical":
-        promote_result = promote_capability(proposal)
-        if promote_result.ok:
-            proposal.status = "promoted"
-            metadata = dict(proposal.metadata_ or {})
-            metadata["promotion"] = {
-                "promoted_at": now.isoformat(),
-                "staging_dir": promote_result.staging_dir,
-                "files": promote_result.files,
-                "skill_name": promote_result.skill_name,
-                "gateway_updated": promote_result.gateway_updated,
-                "auto": False,
-            }
-            proposal.metadata_ = metadata
-            from app.ai.gateway_config import gateway_config as _gw
-
-            _gw.reload()
-
-    await db.commit()
-    await db.refresh(proposal)
-    return proposal
+    raise HTTPException(410, "Capability promotion is an engineering release operation")
 
 
 @router.post("/capabilities/{proposal_id}/promote", response_model=CapabilityProposalOut)
@@ -1522,51 +1360,7 @@ async def promote_capability_proposal(
     db: AsyncSession = Depends(get_db),
     _user: UserInfo = Depends(require_role(UserRole.admin)),
 ) -> CapabilityProposal:
-    """Promote an approved capability to staging and expose in gateway.
-
-    Deliberately NOT a `Skill:` — promotion is the human decide step of the
-    capability lifecycle and must never be callable by the agent itself.
-    """
-    proposal = await db.get(CapabilityProposal, proposal_id)
-    if not proposal:
-        raise HTTPException(status_code=404, detail="Capability proposal not found")
-    if proposal.status == "promoted":
-        raise HTTPException(status_code=409, detail="Capability proposal already promoted")
-    if proposal.status not in {"approved"}:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Capability must be in 'approved' state before promotion (current: {proposal.status})",
-        )
-
-    result = promote_capability(proposal)
-    if not result.ok:
-        raise HTTPException(
-            status_code=400,
-            detail={"message": "Promotion failed", "errors": result.errors},
-        )
-
-    now = datetime.now(UTC)
-    proposal.status = "promoted"
-    proposal.decided_by = decided_by
-    proposal.decided_at = now
-    metadata = dict(proposal.metadata_ or {})
-    metadata["promotion"] = {
-        "promoted_at": now.isoformat(),
-        "staging_dir": result.staging_dir,
-        "files": result.files,
-        "skill_name": result.skill_name,
-        "gateway_updated": result.gateway_updated,
-    }
-    proposal.metadata_ = metadata
-
-    # Reload gateway config so the new skill is visible immediately
-    from app.ai.gateway_config import gateway_config as _gw
-
-    _gw.reload()
-
-    await db.commit()
-    await db.refresh(proposal)
-    return proposal
+    raise HTTPException(410, "Capability promotion is an engineering release operation")
 
 
 # ── Recipe skills (learned declarative macros) ────────────────────────────────

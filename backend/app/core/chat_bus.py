@@ -62,8 +62,17 @@ class ChatBus:
     # ── Publish (write path) ─────────────────────────────────────────────────
 
     async def publish(self, event: dict) -> None:
-        """Broadcast to all subscribers (global channel)."""
-        await _redis_publish(f"{_PREFIX}:global", event)
+        """Legacy publisher: scope content to the authenticated actor."""
+        from app.ai.actor_context import get_acting_user
+
+        actor = get_acting_user()
+        if actor:
+            await self.push_to_user(actor, event)
+        else:
+            # Only content-free invalidations may be global.
+            kind = event.get("type")
+            if kind in {"workspace.updated", "email.new"}:
+                await _redis_publish(f"{_PREFIX}:global", {"type": kind})
 
     async def push_to_user(self, user_sub: str, event: dict) -> None:
         """Send to a specific user's WebSocket connections."""
@@ -78,6 +87,9 @@ class ChatBus:
     def _dispatch_local(self, channel: str, event: dict) -> None:
         """Route an incoming Redis message to local callbacks."""
         if channel == f"{_PREFIX}:global":
+            if event.get("type") not in {"workspace.updated", "email.new"}:
+                return
+            event = {"type": event["type"]}
             targets = list(self._subs.values())
         elif channel.startswith(f"{_PREFIX}:user:"):
             key = channel[len(f"{_PREFIX}:user:") :]
