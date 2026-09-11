@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -1682,6 +1683,9 @@ class AgentSession:
 
     def __init__(self, send: SendFn) -> None:
         self._send = send
+        self._checkpoint_sink: Callable[[dict], Awaitable[None]] | None = None
+        self._checkpoint_pending: list[dict] = []
+        self._checkpoint_in_flight: str | None = None
         self.messages: list[dict] = []
         self._approval_future: asyncio.Future[bool] | None = None
         # Правки, внесённые человеком в карточке подтверждения (см. on_approval).
@@ -1727,6 +1731,43 @@ class AgentSession:
         self.total_tokens: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
         self._registry_mtime: float = _registry_mtime()
         _ACTIVE_SESSIONS.add(self)
+
+    def set_checkpoint_sink(self, sink: Callable[[dict], Awaitable[None]]) -> None:
+        self._checkpoint_sink = sink
+
+    async def save_checkpoint(self, phase: str, confirmation: dict | None = None) -> None:
+        if self._checkpoint_sink is None:
+            return
+        from app.ai.chat_checkpoint import ChatCheckpointError, pack_checkpoint
+
+        try:
+            snapshot = pack_checkpoint(
+                {
+                    "phase": phase,
+                    "messages": self.messages,
+                    "pending_calls": self._checkpoint_pending,
+                    "in_flight_call_id": self._checkpoint_in_flight,
+                    "iteration": self._iteration,
+                    "tokens_used": self.total_tokens,
+                    "confirmation": confirmation,
+                    "runtime": {
+                        "system_prompt": self._effective_system(),
+                        "config_sha256": hashlib.sha256(
+                            self._config.model_dump_json().encode()
+                        ).hexdigest(),
+                        "role_context": self._role_context,
+                        "active_role": self._active_role,
+                        "model_override": self._turn_model_override,
+                        "response_budget": self._response_budget,
+                        "excluded_tools": sorted(self._excluded_tools),
+                        "recommended_capabilities": sorted(self._recommended_capabilities),
+                        "workspace_expected": self._workspace_expected,
+                    },
+                }
+            )
+            await self._checkpoint_sink(snapshot)
+        except Exception as exc:
+            raise ChatCheckpointError("Chat checkpoint could not be persisted") from exc
 
     def reload_skills(self) -> None:
         """Hot-reload skill map from registry — used by CapabilityBuilder after new skill creation."""
@@ -2876,16 +2917,34 @@ class AgentSession:
         self, tool_calls: list[dict], iteration: int
     ) -> list[tuple[str, dict]]:
         results: list[tuple[str, dict]] = []
+        if self._checkpoint_sink is not None:
+            for call in tool_calls:
+                if not call.get("id"):
+                    call["id"] = str(uuid.uuid4())
+            self._checkpoint_pending = list(tool_calls)
+            self._checkpoint_in_flight = None
+            await self.save_checkpoint("tools_planned")
         for tc in tool_calls:
+            if self._checkpoint_sink is not None:
+                self._checkpoint_in_flight = tc["id"]
+                await self.save_checkpoint("tool_started")
             fn_name, result, tc_id = await self._execute_single_tool(tc, iteration)
             results.append((fn_name, result))
             await self._tool_result_to_history(result, tc_id)
+            if self._checkpoint_sink is not None:
+                self._checkpoint_pending = self._checkpoint_pending[1:]
+                self._checkpoint_in_flight = None
+                await self.save_checkpoint("tool_recorded")
             self._trim_history()
         return results
 
     async def _execute_tools_parallel(
         self, tool_calls: list[dict], iteration: int
     ) -> list[tuple[str, dict]]:
+        if self._checkpoint_sink is not None:
+            # Until parallel completion is journaled atomically, keep durable
+            # calls sequential so each snapshot has one unambiguous frontier.
+            return await self._execute_tools_sequential(tool_calls, iteration)
         # Observability marker — lets the orchestrator log parallel_used per turn.
         await self._send({"type": "tools.parallel", "count": len(tool_calls)})
         results = await asyncio.gather(

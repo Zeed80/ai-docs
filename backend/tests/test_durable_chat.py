@@ -33,7 +33,17 @@ async def test_intake_idempotency_and_conflicts(client, db_session):
     assert conflict.status_code == 409
     busy = await client.post("/api/agent/chat-runs", json=request(session_id=run["session_id"]))
     assert busy.status_code == 409
-    assert await db_session.scalar(select(func.count()).select_from(DurableChatRun)) == 1
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(DurableChatRun)
+            .where(
+                DurableChatRun.request_id == uuid.UUID(body["request_id"]),
+                DurableChatRun.owner_key == _DEV_USER.sub,
+            )
+        )
+        == 1
+    )
     step = await db_session.scalar(
         select(WorkStep).where(WorkStep.work_order_id == uuid.UUID(run["work_order_id"]))
     )

@@ -5,9 +5,10 @@ import json
 
 from sqlalchemy import func, select
 
+from app.ai.chat_checkpoint import ChatCheckpointError, unpack_checkpoint
 from app.chat.store import append_chat_message
 from app.db.agent_runtime_models import DurableChatRun
-from app.db.models import ChatMessage, WorkEvent, WorkOrder, WorkStep, WorkStepAttempt
+from app.db.models import ChatMessage, WorkEvent, WorkOrder, WorkPlan, WorkStep, WorkStepAttempt
 from app.domain.work_orders import append_event, attempt_owns_lease
 
 
@@ -26,7 +27,7 @@ async def run_durable_chat(
             session_factory=session_factory,
             agent_factory=agent_factory,
         )
-    except ChatRunStopped as exc:
+    except (ChatRunStopped, ChatCheckpointError) as exc:
         raise RuntimeError(str(exc)) from exc
 
 
@@ -45,6 +46,7 @@ async def _run_durable_chat(
             order is None
             or order.status != "running"
             or step is None
+            or step.work_order_id != order.id
             or attempt is None
             or not attempt_owns_lease(step, attempt)
         ):
@@ -125,7 +127,49 @@ async def _run_durable_chat(
     agent._executor._session_id = str(session_id)
     agent.hydrate_history(restored)
 
+    async def save_snapshot(envelope):
+        payload = unpack_checkpoint(envelope)
+        async with factory() as db:
+            order = await active(db)
+            attempt = await db.get(WorkStepAttempt, attempt_id)
+            step = await db.get(WorkStep, step_id)
+            plan = await db.get(WorkPlan, step.plan_id)
+            if plan is None or plan.status != "active" or plan.revision != order.plan_revision:
+                raise ChatRunStopped("Checkpoint plan is no longer active")
+            attempt.checkpoint = {
+                "kind": "durable_chat",
+                "owner_key": order.owner_key,
+                "work_order_id": str(order.id),
+                "step_id": str(step_id),
+                "attempt_id": str(attempt_id),
+                "plan_id": str(plan.id),
+                "plan_revision": order.plan_revision,
+                "snapshot": envelope,
+            }
+            await append_event(
+                db,
+                order.id,
+                "chat.checkpoint_saved",
+                actor="chat-worker",
+                payload={
+                    "phase": payload["phase"],
+                    "sha256": envelope["sha256"],
+                    "pending_tool_count": len(payload["pending_calls"]),
+                    "in_flight": bool(payload.get("in_flight_call_id")),
+                    "can_resume": False,
+                },
+            )
+            await db.commit()
+
+    checkpointed = callable(getattr(agent._executor, "set_checkpoint_sink", None))
+    if checkpointed:
+        agent._executor.set_checkpoint_sink(save_snapshot)
+
     async def require_confirmation(skill_name, args):
+        if checkpointed:
+            await agent._executor.save_checkpoint(
+                "confirmation_required", {"tool": skill_name, "args": args}
+            )
         await collect({"type": "confirmation_required", "tool": skill_name, "args": args})
         raise ChatRunStopped(
             "Durable approval continuation is not yet enabled; action not executed"
@@ -162,6 +206,8 @@ async def _run_durable_chat(
         await asyncio.gather(execution, watcher, return_exceptions=True)
     if errors:
         raise RuntimeError("Agent returned errors: " + ", ".join(errors))
+    if checkpointed:
+        await agent._executor.save_checkpoint("turn_finished")
     result = "".join(chunks).strip()
     if not result:
         raise RuntimeError("Agent did not produce a final response")

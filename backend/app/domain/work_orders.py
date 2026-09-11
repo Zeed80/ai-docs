@@ -1192,7 +1192,8 @@ async def fail_attempt(
     now = utcnow()
     attempt.status = "failed"
     attempt.error = error
-    attempt.checkpoint = checkpoint
+    if checkpoint is not None or order.source != "durable_chat":
+        attempt.checkpoint = checkpoint
     attempt.finished_at = now
     attempt.heartbeat_at = now
     step.last_error = error

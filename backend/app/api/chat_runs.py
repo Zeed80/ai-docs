@@ -19,7 +19,15 @@ from app.chat.store import (
     ensure_chat_session,
 )
 from app.db.agent_runtime_models import DurableChatRun
-from app.db.models import ChatMessage, ChatSession, Document, WorkEvent, WorkOrder
+from app.db.models import (
+    ChatMessage,
+    ChatSession,
+    Document,
+    WorkEvent,
+    WorkOrder,
+    WorkStep,
+    WorkStepAttempt,
+)
 from app.db.session import get_db
 from app.domain.work_orders import ACTIVE_WORK_STATUSES, create_single_step_plan, create_work_order
 
@@ -255,4 +263,59 @@ async def get_chat_events(
             {"sequence": e.sequence, "type": e.event_type, "payload": e.payload} for e in events
         ],
         "next_cursor": events[-1].sequence if events else after,
+    }
+
+
+@router.get("/{run_id}/checkpoint")
+async def get_chat_checkpoint(
+    run_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+):
+    from app.ai.chat_checkpoint import unpack_checkpoint
+
+    run = await owned_run(db, run_id, user)
+    order = await db.get(WorkOrder, run.work_order_id)
+    attempt = await db.scalar(
+        select(WorkStepAttempt)
+        .join(
+            WorkStep,
+            WorkStep.id == WorkStepAttempt.step_id,
+        )
+        .where(WorkStep.work_order_id == run.work_order_id)
+        .order_by(
+            WorkStepAttempt.started_at.desc(),
+            WorkStepAttempt.attempt_no.desc(),
+        )
+        .limit(1)
+    )
+    if attempt is None or not attempt.checkpoint:
+        return {"available": False, "can_resume": False}
+    record = attempt.checkpoint
+    step = await db.get(WorkStep, attempt.step_id)
+    if (
+        record.get("kind") != "durable_chat"
+        or record.get("owner_key") != user.sub
+        or record.get("work_order_id") != str(order.id)
+        or record.get("step_id") != str(attempt.step_id)
+        or record.get("attempt_id") != str(attempt.id)
+        or step is None
+        or record.get("plan_id") != str(step.plan_id)
+        or record.get("plan_revision") != order.plan_revision
+    ):
+        raise HTTPException(409, "Stale or invalid checkpoint binding")
+    try:
+        payload = unpack_checkpoint(record.get("snapshot") or {})
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(409, "Invalid checkpoint integrity") from exc
+    # Full model context stays private storage, not an API/debug transcript.
+    return {
+        "available": True,
+        "can_resume": False,
+        "phase": payload["phase"],
+        "plan_revision": order.plan_revision,
+        "attempt_id": attempt.id,
+        "pending_tool_count": len(payload["pending_calls"]),
+        "in_flight": bool(payload.get("in_flight_call_id")),
+        "sha256": record["snapshot"]["sha256"],
     }
