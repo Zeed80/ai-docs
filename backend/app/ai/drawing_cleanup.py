@@ -182,10 +182,18 @@ def _open_on_white(image_bytes: bytes):
 
 
 def _dewarp_sheet(arr):
+    """Perspective-correct a phone photo; see `dewarp_sheet_with_transform`."""
+    result = dewarp_sheet_with_transform(arr)
+    return None if result is None else result[0]
+
+
+def dewarp_sheet_with_transform(arr):
     """Find the sheet of paper in a phone photo and perspective-correct it to
     a straight-on view (classic document-scanner dewarp). Returns the warped
     RGB array, or None when there is no confident sheet quad — callers keep
-    the image as-is then.
+    the image as-is then. Also returns the 3×3 homography from the photo to
+    the warped sheet: the verifier harness carries the ground truth through
+    the same transform, so it measures exactly what the product measures.
 
     Sheet detection is saturation-based: paper is near-achromatic and bright,
     while the desk/table around it (wood, cloth) is colored. That mask is far
@@ -249,7 +257,7 @@ def _dewarp_sheet(arr):
         borderValue=(255, 255, 255),
     )
     logger.info("dewarp_applied", out_w=out_w, out_h=out_h, area_fraction=round(area / (w * h), 2))
-    return warped
+    return warped, m
 
 
 def _erase_binding_blocks(arr):

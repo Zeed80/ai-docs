@@ -31,6 +31,12 @@ _SCALE_AGREEMENT_TOLERANCE = 0.12
 _INK_GAP = 1.2
 _INK_REACH = 3.5
 _INK_MIN_SPAN = 3.0
+# Доля столбцов прогона, занятых чернилами, чтобы он считался линией.
+_INK_MIN_FILL = 0.6
+# Чернила относительно местного фона: не меньше этого перепада яркости и не
+# меньше стольких сигм шума листа.
+_INK_CONTRAST_MIN = 25
+_INK_CONTRAST_NOISE = 4.0
 # Выносная линия у размерной: насколько далеко смотреть вверх и вниз от строки и
 # сколько чернил подряд нужно с КАЖДОЙ стороны, чтобы признать пересечение. Выход
 # выносной за размерную линию по ГОСТ 2.307 — 1…5 мм, текст — 3,5…5 мм, отсюда
@@ -226,10 +232,34 @@ def _text_unit(tokens: list[dict[str, Any]]) -> float:
 
 
 def _ink_rows(image: Any) -> Any:
-    """Чернила листа: тёмное на светлом, без разделения на деталь и рамку."""
+    """Чернила листа: тёмное на светлом, без разделения на деталь и рамку.
+
+    Абсолютного порога мало. На фото листа (тонированная бумага ~228, свет
+    неравномерный, размытие и ужатие до 1000–1700 px) тонкие размерные и
+    выносные линии светлеют до ~190, и порог 160 оставлял от размера одни
+    стрелки: замер находил 31 % размеров против 97 % на скане той же цифры.
+    Поэтому чернила — ещё и всё, что заметно темнее МЕСТНОГО фона, а
+    «заметно» — в единицах оценённого шума, чтобы зерно не стало линией.
+    """
     import numpy as np
 
-    return np.asarray(image.convert("L")) < 160
+    gray = np.asarray(image.convert("L"))
+    dark = gray < 160
+    try:
+        import cv2
+    except ImportError:  # pragma: no cover — без OpenCV остаётся прежний порог
+        return dark
+    height, width = gray.shape
+    size = max(15, min(height, width) // 60) | 1
+    background = cv2.blur(cv2.dilate(gray, np.ones((size, size), np.uint8)), (size, size))
+    contrast = background.astype(np.int16) - gray.astype(np.int16)
+    # Фон — максимум по окрестности, и на зашумлённом листе он выше истинного
+    # на пару сигм: перепад отсчитывается от его медианы, а не от нуля. Без
+    # этого шум σ18 давал ложные чернила, и верных замеров стало 90 % вместо 100.
+    level = float(np.median(contrast))
+    spread = float(np.median(np.abs(contrast - level)))
+    step = max(_INK_CONTRAST_MIN, _INK_CONTRAST_NOISE * 1.4826 * spread)
+    return dark | (contrast - level > step)
 
 
 def _span_from_ink(ink: Any, bbox: list[float], unit: float) -> list[float] | None:
@@ -253,41 +283,79 @@ def _span_from_ink(ink: Any, bbox: list[float], unit: float) -> list[float] | No
     отдельной трассировки: измерение существует только затем, чтобы дать
     прочитанному числу длину.
     """
-    import numpy as np
 
     x0, y0, x1, y1 = (float(value) for value in bbox)
-    height, width = ink.shape
+    height, _width = ink.shape
     centre = (x0 + x1) / 2.0
-    max_gap = max(4, int(_INK_GAP * unit))
-    minimum = _INK_MIN_SPAN * unit
-    best: tuple[tuple[float, float], list[float]] | None = None
+    best: tuple[tuple[float, float], int, list[float]] | None = None
     top = max(0, int(y0 - _INK_REACH * unit))
     bottom = min(height, int(y1 + _INK_REACH * unit))
     for y in range(top, bottom):
         if int(y0) <= y <= int(y1):
             continue  # строки самой подписи
-        columns = np.flatnonzero(ink[y])
-        if columns.size < 2:
+        run = _line_run(ink, y, centre, unit)
+        if run is None:
             continue
-        breaks = np.flatnonzero(np.diff(columns) > max_gap)
-        starts = np.concatenate(([0], breaks + 1))
-        ends = np.concatenate((breaks, [columns.size - 1]))
-        for start, end in zip(starts, ends, strict=True):
-            left, right = float(columns[start]), float(columns[end])
-            if right - left < minimum:
-                continue
-            if not (left - unit <= centre <= right + unit):
-                continue
-            key = (min(abs(y - y0), abs(y - y1)), -(right - left))
-            if best is None or key < best[0]:
-                best = (key, [left, float(y), right, float(y)])
+        key = (min(abs(y - y0), abs(y - y1)), -(run[1] - run[0]))
+        if best is None or key < best[0]:
+            best = (key, y, [run[0], float(y), run[1], float(y)])
     if best is None:
         return None
-    line = best[1]
-    return _cut_at_witness_lines(ink, line, centre, unit)
+    # Ближайшая к подписи подходящая строка — край полосы «линия + стрелки»,
+    # а не сама линия: на размытом листе это строка внутри пятна стрелок, где
+    # к ним прилипает низ цифры, и штрихи цифры засчитывались выносными у
+    # самой подписи — отсечение сдавалось. Стрелки симметричны относительно
+    # линии, поэтому линия — середина полосы.
+    _key, first, line = best
+    last = first
+    step = 1 if first > y1 else -1
+    while 0 <= last + step < height and _line_run(ink, last + step, centre, unit) is not None:
+        last += step
+    middle = (first + last) // 2 if step > 0 else (first + last + 1) // 2
+    run = _line_run(ink, middle, centre, unit)
+    if run is not None:
+        line = [run[0], float(middle), run[1], float(middle)]
+    return _cut_at_witness_lines(ink, line, centre, unit, label=(x0, y0, x1, y1))
 
 
-def _cut_at_witness_lines(ink: Any, line: list[float], centre: float, unit: float) -> list[float]:
+def _line_run(ink: Any, y: int, centre: float, unit: float) -> tuple[float, float] | None:
+    """Прогон чернил строки ``y`` под подписью с центром ``centre``, если это линия."""
+    import numpy as np
+
+    columns = np.flatnonzero(ink[y])
+    if columns.size < 2:
+        return None
+    max_gap = max(4, int(_INK_GAP * unit))
+    minimum = _INK_MIN_SPAN * unit
+    breaks = np.flatnonzero(np.diff(columns) > max_gap)
+    starts = np.concatenate(([0], breaks + 1))
+    ends = np.concatenate((breaks, [columns.size - 1]))
+    best: tuple[float, float] | None = None
+    for start, end in zip(starts, ends, strict=True):
+        left, right = float(columns[start]), float(columns[end])
+        if right - left < minimum:
+            continue
+        if not (left - unit <= centre <= right + unit):
+            continue
+        # Линия — это строка, почти сплошь залитая чернилами. Без этого
+        # условия на размытом листе «линией» становилась строка, где стоят
+        # только две выносные и низ цифры: промежутки между ними меньше
+        # допустимого разрыва, и прогон склеивался.
+        if (end - start + 1) < _INK_MIN_FILL * (right - left + 1):
+            continue
+        if best is None or right - left > best[1] - best[0]:
+            best = (left, right)
+    return best
+
+
+def _cut_at_witness_lines(
+    ink: Any,
+    line: list[float],
+    centre: float,
+    unit: float,
+    *,
+    label: tuple[float, float, float, float] | None = None,
+) -> list[float]:
     """Обрезать прогон по выносным линиям, пересекающим его рядом с подписью.
 
     Звенья размерной цепочки лежат на одной прямой и касаются друг друга, и
@@ -310,6 +378,16 @@ def _cut_at_witness_lines(ink: Any, line: list[float], centre: float, unit: floa
     top = max(0, row - reach)
     bottom = min(height, row + reach + 1)
     band = ink[top:bottom, left : right + 1]
+    if label is not None:
+        # Сама подпись — не выносная. На размытом листе низ цифры сливается
+        # со стрелками, и столбцы под подписью получали длинную сторону вверх
+        # через цифру: штрихи «8» резали размер 47 px до 5. Настоящая выносная
+        # через подпись не идёт, а её выход за линию лежит в зазоре под ней.
+        band = band.copy()
+        lx0, ly0, lx1, ly1 = (int(round(value)) for value in label)
+        rows = slice(max(0, ly0 - top), max(0, min(bottom, ly1 + 1) - top))
+        cols = slice(max(0, lx0 - left), max(0, min(right + 1, lx1 + 1) - left))
+        band[rows, cols] = False
     centre_row = row - top
     above = band[:centre_row][::-1]
     below = band[centre_row + 1 :]

@@ -98,3 +98,24 @@ def test_the_clean_truth_is_not_mutated():
     before = repr(truth)
     degrade(png, truth, {"name": "x", "scale": 0.5}, seed=1)
     assert repr(truth) == before
+
+
+def test_the_truth_follows_the_mark_through_the_product_dewarp():
+    """Харнесс мерит фото так, как его видит продукт — выпрямленным.
+
+    Выпрямление (стадия 0.9 `cad_trace`) переносит и эталон той же матрицей.
+    Без него проверяльщик размерных линий был верен на фото в 31 %: строки
+    листа наклонены, а он сканирует строки.
+    """
+    from scripts.eval_verify import product_normalize
+
+    png, truth = _sheet_with_mark(700.0, 400.0)
+    photo, moved = degrade(png, truth, {"name": "photo", "photo": True}, seed=3)
+
+    straight, straight_truth, dewarped = product_normalize(photo, moved)
+
+    assert dewarped
+    expected = straight_truth["labels"][1]["anchors_px"][0]
+    found = _darkest_blob_centre(straight)
+    assert abs(found[0] - expected[0]) <= 3.0 and abs(found[1] - expected[1]) <= 3.0
+    assert list(Image.open(io.BytesIO(straight)).size) == straight_truth["image_size_px"]

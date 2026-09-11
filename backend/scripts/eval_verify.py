@@ -29,6 +29,32 @@ from typing import Any
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 
+def product_normalize(png: bytes, truth: dict) -> tuple[bytes, dict, bool]:
+    """Подготовить лист так же, как стадия 0.9 продукта (`cad_trace._dewarp_photo`).
+
+    Проверяльщик в продукте видит фото уже выпрямленным — харнесс обязан мерить
+    то же самое, иначе он оценивает не продукт. Эталон переносится той же
+    гомографией. Для скана выпрямление не срабатывает и лист не меняется.
+    """
+    import copy
+
+    import numpy as np
+    from PIL import Image
+
+    from app.ai.drawing_cleanup import dewarp_sheet_with_transform
+    from app.ai.verify_corpus.degrade import _apply_homography, _encode, _map_points
+
+    arr = np.asarray(Image.open(io.BytesIO(png)).convert("RGB"))
+    result = dewarp_sheet_with_transform(arr)
+    if result is None:
+        return png, truth, False
+    warped, homography = result
+    moved = copy.deepcopy(truth)
+    _map_points(moved, lambda points: _apply_homography(np.asarray(homography), points))
+    moved["image_size_px"] = [int(warped.shape[1]), int(warped.shape[0])]
+    return _encode(warped), moved, True
+
+
 def _horizontal_dimensions(truth: dict) -> list[dict[str, Any]]:
     """Линейные размеры с горизонтальной размерной линией и подписью."""
     result = []
@@ -94,6 +120,9 @@ def main() -> int:
     parser.add_argument("--verifier", choices=sorted(_VERIFIERS), required=True)
     parser.add_argument("--split", default="dev", choices=("dev", "holdout", "all"))
     parser.add_argument("--report", type=pathlib.Path)
+    parser.add_argument(
+        "--raw", action="store_true", help="без нормализации продукта (выпрямления фото)"
+    )
     args = parser.parse_args()
 
     rows = [
@@ -104,11 +133,15 @@ def main() -> int:
     evaluate = _VERIFIERS[args.verifier]
     by_step: dict[str, list[dict]] = defaultdict(list)
     by_kind_step: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    dewarp_count: dict[str, int] = defaultdict(int)
     for row in rows:
         if args.split != "all" and row.get("split") != args.split:
             continue
         png = (args.corpus / f"{row['name']}.png").read_bytes()
         truth = json.loads((args.corpus / f"{row['name']}.json").read_text(encoding="utf-8"))
+        if not args.raw:
+            png, truth, dewarped = product_normalize(png, truth)
+            dewarp_count[row["step"]] += int(dewarped)
         outcomes = evaluate(png, truth)
         by_step[row["step"]].extend(outcomes)
         by_kind_step[(row.get("kind") or "?", row["step"])].extend(outcomes)
@@ -129,19 +162,23 @@ def main() -> int:
     report = {
         "verifier": args.verifier,
         "split": args.split,
+        "normalized": not args.raw,
+        "dewarped_by_step": dict(dewarp_count),
         "by_step": {step: summary(items) for step, items in by_step.items()},
         "by_kind_step": {
             f"{kind}@{step}": summary(items) for (kind, step), items in by_kind_step.items()
         },
     }
     print(
-        f"{'ступень':<11} {'n':>4} {'найдено':>8} {'верно':>7} {'медиана ошибки':>15} {'текст px':>9}"
+        f"{'ступень':<11} {'n':>4} {'найдено':>8} {'верно':>7} {'медиана ошибки':>15} "
+        f"{'текст px':>9} {'выпрямлено':>11}"
     )
     for step, item in report["by_step"].items():
         error = item["median_error_rel"]
         print(
             f"{step:<11} {item['n']:>4} {item['found']:>8.0%} {item['correct']:>7.0%} "
-            f"{(f'{error:.1%}' if error is not None else '—'):>15} {item['median_text_px']:>9.1f}"
+            f"{(f'{error:.1%}' if error is not None else '—'):>15} {item['median_text_px']:>9.1f} "
+            f"{dewarp_count[step]:>11}"
         )
     if args.report:
         args.report.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
