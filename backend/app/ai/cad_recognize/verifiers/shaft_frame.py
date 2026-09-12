@@ -175,7 +175,7 @@ def _view(
         for line in vertical
         if x0 - 3 <= line.position <= x1 + 3
         and min(line.end, inside[1]) - max(line.start, inside[0]) >= min_length
-        and _stroke(gray, ink, line, inside, axis=1) >= context.main_weight
+        and _stroke(gray, ink, _at_rows(ink, line, inside), inside, axis=1) >= context.main_weight
     )
     profile = ShaftProfile(
         x0=x0, x1=x1, axis_y=axis_y, half_px=segment, faces_px=tuple(faces), line_px=main_ref
@@ -321,6 +321,20 @@ def _profile(lines: list[Any], axis_y: float, width: int, min_length: int):
     return x0, x1, half
 
 
+def _at_rows(ink: Any, line: Any, rows: tuple[float, float]) -> Any:
+    """Та же вертикаль, но на своём столбце в строках ``rows``.
+
+    `_lines` склеивает торец или грань с выносной, которая её продолжает
+    (размер фаски под видом, ширина канавки): центр тяжести компоненты
+    уезжает к тонкой выносной, и толщина, измеренная в этом столбце у оси,
+    выходила нулевой — торец отбрасывался (корпус v8, shaft-5: вид вала не
+    найден), грань уступа тоже (длины у канавок мимо на её ширину).
+    """
+    from app.ai.cad_recognize.verifiers.plate_frame import _Line
+
+    return _Line(_face_x(ink, line, rows), line.start, line.end)
+
+
 def _end_faces(
     vertical: list[Any], axis_y: float, x0: int, x1: int, half: Any, sheet: _Sheet
 ) -> tuple[int, int] | None:
@@ -355,7 +369,9 @@ def _end_faces(
         span = min(line.end, axis_y + height) - max(line.start, axis_y - height)
         if span < 0.6 * 2.0 * height:
             return False
-        weight = _stroke(sheet.gray, sheet.ink, line, near_axis, axis=1)
+        weight = _stroke(
+            sheet.gray, sheet.ink, _at_rows(sheet.ink, line, near_axis), near_axis, axis=1
+        )
         return weight >= sheet.main_weight
 
     left = [

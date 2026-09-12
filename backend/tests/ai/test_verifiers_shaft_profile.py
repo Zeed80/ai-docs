@@ -172,6 +172,30 @@ def test_a_wrong_link_in_the_middle_keeps_the_links_after_it():
     assert abs(got[2] - 20.0) <= 0.5 and abs(got[3] - 20.0) <= 0.5, got
 
 
+def test_an_end_face_continued_by_a_witness_line_is_still_an_end_face():
+    """Контракт: выносная, продолжающая торец (размер фаски под видом), не мешает
+    найти торец и масштаб.
+
+    На корпусе v8 (shaft-5: полый вал, фаска 1 мм, выносные с обеих сторон)
+    `_lines` склеивал торец с выносной, толщина у оси в столбце центра
+    компоненты выходила 0, и вид не находился; исправлено `_at_rows`. Эта
+    синтетика тот сбой НЕ воспроизводит (старый код её тоже проходит) —
+    доказательство исправления корпусное: v8 shaft-5 и корпус v9."""
+    image = Image.fromarray(_sheet()).copy()
+    draw = ImageDraw.Draw(image)
+    x_end = X0 + sum(length for _d, length in STEPS) * PX
+    r_end = STEPS[-1][0] / 2 * PX
+    # Тонкая выносная в 3 px от торца, от кромки вниз под вид.
+    draw.line([(x_end + 3, AXIS + r_end), (x_end + 3, AXIS + r_end + 250)], fill=0, width=THIN)
+    draw.line([(x_end + 3, AXIS - r_end - 120), (x_end + 3, AXIS - r_end)], fill=0, width=THIN)
+    located = locate_shaft_frame(np.asarray(image), 100.0)
+
+    assert located is not None
+    frame, profile = located
+    assert abs(profile.x1 - x_end) <= 3.0, profile.x1
+    assert abs(frame.mm_per_px - 1 / PX) / (1 / PX) <= 0.01
+
+
 def test_a_shifted_shoulder_is_refuted_with_the_measured_lengths():
     verdict = _check([(30.0, 32.0), (20.0, 38.0), (25.0, 30.0)])
 
