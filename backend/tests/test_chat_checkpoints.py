@@ -21,6 +21,7 @@ from app.api.chat_runs import (
     submit_chat_run,
 )
 from app.auth.jwt import _DEV_USER
+from app.db.agent_runtime_models import ChatLogicalAction
 from app.db.models import WorkEvent, WorkOrder, WorkPlan, WorkStep, WorkStepAttempt
 from app.domain.work_orders import claim_ready_step, fail_attempt
 
@@ -118,6 +119,9 @@ async def test_sequential_frontier_is_saved_before_and_after_each_tool():
     assert [c["id"] for c in snapshots[2]["pending_calls"]] == ["two"]
     assert snapshots[2]["messages"][-1]["tool_call_id"] == "one"
     assert snapshots[-1]["pending_calls"] == []
+    assert snapshots[0]["action_ids"] == snapshots[-1]["action_ids"]
+    assert snapshots[-1]["completed_call"]["action_id"] == snapshots[0]["action_ids"]["two"]
+    assert set(obj.messages[0]["tool_calls"][0]) == {"id", "function"}
 
 
 @pytest.mark.asyncio
@@ -229,6 +233,18 @@ async def test_confirmation_keeps_prior_results_and_survives_failure_settlement(
         assert payload["confirmation"] == {"tool": "test", "args": {"id": "two"}}
         assert [c["id"] for c in payload["pending_calls"]] == ["two"]
         assert payload["messages"][-1]["tool_call_id"] == "one"
+        actions = list(
+            await db.scalars(
+                select(ChatLogicalAction).where(
+                    ChatLogicalAction.work_order_id == run["work_order_id"]
+                )
+            )
+        )
+        assert {a.call_id: a.status for a in actions} == {
+            "one": "result_recorded",
+            "two": "waiting_confirmation",
+        }
+        assert next(a.result for a in actions if a.call_id == "one") == {"result": "one"}
         summary = await get_chat_checkpoint(run["id"], db, _DEV_USER)
         assert summary["available"] is True
         assert summary["can_resume"] is False
@@ -516,3 +532,62 @@ async def test_expired_decision_stops_worker_before_agent_creation(test_engine, 
     monkeypatch.setattr(orchestrator, "AgentOrchestrator", agent)
     assert not await execute_claimed_step(step.id, attempt.id, session_factory=factory)
     agent.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed_phase", ["tool_started", "tool_recorded"])
+async def test_worker_journal_failure_fences_effect_and_preserves_unknown_outcome(
+    test_engine, monkeypatch, failed_phase
+):
+    from app.ai import orchestrator
+    from app.api.chat_runs import get_chat_actions
+    from app.domain import chat_action_journal
+    from app.tasks.work_orders import execute_claimed_step
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    run, step_id, attempt_id = await claim(factory)
+    effects = []
+    original = chat_action_journal.record_boundary
+
+    async def failing_journal(db, order, attempt, payload):
+        await original(db, order, attempt, payload)
+        if payload["phase"] == failed_phase:
+            raise ConnectionError("Simulated journal commit failure")
+
+    class Agent:
+        def __init__(self, send):
+            self._executor = session(send)
+
+            async def execute(tc, iteration):
+                effects.append(tc["id"])
+                return "test", {"result": tc["id"]}, tc["id"]
+
+            self._executor._execute_single_tool = execute
+
+        def hydrate_history(self, history):
+            self._executor.messages = list(history)
+
+        async def on_user_message(self, prompt, **kwargs):
+            calls = [call(), call("two")]
+            self._executor.messages += [
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "tool_calls": calls},
+            ]
+            await self._executor._execute_tools_sequential(calls, 0)
+
+    monkeypatch.setattr(orchestrator, "AgentOrchestrator", Agent)
+    monkeypatch.setattr(chat_action_journal, "record_boundary", failing_journal)
+    assert not await execute_claimed_step(step_id, attempt_id, session_factory=factory)
+    assert effects == ([] if failed_phase == "tool_started" else ["one"])
+    async with factory() as db:
+        page = await get_chat_actions(run["id"], 0, 100, db, _DEV_USER)
+        states = {item["call_id"]: item["status"] for item in page["items"]}
+        assert states == {
+            "one": "planned" if failed_phase == "tool_started" else "outcome_unknown",
+            "two": "planned",
+        }
+        assert all(
+            item["result_available"] is False and item["can_replay"] is False
+            for item in page["items"]
+        )
+        assert (await db.get(WorkOrder, run["work_order_id"])).status == "blocked"

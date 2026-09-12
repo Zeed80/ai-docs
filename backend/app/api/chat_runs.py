@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from app.auth.jwt import get_current_user, is_service_account
 from app.auth.models import UserInfo
@@ -19,7 +20,7 @@ from app.chat.store import (
     append_chat_message,
     ensure_chat_session,
 )
-from app.db.agent_runtime_models import DurableChatRun
+from app.db.agent_runtime_models import ChatLogicalAction, DurableChatRun
 from app.db.models import (
     ChatMessage,
     ChatSession,
@@ -306,6 +307,165 @@ async def owned_run(db, run_id, user):
     if run is None:
         raise HTTPException(404, "Chat run not found")
     return run
+
+
+class ActionObservationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: uuid.UUID
+    request_digest: str = Field(pattern="^[a-f0-9]{64}$")
+    outcome: Literal["observed", "not_observed", "inconclusive"]
+    note: str = Field(min_length=1, max_length=10000)
+    evidence_reference: str = Field(min_length=1, max_length=2000)
+
+
+@router.get("/{run_id}/actions")
+async def get_chat_actions(
+    run_id: uuid.UUID,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+):
+    from app.domain.chat_action_journal import action_state
+
+    run = await owned_run(db, run_id, user)
+    order = await db.get(WorkOrder, run.work_order_id)
+    actions = list(
+        (
+            await db.execute(
+                select(ChatLogicalAction, ChatLogicalAction.request["name"].as_string())
+                .options(defer(ChatLogicalAction.request), defer(ChatLogicalAction.result))
+                .where(ChatLogicalAction.work_order_id == order.id)
+                .order_by(ChatLogicalAction.created_at, ChatLogicalAction.id)
+                .offset(offset)
+                .limit(limit)
+            )
+        ).all()
+    )
+    items = []
+    for action, tool_name in actions:
+        observation = await db.scalar(
+            select(WorkEvent)
+            .where(
+                WorkEvent.work_order_id == order.id,
+                WorkEvent.event_type == "chat.action_observation",
+                WorkEvent.payload["action_id"].as_string() == str(action.id),
+            )
+            .order_by(WorkEvent.sequence.desc())
+            .limit(1)
+        )
+        items.append(
+            {
+                "id": action.id,
+                "call_id": action.call_id,
+                "attempt_id": action.attempt_id,
+                "status": await action_state(db, order, action),
+                "tool": tool_name,
+                "request_digest": action.request_digest,
+                "result_available": action.result_digest is not None,
+                "result_digest": action.result_digest,
+                "can_replay": False,
+                "latest_observation": {
+                    "sequence": observation.sequence,
+                    "actor": observation.actor,
+                    **observation.payload,
+                }
+                if observation
+                else None,
+            }
+        )
+    return {
+        "items": items,
+        "next_offset": offset + len(items),
+        "coverage": "journaled_actions_only",
+        "work_order_status": order.status,
+    }
+
+
+@router.get("/{run_id}/actions/{action_id}")
+async def get_chat_action(
+    run_id: uuid.UUID,
+    action_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+):
+    from app.domain.chat_action_journal import action_state, digest
+
+    run = await owned_run(db, run_id, user)
+    action = await db.get(ChatLogicalAction, action_id)
+    if action is None or action.work_order_id != run.work_order_id:
+        raise HTTPException(404, "Logical action not found")
+    if digest(action.request) != action.request_digest or (
+        action.result_digest and digest(action.result) != action.result_digest
+    ):
+        raise HTTPException(409, "Logical action integrity mismatch")
+    order = await db.get(WorkOrder, run.work_order_id)
+    return {
+        "id": action.id,
+        "status": await action_state(db, order, action),
+        "request": action.request,
+        "request_digest": action.request_digest,
+        "result": action.result,
+        "result_digest": action.result_digest,
+        "can_replay": False,
+    }
+
+
+@router.post("/{run_id}/actions/{action_id}/observations", status_code=201)
+async def observe_chat_action(
+    run_id: uuid.UUID,
+    action_id: uuid.UUID,
+    body: ActionObservationRequest,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+):
+    from app.domain.chat_action_journal import action_state, digest
+    from app.domain.chat_continuation import canonical
+
+    if is_service_account(user):
+        raise HTTPException(403, "Observation requires a human owner")
+    if not body.note.strip() or not body.evidence_reference.strip():
+        raise HTTPException(422, "Observation requires a note and evidence reference")
+    run = await owned_run(db, run_id, user)
+    order = await db.get(WorkOrder, run.work_order_id, with_for_update=True)
+    action = await db.get(ChatLogicalAction, action_id)
+    if action is None or action.work_order_id != order.id:
+        raise HTTPException(404, "Logical action not found")
+    payload = {
+        **body.model_dump(mode="json"),
+        "action_id": str(action.id),
+        "verified": False,
+        "can_replay": False,
+    }
+    old = await db.scalar(
+        select(WorkEvent)
+        .where(
+            WorkEvent.work_order_id == order.id,
+            WorkEvent.event_type == "chat.action_observation",
+            WorkEvent.payload["request_id"].as_string() == str(body.request_id),
+        )
+        .limit(1)
+    )
+    if old:
+        if canonical(old.payload) != canonical(payload):
+            raise HTTPException(409, "Observation request already used differently")
+        return {"sequence": old.sequence, **old.payload}
+    if (
+        action.request_digest != body.request_digest
+        or digest(action.request) != body.request_digest
+    ):
+        raise HTTPException(409, "Logical action request changed")
+    if (
+        order.status not in {"blocked", "failed", "canceled"}
+        or await action_state(db, order, action) != "outcome_unknown"
+    ):
+        raise HTTPException(409, "Observation requires a stopped unknown outcome")
+    event = await append_event(
+        db, order.id, "chat.action_observation", actor=user.sub, payload=payload
+    )
+    await db.commit()
+    # An operator's report is evidence to review, not an execution authorization.
+    return {"sequence": event.sequence, **event.payload}
 
 
 @router.get("")

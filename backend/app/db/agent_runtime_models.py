@@ -29,6 +29,21 @@ class DurableChatRun(UUIDPrimaryKey, TimestampMixin, Base):
     )
 
 
+class ChatLogicalAction(UUIDPrimaryKey, TimestampMixin, Base):
+    __tablename__ = "chat_logical_actions"
+
+    work_order_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("work_orders.id"), index=True
+    )
+    attempt_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("work_step_attempts.id"))
+    call_id: Mapped[str] = mapped_column(Text)
+    request: Mapped[dict] = mapped_column(JSON)
+    request_digest: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(40))
+    result: Mapped[dict | None] = mapped_column(JSON)
+    result_digest: Mapped[str | None] = mapped_column(String(64))
+
+
 class OwnedWorkspaceBlock(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "owned_workspace_blocks"
     __table_args__ = (UniqueConstraint("owner_key", "block_key"),)

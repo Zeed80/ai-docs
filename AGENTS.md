@@ -16,6 +16,7 @@ The target implementation structure is:
 Проверки границ и разрешений: `python3 -m pytest backend/tests/test_agent_execution_boundary.py backend/tests/test_agent_delegations.py -q`.
 Пилот долговечного чата: `python3 -m pytest backend/tests/test_durable_chat.py backend/tests/test_work_order_checkpoint.py -q`.
 Снимки исполнения и одноразовое продолжение после подтверждения владельца: `python3 -m pytest backend/tests/test_chat_checkpoints.py -q`.
+Журнал логических действий, наблюдения владельца и миграция: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 UI долговечного чата: `npm test`; браузерная проверка с подставным API — `PLAYWRIGHT_MOCK_API=1 npx playwright test tests/e2e/durable-chat.spec.ts --project=chromium` в `frontend/`.
 Проверка frontend: `npm run typecheck` в `frontend/`. Перед выдачей изменений:
 `make prod-build`, затем `curl -k https://localhost/health` из корня проекта.

@@ -8,6 +8,10 @@
 `POST /{id}/resume` продолжают только подтверждённый владельцем ожидающий вызов:
 точные аргументы, одноразовое решение на 30 минут, новая ревизия без повторения
 выполненного. Произвольный сбой и неизвестные внешние эффекты не возобновляются.
+Журнал `/api/agent/chat-runs/{id}/actions` хранит логические UUID, запросы и результаты
+атомарно с checkpoint (миграция `20260912_0001`). Наблюдения владельца сохраняются
+без разрешения повторить неизвестный эффект. UI сверки и receipts получателей —
+следующий этап. Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Проверка: `python3 -m pytest backend/tests/test_chat_checkpoints.py backend/tests/test_durable_chat.py backend/tests/test_work_order_checkpoint.py -q`.
 
 > Подробный план и фактический статус инженерного направления «Оцифровка в DXF» находятся в [`DXF_CAD_DEVELOPMENT_PLAN.md`](./DXF_CAD_DEVELOPMENT_PLAN.md).

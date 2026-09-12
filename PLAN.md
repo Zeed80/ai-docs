@@ -43,6 +43,10 @@ isProject: false
 сохранённый ожидающий вызов после одноразового решения владельца. Аргументы
 не редактируются, согласие действует 30 минут; неизвестный внешний эффект не
 повторяется. Общий pause/resume после произвольного сбоя ещё не реализован.
+Журнал `/api/agent/chat-runs/{id}/actions` сохраняет логический UUID и результат
+атомарно с checkpoint. API наблюдений владельца фиксирует свидетельства неизвестного
+исхода, но не разрешает повтор. UI сверки и receipts получателей ещё в плане.
+Миграция `20260912_0001`; журнал проверяется `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Проверка: `python3 -m pytest backend/tests/test_chat_checkpoints.py backend/tests/test_durable_chat.py backend/tests/test_work_order_checkpoint.py -q`.
 
 > Подробный план и фактический статус инженерного направления «Оцифровка в DXF» находятся в [`DXF_CAD_DEVELOPMENT_PLAN.md`](./DXF_CAD_DEVELOPMENT_PLAN.md).

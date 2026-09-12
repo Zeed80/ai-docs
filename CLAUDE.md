@@ -15,6 +15,12 @@ AI-сотрудник **Света** (AiAgent agent) обрабатывает с
 - `DEVPLAN.md` — план разработки с ToDo (~1530 строк, 7 эпиков, 52 skills, 8 scenarios)
 - `PLAN.md` — краткий стек и ToDo
 
+Долговечный журнал действий: `/api/agent/chat-runs/{id}/actions`, подробности
+`/{action_id}`, наблюдения владельца `/{action_id}/observations`. Записи атомарны
+с checkpoint; неизвестный исход не разрешает повтор. Наблюдение не является
+проверенным эффектом или разрешением. Миграция `20260912_0001`, проверки:
+`python3 -m pytest backend/tests/test_chat_action_journal.py backend/tests/test_chat_checkpoints.py -q`.
+
 ## Стек
 - **Agent**: встроенный Python-агент в `backend/app/ai/` (orchestrator + AgentSession) — AI-сотрудник «Света»; `aiagent/` содержит только конфиги, промпты, реестры skills и сценарии
 - **Backend**: Python / FastAPI + Celery + Redis

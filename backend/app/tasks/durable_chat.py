@@ -180,6 +180,9 @@ async def _run_durable_chat(
             plan = await db.get(WorkPlan, step.plan_id)
             if plan is None or plan.status != "active" or plan.revision != order.plan_revision:
                 raise ChatRunStopped("Checkpoint plan is no longer active")
+            from app.domain.chat_action_journal import record_boundary
+
+            await record_boundary(db, order, attempt, payload)
             attempt.checkpoint = {
                 "kind": "durable_chat",
                 "owner_key": order.owner_key,

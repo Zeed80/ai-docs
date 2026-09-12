@@ -1735,7 +1735,9 @@ class AgentSession:
     def set_checkpoint_sink(self, sink: Callable[[dict], Awaitable[None]]) -> None:
         self._checkpoint_sink = sink
 
-    async def save_checkpoint(self, phase: str, confirmation: dict | None = None) -> None:
+    async def save_checkpoint(
+        self, phase: str, confirmation: dict | None = None, *, completed_call: dict | None = None
+    ) -> None:
         if self._checkpoint_sink is None:
             return
         from app.ai.chat_checkpoint import ChatCheckpointError, pack_checkpoint
@@ -1750,6 +1752,8 @@ class AgentSession:
                     "iteration": self._iteration,
                     "tokens_used": self.total_tokens,
                     "confirmation": confirmation,
+                    "action_ids": getattr(self, "_checkpoint_action_ids", {}),
+                    "completed_call": completed_call,
                     "runtime": {
                         "system_prompt": self._effective_system(),
                         "config_sha256": hashlib.sha256(
@@ -2112,7 +2116,9 @@ class AgentSession:
         self._iteration = int(payload["iteration"])
         self._granted_approvals.clear()
         self._pending_args_override = None
-        await self._execute_tools_sequential(payload["pending_calls"], self._iteration)
+        await self._execute_tools_sequential(
+            payload["pending_calls"], self._iteration, action_ids=payload.get("action_ids")
+        )
         await self._run(start_iteration=self._iteration + 1, restored=True)
 
     async def _publish_canvas(
@@ -2942,13 +2948,17 @@ class AgentSession:
         await self._send({"type": "plan", "iteration": iteration, "steps": steps})
 
     async def _execute_tools_sequential(
-        self, tool_calls: list[dict], iteration: int
+        self, tool_calls: list[dict], iteration: int, *, action_ids: dict | None = None
     ) -> list[tuple[str, dict]]:
         results: list[tuple[str, dict]] = []
         if self._checkpoint_sink is not None:
             for call in tool_calls:
                 if not call.get("id"):
                     call["id"] = str(uuid.uuid4())
+            self._checkpoint_action_ids = {
+                call["id"]: (action_ids or {}).get(call["id"], str(uuid.uuid4()))
+                for call in tool_calls
+            }
             self._checkpoint_pending = list(tool_calls)
             self._checkpoint_in_flight = None
             await self.save_checkpoint("tools_planned")
@@ -2965,7 +2975,14 @@ class AgentSession:
                 # One explicit confirmation never authorizes another call with
                 # identical arguments later in the same resumed turn.
                 self._granted_approvals.clear()
-                await self.save_checkpoint("tool_recorded")
+                await self.save_checkpoint(
+                    "tool_recorded",
+                    completed_call={
+                        "action_id": self._checkpoint_action_ids[tc["id"]],
+                        "call_id": tc["id"],
+                        "result": result,
+                    },
+                )
             self._trim_history()
         return results
 
