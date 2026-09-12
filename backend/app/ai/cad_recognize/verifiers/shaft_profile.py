@@ -22,6 +22,10 @@ from app.ai.cad_recognize.verifiers.view_frame import ViewFrame
 
 # Средняя часть ступени, по которой меряется Ø.
 _CORE = (0.2, 0.8)
+# Толщина основной линии (масса, px), ниже которой лист слишком груб для
+# профиля: на корпусе v7 при 300 dpi — 6 px и 7 % ложных опровержений верного
+# чтения, при 150 dpi — 3 px и 18–25 %. Грубее — «не измеримо», а не догадка.
+_MIN_LINE_PX = 4.5
 
 
 def shaft_tolerances(mm_per_px: float) -> tuple[float, float]:
@@ -40,6 +44,26 @@ def verify_shaft_profile(hypothesis: Hypothesis, frame: ViewFrame | None, sheet:
     if not steps:
         return Verdict(status="unmeasurable", reason="нет прочитанных ступеней")
     profile = sheet
+    line_px = float(getattr(profile, "line_px", 0.0) or 0.0)
+    if 0.0 < line_px < _MIN_LINE_PX:
+        return Verdict(
+            status="unmeasurable",
+            evidence_bbox_px=frame.bbox_px,
+            reason=(
+                f"лист слишком грубый для проверки профиля: основная линия "
+                f"{line_px:.1f} px (нужно от {_MIN_LINE_PX:g})"
+            ),
+        )
+    # Пролёты пазов из прочитанного: под пазом ступень на виде лишена пары
+    # кромок (shaft-20) или меряется по контуру паза (shaft-12: Ø 19,56 вместо
+    # 20) — её Ø и пропавший уступ не проверяются, а не опровергаются.
+    keyways = [
+        (float(item["axial_start_mm"]), float(item["axial_start_mm"]) + float(item["length_mm"]))
+        for item in hypothesis.expected.get("keyways") or []
+        if isinstance(item, dict)
+        and isinstance(item.get("axial_start_mm"), (int, float))
+        and isinstance(item.get("length_mm"), (int, float))
+    ]
     scale_u, scale_v = frame.mm_per_px, frame.scale_v
     length_tol, diameter_tol = shaft_tolerances(frame.scale_mean)
     shoulders = _shoulders(
@@ -47,6 +71,8 @@ def verify_shaft_profile(hypothesis: Hypothesis, frame: ViewFrame | None, sheet:
     )
     measured_steps = []
     problems = []
+    bad_steps: set[int] = set()
+    keyed_steps: set[int] = set()
     station = 0.0
     boundaries = [0.0]
     for step in steps:
@@ -83,18 +109,57 @@ def verify_shaft_profile(hypothesis: Hypothesis, frame: ViewFrame | None, sheet:
         b = frame.origin_px[0] + (start + _CORE[1] * (end - start)) / scale_u
         halves = [profile.half_at(x) for x in np.arange(a, b + 1.0)]
         halves = [h for h in halves if h is not None]
-        diameter = round(2.0 * float(np.median(halves)) * scale_v, 3) if halves else None
+        under_key = any(k0 < end and k1 > start for k0, k1 in keyways)
+        if under_key:
+            keyed_steps.add(index)
+        diameter = (
+            round(2.0 * float(np.median(halves)) * scale_v, 3) if halves and not under_key else None
+        )
         left, right = matched[index], matched[index + 1]
         length = round(right - left, 3) if left is not None and right is not None else None
         measured_steps.append({"diameter_mm": diameter, "length_mm": length})
         read_d, read_l = step.get("diameter_mm"), step.get("length_mm")
         if diameter is not None and read_d and abs(diameter - float(read_d)) > diameter_tol:
             problems.append(f"ступень {index + 1}: Ø {diameter:g}, прочитано {read_d:g}")
+            bad_steps.add(index)
         if length is not None and read_l and abs(length - float(read_l)) > length_tol:
             problems.append(f"ступень {index + 1}: длина {length:g}, прочитано {read_l:g}")
-        if left is None or right is None:
+            bad_steps.add(index)
+        if (left is None or right is None) and not under_key:
             problems.append(f"ступень {index + 1}: уступ на прочитанной станции не найден")
-    unmeasured = all(item["diameter_mm"] is None for item in measured_steps)
+            bad_steps.add(index)
+    # Настоящая ошибка ридера — одно-два значения. Разошлась большая часть —
+    # значит, неверен вид или система координат: честнее «не измеримо», чем
+    # опровергнуть всё прочитанное (фото, размытие, не тот вид). Считаются
+    # ошибки, а не ступени: сдвинутая граница портит длины ДВУХ соседних
+    # ступеней, но это одна ошибка (3 ступени — иначе сразу «больше половины»).
+    diameter_bad = {
+        index
+        for index, (got, step) in enumerate(zip(measured_steps, steps))
+        if got["diameter_mm"] is not None
+        and step.get("diameter_mm")
+        and abs(got["diameter_mm"] - float(step["diameter_mm"])) > diameter_tol
+    }
+    boundary_bad = sum(
+        1
+        for index, boundary in enumerate(boundaries[1:-1])
+        if (matched[index + 1] is None and not {index, index + 1} & keyed_steps)
+        or (matched[index + 1] is not None and abs(matched[index + 1] - boundary) > length_tol)
+    )
+    checked = len(steps) + max(0, len(steps) - 1)
+    errors = len(diameter_bad) + boundary_bad
+    if errors > checked / 2.0:
+        return Verdict(
+            status="unmeasurable",
+            evidence_bbox_px=frame.bbox_px,
+            reason=(
+                f"профиль вида не сходится с прочитанным почти целиком "
+                f"({errors} расхождений из {checked} величин) — вероятно, не тот вид"
+            ),
+        )
+    unmeasured = all(
+        item["diameter_mm"] is None and item["length_mm"] is None for item in measured_steps
+    )
     return Verdict(
         status="unmeasurable" if unmeasured else ("refuted" if problems else "confirmed"),
         measured={"steps": measured_steps},

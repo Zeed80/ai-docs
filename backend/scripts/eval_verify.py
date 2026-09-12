@@ -455,15 +455,45 @@ def eval_shaft_profile(png: bytes, truth: dict) -> list[dict[str, Any]]:
         wrong_l[middle]["length_mm"] += 2.0
         wrong_l[middle + 1]["length_mm"] -= 2.0
     outcomes = []
+    # Ступени под пазом Ø не мерят (проверяльщик честно отдаёт пустой замер) —
+    # их Ø из точности исключается, как в продукте.
+    stations = [0.0]
+    for item in steps:
+        stations.append(stations[-1] + item["length_mm"])
+    keyed = {
+        index
+        for index in range(len(steps))
+        for key in (truth["spec"].get("main_view") or {}).get("keyways") or []
+        if isinstance(key.get("axial_start_mm"), (int, float))
+        and key["axial_start_mm"] < stations[index + 1]
+        and key["axial_start_mm"] + float(key.get("length_mm") or 0.0) > stations[index]
+    }
     for case, read in (("truth", steps), ("diameter", wrong_d), ("length", wrong_l)):
-        verdict = verify(Hypothesis("shaft_profile", "outer", {"steps": read}), frame, profile)
+        verdict = verify(
+            Hypothesis(
+                "shaft_profile",
+                "outer",
+                {
+                    "steps": read,
+                    # Пазы — из прочитанного спека, как в продукте.
+                    "keyways": (truth["spec"].get("main_view") or {}).get("keyways") or [],
+                },
+            ),
+            frame,
+            profile,
+        )
         measured = verdict.measured.get("steps") or []
         accurate = len(measured) == len(steps) and all(
-            got["diameter_mm"] is not None
-            and abs(got["diameter_mm"] - real["diameter_mm"]) <= diameter_tol
+            (
+                index in keyed
+                or (
+                    got["diameter_mm"] is not None
+                    and abs(got["diameter_mm"] - real["diameter_mm"]) <= diameter_tol
+                )
+            )
             and got["length_mm"] is not None
             and abs(got["length_mm"] - real["length_mm"]) <= length_tol
-            for got, real in zip(measured, steps)
+            for index, (got, real) in enumerate(zip(measured, steps))
         )
         wanted = "confirmed" if case == "truth" else "refuted"
         errors = [

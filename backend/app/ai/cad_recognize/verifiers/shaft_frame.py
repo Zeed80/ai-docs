@@ -58,6 +58,8 @@ class ShaftProfile:
     # (x, начало, конец по вертикали): у канавки у уступа тоже есть грань,
     # отличить уступ можно только по тому, какой скачок радиуса она покрывает.
     faces_px: tuple[tuple[float, float, float], ...] = ()
+    # Эталонная толщина основной линии (масса поперёк, px) — мера разрешения.
+    line_px: float = 0.0
 
     def half_at(self, x: float) -> float | None:
         import math
@@ -141,7 +143,9 @@ def locate_shaft_frame(sheet: Any, total_length_mm: float) -> tuple[ViewFrame, S
         and min(line.end, inside[1]) - max(line.start, inside[0]) >= min_length
         and _stroke(gray, ink, line, inside, axis=1) >= context.main_weight
     )
-    profile = ShaftProfile(x0=x0, x1=x1, axis_y=axis_y, half_px=segment, faces_px=tuple(faces))
+    profile = ShaftProfile(
+        x0=x0, x1=x1, axis_y=axis_y, half_px=segment, faces_px=tuple(faces), line_px=main_ref
+    )
     frame = ViewFrame(
         bbox_px=(x0 - 3, axis_y - extent - 3, x1 + 3, axis_y + extent + 3),
         mm_per_px=float(total_length_mm) / float(x1 - x0),
@@ -165,6 +169,11 @@ def _segments(ink: Any, min_length: int) -> list[Any]:
 
     from app.ai.cad_recognize.verifiers.plate_frame import _Line
 
+    # Ядро размыкания (0,6 % меньшей стороны листа) на листах A-формата при
+    # любом dpi примерно в 2,5 раза толще основной линии, и грани уступов им
+    # стираются. На изображении, где ядро не толще линии, грань переживает
+    # размыкание и сшивает верх и низ ступени — вычитать вертикали нельзя
+    # (выносные режут кромки: корпус v7, чистый лист 26 → 12 из 28).
     opened = cv2.morphologyEx(
         ink.astype(np.uint8), cv2.MORPH_OPEN, np.ones((1, min_length), np.uint8)
     )
