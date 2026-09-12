@@ -80,6 +80,17 @@ class _Sheet:
 
 def locate_shaft_frame(sheet: Any, total_length_mm: float) -> tuple[ViewFrame, ShaftProfile] | None:
     """Главный вид вала → (система координат с началом на левом торце на оси, профиль)."""
+    views = locate_shaft_views(sheet, total_length_mm)
+    return views[0] if views else None
+
+
+def locate_shaft_views(sheet: Any, total_length_mm: float) -> list[tuple[ViewFrame, ShaftProfile]]:
+    """Все виды одного вала на листе — самый полный первым.
+
+    У полого вала опорный вид — разрез, а паз лицом виден на виде `bottom`
+    под ним (Ф3.0a): проверяльщику паза нужен второй вид, а не только первый
+    (shaft-8, shaft-12: паз на разрезе «не измерим»).
+    """
     import numpy as np
 
     from app.ai.cad_recognize.verifiers.plate_frame import _ink, _lines, _stroke
@@ -123,7 +134,7 @@ def locate_shaft_frame(sheet: Any, total_length_mm: float) -> tuple[ViewFrame, S
         segment = _slice(half, x0, x1)
         passing.append((axis_y, x0, x1, segment, float(np.nansum(segment))))
     if not passing:
-        return None
+        return []
     primary = passing[0]
     reach = _SAME_VIEW_SHARE * (primary[2] - primary[1])
     same_shaft = [
@@ -131,7 +142,30 @@ def locate_shaft_frame(sheet: Any, total_length_mm: float) -> tuple[ViewFrame, S
         for item in passing
         if abs(item[1] - primary[1]) <= reach and abs(item[2] - primary[2]) <= reach
     ]
-    axis_y, x0, x1, segment, _area = max(same_shaft, key=lambda item: item[4])
+    # Устойчивая сортировка: при равной площади первым остаётся тот же вид,
+    # что выбирал прежний `max`.
+    same_shaft.sort(key=lambda item: -item[4])
+    return [
+        _view(gray, ink, vertical, context, main_ref, total_length_mm, min_length, item)
+        for item in same_shaft
+    ]
+
+
+def _view(
+    gray: Any,
+    ink: Any,
+    vertical: list[Any],
+    context: Any,
+    main_ref: float,
+    total_length_mm: float,
+    min_length: int,
+    item: tuple,
+) -> tuple[ViewFrame, ShaftProfile]:
+    import numpy as np
+
+    from app.ai.cad_recognize.verifiers.plate_frame import _stroke
+
+    axis_y, x0, x1, segment, _area = item
     extent = float(np.nanmax(segment))
     # Грани уступов: основные вертикали внутри вида. Толщина — на отрезке
     # внутри профиля: грань тоже сливается с выносной цепочки размеров.

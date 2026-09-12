@@ -6,7 +6,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from app.ai.cad_recognize.verifiers import Hypothesis, verify
-from app.ai.cad_recognize.verifiers.shaft_frame import locate_shaft_frame
+from app.ai.cad_recognize.verifiers.shaft_frame import locate_shaft_frame, locate_shaft_views
 
 # Вал 30×30 → Ø20×40 → Ø25×30 при 5 px/мм; левый торец x=200, ось y=500.
 PX = 5.0
@@ -18,34 +18,54 @@ KEY = {"axial_start_mm": 40.0, "length_mm": 20.0, "width_mm": 6.0}
 _KEY_ARGS = (KEY["axial_start_mm"], KEY["length_mm"], KEY["width_mm"])
 
 
-def _shaft(draw: ImageDraw.ImageDraw, main: int) -> float:
+def _shaft(draw: ImageDraw.ImageDraw, main: int, axis: float = AXIS) -> float:
     x, previous = X0, 0.0
     for diameter, length in STEPS:
         r = diameter / 2 * PX
         x_end = x + length * PX
-        draw.line([(x, AXIS - r), (x_end, AXIS - r)], fill=0, width=main)
-        draw.line([(x, AXIS + r), (x_end, AXIS + r)], fill=0, width=main)
+        draw.line([(x, axis - r), (x_end, axis - r)], fill=0, width=main)
+        draw.line([(x, axis + r), (x_end, axis + r)], fill=0, width=main)
         low, high = min(previous, r), max(previous, r)
         if previous == 0.0:
-            draw.line([(x, AXIS - r), (x, AXIS + r)], fill=0, width=main)
+            draw.line([(x, axis - r), (x, axis + r)], fill=0, width=main)
         else:
-            draw.line([(x, AXIS - high), (x, AXIS - low)], fill=0, width=main)
-            draw.line([(x, AXIS + low), (x, AXIS + high)], fill=0, width=main)
+            draw.line([(x, axis - high), (x, axis - low)], fill=0, width=main)
+            draw.line([(x, axis + low), (x, axis + high)], fill=0, width=main)
         previous, x = r, x_end
-    draw.line([(x, AXIS - previous), (x, AXIS + previous)], fill=0, width=main)
+    draw.line([(x, axis - previous), (x, axis + previous)], fill=0, width=main)
     return x
 
 
-def _capsule(draw: ImageDraw.ImageDraw, start: float, length: float, width: float, main: int):
+def _capsule(
+    draw: ImageDraw.ImageDraw,
+    start: float,
+    length: float,
+    width: float,
+    main: int,
+    axis: float = AXIS,
+):
     h = width / 2 * PX
     left = X0 + (start + width / 2) * PX
     right = X0 + (start + length - width / 2) * PX
-    draw.line([(left, AXIS - h), (right, AXIS - h)], fill=0, width=main)
-    draw.line([(left, AXIS + h), (right, AXIS + h)], fill=0, width=main)
+    draw.line([(left, axis - h), (right, axis - h)], fill=0, width=main)
+    draw.line([(left, axis + h), (right, axis + h)], fill=0, width=main)
     # Обводка серединой на радиусе (PIL кладёт её внутрь рамки).
     r = h + main / 2
-    draw.arc([left - r, AXIS - r, left + r, AXIS + r], 90, 270, fill=0, width=main)
-    draw.arc([right - r, AXIS - r, right + r, AXIS + r], -90, 90, fill=0, width=main)
+    draw.arc([left - r, axis - r, left + r, axis + r], 90, 270, fill=0, width=main)
+    draw.arc([right - r, axis - r, right + r, axis + r], -90, 90, fill=0, width=main)
+
+
+def _hatched_bore(draw: ImageDraw.ImageDraw, axis: float) -> None:
+    """Разрез полого вала: «расточка» с дугами, за её линиями — штриховка 45°."""
+    x_end = X0 + sum(length for _d, length in STEPS) * PX
+    for offset in range(-100, 600, 12):
+        draw.line([(X0 + offset, axis - 49), (X0 + offset + 98, axis + 49)], fill=0, width=2)
+    # Штриховка кончается на контуре детали, внутри «расточки» пусто.
+    draw.rectangle([0, axis - 50, X0, axis + 50], fill=255)
+    draw.rectangle([x_end, axis - 50, x_end + 200, axis + 50], fill=255)
+    draw.rectangle([X0 + 40 * PX, axis - 12, X0 + 60 * PX, axis + 12], fill=255)
+    _shaft(draw, MAIN, axis)
+    _capsule(draw, *_KEY_ARGS, main=MAIN, axis=axis)
 
 
 def _sheet(*, main: int = MAIN, thin: int = THIN, label: bool = False) -> np.ndarray:
@@ -100,18 +120,35 @@ def test_a_wrong_start_and_a_wrong_length_are_refuted_with_the_sheet_values():
 def test_a_bore_in_a_hatched_section_is_not_a_keyway():
     """shaft-8: расточка разреза — те же прямые с дугами, но за ними штриховка."""
     image = Image.new("L", (2800, 2000), 255)
-    draw = ImageDraw.Draw(image)
-    _shaft(draw, MAIN)
-    _capsule(draw, *_KEY_ARGS, main=MAIN)
-    # Штриховка под 45° между «расточкой» и кромкой ступени.
-    for offset in range(-400, 900, 12):
-        draw.line([(X0 + offset, AXIS - 49), (X0 + offset + 98, AXIS + 49)], fill=0, width=2)
-    # Внутри «расточки» пусто, штриховка начинается сразу за её линией.
-    draw.rectangle([X0 + 40 * PX, AXIS - 12, X0 + 60 * PX, AXIS + 12], fill=255)
-    _capsule(draw, *_KEY_ARGS, main=MAIN)
+    _hatched_bore(ImageDraw.Draw(image), AXIS)
     verdict = _verdict(KEY, np.asarray(image))
 
     assert verdict.status == "unmeasurable", (verdict.reason, verdict.measured)
+
+
+def test_a_hollow_shaft_keyway_is_checked_on_the_view_below_the_section():
+    """shaft-8/12: опорный вид полого вала — разрез, паз лицом — на виде под ним."""
+    from app.ai.cad_recognize.verifiers.stage import _keyways
+
+    below = AXIS + 700.0
+    image = Image.new("L", (2800, 2000), 255)
+    draw = ImageDraw.Draw(image)
+    _hatched_bore(draw, AXIS)
+    _shaft(draw, MAIN, below)
+    _capsule(draw, *_KEY_ARGS, main=MAIN, axis=below)
+    gray = np.asarray(image)
+    views = [frame for frame, _profile in locate_shaft_views(gray, 100.0)]
+    section = [frame for frame in views if abs(frame.origin_px[1] - AXIS) <= 2.0]
+    face_on = [frame for frame in views if abs(frame.origin_px[1] - below) <= 2.0]
+    assert section and face_on, [frame.origin_px for frame in views]
+
+    report: dict = {"items": [], "notes": []}
+    # Разрез — первым, как у полого вала на корпусе.
+    _keyways(gray, section + face_on, {"keyways": [{**KEY, "depth_mm": 3.5}]}, report)
+
+    item = report["items"][0]
+    assert item["status"] == "confirmed", item
+    assert abs(item["measured"]["length_mm"] - 20.0) <= 0.5
 
 
 def test_a_coarse_sheet_is_unmeasurable_not_a_guess():

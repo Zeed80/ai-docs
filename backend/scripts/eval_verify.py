@@ -524,9 +524,10 @@ def eval_keyway(png: bytes, truth: dict) -> list[dict[str, Any]]:
     import numpy as np
     from PIL import Image
 
-    from app.ai.cad_recognize.verifiers import Hypothesis, verify
-    from app.ai.cad_recognize.verifiers.shaft_frame import locate_shaft_frame
+    from app.ai.cad_recognize.verifiers import Hypothesis
+    from app.ai.cad_recognize.verifiers.shaft_frame import locate_shaft_views
     from app.ai.cad_recognize.verifiers.shaft_profile import shaft_tolerances
+    from app.ai.cad_recognize.verifiers.stage import _first_measured
 
     main_view = truth["spec"].get("main_view") or {}
     keys = [key for key in main_view.get("keyways") or [] if key.get("length_mm")]
@@ -535,12 +536,9 @@ def eval_keyway(png: bytes, truth: dict) -> list[dict[str, Any]]:
         return []
     total = sum(float(step["length_mm"]) for step in outer)
     gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))
-    located = locate_shaft_frame(gray, total)
-    frame = located[0] if located else None
-    if frame is None:
-        scale = 0.2
-    else:
-        scale = frame.scale_mean
+    # Как в стадии: виды вала по очереди (у полого первый — разрез).
+    frames = [frame for frame, _profile in locate_shaft_views(gray, total)]
+    scale = frames[0].scale_mean if frames else 0.2
     length_tol, width_tol = shaft_tolerances(scale)
     outcomes = []
     for key in keys:
@@ -556,7 +554,7 @@ def eval_keyway(png: bytes, truth: dict) -> list[dict[str, Any]]:
             ("width", {**real, "width_mm": real["width_mm"] + 2.0}),
         ]
         for case, read in cases:
-            verdict = verify(Hypothesis("keyway", "keyways", read), frame, gray)
+            _frame, verdict = _first_measured(Hypothesis("keyway", "keyways", read), frames, gray)
             measured = verdict.measured
             accurate = bool(measured) and (
                 abs(measured["axial_start_mm"] - real["axial_start_mm"]) <= length_tol

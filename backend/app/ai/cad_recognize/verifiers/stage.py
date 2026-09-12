@@ -231,7 +231,7 @@ def _shaft(image_bytes: bytes, body: dict[str, Any], report: dict[str, Any]) -> 
     по ступеням. Грубый лист, «не тот вид» и прочие отказы профиля в целом —
     «не измеримо» у каждой ступени с той же причиной, а не молчание.
     """
-    from app.ai.cad_recognize.verifiers.shaft_frame import locate_shaft_frame
+    from app.ai.cad_recognize.verifiers.shaft_frame import locate_shaft_views
     from app.ai.cad_recognize.verifiers.shaft_profile import shaft_tolerances
 
     outer = body.get("outer") or []
@@ -246,15 +246,15 @@ def _shaft(image_bytes: bytes, body: dict[str, Any], report: dict[str, Any]) -> 
         return "нет полного наружного профиля (Ø и длина каждой ступени)"
     total = sum(float(step["length_mm"]) for _, step in steps)
     gray = _gray(image_bytes)
-    located = locate_shaft_frame(gray, total)
-    if located is None:
+    views = locate_shaft_views(gray, total)
+    if not views:
         reason = "главный вид вала на листе не найден"
         for index, step in steps:
             report["items"].append(_step_item(index, step, "unmeasurable", {}, reason))
-        _keyways(gray, None, body, report)
+        _keyways(gray, [], body, report)
         return reason
-    frame, profile = located
-    _keyways(gray, frame, body, report)
+    frame, profile = views[0]
+    _keyways(gray, [view_frame for view_frame, _profile in views], body, report)
     verdict = verify(
         Hypothesis(
             "shaft_profile",
@@ -314,11 +314,13 @@ def _shaft(image_bytes: bytes, body: dict[str, Any], report: dict[str, Any]) -> 
 _KEYWAY_KEYS = ("axial_start_mm", "length_mm", "width_mm")
 
 
-def _keyways(gray: Any, frame: Any, body: dict[str, Any], report: dict[str, Any]) -> None:
+def _keyways(gray: Any, frames: list[Any], body: dict[str, Any], report: dict[str, Any]) -> None:
     """Шпоночные пазы главного вида: капсула — начало, длина, ширина (Ф3).
 
     Лицом на главном виде виден только закрытый призматический паз; у
     открытого и сегментного контур другой — «не измеримо» с причиной.
+    Виды вала — по очереди: у полого вала первый — разрез, где паз лицом не
+    виден (капсулу расточки отсекает штриховка), паз — на виде под ним.
     """
     from app.ai.cad_recognize.verifiers.shaft_profile import shaft_tolerances
 
@@ -340,11 +342,8 @@ def _keyways(gray: Any, frame: Any, body: dict[str, Any], report: dict[str, Any]
         ) != "closed":
             item["reason"] = "проверяется только закрытый призматический паз"
             continue
-        verdict = verify(
-            Hypothesis("keyway", item["path"], {k: float(key[k]) for k in _KEYWAY_KEYS}),
-            frame,
-            gray,
-        )
+        hypothesis = Hypothesis("keyway", item["path"], {k: float(key[k]) for k in _KEYWAY_KEYS})
+        frame, verdict = _first_measured(hypothesis, frames, gray)
         item.update(status=verdict.status, measured=dict(verdict.measured), reason=verdict.reason)
         if frame is not None:
             length_tol, width_tol = shaft_tolerances(frame.scale_mean)
@@ -358,6 +357,19 @@ def _keyways(gray: Any, frame: Any, body: dict[str, Any], report: dict[str, Any]
                 f"{_mm(got['axial_start_mm'] + got['length_mm'])} × {_mm(got['width_mm'])}"
                 " — проверить"
             )
+
+
+def _first_measured(hypothesis: Hypothesis, frames: list[Any], sheet: Any) -> tuple[Any, Any]:
+    """Первый вид, на котором гипотеза измерима; иначе — отказ первого вида."""
+    if not frames:
+        return None, verify(hypothesis, None, sheet)
+    first = None
+    for frame in frames:
+        verdict = verify(hypothesis, frame, sheet)
+        if verdict.status != "unmeasurable":
+            return frame, verdict
+        first = first or (frame, verdict)
+    return first
 
 
 def _step_item(
