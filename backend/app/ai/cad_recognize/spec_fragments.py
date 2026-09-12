@@ -5306,7 +5306,37 @@ async def _finalize_spec(spec: dict, image_bytes: bytes) -> dict:
         "Шпоночные пазы сверены со ступенями и ГОСТ 23360",
         summary,
     )
-    return _flag_unconfirmed_outer_bore_diameters(with_ids)
+    return _tidy_notes(_flag_unconfirmed_outer_bore_diameters(with_ids))
+
+
+# Замечание оператору — одна мысль, а не поток рассуждений.
+_NOTE_LIMIT = 240
+
+
+def _tidy_notes(spec: dict) -> dict:
+    """Замечания чтения — коротко: до конца строки и не длиннее `_NOTE_LIMIT`.
+
+    Модель пишет в `unresolved` то, что сама не смогла доказать, и иногда пишет
+    туда рассуждение вслух. Базовая линия M5, вал shaft-1: одна «заметка» в
+    1419 знаков — «…Нет, посмотрим внимательно. Размер 12 соответствует…» —
+    которую оператор должен прочесть, чтобы понять одно: не прочитан Ø первой
+    ступени. Полный ответ модели остаётся в сырых ответах ридера; здесь
+    остаётся начало мысли. Одинаковые после обрезки — один раз.
+    """
+    for key in ("unresolved", "optional_unresolved"):
+        notes = spec.get(key)
+        if not isinstance(notes, list):
+            continue
+        tidy: list[str] = []
+        for note in notes:
+            text = " ".join(str(note).split("\n", 1)[0].split())
+            if len(text) > _NOTE_LIMIT:
+                cut = text[:_NOTE_LIMIT].rsplit(" ", 1)[0].rstrip(",;:—- ")
+                text = f"{cut}…"
+            if text and text not in tidy:
+                tidy.append(text)
+        spec[key] = tidy
+    return spec
 
 
 def _flag_profile_length_mismatch(spec: dict) -> None:

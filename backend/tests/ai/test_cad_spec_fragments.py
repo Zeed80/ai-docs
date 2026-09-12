@@ -1646,3 +1646,32 @@ async def test_a_bolt_circle_the_sheet_states_fully_is_built_without_notes(monke
 
     assert profile["hole_patterns"][0]["count"] == 4
     assert notes == []
+
+
+def test_a_reasoning_dump_in_unresolved_is_cut_to_one_note():
+    """Базовая линия M5, shaft-1: «заметка» в 1419 знаков — рассуждение вслух."""
+    from app.ai.cad_recognize.spec_fragments import _NOTE_LIMIT, _tidy_notes
+
+    dump = (
+        "Не удалось однозначно определить диаметр первой ступени (слева) — на чертеже "
+        "виден размер Ø28, но он относится к следующей ступени или является общим? "
+        + "На самом деле слева направо: 12мм - Ø28? Нет, посмотрим внимательно. "
+        * 20
+    )
+    spec = {
+        "unresolved": [
+            dump,
+            "малые элементы: паз не локализован",
+            "малые элементы: паз не локализован",
+        ],
+        "optional_unresolved": ["строка 1\nстрока 2"],
+    }
+
+    tidy = _tidy_notes(spec)
+
+    assert len(tidy["unresolved"]) == 2
+    assert len(tidy["unresolved"][0]) <= _NOTE_LIMIT + 1
+    assert tidy["unresolved"][0].startswith("Не удалось однозначно определить диаметр первой")
+    assert tidy["unresolved"][0].endswith("…")
+    assert tidy["unresolved"][1] == "малые элементы: паз не локализован"
+    assert tidy["optional_unresolved"] == ["строка 1"]
