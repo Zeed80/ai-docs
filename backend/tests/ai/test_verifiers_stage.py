@@ -110,6 +110,39 @@ def test_verdicts_reach_the_graph_per_field_of_each_hole():
     assert abs(measured.value.value - 7.0) <= 0.3
 
 
+def test_no_checkable_hypothesis_leaves_the_stage_without_a_verdict():
+    """Контракт стадии (план, P1.3): каждое проверяемое — ровно один вердикт.
+
+    Молчаливых потерь нет: и найденная система координат, и не найденная дают
+    по элементу на каждое отверстие пластины, окружность болтов и центральное
+    отверстие — со статусом из трёх возможных.
+    """
+    flange = _flange_spec()
+    flange["main_view"]["profile"]["holes"] = [
+        {"center_x_mm": 0.0, "center_y_mm": 0.0, "diameter_mm": 25.0}
+    ]
+    blank = io.BytesIO()
+    Image.new("L", (800, 600), 255).save(blank, format="PNG")
+    cases = [
+        (_png(), _spec(HOLES), 4),
+        (_png(plan=False), _spec(HOLES), 4),
+        (_flange_png(), flange, 2),
+        (blank.getvalue(), flange, 2),
+    ]
+    for image, spec, expected in cases:
+        report = verify_spec_against_sheet(image, spec)
+        assert len(report["items"]) == expected, report["summary"]
+        assert {item["status"] for item in report["items"]} <= {
+            "confirmed",
+            "refuted",
+            "unmeasurable",
+        }
+        assert report["summary"]["checked"] == expected
+        assert sum(report["summary"][s] for s in ("confirmed", "refuted", "unmeasurable")) == (
+            expected
+        )
+
+
 def test_a_spec_without_checkable_elements_has_nothing_to_check():
     report = verify_spec_against_sheet(_png(), {"main_view": {"profile": {"shape": "circle"}}})
 
