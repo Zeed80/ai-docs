@@ -207,6 +207,7 @@ def place_sheet_views(
     origin_v_mm: float = 0.0,
     gap_mm: float = VIEW_GAP_MM,
     skip: set[int] | None = None,
+    right: set[int] | None = None,
 ) -> tuple[list[Any], list[dict[str, float] | None]]:
     """Lay out the views ``/drawing`` returned, in the order it returned them.
 
@@ -229,6 +230,11 @@ def place_sheet_views(
     # would otherwise appear beside its own section — the same part drawn twice.
     # It keeps its index so dimensions still address their view correctly.
     skipped = skip or set()
+    # ``right`` overrides placement by kind: the kernel names a view by its
+    # direction, and on a plate whose main view is the PLAN the thickness view
+    # is the kernel's ``top`` — it shares the plan's vertical axis and belongs
+    # to its right, not below.
+    to_right = right or set()
 
     def bounds(view: dict[str, Any]) -> dict[str, float] | None:
         value = view.get("bounds_mm")
@@ -267,7 +273,7 @@ def place_sheet_views(
         if box is None:
             continue
         kind = view.get("kind")
-        if kind == "top":
+        if kind == "top" and index not in to_right:
             # Directly below the anchor, sharing its u — first-angle.
             placements[index] = {
                 "offset_u": origin_u_mm - box["u_min"],

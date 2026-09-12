@@ -722,3 +722,45 @@ def test_a_chain_leaves_exactly_one_link_open_even_with_repeated_lengths():
 
     assert _chain_lengths(outer) == [12.0, 15.0, 15.0, 30.0, 35.0, 80.0]
     assert _chain_lengths([{"d": 20, "l": 50}]) == []
+
+
+# ── Плоская деталь: главный вид — план (базовая линия M5, plate-0) ─────────
+# Ядро для пластины 100×50×25: front — u 25 (толщина), v 100 (ширина);
+# side — u 100, v 50 (план); top — u 25, v 50. Лист вёл вид ребром первым —
+# вертикальную полоску 25×100, — и модель чтения прочитала ширину 25.
+
+_PLATE = {
+    "main_view": {
+        "profile": {"shape": "rectangle", "width_mm": 100, "height_mm": 50, "thickness_mm": 25}
+    },
+    "views": [],
+}
+
+
+def test_a_plate_sheet_is_its_plan_with_the_thickness_view_beside_it():
+    kinds = [view["kind"] for view in plan_views("plate", _PLATE)]
+
+    assert kinds == ["front", "side", "top"]  # front — только основа ядра
+
+
+def test_a_flange_keeps_its_axial_section_beside_the_plan():
+    kinds = [view["kind"] for view in plan_views("flange", _PLATE)]
+
+    assert kinds == ["front", "section", "side"]
+
+
+def test_the_thickness_view_of_a_plate_stands_right_of_the_plan():
+    from app.ai.cad_projection import place_sheet_views
+
+    views = [
+        {"kind": "front", "bounds_mm": {"u_min": 0, "u_max": 25, "v_min": 0, "v_max": 100}},
+        {"kind": "side", "bounds_mm": {"u_min": 0, "u_max": 100, "v_min": 0, "v_max": 50}},
+        {"kind": "top", "bounds_mm": {"u_min": 0, "u_max": 25, "v_min": 0, "v_max": 50}},
+    ]
+
+    _entities, placements = place_sheet_views(views, px_per_mm=1.0, skip={0}, right={2})
+
+    assert placements[0] is None  # основа на лист не идёт
+    assert placements[1]["offset_u"] == 0.0  # план — главный вид
+    assert placements[2]["offset_u"] > 100.0  # толщина — справа от плана
+    assert placements[2]["offset_v"] == placements[1]["offset_v"]  # на одной оси

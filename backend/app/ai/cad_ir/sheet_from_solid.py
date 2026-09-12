@@ -58,6 +58,9 @@ class SheetPlan:
     # a base view, so on a hollow part the plain front view is requested and
     # then dropped: it is the same part its own section already draws.
     scaffold_views: set[int] = field(default_factory=set)
+    # Views that stand to the RIGHT of the main view whatever their kind (the
+    # thickness view of a plate is the kernel's `top`, which would go below).
+    right_views: set[int] = field(default_factory=set)
     geometry_only: bool = True
     view_reasons: list[dict[str, Any]] = field(default_factory=list)
 
@@ -137,13 +140,25 @@ def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
             section["section_path_mm"] = source["section_path_mm"]
         views.append(section)
     elif part_class in ("flange", "plate"):
-        views.append({"kind": "section", "label": "А-А", "section_symbol": "А"})
-        # Вид ВДОЛЬ оси выдавливания — это и есть пластина в плане: контур,
-        # отверстия, окружность болтов, прорези. Его не было вовсе: лист нёс
-        # только главный вид и разрез, оба ребром, и фланец Ø250 с шестью
-        # отверстиями перечерчивался полоской 12 мм. `side` у ядра смотрит
-        # вдоль −Z, куда деталь и выдавлена.
-        views.append({"kind": "side"})
+        # Вид ВДОЛЬ оси выдавливания (`side`, вдоль −Z) — это деталь в плане:
+        # контур, отверстия, окружность болтов, прорези. Он и есть главный вид
+        # (ГОСТ 2.305: наиболее полное представление о форме). `front` ядра
+        # смотрит на ребро и кладёт ширину ВЕРТИКАЛЬНО (u — толщина, v —
+        # ширина): лист вёл пластину вертикальной полоской 25×100, и модель
+        # чтения честно прочитала ширину 25 (базовая линия M5). `front` остаётся
+        # основой для ядра, на лист он не идёт (см. `plan_sheet`).
+        if part_class == "flange":
+            # Разрез по оси — толщина и центральное отверстие; делит с планом
+            # вертикальную ось (u — толщина, v — диаметр), встаёт справа.
+            views.append({"kind": "section", "label": "А-А", "section_symbol": "А"})
+            views.append({"kind": "side"})
+        else:
+            # Разрез пластины режет по направлению `front` — тот же перекос
+            # осей — и по середине, мимо отверстий: штрихованная полоска без
+            # сведений. Толщину показывает `top` (u — толщина, v — высота
+            # плана): он делит ось с планом и встаёт справа.
+            views.append({"kind": "side"})
+            views.append({"kind": "top"})
 
     requested = {str(view.get("kind")) for view in source_views}
     # A view the reader saw on the source sheet is reproduced. "top" used to be
@@ -234,6 +249,11 @@ def _view_reasons(views: list[dict[str, Any]], part_class: str, spec: dict) -> l
             if item["kind"] == "front":
                 item["visible"] = False
                 item["reason"] = "техническая основа для построения продольного разреза"
+    elif part_class in ("flange", "plate"):
+        for item in reasons:
+            if item["kind"] == "front":
+                item["visible"] = False
+                item["reason"] = "техническая основа: главный вид плоской детали — план"
     return reasons
 
 
@@ -282,7 +302,8 @@ def _estimate_layout_mm(part_class: str, report: dict, views: list[dict]) -> tup
 
     if part_class in ("flange", "plate"):
         width, height = diameter, diameter
-        if "section" in kinds or "removed_section" in kinds:
+        # Справа от плана — разрез фланца или вид на толщину пластины (`top`).
+        if any(kind in kinds for kind in ("section", "removed_section", "top")):
             width += VIEW_GAP_MM + max(length, 1.0)
     else:
         width, height = length, diameter
@@ -354,8 +375,15 @@ def plan_sheet(
     # A longitudinal section IS the main view of a hollow turned part (ГОСТ
     # 2.305): showing the plain outline beside it draws the same body twice.
     scaffold: set[int] = set()
+    right: set[int] = set()
     if part_class == "hollow_rotation" and any(v["kind"] == "section" for v in views):
         scaffold = {index for index, view in enumerate(views) if view["kind"] == "front"}
+    elif part_class in ("flange", "plate"):
+        # Главный вид плоской детали — план; вид на ребро `front` нужен ядру
+        # как основа, а на листе стоял бы с перекошенными осями.
+        scaffold = {index for index, view in enumerate(views) if view["kind"] == "front"}
+        # `top` пластины делит с планом вертикальную ось — его место справа.
+        right = {index for index, view in enumerate(views) if view["kind"] == "top"}
     return SheetPlan(
         part_class=part_class,
         views=views,
@@ -366,6 +394,7 @@ def plan_sheet(
         layout_w_mm=layout_w,
         layout_h_mm=layout_h,
         scaffold_views=scaffold,
+        right_views=right,
         geometry_only=geometry_only,
         view_reasons=_view_reasons(views, part_class, spec),
     )
@@ -1060,7 +1089,7 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
 
     # Lay the views out at the origin first, measure them, then centre.
     entities, placements = place_sheet_views(
-        views, px_per_mm=PAPER_PX_PER_MM, skip=plan.scaffold_views
+        views, px_per_mm=PAPER_PX_PER_MM, skip=plan.scaffold_views, right=plan.right_views
     )
     extent_w, extent_h = sheet_extent_mm(views, placements)
     offset_u = area_x0 + max((area_w - extent_w) / 2.0, 0.0)
@@ -1071,6 +1100,7 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
         origin_u_mm=offset_u,
         origin_v_mm=offset_v,
         skip=plan.scaffold_views,
+        right=plan.right_views,
     )
     entities += dimensions_from_kernel(
         drawing.get("dimensions") or [],
