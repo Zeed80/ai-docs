@@ -107,6 +107,14 @@ def _shaft_feature_values(body: dict, lengths: list[float]) -> dict[str, list[fl
         offset = from_shoulder(hole["axial_position_mm"])
         if offset > 0.05:
             values["lengths"].append(offset)
+    # Канавка (Ф3.0c) — ширина с глубиной в подписи «b×t»; одна её стенка —
+    # уступ, место задано. Фаска на торце — «c×45°».
+    for groove in body.get("grooves") or []:
+        if not groove.get("internal"):
+            values["lengths"].append(groove["width_mm"])
+    for chamfer in body.get("chamfers") or []:
+        if chamfer.get("location") in ("left_end", "right_end"):
+            values["lengths"].append(chamfer["size_mm"])
     return values
 
 

@@ -1398,6 +1398,105 @@ def _shaft_feature_dimensions(drawing: dict, spec: dict, plan: SheetPlan) -> Non
                 dimensions.append(below((base, v), (u, v), offset, "cross_hole"))
 
 
+def _turned_detail_dimensions(drawing: dict, spec: dict, plan: SheetPlan) -> None:
+    """Канавки и фаски вала — на главном продольном виде (Ф3.0c).
+
+    Базовая линия ридера: канавки 0/2, фаски 1/3 — лист их не образмеривал,
+    и ридер угадывал по картинке. Канавка выхода инструмента стоит у уступа
+    (одна её стенка — сам уступ), поэтому её ширина b однозначно задаёт место;
+    глубина — Ø дна вертикальным размером по середине канавки. Фаска на торце —
+    «c×45°» (ГОСТ 2.307) коротким размером от торца до линии фаски. Всё — ПОД
+    видом, как у паза: над ним цепочка длин.
+    """
+    if plan.part_class not in ("solid_rotation", "hollow_rotation"):
+        return
+    body = spec.get("main_view") or {}
+    grooves = [
+        g for g in body.get("grooves") or [] if isinstance(g, dict) and not g.get("internal")
+    ]
+    chamfers = [
+        c
+        for c in body.get("chamfers") or []
+        if isinstance(c, dict) and c.get("location") in ("left_end", "right_end")
+    ]
+    outer = [s for s in body.get("outer") or [] if isinstance(s, dict)]
+    lengths = [float(s.get("length_mm") or 0.0) for s in outer]
+    if not (grooves or chamfers) or not lengths or not all(lengths):
+        return
+    starts = [sum(lengths[:i]) for i in range(len(lengths))]
+    ratio = plan.ratio or 1.0
+    target = next(
+        (
+            (index, view)
+            for index, view in enumerate(drawing.get("views") or [])
+            if index not in plan.scaffold_views
+            and view.get("kind") in ("bottom", "front", "section")
+            and view.get("bounds_mm")
+        ),
+        None,
+    )
+    if target is None:
+        return
+    index, view = target
+    bounds = view["bounds_mm"]
+    u_min = float(bounds["u_min"])
+    axis_v = (float(bounds["v_min"]) + float(bounds["v_max"])) / 2.0
+    dimensions = drawing.setdefault("dimensions", [])
+
+    def step_at(station: float) -> float:
+        for start, length, step in zip(starts, lengths, outer, strict=False):
+            if start - 1e-6 <= station <= start + length + 1e-6:
+                return float(step.get("diameter_mm") or 0.0)
+        return float(outer[-1].get("diameter_mm") or 0.0)
+
+    def below(first: tuple, second: tuple, value: float, label: str, measured_by: str) -> dict:
+        return {
+            "view_index": index,
+            "kind": "DistanceX",
+            "label": label,
+            "anchors_mm": [list(first), list(second)],
+            "value_mm": value,
+            "measured_by": measured_by,
+            "ir_kind": "linear",
+            "below": True,
+        }
+
+    for groove in grooves:
+        width = float(groove.get("width_mm") or 0.0)
+        centre = float(groove.get("axial_position_mm") or 0.0)
+        if width <= 0:
+            continue
+        root = groove.get("root_diameter_mm")
+        if not root and groove.get("depth_mm"):
+            root = step_at(centre) - 2.0 * float(groove["depth_mm"])
+        radius = (float(root) if root else step_at(centre)) / 2.0 * ratio
+        left = u_min + (centre - width / 2.0) * ratio
+        right = u_min + (centre + width / 2.0) * ratio
+        edge_v = axis_v - radius
+        # Глубина — в подписи «b×t», а не вертикальным Ø дна через вид: линия
+        # Ø по канавке в 2–3 мм сливалась со стенками и дном, и проверка
+        # профиля вала на корпусе v8 упала с 96 до 57 % (уступ у канавки
+        # сместился на её ширину).
+        depth = groove.get("depth_mm")
+        if not depth and root:
+            depth = (step_at(centre) - float(root)) / 2.0
+        label = f"{width:g}×{float(depth):g}" if depth else f"{width:g}"
+        dimensions.append(below((left, edge_v), (right, edge_v), round(width, 3), label, "groove"))
+
+    total = sum(lengths)
+    for chamfer in chamfers:
+        size = float(chamfer.get("size_mm") or 0.0)
+        if size <= 0:
+            continue
+        angle = float(chamfer.get("angle_deg") or 45.0)
+        at_left = chamfer["location"] == "left_end"
+        end_u = u_min + (0.0 if at_left else total) * ratio
+        line_u = end_u + (size if at_left else -size) * ratio
+        edge_v = axis_v - step_at(0.0 if at_left else total) / 2.0 * ratio
+        first, second = sorted(((end_u, edge_v), (line_u, edge_v)))
+        dimensions.append(below(first, second, round(size, 3), f"{size:g}×{angle:g}°", "chamfer"))
+
+
 def _corner_radii(
     view: dict, index: int, dimensions: list[dict], bounds: dict, ratio: float
 ) -> None:
@@ -1596,6 +1695,7 @@ async def build_sheet_from_solid(
     _label_dimensions(measured, requests, spec)
     _hole_dimensions(drawing, plan)
     _shaft_feature_dimensions(drawing, spec, plan)
+    _turned_detail_dimensions(drawing, spec, plan)
 
     ir, extent = _assemble(drawing, spec, plan)
     geometry_verification = verify_views_against_solid(
