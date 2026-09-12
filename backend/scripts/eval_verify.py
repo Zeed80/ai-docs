@@ -400,9 +400,95 @@ def eval_concentric_hole(png: bytes, truth: dict) -> list[dict[str, Any]]:
     return outcomes
 
 
+def eval_shaft_profile(png: bytes, truth: dict) -> list[dict[str, Any]]:
+    """Наружный профиль вала: система координат и профиль — по листу.
+
+    Случаи: ``truth`` — должно подтвердиться; ``diameter`` — Ø средней
+    ступени +1,5 мм; ``length`` — граница за средней ступенью сдвинута на
+    2 мм (эта длина +2, следующая −2). Опровергнутое должно измериться как
+    эталон. Точность системы координат — против размера общей длины.
+    """
+    import numpy as np
+    from PIL import Image
+
+    from app.ai.cad_recognize.verifiers import Hypothesis, verify
+    from app.ai.cad_recognize.verifiers.shaft_frame import locate_shaft_frame
+    from app.ai.cad_recognize.verifiers.shaft_profile import shaft_tolerances
+
+    steps = [
+        {"diameter_mm": float(item["diameter_mm"]), "length_mm": float(item["length_mm"])}
+        for item in (truth["spec"].get("main_view") or {}).get("outer") or []
+    ]
+    if len(steps) < 2:
+        return []
+    total = sum(item["length_mm"] for item in steps)
+    overall = next(
+        (
+            item
+            for item in truth.get("labels") or []
+            if item.get("kind") == "dimension"
+            and item.get("dimension_kind") == "linear"
+            and item.get("value_mm") is not None
+            and abs(item["value_mm"] - total) <= 0.05
+        ),
+        None,
+    )
+    if overall is None:
+        return []
+    (ax, _ay), (bx, _by) = overall["anchors_px"]
+    ref_scale = total / abs(bx - ax)
+    gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))
+    located = locate_shaft_frame(gray, total)
+    frame, profile = located if located else (None, None)
+    frame_error = None
+    if frame is not None:
+        frame_error = {
+            "scale_rel": abs(frame.mm_per_px / ref_scale - 1.0),
+            "origin_px": abs(frame.origin_px[0] - min(ax, bx)),
+        }
+    length_tol, diameter_tol = shaft_tolerances(ref_scale)
+    middle = len(steps) // 2
+    wrong_d = [dict(item) for item in steps]
+    wrong_d[middle]["diameter_mm"] += 1.5
+    wrong_l = [dict(item) for item in steps]
+    if middle + 1 < len(steps):
+        wrong_l[middle]["length_mm"] += 2.0
+        wrong_l[middle + 1]["length_mm"] -= 2.0
+    outcomes = []
+    for case, read in (("truth", steps), ("diameter", wrong_d), ("length", wrong_l)):
+        verdict = verify(Hypothesis("shaft_profile", "outer", {"steps": read}), frame, profile)
+        measured = verdict.measured.get("steps") or []
+        accurate = len(measured) == len(steps) and all(
+            got["diameter_mm"] is not None
+            and abs(got["diameter_mm"] - real["diameter_mm"]) <= diameter_tol
+            and got["length_mm"] is not None
+            and abs(got["length_mm"] - real["length_mm"]) <= length_tol
+            for got, real in zip(measured, steps)
+        )
+        wanted = "confirmed" if case == "truth" else "refuted"
+        errors = [
+            abs(got["diameter_mm"] - real["diameter_mm"]) / real["diameter_mm"]
+            for got, real in zip(measured, steps)
+            if got["diameter_mm"] is not None
+        ]
+        outcomes.append(
+            {
+                "case": case,
+                "found": verdict.status != "unmeasurable",
+                "correct": verdict.status == wanted and accurate,
+                "error_rel": (sorted(errors)[len(errors) // 2] if errors else None),
+                "unit_px": min(item["diameter_mm"] for item in steps) / 2.0 / ref_scale,
+                "frame_found": frame is not None,
+                "frame_error": frame_error,
+            }
+        )
+    return outcomes
+
+
 _VERIFIERS = {
     "bolt_circle": eval_bolt_circle,
     "concentric_hole": eval_concentric_hole,
+    "shaft_profile": eval_shaft_profile,
     "dimension_line": eval_dimension_line,
     "plate_hole": eval_plate_hole,
 }

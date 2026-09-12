@@ -22,4 +22,5 @@ from app.ai.cad_recognize.verifiers import (
     concentric_hole,  # noqa: E402,F401
     dimension_line,  # noqa: E402,F401
     plate_hole,  # noqa: E402,F401
+    shaft_profile,  # noqa: E402,F401
 )
