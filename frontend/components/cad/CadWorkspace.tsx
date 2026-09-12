@@ -36,6 +36,7 @@ import {
 } from "@/lib/studio-api";
 
 import AssurancePanel from "@/components/cad/AssurancePanel";
+import ProfileHolesEditor from "@/components/cad/ProfileHolesEditor";
 import CadModelTracePanel from "@/components/cad/CadModelTracePanel";
 import type {
   KernelInput,
@@ -1635,6 +1636,18 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
         t={t}
       />
 
+      <ProfileHolesEditor
+        generationId={gen.id}
+        spec={
+          (gen.params?.spec_corrected ?? gen.params?.spec) as
+            Record<string, unknown> | undefined
+        }
+        verification={specVerification}
+        busy={busy}
+        onDone={() => window.location.reload()}
+        onError={setErr}
+        t={t}
+      />
       <SpecEditorPanel
         generationId={gen.id}
         spec={

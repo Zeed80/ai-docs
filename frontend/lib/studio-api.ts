@@ -1043,6 +1043,9 @@ export interface SpecVerification {
     status: "confirmed" | "refuted" | "unmeasurable";
     measured: Record<string, number | null>;
     reason: string;
+    /** Допуски сравнения стадии: position/diameter у отверстия пластины,
+     * count/pcd/diameter/phase у окружности болтов. */
+    tolerance_mm?: Record<string, number>;
   }>;
   summary: {
     checked: number;
