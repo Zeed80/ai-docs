@@ -28,6 +28,10 @@ _POSITION_MM = 0.5
 _DIAMETER_MM = 0.3
 # Во сколько раз настоящее отверстие может быть меньше или больше прочитанного.
 _RADIUS_SPAN = (0.4, 2.5)
+# Угловые сектора подгонки и доля их, покрытая линией, чтобы окружность
+# считалась замкнутой (четверть дуги скругления — около 0,25).
+_SECTORS = 72
+_MIN_COVERAGE = 0.6
 
 
 @register("plate_hole", min_feature_px=8.0)
@@ -72,8 +76,22 @@ def verify_plate_hole(hypothesis: Hypothesis, frame: ViewFrame | None, sheet: An
             evidence_bbox_px=(left, top, right, bottom),
             reason="окружности в полосе есть, но не на заявленном x",
         )
-    u, v, r = min(on_column, key=lambda c: abs(c[1] - target_y))
-    u, v, r = _refine(strip, u, v, r)
+    # Ближайшая к прочитанному y ЗАМКНУТАЯ окружность: дуга скругления угла
+    # рядом с угловым отверстием тоже находится Hough-ом (plate-13: Ø9 в углу
+    # измерился как Ø17), но линией покрыта едва на четверть.
+    fitted = None
+    for candidate in sorted(on_column, key=lambda c: abs(c[1] - target_y)):
+        result = _fit_circle(strip, *candidate)
+        if result is not None and result[3] >= _MIN_COVERAGE:
+            fitted = result
+            break
+    if fitted is None:
+        return Verdict(
+            status="unmeasurable",
+            evidence_bbox_px=(left, top, right, bottom),
+            reason="на заявленном x нет замкнутой окружности",
+        )
+    u, v, r, _coverage = fitted
     centre_px = (u + left, v + top)
     measured_x, measured_y = frame.to_mm(*centre_px)
     measured = {
@@ -82,12 +100,13 @@ def verify_plate_hole(hypothesis: Hypothesis, frame: ViewFrame | None, sheet: An
         "diameter_mm": round(2.0 * r * frame.mm_per_px, 3),
     }
     bbox = (centre_px[0] - r, centre_px[1] - r, centre_px[0] + r, centre_px[1] + r)
+    position_tol, diameter_tol = plate_hole_tolerances(frame.mm_per_px)
     problems = []
-    if abs(measured["x_mm"] - x_mm) > _POSITION_MM:
+    if abs(measured["x_mm"] - x_mm) > position_tol:
         problems.append(f"x {measured['x_mm']:g} мм, прочитано {x_mm:g}")
-    if y_mm is not None and abs(measured["y_mm"] - y_mm) > _POSITION_MM:
+    if y_mm is not None and abs(measured["y_mm"] - y_mm) > position_tol:
         problems.append(f"y {measured['y_mm']:g} мм, прочитано {y_mm:g}")
-    if abs(measured["diameter_mm"] - diameter_mm) > _DIAMETER_MM:
+    if abs(measured["diameter_mm"] - diameter_mm) > diameter_tol:
         problems.append(f"Ø {measured['diameter_mm']:g} мм, прочитано {diameter_mm:g}")
     return Verdict(
         status="refuted" if problems else "confirmed",
@@ -96,6 +115,15 @@ def verify_plate_hole(hypothesis: Hypothesis, frame: ViewFrame | None, sheet: An
         anchors_px=(centre_px,),
         reason="; ".join(problems),
     )
+
+
+def plate_hole_tolerances(mm_per_px: float) -> tuple[float, float]:
+    """Допуски положения и Ø в мм — не меньше пары пикселей листа.
+
+    0,3 мм по Ø при 75 dpi — это меньше одного пикселя: отказ был бы не
+    проверки, а арифметики. Пиксельный предел держит допуск в мере листа.
+    """
+    return max(_POSITION_MM, 2.0 * mm_per_px), max(_DIAMETER_MM, 1.5 * mm_per_px)
 
 
 def _hough(strip: Any, radius_px: float) -> list[tuple[float, float, float]]:
@@ -121,26 +149,61 @@ def _hough(strip: Any, radius_px: float) -> list[tuple[float, float, float]]:
     return [(float(c[0]), float(c[1]), float(c[2])) for c in found[0]]
 
 
-def _refine(strip: Any, u: float, v: float, r: float) -> tuple[float, float, float]:
-    """Центр и радиус по чернилам в кольце вокруг найденной окружности (подгонка Kåsa)."""
+def _fit_circle(
+    strip: Any, u: float, v: float, r: float
+) -> tuple[float, float, float, float] | None:
+    """Окружность по чернилам в кольце — по угловым секторам, устойчиво к стрелкам.
+
+    Подгонка по всем пикселям кольца сдвигала радиус: к окружности отверстия
+    примыкают залитые стрелки её же диаметра, через неё идут выносные
+    координат (корпус v7: Ø5,5 мерилось от 4,87 до 6,16). В каждом из секторов
+    берётся медианное расстояние чернил до центра — стрелки и линии занимают
+    лишь несколько секторов; окружность подгоняется по этим точкам (Kåsa),
+    сектора, далёкие от неё, отбрасываются, и подгонка повторяется.
+    Возвращает ``(u, v, r, покрытие)`` — долю секторов, где линия есть.
+    """
     import numpy as np
 
     ink = np.asarray(strip) < 160
     ys, xs = np.nonzero(ink)
     if xs.size < 12:
-        return u, v, r
+        return None
     distance = np.hypot(xs - u, ys - v)
-    ring = np.abs(distance - r) <= max(1.5, 0.2 * r)
+    ring = np.abs(distance - r) <= max(2.0, 0.25 * r)
     if int(ring.sum()) < 12:
-        return u, v, r
-    x, y = xs[ring].astype(float), ys[ring].astype(float)
+        return None
+    angles = np.arctan2(ys[ring] - v, xs[ring] - u)
+    sector = ((angles + np.pi) / (2 * np.pi) * _SECTORS).astype(int) % _SECTORS
+    radii = distance[ring]
+    points = []
+    for index in range(_SECTORS):
+        chosen = radii[sector == index]
+        if chosen.size:
+            angle = (index + 0.5) / _SECTORS * 2 * np.pi - np.pi
+            rho = float(np.median(chosen))
+            points.append((u + rho * np.cos(angle), v + rho * np.sin(angle)))
+    coverage = len(points) / _SECTORS
+    if len(points) < 8:
+        return None
+    pts = np.asarray(points)
+    for _round in range(2):
+        cu, cv, radius = _kasa(pts)
+        deviation = np.abs(np.hypot(pts[:, 0] - cu, pts[:, 1] - cv) - radius)
+        keep = deviation <= max(1.0, 3.0 * float(np.median(deviation)))
+        if int(keep.sum()) < 8:
+            break
+        pts = pts[keep]
+    cu, cv, radius = _kasa(pts)
+    if not np.isfinite(radius) or abs(radius - r) > 0.35 * r:
+        return None
+    return float(cu), float(cv), float(radius), coverage
+
+
+def _kasa(points: Any) -> tuple[float, float, float]:
+    import numpy as np
+
+    x, y = points[:, 0], points[:, 1]
     a = np.column_stack([x, y, np.ones_like(x)])
-    b = x * x + y * y
-    (c0, c1, c2), *_ = np.linalg.lstsq(a, b, rcond=None)
+    (c0, c1, c2), *_ = np.linalg.lstsq(a, x * x + y * y, rcond=None)
     cu, cv = c0 / 2.0, c1 / 2.0
-    radius = float(np.sqrt(max(c2 + cu * cu + cv * cv, 0.0)))
-    # Контурная линия имеет толщину: подгонка по всей её ширине даёт середину
-    # линии — это и есть окружность чертежа.
-    if not np.isfinite(radius) or abs(radius - r) > 0.3 * r or np.hypot(cu - u, cv - v) > 0.3 * r:
-        return u, v, r
-    return float(cu), float(cv), radius
+    return cu, cv, float(np.sqrt(max(c2 + cu * cu + cv * cv, 0.0)))

@@ -157,6 +157,7 @@ def eval_plate_hole(png: bytes, truth: dict) -> list[dict[str, Any]]:
     from PIL import Image
 
     from app.ai.cad_recognize.verifiers import Hypothesis, verify
+    from app.ai.cad_recognize.verifiers.plate_hole import plate_hole_tolerances
     from app.ai.verify_corpus.score import expand_holes
 
     frame = _plate_frame(truth)
@@ -169,11 +170,25 @@ def eval_plate_hole(png: bytes, truth: dict) -> list[dict[str, Any]]:
     cases: list[tuple[str, tuple[float, float, float], tuple[float, float, float]]] = []
     for index, hole in enumerate(holes):
         cases.append(("truth", hole, hole))
+        # Перестановка y — как у plate-1: y соседнего отверстия из ДРУГОГО
+        # столбца, но такой, на котором в столбце этого отверстия отверстия нет.
+        # Иначе (массив 2×2) гипотеза описывала существующее отверстие и
+        # законно подтверждалась — первый прогон v7 считал это промахом.
+        column = [h for h in holes if abs(h[0] - hole[0]) <= 1.0]
         other = next(
-            (h for h in holes[index + 1 :] + holes[:index] if abs(h[1] - hole[1]) > 2.0), None
+            (
+                h
+                for h in holes[index + 1 :] + holes[:index]
+                if abs(h[0] - hole[0]) > h[2] + hole[2]
+                and all(abs(h[1] - c[1]) > 2.0 for c in column)
+            ),
+            None,
         )
         if other is not None:
-            cases.append(("swap_y", (hole[0], other[1], hole[2]), hole))
+            # Верный замер — отверстие столбца, ближайшее к заявленному y: так
+            # проверяльщик и устроен (x выбирает столбец, y — ближайшее в нём).
+            nearest = min(column, key=lambda c: abs(c[1] - other[1]))
+            cases.append(("swap_y", (hole[0], other[1], hole[2]), nearest))
         cases.append(("diameter", (hole[0], hole[1], hole[2] + 1.1), hole))
     outcomes = []
     for case, (x, y, d), real in cases:
@@ -183,9 +198,12 @@ def eval_plate_hole(png: bytes, truth: dict) -> list[dict[str, Any]]:
             gray,
         )
         measured = verdict.measured
+        position_tol, diameter_tol = plate_hole_tolerances(frame.mm_per_px)
         accurate = bool(measured) and (
-            abs(measured["y_mm"] - real[1]) <= 0.5 and abs(measured["diameter_mm"] - real[2]) <= 0.3
+            abs(measured["y_mm"] - real[1]) <= position_tol
+            and abs(measured["diameter_mm"] - real[2]) <= diameter_tol
         )
+
         wanted = "confirmed" if case == "truth" else "refuted"
         outcomes.append(
             {
