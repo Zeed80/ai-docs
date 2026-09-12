@@ -322,10 +322,11 @@ _ASSIGN_PROMPT = (
     '{{"outer_diameter_mm":null,"width_mm":null,"height_mm":null,'
     '"thickness_mm":null,"bore_diameter_mm":null,'
     '"bolt_circle_diameter_mm":null,"bolt_hole_diameter_mm":null,'
-    '"bolt_hole_count":null}}\n'
+    '"bolt_hole_count":null,"corner_radius_mm":null}}\n'
     "outer_diameter_mm — наружный габарит круглой детали (самый большой Ø). "
     "bore_diameter_mm — центральное отверстие. thickness_mm — толщина с вида "
-    "сбоку или разреза. Только JSON."
+    "сбоку или разреза. corner_radius_mm — радиус скругления углов прямоугольной "
+    "пластины (надпись R…), нет — null. Только JSON."
 )
 _PLATE_HOLES_PROMPT = (
     "С чертежа уже прочитаны размерные надписи:\n{callouts}\n\n"
@@ -370,6 +371,7 @@ _ASSIGN_SCHEMA = {
             "bore_diameter_mm",
             "bolt_circle_diameter_mm",
             "bolt_hole_diameter_mm",
+            "corner_radius_mm",
         )
     }
     | {"bolt_hole_count": {"type": ["integer", "null"]}},
@@ -4303,6 +4305,11 @@ async def _profile_by_assignment(
         if not width or not height:
             return None
         profile["width_mm"], profile["height_mm"] = width, height
+        # Базовая линия v3: «R5» на листе есть, а роли для него не было —
+        # радиус углов не читался вовсе (0/2).
+        radius = taken("corner_radius_mm")
+        if radius and radius <= min(width, height) / 2.0:
+            profile["corner_radius_mm"] = radius
     profile["thickness_mm"] = taken("thickness_mm")
 
     holes: list[dict] = []

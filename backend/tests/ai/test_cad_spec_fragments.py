@@ -1735,3 +1735,33 @@ async def test_plate_holes_are_read_from_the_edges_and_placed_from_the_centre(mo
 async def test_a_flange_is_not_asked_for_plate_hole_coordinates(monkeypatch):
     _profile, _notes, asked = await _read_plate(monkeypatch, {"holes": []}, shape="circle")
     assert asked == []
+
+
+async def _assign_plate(monkeypatch, radius):
+    from app.ai.cad_recognize import spec_fragments as fragments
+
+    async def fake_ask(prompt, *_a, **_k):
+        if prompt is fragments._SHAPE_PROMPT:
+            return {"shape": "rectangle"}
+        if "x_from_left_mm" in prompt:
+            return {"holes": []}
+        return {"width_mm": 100, "height_mm": 50, "thickness_mm": 25, "corner_radius_mm": radius}
+
+    monkeypatch.setattr(fragments, "_ask", fake_ask)
+    callouts = {"dimensions": [{"value": v} for v in ("100", "50", "25", "R5", "R30")]}
+    return await fragments._profile_by_assignment(
+        object(), callouts, router=object(), confidential=True, notes=[]
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_corner_radius_of_a_plate_is_read_from_the_sheet(monkeypatch):
+    """Базовая линия v3: «R5» на листе был, а роли для него не было (0/2)."""
+    profile = await _assign_plate(monkeypatch, 5)
+    assert profile["corner_radius_mm"] == 5.0
+
+
+@pytest.mark.asyncio
+async def test_a_corner_radius_larger_than_half_the_side_is_dropped(monkeypatch):
+    profile = await _assign_plate(monkeypatch, 30)  # R30 на стороне 50 — не угол
+    assert "corner_radius_mm" not in profile

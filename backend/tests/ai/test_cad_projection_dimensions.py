@@ -365,3 +365,19 @@ def test_a_radius_runs_from_the_centre_with_one_arrow_on_the_arc():
     assert len(arrows) == 1
     assert (segments[0].p1.x, segments[0].p1.y) == (100.0, 100.0)  # от самого центра
     assert abs(arrows[0].points[0].x - 107.0711) < 1e-3  # остриё — на дуге
+
+
+def test_a_diameter_label_crossing_its_own_circle_goes_onto_the_shelf():
+    """Базовая линия v3, plate-0: «Ø11» лежал на контуре своего отверстия Ø11 —
+    ридер прочитал отверстие как Ø15."""
+    text, segments = _diameter_label(5.5, "Ø11")
+
+    assert text.position.x - 100.0 > 5.5  # за окружностью
+    assert len(segments) == 2
+
+
+def test_a_bore_label_that_fits_inside_stays_on_its_diameter():
+    text, segments = _diameter_label(16.0, "Ø32")
+
+    assert abs(text.position.x - 100.0) < 16.0
+    assert len(segments) == 1

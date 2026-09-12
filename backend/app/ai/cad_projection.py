@@ -632,7 +632,13 @@ def dimensions_from_kernel(
             # label of a small hole — «4 отв. Ø5.5» across a 5.5 mm circle —
             # lay over the circle and both arrows.
             label_mm = len(text) * _LABEL_EM * DIM_TEXT_MM
-            if not vertical and label_mm > span:
+            # A circle's diameter label is set at 3/4 of the diameter, so from
+            # half the diameter on it lies across the circle's own outline —
+            # «Ø11» on a Ø11 hole, over the arrow and the contour. The reader
+            # then read the hole as Ø15 (baseline v3, plate-0). Such a label
+            # goes onto the shelf too.
+            room = 0.5 * span if through_centre else span
+            if not vertical and label_mm > room:
                 start = carry
                 reach = start + DIM_EXTENSION_MM + label_mm
                 entities.append(
