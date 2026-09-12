@@ -864,3 +864,47 @@ def test_a_rotation_body_gets_no_hole_coordinates():
     }
     _hole_dimensions(drawing, _plan("solid_rotation"))
     assert not drawing.get("dimensions")
+
+
+def _plate_with_corners(width: float, height: float, sx: float, sy: float) -> dict:
+    corners = [_circle(x, y, 3.3) for x in (-sx / 2, sx / 2) for y in (-sy / 2, sy / 2)]
+    return {
+        "views": [
+            {"kind": "front"},
+            {
+                "kind": "side",
+                "bounds_mm": {
+                    "u_min": -width / 2,
+                    "u_max": width / 2,
+                    "v_min": -height / 2,
+                    "v_max": height / 2,
+                },
+                "visible": corners,
+            },
+        ],
+        "dimensions": [],
+    }
+
+
+def test_corner_holes_of_a_plate_get_coordinates_not_a_bolt_circle():
+    """Корпус v4, plate-3: через 4 угловых отверстия лист провёл окружность Ø97.529."""
+    from app.ai.cad_ir.sheet_from_solid import _hole_dimensions
+
+    for width, height, sx, sy in ((60, 100, 46, 86), (80, 80, 60, 60)):  # и квадрат
+        drawing = _plate_with_corners(width, height, sx, sy)
+        _hole_dimensions(drawing, _plan("plate"))
+
+        assert not [d for d in drawing["dimensions"] if d.get("pitch_circle")]
+        xs = sorted(d["value_mm"] for d in drawing["dimensions"] if d["kind"] == "DistanceX")
+        assert xs == [(width - sx) / 2, (width + sx) / 2]
+
+
+def test_unevenly_spaced_holes_of_a_flange_are_not_a_bolt_circle():
+    from app.ai.cad_ir.sheet_from_solid import _is_bolt_circle
+
+    even = [(30.0, 0.0, 3.0), (0.0, 30.0, 3.0), (-30.0, 0.0, 3.0), (0.0, -30.0, 3.0)]
+    uneven = [(30.0, 0.0, 3.0), (0.0, 30.0, 3.0), (-30.0, 0.0, 3.0), (21.2, -21.2, 3.0)]
+
+    assert _is_bolt_circle(even, 0.0, 0.0, "flange")
+    assert not _is_bolt_circle(uneven, 0.0, 0.0, "flange")
+    assert not _is_bolt_circle(even, 0.0, 0.0, "plate")

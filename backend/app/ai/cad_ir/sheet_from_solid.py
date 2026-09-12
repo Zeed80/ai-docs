@@ -973,7 +973,7 @@ def _hole_dimensions(drawing: dict, plan: SheetPlan) -> None:
             if item.get("view_index") == index and item.get("measured_by") == "view_circle"
         )
         for members in groups.values():
-            if len(members) < 3:
+            if not _is_bolt_circle(members, cu, cv, plan.part_class):
                 continue
             on_pitch.extend(members)
             radius = math.hypot(members[0][0] - cu, members[0][1] - cv)
@@ -1062,6 +1062,26 @@ def _hole_dimensions(drawing: dict, plan: SheetPlan) -> None:
             label = str(item.get("label") or f"Ø{value:g}")
             if count >= 2 and "отв." not in label:
                 item["label"] = f"{count} отв. {label}"
+
+
+def _is_bolt_circle(
+    members: list[tuple[float, float, float]], cu: float, cv: float, part_class: str
+) -> bool:
+    """Одинаковые отверстия на одном радиусе — окружность болтов, только у фланца.
+
+    Прямоугольный массив по углам пластины тоже лежит на одном радиусе от
+    центра, и лист ставил через него фиктивную окружность центров Ø97.529
+    вместо координат (корпус v4: 11 пластин из 30 без координат угловых
+    отверстий). Окружность болтов — это круглая деталь и равный угловой шаг.
+    """
+    import math
+
+    if part_class != "flange" or len(members) < 3:
+        return False
+    angles = sorted(math.degrees(math.atan2(v - cv, u - cu)) % 360.0 for u, v, _r in members)
+    step = 360.0 / len(angles)
+    gaps = [(b - a) for a, b in zip(angles, angles[1:])] + [angles[0] + 360.0 - angles[-1]]
+    return all(abs(gap - step) <= 0.5 for gap in gaps)
 
 
 def _label_dimensions(dimensions: list[dict], requests: list[dict], spec: dict) -> None:
