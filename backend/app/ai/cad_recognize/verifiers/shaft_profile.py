@@ -108,12 +108,34 @@ def _shoulders(profile: Any, *, jump_px: float) -> list[tuple[float, float]]:
         # начинается её кромка — у внешнего края толстой линии грани: уступ
         # уезжал на полтолщины в сторону большей ступени (подъём — раньше,
         # спуск — позже, до 0,8 мм при 1:2). Точная грань — центр вертикали
-        # в окне перехода; нет её — середина промежутка.
+        # в окне перехода, и не любой: рядом бывает грань канавки (shaft-1:
+        # 157,2 — уступ, 158,1 — канавка, ближе к середине оказалась она).
+        # Грань уступа покрывает полосу скачка радиуса — от меньшей ступени
+        # до большей; нет такой — середина промежутка.
         middle = profile.x0 + (a_end + b_start) / 2.0
         window = max(8.0, (b_start - a_end) + 6.0)
-        nearby = [x for x in profile.faces_px if abs(x - middle) <= window]
-        face = min(nearby, key=lambda x: abs(x - middle)) if nearby else middle
-        result.append((face, jump))
+        small, big = min(a_level, b_level), max(a_level, b_level)
+        bands = (
+            (profile.axis_y - big, profile.axis_y - small),
+            (profile.axis_y + small, profile.axis_y + big),
+        )
+
+        def cover(face: tuple[float, float, float]) -> float:
+            _x, top, bottom = face
+            return max(
+                max(0.0, min(bottom, high) - max(top, low)) / (big - small) for low, high in bands
+            )
+
+        nearby = [
+            face
+            for face in profile.faces_px
+            if abs(face[0] - middle) <= window and cover(face) >= 0.5
+        ]
+        if nearby:
+            best = max(nearby, key=lambda face: (round(cover(face), 1), -abs(face[0] - middle)))
+            result.append((best[0], jump))
+        else:
+            result.append((middle, jump))
     return result
 
 

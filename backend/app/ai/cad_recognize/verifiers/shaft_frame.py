@@ -35,10 +35,11 @@ from app.ai.cad_recognize.verifiers.view_frame import ViewFrame
 _SYMMETRY_PX = 2.0
 # Основная линия — не тоньше этой доли эталонной толщины (тонкая — вдвое тоньше).
 _MAIN_SHARE = 0.6
-# Разрыв профиля, который ещё считается тем же видом: доля текущего куска
-# или доля ширины листа (от одной доли куска профиль рвался в самом начале).
-_GAP_SHARE = 0.03
-_GAP_SHEET_SHARE = 0.005
+# Разрыв профиля, который ещё считается тем же видом, — доля всей протяжённости
+# найденных столбцов. Внутри вида разрывы до 3,5 % (короткая ступень без пары,
+# канавка: shaft-3 — 22 px, shaft-20 — 47 px), вид с торца отделён на 20–33 %.
+# От доли текущего куска профиль рвался, и торец находился на середине вала.
+_GAP_TOTAL_SHARE = 0.05
 # Сколько лучших кандидатов оси проверять на торцы.
 _AXIS_CANDIDATES = 6
 # Второй вид того же вала: торцы на тех же столбцах в пределах этой доли длины.
@@ -54,7 +55,9 @@ class ShaftProfile:
     axis_y: float
     half_px: Any  # numpy: полувысота или nan, длина x1 - x0 + 1
     # Столбцы основных вертикалей внутри вида — грани уступов (центр линии).
-    faces_px: tuple[float, ...] = ()
+    # (x, начало, конец по вертикали): у канавки у уступа тоже есть грань,
+    # отличить уступ можно только по тому, какой скачок радиуса она покрывает.
+    faces_px: tuple[tuple[float, float, float], ...] = ()
 
     def half_at(self, x: float) -> float | None:
         import math
@@ -84,10 +87,16 @@ def locate_shaft_frame(sheet: Any, total_length_mm: float) -> tuple[ViewFrame, S
     gray = np.asarray(sheet)
     ink = _ink(gray)
     min_length = max(6, int(round(0.006 * min(gray.shape))))
-    lines = _lines(ink, min_length, axis=0)
+    lines = _segments(ink, min_length)
     if len(lines) < 2:
         return None
-    weight = {id(line): _stroke(gray, ink, line, (line.start, line.end), axis=0) for line in lines}
+    # Нижний квартиль толщины: у короткой размерной линии залитые стрелки
+    # занимают почти половину длины, и по медиане она выходила основной
+    # (shaft-4: пара размерных «30» и «16», симметричных оси, — «Ø72»).
+    weight = {
+        id(line): _stroke(gray, ink, line, (line.start, line.end), axis=0, quantile=0.25)
+        for line in lines
+    }
     # Эталон толщины — 90-й процентиль толщин ДЛИННЫХ линий: короткие
     # горизонтали — это ещё и основания залитых стрелок размеров Ø (масса
     # 17–18 против 6 у кромки), и по всем линиям эталон отсекал сам контур.
@@ -126,7 +135,7 @@ def locate_shaft_frame(sheet: Any, total_length_mm: float) -> tuple[ViewFrame, S
     # внутри профиля: грань тоже сливается с выносной цепочки размеров.
     inside = (axis_y - extent - 2.0, axis_y + extent + 2.0)
     faces = sorted(
-        line.position
+        (line.position, line.start, line.end)
         for line in vertical
         if x0 - 3 <= line.position <= x1 + 3
         and min(line.end, inside[1]) - max(line.start, inside[0]) >= min_length
@@ -139,6 +148,52 @@ def locate_shaft_frame(sheet: Any, total_length_mm: float) -> tuple[ViewFrame, S
         origin_px=(float(x0), axis_y),
     )
     return frame, profile
+
+
+def _segments(ink: Any, min_length: int) -> list[Any]:
+    """Горизонтали вида: центр линии — по каждому столбцу, со скачком — разрез.
+
+    Общий `_lines` утолщает маску по вертикали и берёт центр тяжести всей
+    компоненты. Кромки соседних ступеней с близкими радиусами при этом
+    сливаются (150 dpi: низ Ø30 и Ø28 в 4 px; 1:2 — Ø22 и Ø20 линиями в 6 px
+    на 5,9 px), центр ложится между ними — пара пропадает, профиль рвётся или
+    две ступени сливаются в одну «Ø21,4». Здесь без утолщения, а компонента
+    режется там, где центр строки прыгает больше чем на пиксель.
+    """
+    import cv2
+    import numpy as np
+
+    from app.ai.cad_recognize.verifiers.plate_frame import _Line
+
+    opened = cv2.morphologyEx(
+        ink.astype(np.uint8), cv2.MORPH_OPEN, np.ones((1, min_length), np.uint8)
+    )
+    count, labels, stats, _centroids = cv2.connectedComponentsWithStats(opened, connectivity=8)
+    result = []
+    for index in range(1, count):
+        x, y, w, h, _area = stats[index]
+        if w < min_length:
+            continue
+        block = labels[y : y + h, x : x + w] == index
+        rows = np.arange(y, y + h, dtype=float)[:, None]
+        counts = block.sum(axis=0)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            centres = np.where(counts > 0, (block * rows).sum(axis=0) / counts, np.nan)
+        start = 0
+        for i in range(1, w + 1):
+            if (
+                i == w
+                or np.isnan(centres[i])
+                or np.isnan(centres[i - 1])
+                or abs(centres[i] - centres[i - 1]) > 1.0
+            ):
+                piece = centres[start:i]
+                if i - start >= min_length and not np.all(np.isnan(piece)):
+                    result.append(
+                        _Line(float(np.nanmean(piece)), float(x + start), float(x + i - 1))
+                    )
+                start = i
+    return sorted(result, key=lambda line: line.position)
 
 
 def _axis_candidates(lines: list[Any], weight: dict[int, float], min_length: int) -> list[float]:
@@ -192,12 +247,11 @@ def _profile(lines: list[Any], axis_y: float, width: int, min_length: int):
     columns = np.nonzero(~np.isnan(half))[0]
     if columns.size == 0:
         return None
-    floor = max(3.0, _GAP_SHEET_SHARE * width)
+    gap = max(3.0, _GAP_TOTAL_SHARE * float(columns[-1] - columns[0]))
     runs: list[list[int]] = [[int(columns[0]), int(columns[0])]]
     for x in columns[1:]:
         x = int(x)
-        span = runs[-1][1] - runs[-1][0] + 1
-        if x - runs[-1][1] <= max(floor, _GAP_SHARE * span):
+        if x - runs[-1][1] <= gap:
             runs[-1][1] = x
         else:
             runs.append([x, x])

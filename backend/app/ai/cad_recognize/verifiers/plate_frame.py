@@ -150,7 +150,15 @@ _STROKE_SAMPLES = 60
 _STROKE_REACH = 25
 
 
-def _stroke(gray: Any, ink: Any, line: _Line, span: tuple[float, float], *, axis: int) -> float:
+def _stroke(
+    gray: Any,
+    ink: Any,
+    line: _Line,
+    span: tuple[float, float],
+    *,
+    axis: int,
+    quantile: float = 0.5,
+) -> float:
     """Толщина линии — медиана поперечной массы затемнения на стороне.
 
     Масса, а не длина прогона чернил: при 75 dpi (сглаженное ужатие с 300)
@@ -196,7 +204,9 @@ def _stroke(gray: Any, ink: Any, line: _Line, span: tuple[float, float], *, axis
         background = float(np.percentile(profile, 90))
         window = profile[max(0, up - 1) : down + 2]
         runs.append(float(np.clip(background - window, 0.0, None).sum()) / max(background, 1.0))
-    return float(np.median(runs))
+    # Медиана по умолчанию; нижний квартиль — для линии, у которой «толстые»
+    # концы (залитые стрелки короткого размера) не должны сделать её основной.
+    return float(np.quantile(runs, quantile))
 
 
 def _ink(gray: Any) -> Any:
