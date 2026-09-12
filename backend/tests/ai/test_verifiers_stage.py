@@ -263,6 +263,29 @@ def test_a_keyway_is_checked_and_only_its_wrong_length_is_contradicted_in_the_gr
     assert active[prefix + "axial_start_mm"] == "corroborated"
 
 
+def test_a_keyway_read_where_there_is_none_does_not_hide_the_step_under_it():
+    """Живой shaft-1: паз прочитан на ступени без паза — её неверный Ø не проверялся."""
+    spec = {
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 30.0, "length_mm": 30.0},
+                {"diameter_mm": 26.0, "length_mm": 40.0},  # на листе Ø20, паза нет
+                {"diameter_mm": 25.0, "length_mm": 30.0},
+            ],
+            "keyways": [
+                {"axial_start_mm": 40.0, "length_mm": 20.0, "width_mm": 6.0, "depth_mm": 3.5}
+            ],
+        }
+    }
+    report = verify_spec_against_sheet(_shaft_png(), spec)
+
+    by_kind = {item["kind"]: item for item in report["items"] if item["kind"] == "keyway"}
+    assert by_kind["keyway"]["status"] == "unmeasurable"
+    steps = [item for item in report["items"] if item["kind"] == "shaft_step"]
+    assert steps[1]["status"] == "refuted", steps[1]
+    assert abs(steps[1]["measured"]["diameter_mm"] - 20.0) <= 0.3
+
+
 def test_a_spec_without_checkable_elements_has_nothing_to_check():
     report = verify_spec_against_sheet(_png(), {"main_view": {"profile": {"shape": "circle"}}})
 

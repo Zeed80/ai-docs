@@ -258,7 +258,7 @@ def _shaft(image_bytes: bytes, body: dict[str, Any], report: dict[str, Any]) -> 
     lengths = [float(step["length_mm"]) for _, step in steps]
     views = [(chain_frame(view, shape, lengths), shape) for view, shape in views]
     frame, profile = views[0]
-    _keyways(gray, [view_frame for view_frame, _profile in views], body, report)
+    spans = _keyways(gray, [view_frame for view_frame, _profile in views], body, report)
     verdict = verify(
         Hypothesis(
             "shaft_profile",
@@ -271,7 +271,9 @@ def _shaft(image_bytes: bytes, body: dict[str, Any], report: dict[str, Any]) -> 
                     }
                     for _, step in steps
                 ],
-                "keyways": body.get("keyways") or [],
+                # Пролёты пазов — по проверке пазов, а не как прочитаны:
+                # несуществующий паз прятал неверный Ø ступени под собой.
+                "keyways": spans,
             },
         ),
         frame,
@@ -318,18 +320,37 @@ def _shaft(image_bytes: bytes, body: dict[str, Any], report: dict[str, Any]) -> 
 _KEYWAY_KEYS = ("axial_start_mm", "length_mm", "width_mm")
 
 
-def _keyways(gray: Any, frames: list[Any], body: dict[str, Any], report: dict[str, Any]) -> None:
+def _keyways(
+    gray: Any, frames: list[Any], body: dict[str, Any], report: dict[str, Any]
+) -> list[dict[str, float]]:
     """Шпоночные пазы главного вида: капсула — начало, длина, ширина (Ф3).
 
     Лицом на главном виде виден только закрытый призматический паз; у
     открытого и сегментного контур другой — «не измеримо» с причиной.
     Виды вала — по очереди: у полого вала первый — разрез, где паз лицом не
     виден (капсулу расточки отсекает штриховка), паз — на виде под ним.
+
+    Возвращает пролёты пазов для проверки профиля (под пазом Ø ступени не
+    мерится): найденный паз — измеренным пролётом; не найденный на
+    прочитанном месте — никаким (живой shaft-1: ридер поставил паз на ступень
+    3, и её неверный Ø40 при 25 на листе прошёл без вердикта); честно не
+    измеримый — прочитанным.
     """
+    from app.ai.cad_recognize.verifiers.keyway import NOT_FOUND_REASON
     from app.ai.cad_recognize.verifiers.shaft_profile import shaft_tolerances
 
+    spans: list[dict[str, float]] = []
     for index, key in enumerate(body.get("keyways") or []):
-        if not isinstance(key, dict) or not all(_is_number(key.get(k)) for k in _KEYWAY_KEYS):
+        if not isinstance(key, dict):
+            continue
+        read_span = (
+            {"axial_start_mm": float(key["axial_start_mm"]), "length_mm": float(key["length_mm"])}
+            if _is_number(key.get("axial_start_mm")) and _is_number(key.get("length_mm"))
+            else None
+        )
+        if not all(_is_number(key.get(k)) for k in _KEYWAY_KEYS):
+            if read_span:
+                spans.append(read_span)
             continue
         item = {
             "kind": "keyway",
@@ -345,10 +366,20 @@ def _keyways(gray: Any, frames: list[Any], body: dict[str, Any], report: dict[st
             key.get("end_type") or "closed"
         ) != "closed":
             item["reason"] = "проверяется только закрытый призматический паз"
+            spans.append(read_span)
             continue
         hypothesis = Hypothesis("keyway", item["path"], {k: float(key[k]) for k in _KEYWAY_KEYS})
         frame, verdict = _first_measured(hypothesis, frames, gray)
         item.update(status=verdict.status, measured=dict(verdict.measured), reason=verdict.reason)
+        if verdict.status in ("confirmed", "refuted"):
+            spans.append(
+                {
+                    "axial_start_mm": float(verdict.measured["axial_start_mm"]),
+                    "length_mm": float(verdict.measured["length_mm"]),
+                }
+            )
+        elif verdict.reason != NOT_FOUND_REASON:
+            spans.append(read_span)
         if frame is not None:
             length_tol, width_tol = shaft_tolerances(frame.scale_mean)
             item["tolerance_mm"] = {"length": round(length_tol, 3), "width": round(width_tol, 3)}

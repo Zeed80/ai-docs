@@ -36,6 +36,9 @@ _ARC_FLOOR = 0.8
 _STRAIGHT_FLOOR = 0.6
 # Штриховка за прямыми (`_hatch_score`): доля столбцов с совпадением по 45°.
 _HATCH_FLOOR = 0.04
+# «Паза на прочитанном месте нет» — на измеримом листе это свидетельство, а не
+# отказ: стадия по нему не исключает Ø ступени под прочитанным пазом.
+NOT_FOUND_REASON = "контура паза (прямые и скругления) на прочитанном месте не найдено"
 
 
 @register("keyway", min_feature_px=6.0)
@@ -161,7 +164,7 @@ def verify_keyway(hypothesis: Hypothesis, frame: ViewFrame | None, sheet: Any) -
         return Verdict(
             status="unmeasurable",
             evidence_bbox_px=(left, top, right, bottom),
-            reason="контура паза (прямые и скругления) на прочитанном месте не найдено",
+            reason=NOT_FOUND_REASON,
         )
     _key, centre, h, cl, cr = best
     h = _refined_half(ink, centre, h, cl, cr)
