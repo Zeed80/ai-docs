@@ -4342,7 +4342,10 @@ async def _profile_by_assignment(
     # count, and the spec came back with no bolt holes and nothing unresolved —
     # a flange without its fastening, reported as read cleanly.
     has_count = isinstance(count, int) and not isinstance(count, bool) and 2 <= count <= 128
-    if not patterns and (pcd or bolt or has_count) and notes is not None:
+    # Только у круглой детали: отверстия прямоугольной пластины читает свой
+    # вопрос (`_plate_holes`), а здесь роль «Ø болтов» давала ложное «массив не
+    # построен» (базовая линия v4, plate-0 — оба отверстия прочитаны верно).
+    if shape == "circle" and not patterns and (pcd or bolt or has_count) and notes is not None:
         missing = [
             label
             for label, present in (

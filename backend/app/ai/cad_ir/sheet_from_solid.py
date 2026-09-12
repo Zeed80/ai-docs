@@ -61,6 +61,10 @@ class SheetPlan:
     # Views that stand to the RIGHT of the main view whatever their kind (the
     # thickness view of a plate is the kernel's `top`, which would go below).
     right_views: set[int] = field(default_factory=set)
+    # The view the others are laid out around, when the kind alone does not
+    # say it: a hollow shaft's main view is its SECTION, and «first non-section
+    # view» picked its end view (or the keyway view) instead.
+    anchor_view: int | None = None
     geometry_only: bool = True
     view_reasons: list[dict[str, Any]] = field(default_factory=list)
 
@@ -210,6 +214,16 @@ def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
         body = spec.get("main_view") or {}
         if body.get("keyways") or body.get("cross_holes") or body.get("axial_holes"):
             views.append({"kind": "side"})
+    if part_class == "hollow_rotation":
+        body = spec.get("main_view") or {}
+        if (body.get("keyways") or body.get("cross_holes")) and not any(
+            v["kind"] == "bottom" for v in views
+        ):
+            # Главный вид полого вала — разрез; паз и поперечные отверстия
+            # лицом — отдельным видом `bottom` под ним (общая ось). Без него
+            # элементы полого вала оставались без размеров (корпус: shaft-2,
+            # shaft-7, shaft-10).
+            views.append({"kind": "bottom"})
     if part_class == "solid_rotation":
         body = spec.get("main_view") or {}
         if body.get("keyways") or body.get("cross_holes"):
@@ -330,6 +344,9 @@ def _estimate_layout_mm(part_class: str, report: dict, views: list[dict]) -> tup
             width += VIEW_GAP_MM + length
         if "top" in kinds:
             height += VIEW_GAP_MM + diameter
+        if "bottom" in kinds and part_class == "hollow_rotation":
+            # у полого вала `bottom` стоит под разрезом, у сплошного он сам главный
+            height += VIEW_GAP_MM + diameter
     for view in views:
         if (view.get("presentation_kind") or view.get("kind")) != "detail":
             continue
@@ -393,8 +410,10 @@ def plan_sheet(
     # 2.305): showing the plain outline beside it draws the same body twice.
     scaffold: set[int] = set()
     right: set[int] = set()
+    anchor: int | None = None
     if part_class == "hollow_rotation" and any(v["kind"] == "section" for v in views):
         scaffold = {index for index, view in enumerate(views) if view["kind"] == "front"}
+        anchor = next(index for index, view in enumerate(views) if view["kind"] == "section")
     elif part_class == "solid_rotation" and any(v["kind"] == "bottom" for v in views):
         # Вал с пазом: главный вид — `bottom`, лицом к пазу.
         scaffold = {index for index, view in enumerate(views) if view["kind"] == "front"}
@@ -415,6 +434,7 @@ def plan_sheet(
         layout_h_mm=layout_h,
         scaffold_views=scaffold,
         right_views=right,
+        anchor_view=anchor,
         geometry_only=geometry_only,
         view_reasons=_view_reasons(views, part_class, spec),
     )
@@ -1094,22 +1114,67 @@ def _hole_dimensions(drawing: dict, plan: SheetPlan) -> None:
                 item["label"] = f"{count} отв. {label}"
 
 
-def _slots(
-    view: dict, index: int, dimensions: list[dict], bounds: dict, ratio: float
-) -> list[tuple[float, float, float]]:
-    """Прорезь пластины: межцентровое расстояние, «R» конца — и её центр.
+def _arc_interval(item: dict) -> tuple[float, float]:
+    """Дуга вида как ``(начальный угол, разворот)`` против часовой, через её середину."""
+    import math
 
-    Прорезь стояла на листе без единого размера (корпус v4, plate-3). На плане
-    ядро отдаёт её двумя отрезками и дугами концов — полуокружностью или
-    двумя четвертями с общим центром. Два конца одного радиуса на одной
-    горизонтали или вертикали — одна прорезь. Возвращаются центры прорезей:
-    их координаты ставит общий путь отверстий.
+    cu, cv = (float(value) for value in item["center"])
+
+    def angle(point) -> float:
+        return math.degrees(math.atan2(float(point[1]) - cv, float(point[0]) - cu)) % 360.0
+
+    points = item.get("points") or []
+    if len(points) < 2:
+        return 0.0, 0.0
+    first, last = angle(points[0]), angle(points[-1])
+    forward = (last - first) % 360.0
+    if item.get("mid"):
+        through = (angle(item["mid"]) - first) % 360.0 <= forward
+    else:
+        through = forward <= 180.0
+    return (first, forward) if through else (last, 360.0 - forward)
+
+
+def _arc_sweep(item: dict) -> float:
+    """Разворот дуги вида в градусах (по середине, если ядро её отдало)."""
+    return _arc_interval(item)[1]
+
+
+def _covered_degrees(intervals: list[tuple[float, float]]) -> float:
+    """Сколько градусов окружности покрыто хотя бы одной дугой."""
+    pieces: list[tuple[float, float]] = []
+    for start, sweep in intervals:
+        end = start + sweep
+        if end <= 360.0:
+            pieces.append((start, end))
+        else:
+            pieces.extend(((start, 360.0), (0.0, end - 360.0)))
+    total, reach = 0.0, None
+    for low, high in sorted(pieces):
+        if reach is None or low > reach:
+            total += high - low
+            reach = high
+        elif high > reach:
+            total += high - reach
+            reach = high
+    return min(total, 360.0)
+
+
+def _arc_groups(view: dict, bounds: dict) -> list[tuple[float, float, float, float]]:
+    """Дуги вида, слитые по общему центру и радиусу: ``(u, v, r, суммарный разворот)``.
+
+    Ядро отдаёт одну окружность или полуокружность несколькими дугами: конец
+    паза — двумя четвертями, поперечное отверстие Ø4 — дугами 150,5° + 29,5° +
+    180° (проба shaft-1, вид `bottom`). Суммарный разворот и отличает: 180° —
+    конец паза или прорези, 360° — отверстие. Без этого два одинаковых
+    поперечных отверстия на оси вала сошли бы за концы одного паза.
+    Скругления углов плана (дуга у угла) — не здесь, см. `_corner_radii`.
     """
     import math
 
     u_min, u_max = float(bounds["u_min"]), float(bounds["u_max"])
     v_min, v_max = float(bounds["v_min"]), float(bounds["v_max"])
-    ends: list[tuple[float, float, float]] = []
+    groups: list[list[Any]] = []
     for item in view.get("visible") or []:
         if item.get("type") != "arc" or not item.get("center") or not item.get("radius"):
             continue
@@ -1121,14 +1186,31 @@ def _slots(
             and min(abs(av - v_min), abs(av - v_max)) - radius <= tolerance
         )
         if at_corner:
-            continue  # скругление угла, см. `_corner_radii`
-        if not any(
-            math.hypot(au - e[0], av - e[1]) <= tolerance and abs(radius - e[2]) <= tolerance
-            for e in ends
-        ):
-            ends.append((au, av, radius))
+            continue
+        interval = _arc_interval(item)
+        for group in groups:
+            if (
+                math.hypot(au - group[0], av - group[1]) <= tolerance
+                and abs(radius - group[2]) <= tolerance
+            ):
+                group[3].append(interval)
+                break
+        else:
+            groups.append([au, av, radius, [interval]])
+    # Покрытие, а не сумма: ядро отдаёт часть дуг дважды — отверстие Ø4 на
+    # shaft-18 пришло дугами 180 + 150,5 + 29,5 + 180 (сумма 540°), конец паза
+    # на shaft-3 — 90 + 74,9 + 74,9, и сумма не узнавала ни то, ни другое.
+    return [(g[0], g[1], g[2], _covered_degrees(g[3])) for g in groups]
 
-    centres: list[tuple[float, float, float]] = []
+
+def _capsules(
+    groups: list[tuple[float, float, float, float]],
+) -> list[tuple[tuple[float, float, float], tuple[float, float, float], float]]:
+    """Пары концов (полуокружностей одного радиуса на одной прямой): ``(low, high, r)``."""
+    import math
+
+    ends = [(u, v, r) for u, v, r, sweep in groups if abs(sweep - 180.0) <= 30.0]
+    pairs = []
     used: set[int] = set()
     for i, first in enumerate(ends):
         if i in used:
@@ -1144,10 +1226,30 @@ def _slots(
                 partners.append((span, j))
         if not partners:
             continue
-        span, j = min(partners)
+        _span, j = min(partners)
         used |= {i, j}
         low, high = sorted((first, ends[j]))
-        radius = first[2]
+        pairs.append((low, high, first[2]))
+    return pairs
+
+
+def _slots(
+    view: dict, index: int, dimensions: list[dict], bounds: dict, ratio: float
+) -> list[tuple[float, float, float]]:
+    """Прорезь пластины: межцентровое расстояние, «R» конца — и её центр.
+
+    Прорезь стояла на листе без единого размера (корпус v4, plate-3). На плане
+    ядро отдаёт её двумя отрезками и дугами концов — полуокружностью или
+    двумя четвертями с общим центром. Два конца одного радиуса на одной
+    горизонтали или вертикали — одна прорезь. Возвращаются центры прорезей:
+    их координаты ставит общий путь отверстий.
+    """
+    import math
+
+    u_min = float(bounds["u_min"])
+    centres: list[tuple[float, float, float]] = []
+    for low, high, radius in _capsules(_arc_groups(view, bounds)):
+        span = math.hypot(high[0] - low[0], high[1] - low[1])
         horizontal = abs(low[1] - high[1]) <= 1e-3 * span
         value = round(span / ratio, 3)
         distance = {
@@ -1177,6 +1279,96 @@ def _slots(
         )
         centres.append(((low[0] + high[0]) / 2.0, (low[1] + high[1]) / 2.0, 0.0))
     return centres
+
+
+def _shaft_feature_dimensions(drawing: dict, spec: dict, plan: SheetPlan) -> None:
+    """Пазы и поперечные отверстия вала — на главном виде лицом к ним (Ф3.0b).
+
+    Базовая линия v2: ридер читал пазы наугад (12..42 вместо 16,3..35,3), а
+    поперечные отверстия не находил вовсе — лист не проставлял ни их
+    положения, ни длины паза. На виде `bottom` паз — замкнутый контур, отверстие
+    — окружность (см. `_arc_groups`), и размеры строятся по ним:
+
+    * паз — длина и положение начала от уступа своей ступени;
+    * поперечное отверстие — Ø и положение центра от того же уступа.
+
+    Уступ — по станции спека (левый торец ступени), а не по ближайшей вертикали
+    вида: у торцов стоят вертикали фасок (−133 и 132,5 на shaft-1), и база
+    съехала бы на полмиллиметра. Размеры встают ПОД вид: над ним — цепочка, и
+    короткие размеры элементов разбили бы её по рядам.
+    """
+    import math
+
+    if plan.part_class not in ("solid_rotation", "hollow_rotation"):
+        return
+    outer = [s for s in ((spec.get("main_view") or {}).get("outer") or []) if isinstance(s, dict)]
+    lengths = [float(s.get("length_mm") or 0.0) for s in outer]
+    if not lengths or not all(lengths):
+        return
+    starts = [sum(lengths[:i]) for i in range(len(lengths))]
+    dimensions = drawing.setdefault("dimensions", [])
+    ratio = plan.ratio or 1.0
+    for index, view in enumerate(drawing.get("views") or []):
+        if view.get("kind") != "bottom" or index in plan.scaffold_views:
+            continue
+        bounds = view.get("bounds_mm") or {}
+        if not bounds:
+            continue
+        u_min = float(bounds["u_min"])
+
+        def base_u(u: float) -> float:
+            station = max((s for s in starts if u_min + s * ratio <= u + 0.2 * ratio), default=0.0)
+            return u_min + station * ratio
+
+        def below(first: tuple, second: tuple, value: float, measured_by: str) -> dict:
+            return {
+                "view_index": index,
+                "kind": "DistanceX",
+                "label": f"{value:g}",
+                "anchors_mm": [list(first), list(second)],
+                "value_mm": value,
+                "measured_by": measured_by,
+                "ir_kind": "linear",
+                "below": True,
+            }
+
+        groups = _arc_groups(view, bounds)
+        for low, high, radius in _capsules(groups):
+            if abs(low[1] - high[1]) > 1e-3 * max(abs(high[0] - low[0]), 1.0):
+                continue  # паз вдоль оси; поперёк — не паз вала
+            start, end = low[0] - radius, high[0] + radius
+            edge_v = low[1] - radius
+            length = round((end - start) / ratio, 3)
+            dimensions.append(below((start, edge_v), (end, edge_v), length, "keyway"))
+            base = base_u(start)
+            offset = round((start - base) / ratio, 3)
+            if offset > 0.05:
+                dimensions.append(below((base, edge_v), (start, edge_v), offset, "keyway"))
+
+        circles = [(u, v, r) for u, v, r, sweep in groups if abs(sweep - 360.0) <= 30.0] + [
+            (float(i["center"][0]), float(i["center"][1]), float(i["radius"]))
+            for i in view.get("visible") or []
+            if i.get("type") == "circle" and i.get("center") and i.get("radius")
+        ]
+        for u, v, r in circles:
+            value = round(2.0 * r / ratio, 3)
+            angle = math.radians(45.0)
+            du, dv = r * math.cos(angle), r * math.sin(angle)
+            dimensions.append(
+                {
+                    "view_index": index,
+                    "kind": "Diameter",
+                    "label": f"Ø{value:g}",
+                    "anchors_mm": [[u - du, v - dv], [u + du, v + dv]],
+                    "value_mm": value,
+                    "measured_by": "cross_hole",
+                    "ir_kind": "diameter",
+                }
+            )
+            base = base_u(u)
+            offset = round((u - base) / ratio, 3)
+            if offset > 0.05:
+                dimensions.append(below((base, v), (u, v), offset, "cross_hole"))
 
 
 def _corner_radii(
@@ -1376,6 +1568,7 @@ async def build_sheet_from_solid(
     drawing["dimensions"] = measured
     _label_dimensions(measured, requests, spec)
     _hole_dimensions(drawing, plan)
+    _shaft_feature_dimensions(drawing, spec, plan)
 
     ir, extent = _assemble(drawing, spec, plan)
     geometry_verification = verify_views_against_solid(
@@ -1441,7 +1634,11 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
 
     # Lay the views out at the origin first, measure them, then centre.
     entities, placements = place_sheet_views(
-        views, px_per_mm=PAPER_PX_PER_MM, skip=plan.scaffold_views, right=plan.right_views
+        views,
+        px_per_mm=PAPER_PX_PER_MM,
+        skip=plan.scaffold_views,
+        right=plan.right_views,
+        anchor=plan.anchor_view,
     )
     extent_w, extent_h = sheet_extent_mm(views, placements)
     offset_u = area_x0 + max((area_w - extent_w) / 2.0, 0.0)
@@ -1453,6 +1650,7 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
         origin_v_mm=offset_v,
         skip=plan.scaffold_views,
         right=plan.right_views,
+        anchor=plan.anchor_view,
     )
     entities += dimensions_from_kernel(
         drawing.get("dimensions") or [],

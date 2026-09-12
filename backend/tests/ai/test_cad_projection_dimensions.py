@@ -381,3 +381,64 @@ def test_a_bore_label_that_fits_inside_stays_on_its_diameter():
 
     assert abs(text.position.x - 100.0) < 16.0
     assert len(segments) == 1
+
+
+def test_a_feature_dimension_marked_below_stands_under_the_view():
+    """Размеры паза и отверстий вала — под видом, чтобы не делить ряды с цепочкой."""
+    from app.ai.cad_ir.schema import TextEntity
+
+    entities = dimensions_from_kernel(
+        [
+            {
+                "view_index": 0,
+                "kind": "DistanceX",
+                "below": True,
+                "label": "19",
+                "anchors_mm": [[-117.2, -4.0], [-98.2, -4.0]],
+                "value_mm": 19.0,
+            }
+        ],
+        {
+            "bottom": {
+                "offset_u": 200.0,
+                "offset_v": 100.0,
+                "bounds_mm": {"v_min": -20.0, "v_max": 20.0},
+            }
+        },
+        ["bottom"],
+        px_per_mm=1.0,
+    )
+    segments = [e for e in entities if isinstance(e, Segment)]
+    line = segments[2]
+    label = next(e for e in entities if isinstance(e, TextEntity))
+
+    assert line.p1.y == line.p2.y > 120.0  # ниже нижней кромки вида (y вниз)
+    assert label.position.y < line.p1.y  # подпись — над своей линией
+
+
+def test_short_feature_dimensions_whose_labels_would_touch_go_to_separate_rows():
+    """shaft-1 (1:2): «9.8» и «16.7» в одном ряду под видом слиплись в «9.816.7».
+
+    На листе 1:2 положения 9,8 и 16,7 — это 4,9 и 8,35 мм листа, а зазор между
+    ними — 2,6 мм: подписи шире своих линий налезают друг на друга.
+    """
+    dimensions = [
+        {
+            "view_index": 0,
+            "kind": "DistanceX",
+            "below": True,
+            "label": "9.8",
+            "anchors_mm": [[0.0, 0.0], [4.9, 0.0]],
+            "value_mm": 9.8,
+        },
+        {
+            "view_index": 0,
+            "kind": "DistanceX",
+            "below": True,
+            "label": "16.7",
+            "anchors_mm": [[7.5, 0.0], [15.85, 0.0]],
+            "value_mm": 16.7,
+        },
+    ]
+    tiers = _length_tiers(dimensions)
+    assert tiers[0] != tiers[1]

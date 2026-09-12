@@ -1786,3 +1786,26 @@ async def test_a_rectangular_plate_gets_no_phantom_centre_hole(monkeypatch):
     )
 
     assert profile["holes"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_rectangular_plate_gets_no_bolt_circle_note(monkeypatch):
+    """Базовая линия v4, plate-0: оба отверстия прочитаны верно, а в замечаниях —
+    «массив отверстий не построен» от роли «Ø болтов», назначенной прямоугольнику."""
+    from app.ai.cad_recognize import spec_fragments as fragments
+
+    async def fake_ask(prompt, *_a, **_k):
+        if prompt is fragments._SHAPE_PROMPT:
+            return {"shape": "rectangle"}
+        if "x_from_left_mm" in prompt:
+            return {"holes": []}
+        return {"width_mm": 100, "height_mm": 50, "thickness_mm": 25, "bolt_hole_diameter_mm": 11}
+
+    monkeypatch.setattr(fragments, "_ask", fake_ask)
+    notes: list[str] = []
+    callouts = {"dimensions": [{"value": v} for v in ("100", "50", "25", "Ø11")]}
+    await fragments._profile_by_assignment(
+        object(), callouts, router=object(), confidential=True, notes=notes
+    )
+
+    assert notes == []

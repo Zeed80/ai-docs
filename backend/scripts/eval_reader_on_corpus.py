@@ -93,6 +93,12 @@ async def _run(args: argparse.Namespace) -> int:
             "score": score,
             "unresolved": (spec or {}).get("unresolved") or [],
             "read_main_view": (spec or {}).get("main_view"),
+            # Что модель выписала с листа: без этого не отличить «не прочитала
+            # R5» от «прочитала, но не назначила роль» (базовая линия v4).
+            "read_dimensions": [
+                str((item or {}).get("value") or "")
+                for item in (spec or {}).get("dimensions") or []
+            ],
         }
         with log.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")

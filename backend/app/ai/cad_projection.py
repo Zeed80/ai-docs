@@ -208,6 +208,7 @@ def place_sheet_views(
     gap_mm: float = VIEW_GAP_MM,
     skip: set[int] | None = None,
     right: set[int] | None = None,
+    anchor: int | None = None,
 ) -> tuple[list[Any], list[dict[str, float] | None]]:
     """Lay out the views ``/drawing`` returned, in the order it returned them.
 
@@ -251,6 +252,8 @@ def place_sheet_views(
             None,
         ),
     )
+    if anchor is not None and anchor not in skipped and bounds(views[anchor]):
+        anchor_index = anchor
     if anchor_index is None:
         return [], placements
 
@@ -273,7 +276,7 @@ def place_sheet_views(
         if box is None:
             continue
         kind = view.get("kind")
-        if kind == "top" and index not in to_right:
+        if kind in ("top", "bottom") and index not in to_right:
             # Directly below the anchor, sharing its u — first-angle.
             placements[index] = {
                 "offset_u": origin_u_mm - box["u_min"],
@@ -371,6 +374,7 @@ def _projected_dimension_points(
     top: float | None = None,
     tier: int = 0,
     place_u: float | None = None,
+    bottom: float | None = None,
 ) -> tuple[tuple[tuple[float, float], tuple[float, float]], ...]:
     """Where the dimension line is measured from, per the kind TechDraw was asked.
 
@@ -398,6 +402,11 @@ def _projected_dimension_points(
     if kind == "DistanceX":
         if u1 > u2:
             (u1, v1), (u2, v2) = (u2, v2), (u1, v1)
+        if bottom is not None:
+            # Под видом, рядами вниз: размеры элементов вала (паз, поперечное
+            # отверстие), чтобы не делить с цепочкой ряды над видом.
+            level = bottom - tier * DIM_TIER_STEP_MM
+            return ((u1, v1), (u1, level)), ((u2, v2), (u2, level))
         level = (top if top is not None else max(v1, v2)) + tier * DIM_TIER_STEP_MM
         return ((u1, v1), (u1, level)), ((u2, v2), (u2, level))
     if kind == "DistanceY":
@@ -444,7 +453,16 @@ def _length_tiers(dimensions: list[dict[str, Any]]) -> dict[int, int]:
         else:
             continue
         lo, hi = sorted((float(anchors[0][axis]), float(anchors[1][axis])))
-        by_view.setdefault((item.get("view_index"), kind), []).append((lo, hi, position))
+        if item.get("below"):
+            # Короткие размеры элементов (положение паза, отверстия) — подписи
+            # шире своих линий, и соседние в одном ряду слипались («9.816.7» на
+            # shaft-1). Ряд считается по месту, которое занимает подпись.
+            label = str(item.get("label") or "")
+            half = len(label) * _LABEL_EM * DIM_TEXT_MM / 2.0 + DIM_ARROW_MM
+            middle = (lo + hi) / 2.0
+            lo, hi = min(lo, middle - half), max(hi, middle + half)
+        key = (item.get("view_index"), kind, bool(item.get("below")))
+        by_view.setdefault(key, []).append((lo, hi, position))
     tiers: dict[int, int] = {}
     for spans in by_view.values():
         rows: list[list[tuple[float, float]]] = []
@@ -508,6 +526,7 @@ def dimensions_from_kernel(
             (float(anchors[0][0]), float(anchors[0][1])),
             (float(anchors[1][0]), float(anchors[1][1])),
             top=float(bounds["v_max"]) if "v_max" in bounds else None,
+            bottom=float(bounds["v_min"]) if item.get("below") and "v_min" in bounds else None,
             tier=tiers.get(position, 0),
             place_u=_placed_u(item, tiers.get(position, 0)),
         )
@@ -520,6 +539,11 @@ def dimensions_from_kernel(
         # Offset the dimension line perpendicular to what is being measured,
         # away from the part: a dimension drawn ON the contour is unreadable.
         nu, nv = -dv / span, du / span
+        # The label stays ABOVE its line (ГОСТ 2.307) even when the line itself
+        # stands off below the view.
+        tnu, tnv = nu, nv
+        if item.get("below"):
+            nu, nv = -nu, -nv
         # Диаметр окружности идёт ЧЕРЕЗ центр, по самой окружности — без
         # отступа и без выносных, как по ГОСТ 2.307. Сдвинутый в сторону, он
         # мерил бы хорду, а не диаметр.
@@ -619,8 +643,8 @@ def dimensions_from_kernel(
             # Подпись диаметра окружности — не в центре, а ближе к концу линии:
             # в центре сходятся все концентрические размеры.
             share = 0.75 if through_centre else 0.5
-            mid_u = u1 + (u2 - u1) * share + ou + nu * 1.5
-            mid_v = v1 + (v2 - v1) * share + ov + nv * 1.5
+            mid_u = u1 + (u2 - u1) * share + ou + tnu * 1.5
+            mid_v = v1 + (v2 - v1) * share + ov + tnv * 1.5
             # ГОСТ 2.307: the value stands along its dimension line. A vertical
             # line (a diameter across a longitudinal view) reads bottom-to-top,
             # to the left of the line — which is where the normal already puts
@@ -649,8 +673,8 @@ def dimensions_from_kernel(
                     )
                 )
                 along = reach - label_mm / 2.0
-                mid_u = u2 + ou + tu * along + nu * 1.5
-                mid_v = v2 + ov + tv * along + nv * 1.5
+                mid_u = u2 + ou + tu * along + tnu * 1.5
+                mid_v = v2 + ov + tv * along + tnv * 1.5
             entities.append(
                 TextEntity(
                     position=to_point(mid_u, mid_v),

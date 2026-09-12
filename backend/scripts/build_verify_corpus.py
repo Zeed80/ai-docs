@@ -72,11 +72,42 @@ def needed_dimensions(spec: dict) -> dict[str, list[float]]:
         {s["diameter_mm"] for s in outer} | {s["diameter_mm"] for s in body.get("bore") or []}
     )
     lengths = [s["length_mm"] for s in outer]
+    features = _shaft_feature_values(body, lengths)
+    diameters = sorted(set(diameters) | set(features["diameters"]))
     # Открыта ровно ОДНА ступень — самая длинная. Список, не множество: у вала
     # shaft-1 две ступени по 80 и две по 15, лист не проставил обе «80» и
     # последнюю «15», а метрика по множеству значений засчитала лист полным.
     open_chain = sorted(lengths)[:-1]
-    return {"diameters": diameters, "lengths": open_chain, "overall": [sum(lengths)]}
+    return {
+        "diameters": diameters,
+        "lengths": sorted(open_chain + features["lengths"]),
+        "overall": [sum(lengths)],
+    }
+
+
+def _shaft_feature_values(body: dict, lengths: list[float]) -> dict[str, list[float]]:
+    """Пазы и поперечные отверстия вала — как их ставит лист (Ф3.0b).
+
+    Паз — длина и положение начала от левого уступа своей ступени; отверстие —
+    Ø и положение центра от него же. Нулевое положение не ставится.
+    """
+    starts = [sum(lengths[:i]) for i in range(len(lengths))]
+
+    def from_shoulder(x: float) -> float:
+        return round(x - max((s for s in starts if s <= x + 1e-6), default=0.0), 3)
+
+    values: dict[str, list[float]] = {"diameters": [], "lengths": []}
+    for keyway in body.get("keyways") or []:
+        values["lengths"].append(keyway["length_mm"])
+        offset = from_shoulder(keyway["axial_start_mm"])
+        if offset > 0.05:
+            values["lengths"].append(offset)
+    for hole in body.get("cross_holes") or []:
+        values["diameters"].append(hole["diameter_mm"])
+        offset = from_shoulder(hole["axial_position_mm"])
+        if offset > 0.05:
+            values["lengths"].append(offset)
+    return values
 
 
 def _hole_coordinates(profile: dict) -> list[float]:

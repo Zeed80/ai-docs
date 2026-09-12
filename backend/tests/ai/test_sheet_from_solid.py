@@ -1019,3 +1019,215 @@ def test_the_front_view_of_a_keyed_shaft_is_only_a_scaffold():
 
     assert reasons["front"]["visible"] is False
     assert "паз" in reasons["bottom"]["reason"]
+
+
+# ── Ф3.0b: паз и поперечные отверстия на главном виде вала ─────────────────
+# Числа — из пробы ядра, shaft-1, вид `bottom` (u от −133,5 до 133,5, 1:1).
+
+
+def _arc_mid(u, v, r, start, end, mid):
+    return {
+        "type": "arc",
+        "center": [u, v],
+        "radius": r,
+        "points": [list(start), list(end)],
+        "mid": list(mid),
+    }
+
+
+def _shaft_bottom_view() -> dict:
+    return {
+        "kind": "bottom",
+        "bounds_mm": {"u_min": -133.5, "u_max": 133.5, "v_min": -20, "v_max": 20},
+        "visible": [
+            # паз 1 (16,3..35,3, R4): концы — по две четверти
+            _arc_mid(-113.2, 0, 4, (-117.2, 0), (-113.2, 4), (-116.03, 2.83)),
+            _arc_mid(-113.2, 0, 4, (-113.2, -4), (-117.2, 0), (-116.03, -2.83)),
+            _arc_mid(-102.2, 0, 4, (-102.2, 4), (-98.2, 0), (-99.37, 2.83)),
+            _arc_mid(-102.2, 0, 4, (-98.2, 0), (-102.2, -4), (-99.37, -2.83)),
+            # паз 2 (188,7..241,7, R5): левый конец — полуокружность, правый — две четверти
+            _arc_mid(60.2, 0, 5, (60.2, -5), (60.2, 5), (55.2, 0)),
+            _arc_mid(103.2, 0, 5, (103.2, 5), (108.2, 0), (106.74, 3.54)),
+            _arc_mid(103.2, 0, 5, (108.2, 0), (103.2, -5), (106.74, -3.54)),
+            # поперечное Ø5 на 166,8 — две полуокружности
+            _arc_mid(33.3, 0, 2.5, (30.8, 0), (35.8, 0), (33.3, 2.5)),
+            _arc_mid(33.3, 0, 2.5, (35.8, 0), (30.8, 0), (33.3, -2.5)),
+            # поперечное Ø4 на 64,7 — 150,5° + 29,5° + 180°
+            _arc_mid(-68.8, 0, 2, (-66.8, 0), (-70.54, -0.98), (-68.29, -1.93)),
+            _arc_mid(-68.8, 0, 2, (-70.54, -0.98), (-70.8, 0), (-70.73, -0.51)),
+            _arc_mid(-68.8, 0, 2, (-70.8, 0), (-66.8, 0), (-68.8, 2)),
+        ],
+    }
+
+
+def test_arcs_merge_into_keyway_ends_and_cross_holes_by_their_total_sweep():
+    from app.ai.cad_ir.sheet_from_solid import _arc_groups, _capsules
+
+    view = _shaft_bottom_view()
+    groups = _arc_groups(view, view["bounds_mm"])
+
+    holes = sorted(round(r * 2, 1) for _u, _v, r, sweep in groups if abs(sweep - 360) <= 30)
+    assert holes == [4.0, 5.0]
+    capsules = _capsules(groups)
+    assert sorted((round(low[0], 1), round(high[0], 1)) for low, high, _r in capsules) == [
+        (-113.2, -102.2),
+        (60.2, 103.2),
+    ]
+
+
+def test_keyways_and_cross_holes_are_dimensioned_from_their_shoulder():
+    """Базовая линия v2: пазы читались наугад, поперечные отверстия — никак."""
+    from types import SimpleNamespace
+
+    from app.ai.cad_ir.sheet_from_solid import _shaft_feature_dimensions
+
+    spec = {
+        "main_view": {
+            "outer": [
+                {"diameter_mm": diameter, "length_mm": length}
+                for diameter, length in (
+                    (25, 12),
+                    (28, 30),
+                    (25, 35),
+                    (40, 80),
+                    (30, 15),
+                    (35, 80),
+                    (22, 15),
+                )
+            ]
+        }
+    }
+    drawing = {"views": [{"kind": "front"}, _shaft_bottom_view()], "dimensions": []}
+    plan = SimpleNamespace(part_class="solid_rotation", ratio=1.0, scaffold_views={0})
+
+    _shaft_feature_dimensions(drawing, spec, plan)
+
+    keyway = sorted(d["value_mm"] for d in drawing["dimensions"] if d["measured_by"] == "keyway")
+    holes = sorted(
+        (d["kind"], d["value_mm"])
+        for d in drawing["dimensions"]
+        if d["measured_by"] == "cross_hole"
+    )
+    assert keyway == [4.3, 16.7, 19.0, 53.0]  # положения от уступов 12 и 172, длины
+    assert holes == [("Diameter", 4.0), ("Diameter", 5.0), ("DistanceX", 9.8), ("DistanceX", 22.7)]
+    assert all(d.get("below") for d in drawing["dimensions"] if d["kind"] == "DistanceX")
+
+
+def test_a_plate_slot_is_unchanged_by_the_shared_arc_grouping():
+    """`_slots` пластины перешёл на общий разбор дуг — прорезь та же."""
+    from app.ai.cad_ir.sheet_from_solid import _hole_dimensions
+
+    drawing = {
+        "views": [
+            {"kind": "front"},
+            {
+                "kind": "side",
+                "bounds_mm": {"u_min": -30, "u_max": 30, "v_min": -50, "v_max": 50},
+                "visible": [
+                    _arc_mid(-6.5, -15, 3, (-6.5, -12), (-6.5, -18), (-9.5, -15)),
+                    _arc_mid(12.5, -15, 3, (12.5, -18), (15.5, -15), (14.62, -17.12)),
+                    _arc_mid(12.5, -15, 3, (15.5, -15), (12.5, -12), (14.62, -12.88)),
+                ],
+            },
+        ],
+        "dimensions": [],
+    }
+    _hole_dimensions(drawing, _plan("plate"))
+    slot = {(d["kind"], d["value_mm"]) for d in drawing["dimensions"] if d["measured_by"] == "slot"}
+    assert slot == {("DistanceX", 19.0), ("Radius", 3.0)}
+
+
+def test_a_hollow_keyed_shaft_gets_a_view_facing_its_keyway_below_the_section():
+    """shaft-2/-7/-10 корпуса: у полого вала элементы оставались без размеров."""
+    spec = {
+        "main_view": {
+            "outer": [{"diameter_mm": 40, "length_mm": 60}],
+            "bore": [{"diameter_mm": 20, "length_mm": 60}],
+            "keyways": [{"axial_start_mm": 10, "length_mm": 20, "width_mm": 12, "depth_mm": 5}],
+        },
+        "views": [],
+    }
+    kinds = [view["kind"] for view in plan_views("hollow_rotation", spec)]
+
+    assert "section" in kinds and "bottom" in kinds
+
+
+def test_the_keyway_view_of_a_hollow_shaft_stands_below_its_section():
+    from app.ai.cad_projection import place_sheet_views
+
+    views = [
+        {"kind": "front", "bounds_mm": {"u_min": -30, "u_max": 30, "v_min": -20, "v_max": 20}},
+        {"kind": "section", "bounds_mm": {"u_min": -30, "u_max": 30, "v_min": -20, "v_max": 20}},
+        {"kind": "bottom", "bounds_mm": {"u_min": -30, "u_max": 30, "v_min": -20, "v_max": 20}},
+    ]
+    _entities, placements = place_sheet_views(views, px_per_mm=1.0, skip={0}, anchor=1)
+
+    assert placements[1]["offset_u"] == 30.0  # главный вид полого вала — разрез, в начале листа
+    assert placements[2]["offset_u"] == placements[1]["offset_u"]  # общая ось u
+    assert placements[2]["offset_v"] > placements[1]["offset_v"] + 40  # ниже разреза
+
+
+def test_feature_dimensions_of_a_hollow_shaft_are_placed_too():
+    from types import SimpleNamespace
+
+    from app.ai.cad_ir.sheet_from_solid import _shaft_feature_dimensions
+
+    spec = {
+        "main_view": {
+            "outer": [
+                {"diameter_mm": diameter, "length_mm": length}
+                for diameter, length in (
+                    (25, 12),
+                    (28, 30),
+                    (25, 35),
+                    (40, 80),
+                    (30, 15),
+                    (35, 80),
+                    (22, 15),
+                )
+            ]
+        }
+    }
+    drawing = {
+        "views": [{"kind": "front"}, {"kind": "section"}, _shaft_bottom_view()],
+        "dimensions": [],
+    }
+    plan = SimpleNamespace(part_class="hollow_rotation", ratio=1.0, scaffold_views={0})
+
+    _shaft_feature_dimensions(drawing, spec, plan)
+
+    assert any(d["measured_by"] == "keyway" for d in drawing["dimensions"])
+
+
+def test_a_hollow_shaft_is_laid_out_around_its_section():
+    """Правило «первый вид, что не разрез» делало опорным вид с торца."""
+    from app.ai.cad_ir.sheet_from_solid import plan_sheet
+
+    spec = {
+        **_HOLLOW,
+        "main_view": {
+            **_HOLLOW["main_view"],
+            "keyways": [{"axial_start_mm": 10, "length_mm": 20, "width_mm": 12, "depth_mm": 5}],
+        },
+    }
+    plan = plan_sheet(spec, _SHAFT_REPORT)
+
+    assert plan.part_class == "hollow_rotation"
+    assert plan.views[plan.anchor_view]["kind"] == "section"
+    assert "bottom" in [view["kind"] for view in plan.views]
+
+
+def test_arcs_the_kernel_returns_twice_are_counted_once():
+    """shaft-18: отверстие Ø4 пришло дугами 180+150,5+29,5+180 — сумма 540°."""
+    from app.ai.cad_ir.sheet_from_solid import _arc_groups
+
+    hole = [
+        _arc_mid(0, 0, 2, (2, 0), (-2, 0), (0, 2)),
+        _arc_mid(0, 0, 2, (2, 0), (-1.74, -0.98), (0.51, -1.93)),
+        _arc_mid(0, 0, 2, (-1.74, -0.98), (-2, 0), (-1.93, -0.51)),
+        _arc_mid(0, 0, 2, (-2, 0), (2, 0), (0, 2)),  # та же верхняя половина второй раз
+    ]
+    view = {"visible": hole}
+    groups = _arc_groups(view, {"u_min": -50, "u_max": 50, "v_min": -20, "v_max": 20})
+
+    assert len(groups) == 1 and abs(groups[0][3] - 360.0) < 1.0
