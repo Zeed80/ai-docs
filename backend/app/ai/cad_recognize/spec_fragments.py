@@ -4313,7 +4313,11 @@ async def _profile_by_assignment(
     profile["thickness_mm"] = taken("thickness_mm")
 
     holes: list[dict] = []
-    bore = taken("bore_diameter_mm")
+    # Центральное отверстие — роль круглой детали. У прямоугольной пластины
+    # отверстия читает отдельный вопрос (`_plate_holes`), а роль «bore»
+    # добавляла лишнее отверстие в центр: базовая линия v3, plate-1 — Ø6.8 в
+    # (0, 0), которого на детали нет.
+    bore = taken("bore_diameter_mm") if shape == "circle" else None
     if bore:
         holes.append({"center_x_mm": 0.0, "center_y_mm": 0.0, "diameter_mm": bore})
     profile["holes"] = holes
