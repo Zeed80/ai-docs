@@ -17,4 +17,7 @@ from app.ai.cad_recognize.verifiers.view_frame import ViewFrame
 __all__ = ["Hypothesis", "Verdict", "ViewFrame", "register", "registered_kinds", "verify"]
 
 # Регистрация встроенных проверяльщиков — импортом модулей.
-from app.ai.cad_recognize.verifiers import dimension_line  # noqa: E402,F401
+from app.ai.cad_recognize.verifiers import (
+    dimension_line,  # noqa: E402,F401
+    plate_hole,  # noqa: E402,F401
+)

@@ -111,7 +111,97 @@ def eval_dimension_line(png: bytes, truth: dict) -> list[dict[str, Any]]:
     return outcomes
 
 
-_VERIFIERS = {"dimension_line": eval_dimension_line}
+def _plate_frame(truth: dict):
+    """Система координат плана пластины — по эталонным размерам ширины и высоты.
+
+    Точки размеров в эталоне лежат на размерных линиях: у ширины это левая и
+    правая кромки плана по x, у высоты — нижняя и верхняя по y.
+    """
+    from app.ai.cad_recognize.verifiers import ViewFrame
+
+    profile = (truth["spec"].get("main_view") or {}).get("profile") or {}
+    if profile.get("shape") != "rectangle":
+        return None
+    width, height = float(profile["width_mm"]), float(profile["height_mm"])
+    width_dim = height_dim = None
+    for item in truth.get("labels") or []:
+        if item.get("kind") != "dimension" or item.get("dimension_kind") != "linear":
+            continue
+        anchors = item.get("anchors_px") or []
+        if len(anchors) != 2 or item.get("value_mm") is None:
+            continue
+        (x1, y1), (x2, y2) = anchors
+        horizontal = abs(x2 - x1) >= abs(y2 - y1)
+        if horizontal and width_dim is None and abs(item["value_mm"] - width) <= 0.05:
+            width_dim = (min(x1, x2), max(x1, x2))
+        if not horizontal and height_dim is None and abs(item["value_mm"] - height) <= 0.05:
+            height_dim = (min(y1, y2), max(y1, y2))
+    if width_dim is None or height_dim is None:
+        return None
+    mm_per_px = width / (width_dim[1] - width_dim[0])
+    return ViewFrame(
+        bbox_px=(width_dim[0] - 5, height_dim[0] - 5, width_dim[1] + 5, height_dim[1] + 5),
+        mm_per_px=mm_per_px,
+        origin_px=(width_dim[0], height_dim[1]),
+    )
+
+
+def eval_plate_hole(png: bytes, truth: dict) -> list[dict[str, Any]]:
+    """Отверстия пластины: гипотезы из эталона и искажённые, как ошибается ридер.
+
+    ``truth`` — должно подтвердиться; ``swap_y`` — y от соседнего отверстия
+    (plate-1: все x верны, y переставлены парами) и ``diameter`` — Ø на 1,1 мм
+    больше: оба должны опровергнуться, а измеренное — совпасть с эталоном.
+    """
+    import numpy as np
+    from PIL import Image
+
+    from app.ai.cad_recognize.verifiers import Hypothesis, verify
+    from app.ai.verify_corpus.score import expand_holes
+
+    frame = _plate_frame(truth)
+    if frame is None:
+        return []
+    profile = truth["spec"]["main_view"]["profile"]
+    width, height = float(profile["width_mm"]), float(profile["height_mm"])
+    holes = [(x + width / 2.0, y + height / 2.0, d) for x, y, d in expand_holes(profile)]
+    gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))
+    cases: list[tuple[str, tuple[float, float, float], tuple[float, float, float]]] = []
+    for index, hole in enumerate(holes):
+        cases.append(("truth", hole, hole))
+        other = next(
+            (h for h in holes[index + 1 :] + holes[:index] if abs(h[1] - hole[1]) > 2.0), None
+        )
+        if other is not None:
+            cases.append(("swap_y", (hole[0], other[1], hole[2]), hole))
+        cases.append(("diameter", (hole[0], hole[1], hole[2] + 1.1), hole))
+    outcomes = []
+    for case, (x, y, d), real in cases:
+        verdict = verify(
+            Hypothesis("plate_hole", "holes", {"x_mm": x, "y_mm": y, "diameter_mm": d}),
+            frame,
+            gray,
+        )
+        measured = verdict.measured
+        accurate = bool(measured) and (
+            abs(measured["y_mm"] - real[1]) <= 0.5 and abs(measured["diameter_mm"] - real[2]) <= 0.3
+        )
+        wanted = "confirmed" if case == "truth" else "refuted"
+        outcomes.append(
+            {
+                "case": case,
+                "found": verdict.status != "unmeasurable",
+                "correct": verdict.status == wanted and accurate,
+                "error_rel": (
+                    abs(measured["diameter_mm"] - real[2]) / real[2] if measured else None
+                ),
+                "unit_px": real[2] / 2.0 / frame.mm_per_px,
+            }
+        )
+    return outcomes
+
+
+_VERIFIERS = {"dimension_line": eval_dimension_line, "plate_hole": eval_plate_hole}
 
 
 def main() -> int:
@@ -185,6 +275,16 @@ def main() -> int:
             f"{(f'{error:.1%}' if error is not None else '—'):>15} {item['median_text_px']:>9.1f} "
             f"{dewarp_count[step]:>11}"
         )
+    cases = sorted({item["case"] for items in by_step.values() for item in items if "case" in item})
+    for case in cases:
+        print(f"\n{case}:")
+        for step, items in by_step.items():
+            picked = [item for item in items if item.get("case") == case]
+            if picked:
+                item = summary(picked)
+                print(
+                    f"  {step:<11} {item['n']:>4} найдено {item['found']:>5.0%} верно {item['correct']:>5.0%}"
+                )
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")

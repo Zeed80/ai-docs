@@ -88,11 +88,18 @@ def render_sheet(ir: CadIR, *, dpi: int, ir_px_per_mm: float) -> RenderedSheet:
                 draw.line(points, fill=0, width=stroke(entity), joint="curve")
         elif isinstance(entity, Circle):
             cx, cy = xy(entity.center)
-            r = float(entity.radius) * scale
-            draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=0, width=stroke(entity))
+            # PIL кладёт обводку ВНУТРЬ рамки — середина линии оказывалась на
+            # r − w/2, и на эталоне каждая окружность была меньше своего Ø на
+            # толщину линии (−0,5 мм у основной). Проверяльщик отверстий честно
+            # мерил середину линии и «опровергал» верные диаметры. Рамка шире
+            # на полтолщины — линия лежит серединой на окружности, как у чертежа.
+            w = stroke(entity)
+            r = float(entity.radius) * scale + w / 2.0
+            draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=0, width=w)
         elif isinstance(entity, Arc):
             cx, cy = xy(entity.center)
-            r = float(entity.radius) * scale
+            # Обводка серединой на радиусе — см. окружность выше.
+            r = float(entity.radius) * scale + stroke(entity) / 2.0
             # Соглашение ровно как у рендера продукта (`png_render`, cv2.ellipse):
             # углы передаются как есть, а при start > end cv2 меняет их местами.
             # Моя первая версия меняла знак углов — и правый конец прорези
