@@ -3750,6 +3750,48 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     },
                 )
 
+                # Проверка прочитанного по самому листу (план, Ф1): модель
+                # предлагает — проверяльщик меряет в окрестности. Прочитанное
+                # НЕ заменяется: опровергнутое уходит замечанием с замером,
+                # выбор — за оператором (plate-1: модель верно дала все x, а y
+                # переставила парами — замер по плану их различает).
+                from app.ai.cad_recognize.verifiers.stage import (
+                    verify_spec_against_sheet,
+                )
+
+                try:
+                    verification = verify_spec_against_sheet(content, spec)
+                except Exception as exc:  # noqa: BLE001 — a check must not break the run
+                    logger.warning(
+                        "cad_verify_failed",
+                        generation_id=generation_id,
+                        error=str(exc)[:200],
+                    )
+                    verification = None
+                if verification and verification["items"]:
+                    await _record(
+                        "verify.plate_hole",
+                        "completed",
+                        "Прочитанные отверстия проверены по листу",
+                        {
+                            **verification["summary"],
+                            "frame": verification["frame"],
+                            "items": verification["items"],
+                        },
+                    )
+                    if verification["notes"]:
+                        spec = {
+                            **spec,
+                            "optional_unresolved": list(
+                                dict.fromkeys(
+                                    [
+                                        *(spec.get("optional_unresolved") or []),
+                                        *verification["notes"],
+                                    ]
+                                )
+                            ),
+                        }
+
                 unresolved = [str(i) for i in spec.get("unresolved", []) if str(i)]
                 unresolved.extend(blocking_checks)
                 if unresolved:
