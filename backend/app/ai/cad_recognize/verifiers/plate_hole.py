@@ -92,6 +92,15 @@ def verify_plate_hole(hypothesis: Hypothesis, frame: ViewFrame | None, sheet: An
             reason="на заявленном x нет замкнутой окружности",
         )
     u, v, r, _coverage = fitted
+    # Уточнение, как у поперечного отверстия вала: подгонка по сектору
+    # стартует от радиуса Hough и остаётся у него (Ø ±0,3–0,4 мм на корпусе);
+    # радиус — профилем, центр — по серединам штриха на лучах.
+    from app.ai.cad_recognize.verifiers.cross_hole import _ring
+    from app.ai.cad_recognize.verifiers.plate_frame import _ink
+
+    refined = _ring(_ink(np.ascontiguousarray(strip)), u, v, r)
+    if refined is not None:
+        u, v, r = refined[0], refined[1], refined[2]
     centre_px = (u + left, v + top)
     measured_x, measured_y = frame.to_mm(*centre_px)
     measured = {
