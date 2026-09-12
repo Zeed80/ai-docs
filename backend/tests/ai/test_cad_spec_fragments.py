@@ -1675,3 +1675,63 @@ def test_a_reasoning_dump_in_unresolved_is_cut_to_one_note():
     assert tidy["unresolved"][0].endswith("…")
     assert tidy["unresolved"][1] == "малые элементы: паз не локализован"
     assert tidy["optional_unresolved"] == ["строка 1"]
+
+
+_PLATE_CALLOUTS = {
+    "dimensions": [
+        {"value": v} for v in ("100", "50", "25", "Ø11", "Ø13.5", "Ø8", "22", "60", "39", "34")
+    ]
+}
+
+
+async def _read_plate(monkeypatch, holes_answer: dict, shape: str = "rectangle"):
+    from app.ai.cad_recognize import spec_fragments as fragments
+
+    asked: list[str] = []
+
+    async def fake_ask(prompt, *_a, **_k):
+        if prompt is fragments._SHAPE_PROMPT:
+            return {"shape": shape}
+        if "x_from_left_mm" in prompt:
+            asked.append("holes")
+            return holes_answer
+        return {"width_mm": 100, "height_mm": 50, "thickness_mm": 25, "outer_diameter_mm": 100}
+
+    monkeypatch.setattr(fragments, "_ask", fake_ask)
+    notes: list[str] = []
+    profile = await fragments._profile_by_assignment(
+        object(), _PLATE_CALLOUTS, router=object(), confidential=True, notes=notes
+    )
+    return profile, notes, asked
+
+
+@pytest.mark.asyncio
+async def test_plate_holes_are_read_from_the_edges_and_placed_from_the_centre(monkeypatch):
+    """Базовая линия M5 v2: у пластин 0 отверстий из 6 — их никто не спрашивал."""
+    profile, notes, _asked = await _read_plate(
+        monkeypatch,
+        {
+            "holes": [
+                {"diameter_mm": 11, "x_from_left_mm": 22, "y_from_bottom_mm": 39},
+                {"diameter_mm": 13.5, "x_from_left_mm": 60, "y_from_bottom_mm": 34},
+                {
+                    "diameter_mm": 11,
+                    "x_from_left_mm": 77,
+                    "y_from_bottom_mm": 39,
+                },  # 77 нет на листе
+                {"diameter_mm": 8, "x_from_left_mm": None, "y_from_bottom_mm": 39},
+            ]
+        },
+    )
+
+    assert profile["holes"] == [
+        {"center_x_mm": -28.0, "center_y_mm": 14.0, "diameter_mm": 11.0},
+        {"center_x_mm": 10.0, "center_y_mm": 9.0, "diameter_mm": 13.5},
+    ]
+    assert notes == ["отверстия Ø8, Ø11: положение на листе не проставлено — не построены"]
+
+
+@pytest.mark.asyncio
+async def test_a_flange_is_not_asked_for_plate_hole_coordinates(monkeypatch):
+    _profile, _notes, asked = await _read_plate(monkeypatch, {"holes": []}, shape="circle")
+    assert asked == []

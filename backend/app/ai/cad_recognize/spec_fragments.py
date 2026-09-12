@@ -327,6 +327,37 @@ _ASSIGN_PROMPT = (
     "bore_diameter_mm — центральное отверстие. thickness_mm — толщина с вида "
     "сбоку или разреза. Только JSON."
 )
+_PLATE_HOLES_PROMPT = (
+    "С чертежа уже прочитаны размерные надписи:\n{callouts}\n\n"
+    "На виде в плане пластины есть отверстия. Для КАЖДОГО отверстия укажи его "
+    "диаметр и положение центра: расстояние от ЛЕВОЙ кромки контура и от НИЖНЕЙ "
+    "кромки — так, как их проставляет лист (размеры от баз, выносные идут к "
+    "центру отверстия). Числа бери ТОЛЬКО из списка выше. Отверстия массива "
+    "(«4 отв.») перечисли по одному. Если положение отверстия на листе не "
+    "проставлено — поставь null. ОДНОЙ строкой JSON:\n"
+    '{{"holes":[{{"diameter_mm":0,"x_from_left_mm":0,"y_from_bottom_mm":0}}]}}\n'
+    "Только JSON."
+)
+
+_PLATE_HOLES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "holes": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "diameter_mm": {"type": ["number", "null"]},
+                    "x_from_left_mm": {"type": ["number", "null"]},
+                    "y_from_bottom_mm": {"type": ["number", "null"]},
+                },
+            },
+        }
+    },
+    "required": ["holes"],
+}
+
 _ASSIGN_SCHEMA = {
     "type": "object",
     "properties": {
@@ -4251,13 +4282,15 @@ async def _profile_by_assignment(
 
     allowed = set(candidates)
 
+    def stated(value: float) -> float | None:
+        # The number must be one the sheet actually states.
+        return value if any(abs(value - c) <= max(0.05, c * 0.005) for c in allowed) else None
+
     def taken(key: str) -> float | None:
         value = answer.get(key)
         if not isinstance(value, (int, float)) or isinstance(value, bool):
             return None
-        value = float(value)
-        # The number must be one the sheet actually states.
-        return value if any(abs(value - c) <= max(0.05, c * 0.005) for c in allowed) else None
+        return stated(float(value))
 
     profile: dict[str, Any] = {"shape": shape}
     if shape == "circle":
@@ -4310,7 +4343,75 @@ async def _profile_by_assignment(
         ]
         notes.append(f"массив отверстий не построен: на листе не указаны {', '.join(missing)}")
     profile["hole_patterns"] = patterns
+    if shape == "rectangle":
+        # Весь список, а не первые 24: у пластины с десятком отверстий
+        # координаты — это больше половины выносок листа.
+        every = ", ".join(f"{value:g}" for value in candidates)
+        profile["holes"] += await _plate_holes(image, every, stated, profile, ask=ask, notes=notes)
     return profile
+
+
+async def _plate_holes(
+    image: Any,
+    listed: str,
+    taken: Any,
+    profile: dict[str, Any],
+    *,
+    ask: dict[str, Any],
+    notes: list[str] | None,
+) -> list[dict[str, Any]]:
+    """Отверстия пластины — диаметр и центр от левой и нижней кромки, с листа.
+
+    Базовая линия M5 v2: у пластин 0 отверстий из 6. Путь назначения ролей
+    спрашивал только контур и толщину (плюс центральное отверстие и
+    окружность болтов, которых у пластины нет), и отверстия не читались
+    вовсе. Лист теперь проставляет координаты от баз (X1) — их и спрашиваем.
+    Каждое число обязано стоять на листе (`taken`); отверстие, чей диаметр
+    лист называет, а положение — нет, не строится и уходит в замечание.
+    """
+    width, height = profile.get("width_mm"), profile.get("height_mm")
+    if not width or not height:
+        return []
+    answer = await _ask(
+        _PLATE_HOLES_PROMPT.format(callouts=listed),
+        image,
+        num_predict=1200,
+        schema=_PLATE_HOLES_SCHEMA,
+        **ask,
+    )
+    holes: list[dict[str, Any]] = []
+    unplaced: list[float] = []
+    for item in (answer or {}).get("holes") or []:
+        if not isinstance(item, dict):
+            continue
+        diameter = taken_value(item.get("diameter_mm"), taken)
+        if not diameter:
+            continue
+        x = taken_value(item.get("x_from_left_mm"), taken)
+        y = taken_value(item.get("y_from_bottom_mm"), taken)
+        if x is None or y is None or not (0 < x < width and 0 < y < height):
+            unplaced.append(diameter)
+            continue
+        hole = {
+            "center_x_mm": round(x - width / 2.0, 3),
+            "center_y_mm": round(y - height / 2.0, 3),
+            "diameter_mm": diameter,
+        }
+        if hole not in holes:
+            holes.append(hole)
+    if unplaced and notes is not None:
+        listed_unplaced = ", ".join(f"Ø{value:g}" for value in sorted(set(unplaced)))
+        notes.append(
+            f"отверстия {listed_unplaced}: положение на листе не проставлено — не построены"
+        )
+    return holes
+
+
+def taken_value(value: Any, taken: Any) -> float | None:
+    """Число из ответа модели, если лист его действительно несёт."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    return taken(float(value))
 
 
 async def read_spec_by_fragments(
