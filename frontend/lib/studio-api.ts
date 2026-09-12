@@ -897,6 +897,8 @@ export interface IrEntity {
   text?: string;
   height?: number;
   rotation?: number;
+  // text: what `position` is — baseline start or baseline centre
+  anchor?: "start" | "middle";
   kind?: string;
   value_mm?: number | null;
   tolerance?: string | null;

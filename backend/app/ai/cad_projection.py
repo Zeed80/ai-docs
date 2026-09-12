@@ -562,12 +562,19 @@ def dimensions_from_kernel(
             share = 0.75 if through_centre else 0.5
             mid_u = u1 + (u2 - u1) * share + ou + nu * 1.5
             mid_v = v1 + (v2 - v1) * share + ov + nv * 1.5
+            # ГОСТ 2.307: the value stands along its dimension line. A vertical
+            # line (a diameter across a longitudinal view) reads bottom-to-top,
+            # to the left of the line — which is where the normal already puts
+            # it, because DistanceY runs upward. The label is drawn horizontal
+            # until now, straddling the line it labels.
+            vertical = not through_centre and abs(du) <= 1e-6 * span
             entities.append(
                 TextEntity(
                     position=to_point(mid_u, mid_v),
                     text=text,
                     height=DIM_TEXT_MM * px_per_mm,
-                    rotation=0.0,
+                    rotation=-90.0 if vertical else 0.0,
+                    anchor="middle",
                     **style,
                 )
             )

@@ -150,7 +150,14 @@ class TextEntity(_EntityBase):
     position: Point
     text: str
     height: float = Field(default=3.5, gt=0)
+    # Degrees, clockwise as seen on the sheet (y points down) — the SVG
+    # convention; DXF import/export negates it. Vertical dimension text that
+    # reads bottom-to-top per ГОСТ 2.307 is -90.
     rotation: float = 0.0
+    # What ``position`` is: the baseline start of the text ("start") or the
+    # baseline centre ("middle"). Dimension labels are placed by their centre;
+    # read as a baseline start they drew half their width to the right.
+    anchor: Literal["start", "middle"] = "start"
     line_class: LineClass = "dim"
 
 

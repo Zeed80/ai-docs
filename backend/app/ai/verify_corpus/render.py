@@ -1,16 +1,14 @@
 """Растр листа для корпуса + эталон, записанный по тому, КАК нарисовано.
 
-Готовые рендеры CadIR для этого не годятся, и по двум причинам, найденным при
-сборке генератора:
+Готовые рендеры CadIR для этого не годятся: оба (`png_render`, `svg_render`)
+рисуют семантический `DimensionEntity` линией между точками привязки. У
+диаметра это вертикальная черта поперёк всей детали — на настоящем чертеже её
+нет, а размер уже нарисован выносными, размерной линией и стрелками, которые
+`dimensions_from_kernel` кладёт отдельными сущностями.
 
-* оба (`png_render`, `svg_render`) рисуют семантический `DimensionEntity`
-  линией между точками привязки. У диаметра это вертикальная черта поперёк
-  всей детали — на настоящем чертеже её нет, а размер уже нарисован
-  выносными, размерной линией и стрелками, которые `dimensions_from_kernel`
-  кладёт отдельными сущностями;
-* подпись размера ставится ЦЕНТРОМ в точку над размерной линией, а
-  `draw_text_entities` считает эту точку левым краем базовой линии — число
-  уезжает вправо на половину своей ширины.
+(Вторая причина, найденная тогда же, — подпись размера ставилась центром, а
+рендеры читали точку как левый край, и число уезжало вправо на полширины, —
+исправлена в продукте полем `TextEntity.anchor`.)
 
 Эталон подписи — рамка, полученная от самого шрифта при рисовании, а не
 вычисленная заранее: так эталон не может разойтись с растром.
@@ -115,12 +113,19 @@ def render_sheet(ir: CadIR, *, dpi: int, ir_px_per_mm: float) -> RenderedSheet:
             size = max(6, int(round(float(entity.height) * scale)))
             font = ImageFont.truetype(font_path, size)
             cx, baseline = xy(entity.position)
-            box = draw.textbbox((0, 0), entity.text, font=font, anchor="ms")
+            # Точка — начало базовой линии или её середина (`anchor`), как у
+            # рендеров продукта. Первая версия ставила ВСЁ по центру — верно для
+            # подписей размеров, неверно для штампа и надписей.
+            pil_anchor = "ms" if getattr(entity, "anchor", "start") == "middle" else "ls"
+            box = draw.textbbox((0, 0), entity.text, font=font, anchor=pil_anchor)
             text_width = box[2] - box[0]
-            # Центр по горизонтали, базовая линия — в точке: так подпись стоит
-            # над размерной линией, как задумано в `dimensions_from_kernel`.
-            draw.text((cx, baseline), entity.text, fill=0, font=font, anchor="ms")
-            drawn = draw.textbbox((cx, baseline), entity.text, font=font, anchor="ms")
+            if abs(float(entity.rotation)) < 1.0:
+                draw.text((cx, baseline), entity.text, fill=0, font=font, anchor=pil_anchor)
+                drawn = draw.textbbox((cx, baseline), entity.text, font=font, anchor=pil_anchor)
+            else:
+                drawn = _draw_rotated(
+                    image, entity.text, font, (cx, baseline), pil_anchor, float(entity.rotation)
+                )
             pending_label = {
                 "text": entity.text,
                 "bbox_px": [round(value, 1) for value in drawn],
@@ -178,3 +183,24 @@ def _hatch(draw, boundary: list[tuple[float, float]], width: int, *, spacing: fl
     target = draw._image  # noqa: SLF001 — PIL не даёт иного доступа к холсту
     black = Image.new("L", pattern.size, 0)
     target.paste(black, (x0, y0), pattern)
+
+
+def _draw_rotated(image, text: str, font, point, pil_anchor: str, rotation: float) -> list[float]:
+    """Повёрнутая подпись вокруг её точки привязки; рамка — по чернилам.
+
+    Угол — по часовой (как в IR), PIL поворачивает против, отсюда минус.
+    """
+    from PIL import Image, ImageDraw, ImageOps
+
+    probe = ImageDraw.Draw(image).textbbox((0, 0), text, font=font, anchor=pil_anchor)
+    side = 2 * int(max(probe[2] - probe[0], probe[3] - probe[1])) + 8
+    centre = side // 2
+    tile = Image.new("L", (side, side), 255)
+    ImageDraw.Draw(tile).text((centre, centre), text, fill=0, font=font, anchor=pil_anchor)
+    tile = tile.rotate(-rotation, center=(centre, centre), fillcolor=255)
+    left = int(round(point[0])) - centre
+    top = int(round(point[1])) - centre
+    mask = ImageOps.invert(tile)
+    image.paste(tile, (left, top), mask)
+    box = mask.getbbox() or (centre, centre, centre, centre)
+    return [left + box[0], top + box[1], left + box[2], top + box[3]]

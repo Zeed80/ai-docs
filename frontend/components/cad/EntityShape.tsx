@@ -168,6 +168,12 @@ export default function EntityShape({
         fontSize={e.height ?? 12}
         fill={stroke}
         stroke="none"
+        textAnchor={e.anchor === "middle" ? "middle" : "start"}
+        transform={
+          e.rotation
+            ? `rotate(${e.rotation} ${e.position.x} ${e.position.y})`
+            : undefined
+        }
         style={{ cursor: "pointer" }}
         onClick={(ev) => {
           ev.stopPropagation();

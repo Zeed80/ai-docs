@@ -89,10 +89,11 @@ def render_ir_to_svg(ir: CadIR) -> bytes:
                 if e.rotation
                 else ""
             )
+            anchor = ' text-anchor="middle"' if e.anchor == "middle" else ""
             parts.append(
                 f'<text x="{_fmt(e.position.x)}" y="{_fmt(e.position.y)}" '
                 f'font-size="{_fmt(e.height)}" fill="currentColor" stroke="none" '
-                f"{_attrs(e)}{transform}>{html.escape(e.text)}</text>"
+                f"{_attrs(e)}{anchor}{transform}>{html.escape(e.text)}</text>"
             )
         elif isinstance(e, DimensionEntity):
             mx, my = (e.p1.x + e.p2.x) / 2, (e.p1.y + e.p2.y) / 2

@@ -168,3 +168,35 @@ def test_without_a_midpoint_the_minor_arc_is_taken():
 
     start, end = _arc_image_angles((0.0, 0.0), (0.0, 1.0), (1.0, 0.0))
     assert round(end - start) == 90
+
+
+# ── Подпись вдоль своей размерной линии ─────────────────────────────────────
+
+
+def _label_of(kind: str, anchors: list[list[float]]):
+    from app.ai.cad_ir.schema import TextEntity
+
+    entities = dimensions_from_kernel(
+        [{"view_index": 0, "kind": kind, "label": "", "anchors_mm": anchors, "value_mm": 25.0}],
+        {"front": {"offset_u": 50.0, "offset_v": 100.0}},
+        ["front"],
+        px_per_mm=1.0,
+    )
+    return next(item for item in entities if isinstance(item, TextEntity))
+
+
+def test_a_vertical_dimension_reads_bottom_to_top_left_of_its_line():
+    """Текст вертикальных размеров не поворачивался и лежал поперёк линии."""
+    label = _label_of("DistanceY", [[10.0, -12.5], [10.0, 12.5]])
+
+    assert label.rotation == -90.0
+    assert label.anchor == "middle"
+    assert label.position.x < 50.0 + 10.0  # слева от линии
+
+
+def test_a_horizontal_dimension_label_is_centred_not_rotated():
+    """Подпись ставится центром; прочитанная как начало, она уезжала вправо."""
+    label = _label_of("DistanceX", [[0.0, 0.0], [25.0, 0.0]])
+
+    assert label.rotation == 0.0
+    assert label.anchor == "middle"

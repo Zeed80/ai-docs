@@ -49,6 +49,7 @@ def render_ir_to_dxf(ir: CadIR) -> bytes:
 
     import ezdxf
     from ezdxf import units
+    from ezdxf.enums import TextEntityAlignment
 
     doc = ezdxf.new("R2010", setup=True)
     doc.units = units.MM
@@ -106,7 +107,14 @@ def render_ir_to_dxf(ir: CadIR) -> bytes:
                     "height": max(entity.height * scale, 0.1),
                     "rotation": -entity.rotation,
                 },
-            ).set_placement(pt(entity.position.x, entity.position.y))
+            ).set_placement(
+                pt(entity.position.x, entity.position.y),
+                align=(
+                    TextEntityAlignment.BOTTOM_CENTER
+                    if entity.anchor == "middle"
+                    else TextEntityAlignment.LEFT
+                ),
+            )
         elif isinstance(entity, DimensionEntity):
             # Export real DIMENSION entities so downstream CAD can edit style,
             # measurement points and labels instead of receiving exploded

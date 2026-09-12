@@ -176,21 +176,32 @@ def draw_text_entities(canvas, entities: list[Entity]) -> int:
             font = ImageFont.truetype(path, size)
         except OSError:
             return drawn
-        # TextEntity.position is the baseline-left corner (that is where the
-        # OCR path puts it: box left, box bottom); PIL anchors at the top.
+        # TextEntity.position is the baseline start ("start", where the OCR
+        # path puts it: box left, box bottom) or the baseline centre
+        # ("middle", dimension labels); PIL anchors at the top.
         x, y = float(entity.position.x), float(entity.position.y) - size
+        middle = getattr(entity, "anchor", "start") == "middle"
         if abs(entity.rotation) < 1.0:
+            if middle:
+                x -= draw.textlength(entity.text, font=font) / 2.0
             draw.text((x, y), entity.text, fill=0, font=font)
         else:
             # Rotated labels (vertical dimension text) are drawn on their own
-            # tile and pasted, since PIL cannot rotate text in place.
+            # tile and pasted, since PIL cannot rotate text in place. The tile
+            # turns about the anchor point itself, so the label stays where it
+            # was placed. PIL turns counter-clockwise, the IR clockwise — the
+            # old code passed the angle as is and turned text the wrong way.
             box = draw.textbbox((0, 0), entity.text, font=font)
-            tile = Image.new("L", (box[2] - box[0] + 4, box[3] - box[1] + 4), 255)
-            ImageDraw.Draw(tile).text((2, 2), entity.text, fill=0, font=font)
-            tile = tile.rotate(entity.rotation, expand=True, fillcolor=255)
+            side = 2 * max(box[2] - box[0], box[3] - box[1]) + 8
+            centre = side // 2
+            tile = Image.new("L", (side, side), 255)
+            ImageDraw.Draw(tile).text(
+                (centre, centre), entity.text, fill=0, font=font, anchor="ms" if middle else "ls"
+            )
+            tile = tile.rotate(-entity.rotation, center=(centre, centre), fillcolor=255)
             image.paste(
                 Image.eval(tile, lambda v: v),
-                (int(x), int(y)),
+                (int(round(entity.position.x)) - centre, int(round(entity.position.y)) - centre),
                 Image.eval(tile, lambda v: 255 - v),
             )
         drawn += 1
