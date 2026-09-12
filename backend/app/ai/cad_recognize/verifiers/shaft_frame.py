@@ -331,15 +331,34 @@ def _outer_x(ink: Any, x: float, rows: tuple[float, float], reach: float, *, sid
         lo, hi = max(0, int(x) - 2), min(width, int(x + reach) + 1)
     else:
         lo, hi = max(0, int(x - reach)), min(width, int(x) + 3)
-    middles = []
+    # Середины прогонов по строкам полосы у оси.
+    samples: list[tuple[int, float]] = []
+    inked_rows = 0
     for y in range(max(0, int(rows[0])), min(ink.shape[0], int(rows[1]) + 1)):
         columns = np.nonzero(ink[y, lo:hi])[0]
         if columns.size == 0:
             continue
-        runs = np.split(columns, np.nonzero(np.diff(columns) > 1)[0] + 1)
-        run = runs[-1] if side > 0 else runs[0]
-        middles.append((run[0] + run[-1]) / 2.0 + lo)
-    return float(np.median(middles)) if middles else float(x)
+        inked_rows += 1
+        for run in np.split(columns, np.nonzero(np.diff(columns) > 1)[0] + 1):
+            samples.append((y, (run[0] + run[-1]) / 2.0 + lo))
+    if not samples:
+        return float(x)
+    # Край — вертикаль: один столбец почти во всех строках. Метку у торца
+    # (shaft-2: окружность отверстия в 7 px от торца) выдаёт форма — у кривой
+    # столбец меняется от строки к строке; правило «только вплотную» не
+    # переносилось между разрешениями (фаска на 150 dpi — те же 4–7 px).
+    samples.sort(key=lambda item: item[1])
+    groups: list[list[tuple[int, float]]] = [[samples[0]]]
+    for item in samples[1:]:
+        if item[1] - groups[-1][-1][1] <= 1.5:
+            groups[-1].append(item)
+        else:
+            groups.append([item])
+    steady = [group for group in groups if len({row for row, _ in group}) >= 0.8 * inked_rows]
+    if not steady:
+        return float(x)
+    edge = steady[-1] if side > 0 else steady[0]
+    return float(np.median([column for _, column in edge]))
 
 
 def _face_x(ink: Any, line: Any, inside: tuple[float, float]) -> float:
