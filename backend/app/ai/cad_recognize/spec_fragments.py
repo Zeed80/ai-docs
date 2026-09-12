@@ -4217,8 +4217,12 @@ async def _profile_by_assignment(
     router: Any,
     confidential: bool,
     audit: list[dict[str, Any]] | None = None,
+    notes: list[str] | None = None,
 ) -> dict | None:
     """Build the outline by ASSIGNING already-read numbers to roles.
+
+    ``notes`` receives what could not be built from what the sheet states — a
+    bolt hole diameter read with no pitch circle or count used to vanish here.
 
     Two narrow questions instead of one broad one: what shape is the contour,
     and which of the numbers the sheet states plays which part. Every returned
@@ -4288,6 +4292,23 @@ async def _profile_by_assignment(
                 "start_angle_deg": 0.0,
             }
         )
+    # A pattern the sheet only half states is not built — but it is not
+    # silently dropped either. Measured on the verifier corpus: both flanges
+    # stated the bolt hole (Ø5.5, Ø11) and neither the pitch circle nor the
+    # count, and the spec came back with no bolt holes and nothing unresolved —
+    # a flange without its fastening, reported as read cleanly.
+    has_count = isinstance(count, int) and not isinstance(count, bool) and 2 <= count <= 128
+    if not patterns and (pcd or bolt or has_count) and notes is not None:
+        missing = [
+            label
+            for label, present in (
+                ("диаметр окружности центров", pcd),
+                ("диаметр отверстий", bolt),
+                ("число отверстий", has_count),
+            )
+            if not present
+        ]
+        notes.append(f"массив отверстий не построен: на листе не указаны {', '.join(missing)}")
     profile["hole_patterns"] = patterns
     return profile
 
@@ -4645,6 +4666,7 @@ async def read_spec_by_fragments(
             router=router,
             confidential=confidential,
             audit=fragment_answers,
+            notes=unresolved,
         )
         if profile is None:
             # Fall back to reading the outline directly when the sheet's

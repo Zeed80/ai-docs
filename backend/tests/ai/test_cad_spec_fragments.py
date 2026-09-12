@@ -1580,3 +1580,69 @@ async def test_the_operator_type_reaches_every_fragment_pass(monkeypatch):
     await read_spec_best_effort(b"x", passes=2, digitization_type="rotation_body")
 
     assert seen == ["rotation_body", "rotation_body"]
+
+
+_FLANGE_CALLOUTS = {
+    "dimensions": [{"value": "20"}, {"value": "Ø120"}, {"value": "Ø5.5"}, {"value": "Ø32"}]
+}
+
+
+async def _assign(monkeypatch, assignment: dict) -> tuple[dict, list[str]]:
+    from app.ai.cad_recognize import spec_fragments as fragments
+
+    async def fake_ask(prompt, *_a, **_k):
+        if prompt is fragments._SHAPE_PROMPT:
+            return {"shape": "circle"}
+        return assignment
+
+    monkeypatch.setattr(fragments, "_ask", fake_ask)
+    notes: list[str] = []
+    profile = await fragments._profile_by_assignment(
+        object(), _FLANGE_CALLOUTS, router=object(), confidential=True, notes=notes
+    )
+    return profile, notes
+
+
+@pytest.mark.asyncio
+async def test_a_bolt_circle_the_sheet_does_not_dimension_is_reported_not_dropped(monkeypatch):
+    """Базовая линия M5: Ø5.5 прочитан, окружности и числа на листе нет —
+    массив пропадал, а `unresolved` оставался пустым."""
+    profile, notes = await _assign(
+        monkeypatch,
+        {
+            "outer_diameter_mm": 120,
+            "thickness_mm": 20,
+            "bore_diameter_mm": 32,
+            "bolt_hole_diameter_mm": 5.5,
+        },
+    )
+
+    assert profile["hole_patterns"] == []
+    assert len(notes) == 1
+    assert "окружности центров" in notes[0] and "число отверстий" in notes[0]
+    assert "диаметр отверстий" not in notes[0]
+
+
+@pytest.mark.asyncio
+async def test_a_bolt_circle_the_sheet_states_fully_is_built_without_notes(monkeypatch):
+    callouts = {"dimensions": [*_FLANGE_CALLOUTS["dimensions"], {"value": "Ø73"}]}
+    from app.ai.cad_recognize import spec_fragments as fragments
+
+    async def fake_ask(prompt, *_a, **_k):
+        if prompt is fragments._SHAPE_PROMPT:
+            return {"shape": "circle"}
+        return {
+            "outer_diameter_mm": 120,
+            "bolt_circle_diameter_mm": 73,
+            "bolt_hole_diameter_mm": 5.5,
+            "bolt_hole_count": 4,
+        }
+
+    monkeypatch.setattr(fragments, "_ask", fake_ask)
+    notes: list[str] = []
+    profile = await fragments._profile_by_assignment(
+        object(), callouts, router=object(), confidential=True, notes=notes
+    )
+
+    assert profile["hole_patterns"][0]["count"] == 4
+    assert notes == []
