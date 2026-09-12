@@ -18,6 +18,7 @@ import {
   SpecCrossCheck,
   SpecDimensionCheck,
   SpecFollowup,
+  SpecVerification,
   Solid3dSummary,
   approveCadAsDrafter,
   approveCadAsNormcontroller,
@@ -1256,6 +1257,8 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
   // exactly like a check that passed.
   const specCrosscheck = gen.params?.spec_crosscheck as
     SpecCrossCheck | undefined;
+  const specVerification = gen.params?.spec_verification as
+    SpecVerification | undefined;
   const specDimensionCheck = gen.params?.spec_dimension_check as
     SpecDimensionCheck | undefined;
   const specAssumptions = (gen.params?.spec_assumptions ??
@@ -1416,7 +1419,9 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
                   <span>{event.status}</span>
                   {event.at && (
                     <time className="ml-auto">
-                      {new Date(event.at).toLocaleTimeString(undefined, { timeZone: tz() })}
+                      {new Date(event.at).toLocaleTimeString(undefined, {
+                        timeZone: tz(),
+                      })}
                     </time>
                   )}
                 </div>
@@ -1535,6 +1540,7 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
 
       <AssurancePanel
         crosscheck={specCrosscheck}
+        verification={specVerification}
         dimensionCheck={specDimensionCheck}
         assumptions={specAssumptions}
         followups={specFollowups}

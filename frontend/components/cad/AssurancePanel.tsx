@@ -8,8 +8,21 @@ import type {
   SpecCrossCheck,
   SpecDimensionCheck,
   SpecFollowup,
+  SpecVerification,
   Solid3dSummary,
 } from "@/lib/studio-api";
+
+const VERIFY_KINDS = new Set(["plate_hole", "bolt_circle", "concentric_hole"]);
+
+/** «Отверстие 3» из `main_view.profile.holes[2]` — номер элемента с единицы. */
+function verifyElement(
+  item: SpecVerification["items"][number],
+  t: (k: string, v?: Record<string, string | number>) => string,
+): string {
+  if (!VERIFY_KINDS.has(item.kind)) return item.path;
+  const index = Number(/\[(\d+)\]$/.exec(item.path)?.[1] ?? 0) + 1;
+  return t(`vector.assurance_verify_kind_${item.kind}`, { index });
+}
 
 /** What the digitization actually established, and what it did not.
  *
@@ -28,9 +41,11 @@ export default function AssurancePanel({
   followups,
   consensus,
   solid,
+  verification,
   t,
 }: {
   crosscheck?: SpecCrossCheck;
+  verification?: SpecVerification;
   dimensionCheck?: SpecDimensionCheck;
   assumptions?: SpecAssumption[];
   followups?: SpecFollowup[];
@@ -77,7 +92,8 @@ export default function AssurancePanel({
     !buildAssumptions.length &&
     !(followups ?? []).length &&
     !consensus &&
-    !solid;
+    !solid &&
+    !verification?.items?.length;
   if (nothingToShow) return null;
 
   return (
@@ -123,6 +139,41 @@ export default function AssurancePanel({
         {warnings.map((finding) => (
           <Row key={finding.code} neutral label={finding.message} />
         ))}
+
+        {/* Прочитанное против самого листа: подтверждённое — одной строкой
+            сводки, опровергнутое и неизмеримое — поимённо, с причиной. */}
+        {verification?.items?.length ? (
+          <>
+            <Row
+              ok={
+                verification.summary.refuted === 0 &&
+                verification.summary.confirmed > 0
+              }
+              neutral={
+                verification.summary.confirmed === 0 &&
+                verification.summary.refuted === 0
+              }
+              label={t("vector.assurance_verify", {
+                confirmed: verification.summary.confirmed,
+                refuted: verification.summary.refuted,
+                unmeasurable: verification.summary.unmeasurable,
+              })}
+            />
+            {verification.items
+              .filter((item) => item.status !== "confirmed")
+              .map((item) => (
+                <Row
+                  key={`${item.kind}-${item.path}`}
+                  ok={false}
+                  neutral={item.status === "unmeasurable"}
+                  label={t(`vector.assurance_verify_${item.status}`, {
+                    element: verifyElement(item, t),
+                  })}
+                  detail={item.reason}
+                />
+              ))}
+          </>
+        ) : null}
 
         {solid ? (
           <>

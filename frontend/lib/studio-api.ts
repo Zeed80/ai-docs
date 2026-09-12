@@ -1031,6 +1031,30 @@ export interface SpecCrossCheck {
   raster_check: string;
 }
 
+/** The reading checked against the sheet itself (verify stage): one verdict
+ * per checkable element — a refuted value is NOT replaced, the measurement is
+ * shown next to it for the person to decide. */
+export interface SpecVerification {
+  items: Array<{
+    kind: "plate_hole" | "bolt_circle" | "concentric_hole" | string;
+    path: string;
+    feature_id?: string | null;
+    read: Record<string, number | null>;
+    status: "confirmed" | "refuted" | "unmeasurable";
+    measured: Record<string, number | null>;
+    reason: string;
+  }>;
+  summary: {
+    checked: number;
+    confirmed: number;
+    refuted: number;
+    unmeasurable: number;
+    reason?: string | null;
+    cost_ms?: number;
+  };
+  notes?: string[];
+}
+
 /** Which read callouts the drawing shows, and which it does not. */
 export interface SpecDimensionCheck {
   status: "ok" | "partial" | string;

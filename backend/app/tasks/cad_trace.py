@@ -4042,6 +4042,9 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         "spec": spec,
                         "spec_dimension_check": spec_dim_check,
                         "spec_crosscheck": crosscheck,
+                        # Прочитанное против самого листа — вердикт на элемент
+                        # (панель «что проверено» показывает его оператору).
+                        **({"spec_verification": verification} if verification else {}),
                         "dimension_graph": dimension_graph,
                         # Which values a second look recovered, which it failed
                         # to, and which answers were refused for having no
