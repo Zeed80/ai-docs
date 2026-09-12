@@ -9,10 +9,10 @@
 
 * отверстия прямоугольной пластины (`plate_hole`) — система координат плана
   по контуру на листе (`locate_plate_frame`);
-* окружности болтов круглой детали (`bolt_circle`) — система координат по
-  наружному контуру (`locate_circle_frame`). Центральное отверстие фланца
-  пока не проверяется: оно концентрично окружности центров, и поиск в
-  полосе их не различит.
+* у круглой детали — система координат по наружному контуру
+  (`locate_circle_frame`), окружности болтов (`bolt_circle`) и центральное
+  отверстие (`concentric_hole`, по радиальному профилю: поиск в полосе не
+  отличит его от концентричной окружности центров).
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ def verify_spec_against_sheet(image_bytes: bytes, spec: dict[str, Any]) -> dict[
     if shape == "rectangle":
         reason = _plate_holes(image_bytes, profile, report)
     elif shape == "circle":
-        reason = _bolt_circles(image_bytes, profile, report)
+        reason = _circular(image_bytes, profile, report)
     else:
         reason = "нет проверяемых элементов (пластина или круглая деталь)"
     return _finish(report, started, reason)
@@ -123,9 +123,7 @@ def _plate_holes(image_bytes: bytes, profile: dict[str, Any], report: dict[str, 
     return None
 
 
-def _bolt_circles(
-    image_bytes: bytes, profile: dict[str, Any], report: dict[str, Any]
-) -> str | None:
+def _circular(image_bytes: bytes, profile: dict[str, Any], report: dict[str, Any]) -> str | None:
     from app.ai.cad_recognize.verifiers.bolt_circle import _PHASE_DEG
     from app.ai.cad_recognize.verifiers.circle_frame import locate_circle_frame
     from app.ai.cad_recognize.verifiers.plate_hole import plate_hole_tolerances
@@ -138,21 +136,28 @@ def _bolt_circles(
         and _is_number(pattern.get("bolt_circle_diameter_mm"))
         and _is_number(pattern.get("hole_diameter_mm"))
     ]
+    central = [
+        (index, hole)
+        for index, hole in enumerate(profile.get("holes") or [])
+        if isinstance(hole, dict)
+        and all(_is_number(hole.get(key)) for key in _HOLE_KEYS)
+        and abs(float(hole["center_x_mm"])) <= 0.01
+        and abs(float(hole["center_y_mm"])) <= 0.01
+    ]
     diameter = profile.get("diameter_mm")
-    if not patterns:
-        return "нет окружностей болтов"
+    if not patterns and not central:
+        return "нет окружностей болтов и центрального отверстия"
     if not _is_number(diameter):
         return "нет наружного диаметра"
     gray = _gray(image_bytes)
     frame = locate_circle_frame(gray, float(diameter))
     if frame is None:
+        reason = "контур детали на листе не найден"
         for index, pattern in patterns:
-            report["items"].append(
-                _pattern_item(
-                    index, pattern, "unmeasurable", {}, "контур детали на листе не найден"
-                )
-            )
-        return "контур детали на листе не найден"
+            report["items"].append(_pattern_item(index, pattern, "unmeasurable", {}, reason))
+        for index, hole in central:
+            report["items"].append(_central_item(index, hole, "unmeasurable", {}, reason))
+        return reason
     report["frame"] = _frame_payload(frame)
     position_tol, diameter_tol = plate_hole_tolerances(frame.scale_mean)
     for index, pattern in patterns:
@@ -196,6 +201,24 @@ def _bolt_circles(
                 f"Ø{_mm(measured['bolt_circle_diameter_mm'])}, "
                 f"фаза {_mm(measured['start_angle_deg'])}° — проверить"
             )
+    for index, hole in central:
+        verdict = verify(
+            Hypothesis(
+                "concentric_hole",
+                f"main_view.profile.holes[{index}]",
+                {"diameter_mm": float(hole["diameter_mm"])},
+            ),
+            frame,
+            gray,
+        )
+        item = _central_item(index, hole, verdict.status, dict(verdict.measured), verdict.reason)
+        item["tolerance_mm"] = {"diameter": round(diameter_tol, 3)}
+        report["items"].append(item)
+        if verdict.status == "refuted" and verdict.measured:
+            report["notes"].append(
+                f"центральное отверстие: прочитано Ø{_mm(hole['diameter_mm'])}, "
+                f"по листу — Ø{_mm(verdict.measured['diameter_mm'])} — проверить"
+            )
     return None
 
 
@@ -212,6 +235,7 @@ _GRAPH_FIELDS = {
         ("hole_diameter_mm", "diameter"),
         ("start_angle_deg", "phase"),
     ),
+    "concentric_hole": (("diameter_mm", "diameter"),),
 }
 
 
@@ -287,6 +311,20 @@ def _hole_item(
         # вердикт находит узел Feature в графе.
         "feature_id": hole.get("id"),
         "read": {key: hole[key] for key in _HOLE_KEYS},
+        "status": status,
+        "measured": measured,
+        "reason": reason,
+    }
+
+
+def _central_item(
+    index: int, hole: dict[str, Any], status: str, measured: dict[str, Any], reason: str
+) -> dict[str, Any]:
+    return {
+        "kind": "concentric_hole",
+        "path": f"main_view.profile.holes[{index}]",
+        "feature_id": hole.get("id"),
+        "read": {"diameter_mm": hole["diameter_mm"]},
         "status": status,
         "measured": measured,
         "reason": reason,

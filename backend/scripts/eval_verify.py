@@ -334,8 +334,75 @@ def eval_bolt_circle(png: bytes, truth: dict) -> list[dict[str, Any]]:
     return outcomes
 
 
+def eval_concentric_hole(png: bytes, truth: dict) -> list[dict[str, Any]]:
+    """Центральное отверстие круглой детали: ``truth`` и ``diameter`` (Ø +1,1 мм).
+
+    Система координат — по контуру на листе; эталон её точности, как у
+    окружности болтов, — середина точек размера наружного Ø.
+    """
+    import math
+
+    import numpy as np
+    from PIL import Image
+
+    from app.ai.cad_recognize.verifiers import Hypothesis, verify
+    from app.ai.cad_recognize.verifiers.circle_frame import locate_circle_frame
+    from app.ai.cad_recognize.verifiers.plate_hole import plate_hole_tolerances
+
+    profile = (truth["spec"].get("main_view") or {}).get("profile") or {}
+    bores = [
+        float(hole["diameter_mm"])
+        for hole in profile.get("holes") or []
+        if abs(float(hole.get("center_x_mm") or 0.0)) <= 0.01
+        and abs(float(hole.get("center_y_mm") or 0.0)) <= 0.01
+        and hole.get("diameter_mm")
+    ]
+    if profile.get("shape") != "circle" or not bores or not profile.get("diameter_mm"):
+        return []
+    outer_mm = float(profile["diameter_mm"])
+    outer = next(
+        (
+            item
+            for item in truth.get("labels") or []
+            if item.get("kind") == "dimension"
+            and item.get("dimension_kind") == "diameter"
+            and item.get("value_mm") is not None
+            and abs(item["value_mm"] - outer_mm) <= 0.05
+            and len(item.get("anchors_px") or []) == 2
+        ),
+        None,
+    )
+    if outer is None:
+        return []
+    (ax, ay), (bx, by) = outer["anchors_px"]
+    ref_scale = outer_mm / math.hypot(bx - ax, by - ay)
+    gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))
+    frame = locate_circle_frame(gray, outer_mm)
+    _position_tol, diameter_tol = plate_hole_tolerances(ref_scale)
+    outcomes = []
+    for bore in bores:
+        for case, read in (("truth", bore), ("diameter", bore + 1.1)):
+            verdict = verify(
+                Hypothesis("concentric_hole", "holes", {"diameter_mm": read}), frame, gray
+            )
+            measured = verdict.measured.get("diameter_mm")
+            accurate = measured is not None and abs(measured - bore) <= diameter_tol
+            wanted = "confirmed" if case == "truth" else "refuted"
+            outcomes.append(
+                {
+                    "case": case,
+                    "found": verdict.status != "unmeasurable",
+                    "correct": verdict.status == wanted and accurate,
+                    "error_rel": (abs(measured - bore) / bore if measured else None),
+                    "unit_px": bore / 2.0 / ref_scale,
+                }
+            )
+    return outcomes
+
+
 _VERIFIERS = {
     "bolt_circle": eval_bolt_circle,
+    "concentric_hole": eval_concentric_hole,
     "dimension_line": eval_dimension_line,
     "plate_hole": eval_plate_hole,
 }

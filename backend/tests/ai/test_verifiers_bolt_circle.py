@@ -77,6 +77,30 @@ def test_a_zero_phase_the_sheet_does_not_carry_is_refuted_with_the_measured_phas
     assert abs(verdict.measured["start_angle_deg"] - PHASE) <= 1.0
 
 
+def _bore(diameter_mm):
+    sheet = _sheet()
+    return verify(
+        Hypothesis("concentric_hole", "main_view.profile.holes[0]", {"diameter_mm": diameter_mm}),
+        locate_circle_frame(sheet, D),
+        sheet,
+    )
+
+
+def test_the_central_bore_is_confirmed_by_the_radial_profile():
+    verdict = _bore(25.0)
+
+    assert verdict.status == "confirmed", (verdict.reason, verdict.measured)
+    assert abs(verdict.measured["diameter_mm"] - 25.0) <= 0.3
+
+
+def test_a_wrong_bore_is_refuted_and_the_thin_bolt_circle_is_not_taken_for_it():
+    """Прочитано Ø60 — ровно окружность центров; она тонкая и не отверстие."""
+    verdict = _bore(60.0)
+
+    assert verdict.status == "refuted"
+    assert abs(verdict.measured["diameter_mm"] - 25.0) <= 0.3
+
+
 def test_a_wrong_hole_count_is_refuted():
     verdict = _check(count=8)
 
