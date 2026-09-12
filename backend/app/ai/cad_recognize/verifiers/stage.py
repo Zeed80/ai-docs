@@ -253,6 +253,8 @@ def apply_verification(graph: Any, report: dict[str, Any], *, pass_id: str) -> t
     from app.domain.engineering_model_graph import apply_graph_patch
 
     written = 0
+    if report.get("frame"):
+        graph = apply_graph_patch(graph, _view_scale_patch(graph, report, pass_id=pass_id))
     for item in report.get("items") or []:
         feature_id = item.get("feature_id")
         if not feature_id:
@@ -276,6 +278,54 @@ def apply_verification(graph: Any, report: dict[str, Any], *, pass_id: str) -> t
             graph = apply_graph_patch(graph, patch)
             written += 1
     return graph, written
+
+
+def _view_scale_patch(graph: Any, report: dict[str, Any], *, pass_id: str) -> Any:
+    """Масштаб проверенного вида — утверждением со свидетельством (план, P1.3).
+
+    Путь «по описанию» масштаба в графе не имел вовсе (`assertion:sheet-scale`
+    пишет только трассировка), хотя стадия проверки его находит по контуру.
+    Масштаб по u — значением, по v и начало — в свидетельстве: выпрямленное
+    фото анизотропно.
+    """
+    from app.domain.emg_predicates import PREDICATE
+    from app.domain.engineering_model_graph import (
+        Assertion,
+        Evidence,
+        ExactValue,
+        GraphPatch,
+    )
+
+    frame = report["frame"]
+    node_ids = {node.id for node in graph.nodes}
+    subject = "sheet:0" if "sheet:0" in node_ids else "document-set:root"
+    kinds = sorted({item["kind"] for item in report.get("items") or []})
+    evidence = Evidence(
+        id=f"evidence:trace:{pass_id}:view-frame",
+        kind="trace_run",
+        payload={"verifier": "view_frame", "checked_by": kinds, **frame},
+    )
+    assertion = Assertion(
+        id=f"assertion:view-scale:{pass_id}",
+        subject_id=subject,
+        predicate=PREDICATE.SCALE_MM_PER_PX,
+        value=ExactValue(kind="exact", value=frame["mm_per_px"]),
+        unit="mm",
+        origin="traced",
+        assurance="observed",
+        evidence_ids=[evidence.id],
+        confidence=0.8,
+    )
+    return GraphPatch(
+        patch_id=f"patch:trace:{pass_id}:view-frame",
+        base_revision=graph.revision,
+        base_sha256=graph.canonical_sha256,
+        producer="tracer",
+        pass_id=pass_id,
+        idempotency_key=f"trace:{pass_id}:view-frame",
+        add_evidence=[evidence],
+        add_assertions=[assertion],
+    )
 
 
 def _field_verdict(item: dict[str, Any], field: str, tolerance_kind: str):

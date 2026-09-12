@@ -194,3 +194,13 @@ def test_a_flange_bolt_circle_is_checked_and_only_the_phase_is_refuted_in_the_gr
     assert active[f"{prefix}count"] == "corroborated"
     assert active[f"{prefix}bolt_circle_diameter_mm"] == "corroborated"
     assert active[f"{prefix}hole_diameter_mm"] == "corroborated"
+    # Масштаб вида — утверждением со свидетельством: в пути «по описанию» его не было.
+    from app.domain.emg_predicates import PREDICATE
+
+    (scale,) = [
+        item
+        for item in graph.assertions
+        if item.predicate == PREDICATE.SCALE_MM_PER_PX and item.state == "active"
+    ]
+    assert abs(scale.value.value - 1 / 6.0) <= 0.002
+    assert scale.origin == "traced" and scale.evidence_ids
