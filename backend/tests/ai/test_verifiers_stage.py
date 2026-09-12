@@ -143,8 +143,11 @@ def test_no_checkable_hypothesis_leaves_the_stage_without_a_verdict():
         )
 
 
-def _shaft_png() -> bytes:
-    """Вал Ø30×30 → Ø20×40 → Ø25×30 при 5 px/мм на листе размера настоящего."""
+def _shaft_png(*, keyway: bool = False) -> bytes:
+    """Вал Ø30×30 → Ø20×40 → Ø25×30 при 5 px/мм на листе размера настоящего.
+
+    ``keyway`` — паз 40…60 × 6 на средней ступени, лицом (капсула).
+    """
     image = Image.new("L", (2800, 2000), 255)
     draw = ImageDraw.Draw(image)
     x, axis, previous = 200.0, 500.0, 0.0
@@ -161,6 +164,13 @@ def _shaft_png() -> bytes:
             draw.line([(x, axis + low), (x, axis + high)], fill=0, width=6)
         previous, x = r, x_end
     draw.line([(x, axis - previous), (x, axis + previous)], fill=0, width=6)
+    if keyway:
+        h, left, right = 15.0, 200.0 + 43.0 * 5.0, 200.0 + 57.0 * 5.0
+        draw.line([(left, axis - h), (right, axis - h)], fill=0, width=6)
+        draw.line([(left, axis + h), (right, axis + h)], fill=0, width=6)
+        r = h + 3.0
+        draw.arc([left - r, axis - r, left + r, axis + r], 90, 270, fill=0, width=6)
+        draw.arc([right - r, axis - r, right + r, axis + r], -90, 90, fill=0, width=6)
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
     return buffer.getvalue()
@@ -207,6 +217,50 @@ def test_a_shaft_is_checked_step_by_step_and_only_the_wrong_diameter_is_refuted(
     assert active["assertion:feature:0:outer:1:param:diameter_mm"] == "contradicted"
     assert active["assertion:feature:0:outer:1:param:length_mm"] == "corroborated"
     assert active["assertion:feature:0:outer:0:param:diameter_mm"] == "corroborated"
+
+
+def test_a_keyway_is_checked_and_only_its_wrong_length_is_contradicted_in_the_graph():
+    from app.ai.cad_emg_compat import spec_feature_tree_as_graph
+    from app.ai.cad_recognize.spec_vectorize import assign_stable_feature_ids
+    from app.ai.cad_recognize.verifiers.stage import apply_verification
+    from app.ai.cad_solid import feature_tree_from_spec
+
+    spec = {
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 30.0, "length_mm": 30.0},
+                {"diameter_mm": 20.0, "length_mm": 40.0},
+                {"diameter_mm": 25.0, "length_mm": 30.0},
+            ],
+            # На листе паз 40…60: длина прочитана неверно.
+            "keyways": [
+                {"axial_start_mm": 40.0, "length_mm": 23.0, "width_mm": 6.0, "depth_mm": 3.5}
+            ],
+        }
+    }
+    assign_stable_feature_ids(spec)
+    report = verify_spec_against_sheet(_shaft_png(keyway=True), spec)
+
+    keyways = [item for item in report["items"] if item["kind"] == "keyway"]
+    assert len(keyways) == 1
+    item = keyways[0]
+    assert item["status"] == "refuted", item
+    assert abs(item["measured"]["length_mm"] - 20.0) <= 0.5
+    assert any(note.startswith("паз 1") for note in report["notes"])
+
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    graph = spec_feature_tree_as_graph(spec, candidate, graph_id="image-generation:keyway")
+    graph, _written = apply_verification(graph, report, pass_id="verify-keyway")
+    active = {
+        assertion.supersedes_assertion_id: assertion.assurance
+        for assertion in graph.assertions
+        if assertion.state == "active" and assertion.supersedes_assertion_id
+    }
+    prefix = f"assertion:feature:{item['feature_id']}:param:"
+    assert active[prefix + "length_mm"] == "contradicted"
+    assert active[prefix + "width_mm"] == "corroborated"
+    assert active[prefix + "axial_start_mm"] == "corroborated"
 
 
 def test_a_spec_without_checkable_elements_has_nothing_to_check():

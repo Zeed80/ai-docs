@@ -251,8 +251,10 @@ def _shaft(image_bytes: bytes, body: dict[str, Any], report: dict[str, Any]) -> 
         reason = "главный вид вала на листе не найден"
         for index, step in steps:
             report["items"].append(_step_item(index, step, "unmeasurable", {}, reason))
+        _keyways(gray, None, body, report)
         return reason
     frame, profile = located
+    _keyways(gray, frame, body, report)
     verdict = verify(
         Hypothesis(
             "shaft_profile",
@@ -309,6 +311,55 @@ def _shaft(image_bytes: bytes, body: dict[str, Any], report: dict[str, Any]) -> 
     return verdict.reason if whole_unmeasurable else None
 
 
+_KEYWAY_KEYS = ("axial_start_mm", "length_mm", "width_mm")
+
+
+def _keyways(gray: Any, frame: Any, body: dict[str, Any], report: dict[str, Any]) -> None:
+    """Шпоночные пазы главного вида: капсула — начало, длина, ширина (Ф3).
+
+    Лицом на главном виде виден только закрытый призматический паз; у
+    открытого и сегментного контур другой — «не измеримо» с причиной.
+    """
+    from app.ai.cad_recognize.verifiers.shaft_profile import shaft_tolerances
+
+    for index, key in enumerate(body.get("keyways") or []):
+        if not isinstance(key, dict) or not all(_is_number(key.get(k)) for k in _KEYWAY_KEYS):
+            continue
+        item = {
+            "kind": "keyway",
+            "path": f"main_view.keyways[{index}]",
+            "feature_id": key.get("id"),
+            "read": {k: key.get(k) for k in _KEYWAY_KEYS},
+            "status": "unmeasurable",
+            "measured": {},
+            "reason": "",
+        }
+        report["items"].append(item)
+        if (key.get("kind") or "parallel") != "parallel" or (
+            key.get("end_type") or "closed"
+        ) != "closed":
+            item["reason"] = "проверяется только закрытый призматический паз"
+            continue
+        verdict = verify(
+            Hypothesis("keyway", item["path"], {k: float(key[k]) for k in _KEYWAY_KEYS}),
+            frame,
+            gray,
+        )
+        item.update(status=verdict.status, measured=dict(verdict.measured), reason=verdict.reason)
+        if frame is not None:
+            length_tol, width_tol = shaft_tolerances(frame.scale_mean)
+            item["tolerance_mm"] = {"length": round(length_tol, 3), "width": round(width_tol, 3)}
+        if verdict.status == "refuted":
+            got = verdict.measured
+            report["notes"].append(
+                f"паз {index + 1}: прочитано {_mm(key['axial_start_mm'])}…"
+                f"{_mm(float(key['axial_start_mm']) + float(key['length_mm']))} × "
+                f"{_mm(key['width_mm'])}, по листу — {_mm(got['axial_start_mm'])}…"
+                f"{_mm(got['axial_start_mm'] + got['length_mm'])} × {_mm(got['width_mm'])}"
+                " — проверить"
+            )
+
+
 def _step_item(
     index: int, step: dict[str, Any], status: str, measured: dict[str, Any], reason: str
 ) -> dict[str, Any]:
@@ -338,6 +389,7 @@ _GRAPH_FIELDS = {
     ),
     "concentric_hole": (("diameter_mm", "diameter"),),
     "shaft_step": (("diameter_mm", "diameter"), ("length_mm", "length")),
+    "keyway": (("axial_start_mm", "length"), ("length_mm", "length"), ("width_mm", "width")),
 }
 
 

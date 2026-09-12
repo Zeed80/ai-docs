@@ -739,6 +739,7 @@
       "assurance_verify_kind_bolt_circle": "Bolt circle {index}",
       "assurance_verify_kind_concentric_hole": "Central hole",
       "assurance_verify_kind_shaft_step": "Step {index}",
+      "assurance_verify_kind_keyway": "Keyway {index}",
       "profile_editor_title": "Holes of the plan (editable)",
       "profile_editor_hint": "Coordinates as the sheet gives them: from the left and bottom edge. Where the sheet measurement disagrees with the reading, the measured value is shown next to the field — take it with one click; the decision is yours.",
       "profile_editor_hint_circle": "Coordinates from the part centre. The sheet rarely states the bolt-circle phase — the sheet check measures it.",

@@ -184,24 +184,43 @@ def _segments(ink: Any, min_length: int) -> list[Any]:
         if w < min_length:
             continue
         block = labels[y : y + h, x : x + w] == index
-        rows = np.arange(y, y + h, dtype=float)[:, None]
-        counts = block.sum(axis=0)
-        with np.errstate(invalid="ignore", divide="ignore"):
-            centres = np.where(counts > 0, (block * rows).sum(axis=0) / counts, np.nan)
-        start = 0
-        for i in range(1, w + 1):
-            if (
-                i == w
-                or np.isnan(centres[i])
-                or np.isnan(centres[i - 1])
-                or abs(centres[i] - centres[i - 1]) > 1.0
-            ):
-                piece = centres[start:i]
-                if i - start >= min_length and not np.all(np.isnan(piece)):
-                    result.append(
-                        _Line(float(np.nanmean(piece)), float(x + start), float(x + i - 1))
-                    )
-                start = i
+        # В столбце может быть несколько прогонов одной компоненты: подпись
+        # «Ø14» поверх паза сшивает его верхнюю и нижнюю прямую (shaft-3),
+        # грань толщиной с ядро — верх и низ ступени. Один центр на столбец
+        # усреднял их и попадал на ось. Каждый прогон — отдельно; прогоны
+        # соседних столбцов сцепляются в цепочки по близости центра.
+        chains: list[list[float]] = []  # [начало, конец, сумма центров, число]
+        active: list[int] = []
+        for column in range(w):
+            rows = np.nonzero(block[:, column])[0]
+            if rows.size == 0:
+                active = []
+                continue
+            runs = np.split(rows, np.nonzero(np.diff(rows) > 1)[0] + 1)
+            next_active = []
+            for run in runs:
+                centre = y + (run[0] + run[-1]) / 2.0
+                match = None
+                for chain_index in active:
+                    chain = chains[chain_index]
+                    last = chain[4]
+                    if abs(centre - last) <= 1.0 and chain_index not in next_active:
+                        match = chain_index
+                        break
+                if match is None:
+                    chains.append([column, column, centre, 1, centre])
+                    match = len(chains) - 1
+                else:
+                    chain = chains[match]
+                    chain[1] = column
+                    chain[2] += centre
+                    chain[3] += 1
+                    chain[4] = centre
+                next_active.append(match)
+            active = next_active
+        for first, last, total, number, _last_centre in chains:
+            if last - first + 1 >= min_length:
+                result.append(_Line(float(total / number), float(x + first), float(x + last)))
     return sorted(result, key=lambda line: line.position)
 
 

@@ -515,8 +515,74 @@ def eval_shaft_profile(png: bytes, truth: dict) -> list[dict[str, Any]]:
     return outcomes
 
 
+def eval_keyway(png: bytes, truth: dict) -> list[dict[str, Any]]:
+    """Шпоночные пазы вала: система координат — по листу (`locate_shaft_frame`).
+
+    Случаи: ``truth``; ``start`` (+3 мм), ``length`` (+5 мм), ``width``
+    (+2 мм) — должны опровергнуться, а измеренное — совпасть с эталоном.
+    """
+    import numpy as np
+    from PIL import Image
+
+    from app.ai.cad_recognize.verifiers import Hypothesis, verify
+    from app.ai.cad_recognize.verifiers.shaft_frame import locate_shaft_frame
+    from app.ai.cad_recognize.verifiers.shaft_profile import shaft_tolerances
+
+    main_view = truth["spec"].get("main_view") or {}
+    keys = [key for key in main_view.get("keyways") or [] if key.get("length_mm")]
+    outer = main_view.get("outer") or []
+    if not keys or len(outer) < 2:
+        return []
+    total = sum(float(step["length_mm"]) for step in outer)
+    gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))
+    located = locate_shaft_frame(gray, total)
+    frame = located[0] if located else None
+    if frame is None:
+        scale = 0.2
+    else:
+        scale = frame.scale_mean
+    length_tol, width_tol = shaft_tolerances(scale)
+    outcomes = []
+    for key in keys:
+        real = {
+            "axial_start_mm": float(key["axial_start_mm"]),
+            "length_mm": float(key["length_mm"]),
+            "width_mm": float(key["width_mm"]),
+        }
+        cases = [
+            ("truth", real),
+            ("start", {**real, "axial_start_mm": real["axial_start_mm"] + 3.0}),
+            ("length", {**real, "length_mm": real["length_mm"] + 5.0}),
+            ("width", {**real, "width_mm": real["width_mm"] + 2.0}),
+        ]
+        for case, read in cases:
+            verdict = verify(Hypothesis("keyway", "keyways", read), frame, gray)
+            measured = verdict.measured
+            accurate = bool(measured) and (
+                abs(measured["axial_start_mm"] - real["axial_start_mm"]) <= length_tol
+                and abs(measured["length_mm"] - real["length_mm"]) <= length_tol
+                and abs(measured["width_mm"] - real["width_mm"]) <= width_tol
+            )
+            wanted = "confirmed" if case == "truth" else "refuted"
+            outcomes.append(
+                {
+                    "case": case,
+                    "found": verdict.status != "unmeasurable",
+                    "correct": verdict.status == wanted and accurate,
+                    "error_rel": (
+                        abs(measured["length_mm"] - real["length_mm"]) / real["length_mm"]
+                        if measured
+                        else None
+                    ),
+                    "unit_px": real["width_mm"] / 2.0 / scale,
+                }
+            )
+    return outcomes
+
+
 _VERIFIERS = {
     "bolt_circle": eval_bolt_circle,
+    "keyway": eval_keyway,
     "concentric_hole": eval_concentric_hole,
     "shaft_profile": eval_shaft_profile,
     "dimension_line": eval_dimension_line,
