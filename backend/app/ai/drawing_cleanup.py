@@ -181,6 +181,31 @@ def _open_on_white(image_bytes: bytes):
     return img.convert("RGB")
 
 
+# Отношение сторон листов ЕСКД A0–A4 (ГОСТ 2.301) — √2; окно, в котором
+# оценка по сторонам четырёхугольника считается этим листом.
+_ISO_RATIO = 2.0**0.5
+_ISO_WINDOW = 0.12
+
+
+def _iso_sheet_size(width: float, height: float) -> tuple[int, int]:
+    """Размер выпрямленного листа: оценка по сторонам, подогнанная к √2.
+
+    Длина стороны на фото — это длина после перспективы: дальняя сторона
+    короче, и максимум из пары противоположных сторон занижает одну ось
+    сильнее другой. На фото корпуса v7 выход расходился с √2 до 8 %, а оси —
+    до 13 % (plate-6@photo: план 80×50 мм лёг на 343×244 px): каждый
+    проверяльщик мерил в анизотропном листе. Лист ЕСКД — √2, поэтому близкая
+    к нему оценка сводится к нему: длинная сторона остаётся, короткая —
+    длинная/√2. Оценка вне окна (не формат A, дополнительные форматы)
+    остаётся как есть.
+    """
+    longer, shorter = max(width, height), min(width, height)
+    if shorter > 0 and abs(longer / shorter / _ISO_RATIO - 1.0) <= _ISO_WINDOW:
+        shorter = longer / _ISO_RATIO
+        width, height = (longer, shorter) if width >= height else (shorter, longer)
+    return int(width), int(height)
+
+
 def _dewarp_sheet(arr):
     """Perspective-correct a phone photo; see `dewarp_sheet_with_transform`."""
     result = dewarp_sheet_with_transform(arr)
@@ -240,8 +265,10 @@ def dewarp_sheet_with_transform(arr):
     tr, bl = pts[np.argmin(diffs)], pts[np.argmax(diffs)]
     ordered = np.array([tl, tr, br, bl], dtype=np.float32)
 
-    out_w = int(max(np.linalg.norm(br - bl), np.linalg.norm(tr - tl)))
-    out_h = int(max(np.linalg.norm(tr - br), np.linalg.norm(tl - bl)))
+    out_w, out_h = _iso_sheet_size(
+        float(max(np.linalg.norm(br - bl), np.linalg.norm(tr - tl))),
+        float(max(np.linalg.norm(tr - br), np.linalg.norm(tl - bl))),
+    )
     if out_w < 200 or out_h < 200:
         return None
     target = np.array(
