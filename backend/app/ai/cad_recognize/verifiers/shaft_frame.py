@@ -135,7 +135,7 @@ def locate_shaft_frame(sheet: Any, total_length_mm: float) -> tuple[ViewFrame, S
     # внутри профиля: грань тоже сливается с выносной цепочки размеров.
     inside = (axis_y - extent - 2.0, axis_y + extent + 2.0)
     faces = sorted(
-        (line.position, line.start, line.end)
+        (_face_x(ink, line, inside), line.start, line.end)
         for line in vertical
         if x0 - 3 <= line.position <= x1 + 3
         and min(line.end, inside[1]) - max(line.start, inside[0]) >= min_length
@@ -290,6 +290,36 @@ def _end_faces(
     if not left or not right:
         return None
     return int(round(min(left))), int(round(max(right)))
+
+
+def _face_x(ink: Any, line: Any, inside: tuple[float, float]) -> float:
+    """Столбец грани — середина линии в строках ВНУТРИ профиля, медиана по строкам.
+
+    Вертикаль грани сливается в одну компоненту с выносной, стенкой канавки
+    или размерной линией отверстия, и центр тяжести компоненты уезжал: грань
+    на 250,0 выходила 251,3 (shaft-11), на 50 — 50,36 (shaft-16), хотя на
+    листе она стоит ровно на станции. Внутри профиля грань стоит одна.
+    """
+    import numpy as np
+
+    top = int(max(line.start, inside[0]))
+    bottom = int(min(line.end, inside[1]))
+    centre = int(round(line.position))
+    reach = 6
+    lo = max(0, centre - reach)
+    hi = min(ink.shape[1], centre + reach + 1)
+    middles = []
+    for y in range(top, bottom + 1):
+        cut = ink[y, lo:hi]
+        columns = np.nonzero(cut)[0]
+        if columns.size == 0:
+            continue
+        # Прогон чернил, ближайший к положению линии: соседняя вертикаль в
+        # пределах окна не должна тянуть середину к себе.
+        runs = np.split(columns, np.nonzero(np.diff(columns) > 1)[0] + 1)
+        run = min(runs, key=lambda item: abs((item[0] + item[-1]) / 2.0 + lo - line.position))
+        middles.append((run[0] + run[-1]) / 2.0 + lo)
+    return float(np.median(middles)) if middles else float(line.position)
 
 
 def _slice(half: Any, x0: int, x1: int) -> Any:
