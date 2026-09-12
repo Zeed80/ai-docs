@@ -588,7 +588,69 @@ def eval_keyway(png: bytes, truth: dict) -> list[dict[str, Any]]:
     return outcomes
 
 
+def eval_cross_hole(png: bytes, truth: dict) -> list[dict[str, Any]]:
+    """Поперечные отверстия вала: система координат — по листу, виды по очереди.
+
+    Случаи: ``truth``; ``position`` (+3 мм), ``diameter`` (+2 мм) — должны
+    опровергнуться, а измеренное — совпасть с эталоном.
+    """
+    import numpy as np
+    from PIL import Image
+
+    from app.ai.cad_recognize.verifiers import Hypothesis
+    from app.ai.cad_recognize.verifiers.plate_hole import plate_hole_tolerances
+    from app.ai.cad_recognize.verifiers.shaft_frame import locate_shaft_views
+    from app.ai.cad_recognize.verifiers.stage import _first_measured
+
+    main_view = truth["spec"].get("main_view") or {}
+    holes = [hole for hole in main_view.get("cross_holes") or [] if hole.get("diameter_mm")]
+    outer = main_view.get("outer") or []
+    if not holes or len(outer) < 2:
+        return []
+    total = sum(float(step["length_mm"]) for step in outer)
+    gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))
+    frames = [frame for frame, _profile in locate_shaft_views(gray, total)]
+    scale = frames[0].scale_mean if frames else 0.2
+    position_tol, diameter_tol = plate_hole_tolerances(scale)
+    outcomes = []
+    for hole in holes:
+        real = {
+            "axial_position_mm": float(hole["axial_position_mm"]),
+            "diameter_mm": float(hole["diameter_mm"]),
+        }
+        cases = [
+            ("truth", real),
+            ("position", {**real, "axial_position_mm": real["axial_position_mm"] + 3.0}),
+            ("diameter", {**real, "diameter_mm": real["diameter_mm"] + 2.0}),
+        ]
+        for case, read in cases:
+            _frame, verdict = _first_measured(
+                Hypothesis("cross_hole", "cross_holes", read), frames, gray
+            )
+            measured = verdict.measured
+            accurate = bool(measured) and (
+                abs(measured["axial_position_mm"] - real["axial_position_mm"]) <= position_tol
+                and abs(measured["diameter_mm"] - real["diameter_mm"]) <= diameter_tol
+            )
+            wanted = "confirmed" if case == "truth" else "refuted"
+            outcomes.append(
+                {
+                    "case": case,
+                    "found": verdict.status != "unmeasurable",
+                    "correct": verdict.status == wanted and accurate,
+                    "error_rel": (
+                        abs(measured["diameter_mm"] - real["diameter_mm"]) / real["diameter_mm"]
+                        if measured
+                        else None
+                    ),
+                    "unit_px": real["diameter_mm"] / 2.0 / scale,
+                }
+            )
+    return outcomes
+
+
 _VERIFIERS = {
+    "cross_hole": eval_cross_hole,
     "bolt_circle": eval_bolt_circle,
     "keyway": eval_keyway,
     "concentric_hole": eval_concentric_hole,

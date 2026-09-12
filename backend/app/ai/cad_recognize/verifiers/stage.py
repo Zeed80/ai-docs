@@ -252,6 +252,7 @@ def _shaft(image_bytes: bytes, body: dict[str, Any], report: dict[str, Any]) -> 
         for index, step in steps:
             report["items"].append(_step_item(index, step, "unmeasurable", {}, reason))
         _keyways(gray, [], body, report)
+        _cross_holes(gray, [], body, report)
         return reason
     # Масштаб — по цепочке, а не по прочитанной сумме (`chain_frame`): одно
     # неверное звено иначе уводит всё — и ступени, и пазы.
@@ -259,6 +260,7 @@ def _shaft(image_bytes: bytes, body: dict[str, Any], report: dict[str, Any]) -> 
     views = [(chain_frame(view, shape, lengths), shape) for view, shape in views]
     frame, profile = views[0]
     spans = _keyways(gray, [view_frame for view_frame, _profile in views], body, report)
+    _cross_holes(gray, [view_frame for view_frame, _profile in views], body, report)
     verdict = verify(
         Hypothesis(
             "shaft_profile",
@@ -394,6 +396,58 @@ def _keyways(
             )
 
 
+_CROSS_HOLE_KEYS = ("axial_position_mm", "diameter_mm")
+
+
+def _cross_holes(
+    gray: Any, frames: list[Any], body: dict[str, Any], report: dict[str, Any]
+) -> None:
+    """Поперечные отверстия главного вида: положение по оси и Ø (Ф3).
+
+    Лицом — окружностью на оси — на главном виде видно только одиночное
+    отверстие под 0°/180°; остальные — «не измеримо» с причиной. Виды вала —
+    по очереди, как у пазов: на разрезе полого вала отверстие — прорезь в
+    штриховке, окружность — на виде под ним.
+    """
+    from app.ai.cad_recognize.verifiers.plate_hole import plate_hole_tolerances
+
+    for index, hole in enumerate(body.get("cross_holes") or []):
+        if not isinstance(hole, dict) or not all(_is_number(hole.get(k)) for k in _CROSS_HOLE_KEYS):
+            continue
+        item = {
+            "kind": "cross_hole",
+            "path": f"main_view.cross_holes[{index}]",
+            "feature_id": hole.get("id"),
+            "read": {k: hole.get(k) for k in _CROSS_HOLE_KEYS},
+            "status": "unmeasurable",
+            "measured": {},
+            "reason": "",
+        }
+        report["items"].append(item)
+        angle = float(hole.get("angle_deg") or 0.0) % 180.0
+        if min(angle, 180.0 - angle) > 1.0 or int(hole.get("count") or 1) != 1:
+            item["reason"] = "проверяется только одиночное отверстие лицом к главному виду"
+            continue
+        hypothesis = Hypothesis(
+            "cross_hole", item["path"], {k: float(hole[k]) for k in _CROSS_HOLE_KEYS}
+        )
+        frame, verdict = _first_measured(hypothesis, frames, gray)
+        item.update(status=verdict.status, measured=dict(verdict.measured), reason=verdict.reason)
+        if frame is not None:
+            position_tol, diameter_tol = plate_hole_tolerances(frame.scale_mean)
+            item["tolerance_mm"] = {
+                "position": round(position_tol, 3),
+                "diameter": round(diameter_tol, 3),
+            }
+        if verdict.status == "refuted":
+            got = verdict.measured
+            report["notes"].append(
+                f"поперечное отверстие {index + 1}: прочитано Ø{_mm(hole['diameter_mm'])} на "
+                f"{_mm(hole['axial_position_mm'])}, по листу — Ø{_mm(got['diameter_mm'])} на "
+                f"{_mm(got['axial_position_mm'])} — проверить"
+            )
+
+
 def _first_measured(hypothesis: Hypothesis, frames: list[Any], sheet: Any) -> tuple[Any, Any]:
     """Первый вид, на котором гипотеза измерима; иначе — отказ первого вида."""
     if not frames:
@@ -437,6 +491,7 @@ _GRAPH_FIELDS = {
     "concentric_hole": (("diameter_mm", "diameter"),),
     "shaft_step": (("diameter_mm", "diameter"), ("length_mm", "length")),
     "keyway": (("axial_start_mm", "length"), ("length_mm", "length"), ("width_mm", "width")),
+    "cross_hole": (("axial_position_mm", "position"), ("diameter_mm", "diameter")),
 }
 
 
