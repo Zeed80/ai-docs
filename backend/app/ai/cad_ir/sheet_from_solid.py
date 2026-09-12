@@ -961,11 +961,17 @@ def _hole_dimensions(drawing: dict, plan: SheetPlan) -> None:
         if plan.part_class == "plate":
             _corner_radii(view, index, dimensions, bounds, ratio)
         holes = [c for c in circles if math.hypot(c[0] - cu, c[1] - cv) > near]
+        if plan.part_class == "plate":
+            # Центр прорези получает координаты как отверстие — радиус 0 его
+            # отличает: ни «N отв.», ни окружности болтов у него нет.
+            holes += _slots(view, index, dimensions, bounds, ratio)
         if not holes:
             continue
 
         groups: dict[tuple[float, float], list[tuple[float, float, float]]] = {}
         for hole in holes:
+            if hole[2] <= 0:
+                continue
             key = (round(math.hypot(hole[0] - cu, hole[1] - cv) / near), round(hole[2] / near))
             groups.setdefault(key, []).append(hole)
         on_pitch: list[tuple[float, float, float]] = []
@@ -1045,6 +1051,8 @@ def _hole_dimensions(drawing: dict, plan: SheetPlan) -> None:
 
         counts: dict[float, int] = {}
         for hole in holes:
+            if hole[2] <= 0:
+                continue
             diameter = round(2.0 * hole[2] / ratio, 3)
             counts[diameter] = counts.get(diameter, 0) + 1
         for item in dimensions:
@@ -1064,6 +1072,91 @@ def _hole_dimensions(drawing: dict, plan: SheetPlan) -> None:
             label = str(item.get("label") or f"Ø{value:g}")
             if count >= 2 and "отв." not in label:
                 item["label"] = f"{count} отв. {label}"
+
+
+def _slots(
+    view: dict, index: int, dimensions: list[dict], bounds: dict, ratio: float
+) -> list[tuple[float, float, float]]:
+    """Прорезь пластины: межцентровое расстояние, «R» конца — и её центр.
+
+    Прорезь стояла на листе без единого размера (корпус v4, plate-3). На плане
+    ядро отдаёт её двумя отрезками и дугами концов — полуокружностью или
+    двумя четвертями с общим центром. Два конца одного радиуса на одной
+    горизонтали или вертикали — одна прорезь. Возвращаются центры прорезей:
+    их координаты ставит общий путь отверстий.
+    """
+    import math
+
+    u_min, u_max = float(bounds["u_min"]), float(bounds["u_max"])
+    v_min, v_max = float(bounds["v_min"]), float(bounds["v_max"])
+    ends: list[tuple[float, float, float]] = []
+    for item in view.get("visible") or []:
+        if item.get("type") != "arc" or not item.get("center") or not item.get("radius"):
+            continue
+        au, av = (float(value) for value in item["center"])
+        radius = float(item["radius"])
+        tolerance = 0.02 * max(radius, 1.0)
+        at_corner = (
+            min(abs(au - u_min), abs(au - u_max)) - radius <= tolerance
+            and min(abs(av - v_min), abs(av - v_max)) - radius <= tolerance
+        )
+        if at_corner:
+            continue  # скругление угла, см. `_corner_radii`
+        if not any(
+            math.hypot(au - e[0], av - e[1]) <= tolerance and abs(radius - e[2]) <= tolerance
+            for e in ends
+        ):
+            ends.append((au, av, radius))
+
+    centres: list[tuple[float, float, float]] = []
+    used: set[int] = set()
+    for i, first in enumerate(ends):
+        if i in used:
+            continue
+        partners = []
+        for j, second in enumerate(ends):
+            if j <= i or j in used or abs(first[2] - second[2]) > 0.02 * max(first[2], 1.0):
+                continue
+            span = math.hypot(second[0] - first[0], second[1] - first[1])
+            if span <= 0:
+                continue
+            if abs(first[1] - second[1]) <= 1e-3 * span or abs(first[0] - second[0]) <= 1e-3 * span:
+                partners.append((span, j))
+        if not partners:
+            continue
+        span, j = min(partners)
+        used |= {i, j}
+        low, high = sorted((first, ends[j]))
+        radius = first[2]
+        horizontal = abs(low[1] - high[1]) <= 1e-3 * span
+        value = round(span / ratio, 3)
+        distance = {
+            "view_index": index,
+            "kind": "DistanceX" if horizontal else "DistanceY",
+            "label": f"{value:g}",
+            "anchors_mm": [[low[0], low[1]], [high[0], high[1]]],
+            "value_mm": value,
+            "measured_by": "slot",
+            "ir_kind": "linear",
+        }
+        if not horizontal:
+            distance.update({"place_u": u_min, "outside": True})
+        dimensions.append(distance)
+        tip = (high[0] + radius, high[1]) if horizontal else (high[0], high[1] + radius)
+        end_radius = round(radius / ratio, 3)
+        dimensions.append(
+            {
+                "view_index": index,
+                "kind": "Radius",
+                "label": f"R{end_radius:g}",
+                "anchors_mm": [[high[0], high[1]], [tip[0], tip[1]]],
+                "value_mm": end_radius,
+                "measured_by": "slot",
+                "ir_kind": "radial",
+            }
+        )
+        centres.append(((low[0] + high[0]) / 2.0, (low[1] + high[1]) / 2.0, 0.0))
+    return centres
 
 
 def _corner_radii(

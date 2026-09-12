@@ -63,6 +63,9 @@ def needed_dimensions(spec: dict) -> dict[str, list[float]]:
             lengths += _hole_coordinates(profile)
             if profile.get("corner_radius_mm"):
                 lengths.append(profile["corner_radius_mm"])
+            for slot in profile.get("slots") or []:
+                # Межцентровое расстояние и радиус конца — как их ставит лист.
+                lengths += [slot["length_mm"] - slot["width_mm"], slot["width_mm"] / 2.0]
         return {"diameters": sorted(diameters), "lengths": sorted(lengths), "overall": []}
     outer = body["outer"]
     diameters = sorted(
@@ -91,7 +94,10 @@ def _hole_coordinates(profile: dict) -> list[float]:
     }
     xs: list[float] = []
     ys: list[float] = []
-    for x, y, _diameter in expand_holes(plain):
+    centres = [(x, y) for x, y, _diameter in expand_holes(plain)]
+    # Центр прорези ставится как центр отверстия.
+    centres += [(slot["center_x_mm"], slot["center_y_mm"]) for slot in profile.get("slots") or []]
+    for x, y in centres:
         x_from_left = round(x + profile["width_mm"] / 2.0, 3)
         y_from_bottom = round(y + profile["height_mm"] / 2.0, 3)
         if not any(abs(x_from_left - other) <= 0.05 for other in xs):

@@ -939,9 +939,47 @@ def test_plate_corner_fillets_get_one_radius_and_slot_ends_do_not():
 
     _hole_dimensions(drawing, _plan("plate"))
 
-    radii = [d for d in drawing["dimensions"] if d["kind"] == "Radius"]
+    # Концы прорези — свой размер «R» (см. тест прорези), но не скругление угла.
+    radii = [d for d in drawing["dimensions"] if d.get("measured_by") == "view_arc"]
     assert [(d["value_mm"], d["label"]) for d in radii] == [(5.0, "R5")]
     (cu, cv), (tu, tv) = radii[0]["anchors_mm"]
     assert abs(tu) > abs(cu) and abs(tv) > abs(cv)  # к углу, наружу
     # правый нижний угол: левый нижний занят выносными координат отверстий
     assert cu > 0 and cv < 0
+
+
+def test_a_slot_gets_its_centre_its_centre_distance_and_its_end_radius():
+    """Корпус v4, plate-3: прорезь 25×6 с центром (3, −15) стояла без размеров.
+
+    Геометрия — как её отдаёт ядро: левый конец полуокружностью, правый двумя
+    четвертями с общим центром.
+    """
+    from app.ai.cad_ir.sheet_from_solid import _hole_dimensions
+
+    drawing = {
+        "views": [
+            {"kind": "front"},
+            {
+                "kind": "side",
+                "bounds_mm": {"u_min": -30, "u_max": 30, "v_min": -50, "v_max": 50},
+                "visible": [
+                    _arc(-6.5, -15, 3, (-6.5, -12), (-6.5, -18)),
+                    _arc(12.5, -15, 3, (12.5, -18), (15.5, -15)),
+                    _arc(12.5, -15, 3, (15.5, -15), (12.5, -12)),
+                ],
+            },
+        ],
+        "dimensions": [],
+    }
+
+    _hole_dimensions(drawing, _plan("plate"))
+
+    slot = {(d["kind"], d["value_mm"]) for d in drawing["dimensions"] if d["measured_by"] == "slot"}
+    centre = {
+        (d["kind"], d["value_mm"])
+        for d in drawing["dimensions"]
+        if d["measured_by"] == "hole_centre"
+    }
+    assert slot == {("DistanceX", 19.0), ("Radius", 3.0)}
+    assert centre == {("DistanceX", 33.0), ("DistanceY", 35.0)}
+    assert not any("отв." in str(d.get("label")) for d in drawing["dimensions"])
