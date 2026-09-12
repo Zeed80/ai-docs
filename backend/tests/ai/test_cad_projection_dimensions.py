@@ -339,3 +339,29 @@ def test_the_label_of_a_large_circle_stays_on_its_diameter():
 
     assert abs(text.position.x - 100.0) < 60.0
     assert len(segments) == 1
+
+
+def test_a_radius_runs_from_the_centre_with_one_arrow_on_the_arc():
+    """Радиус рисовался как длина: отступ и две выносные в стороне от скругления."""
+    from app.ai.cad_ir.schema import Polyline
+
+    entities = dimensions_from_kernel(
+        [
+            {
+                "view_index": 0,
+                "kind": "Radius",
+                "label": "R10",
+                "anchors_mm": [[0.0, 0.0], [7.0711, 7.0711]],
+                "value_mm": 10.0,
+            }
+        ],
+        {"side": {"offset_u": 100.0, "offset_v": 100.0}},
+        ["side"],
+        px_per_mm=1.0,
+    )
+    arrows = [e for e in entities if isinstance(e, Polyline)]
+    segments = [e for e in entities if isinstance(e, Segment)]
+
+    assert len(arrows) == 1
+    assert (segments[0].p1.x, segments[0].p1.y) == (100.0, 100.0)  # от самого центра
+    assert abs(arrows[0].points[0].x - 107.0711) < 1e-3  # остриё — на дуге

@@ -61,6 +61,8 @@ def needed_dimensions(spec: dict) -> dict[str, list[float]]:
         else:
             lengths += [profile["width_mm"], profile["height_mm"]]
             lengths += _hole_coordinates(profile)
+            if profile.get("corner_radius_mm"):
+                lengths.append(profile["corner_radius_mm"])
         return {"diameters": sorted(diameters), "lengths": sorted(lengths), "overall": []}
     outer = body["outer"]
     diameters = sorted(

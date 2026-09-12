@@ -908,3 +908,40 @@ def test_unevenly_spaced_holes_of_a_flange_are_not_a_bolt_circle():
     assert _is_bolt_circle(even, 0.0, 0.0, "flange")
     assert not _is_bolt_circle(uneven, 0.0, 0.0, "flange")
     assert not _is_bolt_circle(even, 0.0, 0.0, "plate")
+
+
+def _arc(u: float, v: float, r: float, start: tuple, end: tuple) -> dict:
+    return {"type": "arc", "center": [u, v], "radius": r, "points": [list(start), list(end)]}
+
+
+def test_plate_corner_fillets_get_one_radius_and_slot_ends_do_not():
+    """Базовая линия M5 v2: «радиус скругления углов не указан на чертеже» — 0/2."""
+    from app.ai.cad_ir.sheet_from_solid import _hole_dimensions
+
+    corners = [
+        _arc(-45, 20, 5, (-50, 20), (-45, 25)),
+        _arc(45, 20, 5, (45, 25), (50, 20)),
+        _arc(45, -20, 5, (50, -20), (45, -25)),
+        _arc(-45, -20, 5, (-45, -25), (-50, -20)),
+    ]
+    slot_ends = [_arc(-10, 0, 4, (-10, 4), (-10, -4)), _arc(10, 0, 4, (10, -4), (10, 4))]
+    drawing = {
+        "views": [
+            {"kind": "front"},
+            {
+                "kind": "side",
+                "bounds_mm": {"u_min": -50, "u_max": 50, "v_min": -25, "v_max": 25},
+                "visible": corners + slot_ends,
+            },
+        ],
+        "dimensions": [],
+    }
+
+    _hole_dimensions(drawing, _plan("plate"))
+
+    radii = [d for d in drawing["dimensions"] if d["kind"] == "Radius"]
+    assert [(d["value_mm"], d["label"]) for d in radii] == [(5.0, "R5")]
+    (cu, cv), (tu, tv) = radii[0]["anchors_mm"]
+    assert abs(tu) > abs(cu) and abs(tv) > abs(cv)  # к углу, наружу
+    # правый нижний угол: левый нижний занят выносными координат отверстий
+    assert cu > 0 and cv < 0

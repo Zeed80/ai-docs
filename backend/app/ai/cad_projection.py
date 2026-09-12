@@ -535,7 +535,10 @@ def dimensions_from_kernel(
             and isinstance(item.get("place_u"), (int, float))
             and not item.get("outside")
         )
-        on_contour = through_centre or across_step
+        # Радиус — от центра дуги до неё самой, одна стрелка на дуге (ГОСТ 2.307).
+        # Шёл общим путём: отступ длин и две выносные в стороне от скругления.
+        radial = str(item.get("kind") or "") == "Radius"
+        on_contour = through_centre or across_step or radial
         offset = 0.0 if on_contour else DIM_OFFSET_MM
         extension = 0.0 if on_contour else DIM_EXTENSION_MM
         ou, ov = nu * offset, nv * offset
@@ -548,8 +551,10 @@ def dimensions_from_kernel(
         # inside, a 6 mm dimension was two arrows fused into a bow tie with no
         # line left at all — unreadable to a person and unmeasurable to the
         # dimension-line verifier (40 % of plate and flange lengths).
-        outside = span < 2.0 * DIM_ARROW_MM + DIM_ARROW_GAP_MM
+        outside = span < (1.0 if radial else 2.0) * DIM_ARROW_MM + DIM_ARROW_GAP_MM
         carry = DIM_ARROW_MM + DIM_EXTENSION_MM if outside else 0.0
+        # A radius starts AT the centre: nothing is carried back past it.
+        start_carry = 0.0 if radial else carry
         # Witness lines from the feature out past the dimension line. They
         # start at the ORIGINAL anchor: for a DistanceX between end faces at
         # different heights the witness lines differ in length, and that is
@@ -573,7 +578,7 @@ def dimensions_from_kernel(
         # The dimension line itself.
         entities.append(
             Segment(
-                p1=to_point(u1 + ou - tu * carry, v1 + ov - tv * carry),
+                p1=to_point(u1 + ou - tu * start_carry, v1 + ov - tv * start_carry),
                 p2=to_point(u2 + ou + tu * carry, v2 + ov + tv * carry),
                 **style,
             )
@@ -581,7 +586,8 @@ def dimensions_from_kernel(
         # Arrowheads: a closed sliver at each end, pointing outward — or, when
         # they do not fit, standing outside and pointing in.
         inward = -1.0 if outside else 1.0
-        for sign, (bu, bv) in ((1.0, (u1 + ou, v1 + ov)), (-1.0, (u2 + ou, v2 + ov))):
+        ends = ((1.0, (u1 + ou, v1 + ov)), (-1.0, (u2 + ou, v2 + ov)))
+        for sign, (bu, bv) in ends[1:] if radial else ends:
             tip_u, tip_v = bu, bv
             back_u = bu + inward * sign * tu * DIM_ARROW_MM
             back_v = bv + inward * sign * tv * DIM_ARROW_MM

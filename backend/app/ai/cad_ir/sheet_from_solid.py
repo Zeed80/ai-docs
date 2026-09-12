@@ -958,6 +958,8 @@ def _hole_dimensions(drawing: dict, plan: SheetPlan) -> None:
         ]
         # Наружный контур фланца и центральное отверстие стоят в центре плана —
         # у них нет координат, только диаметр.
+        if plan.part_class == "plate":
+            _corner_radii(view, index, dimensions, bounds, ratio)
         holes = [c for c in circles if math.hypot(c[0] - cu, c[1] - cv) > near]
         if not holes:
             continue
@@ -1062,6 +1064,71 @@ def _hole_dimensions(drawing: dict, plan: SheetPlan) -> None:
             label = str(item.get("label") or f"Ø{value:g}")
             if count >= 2 and "отв." not in label:
                 item["label"] = f"{count} отв. {label}"
+
+
+def _corner_radii(
+    view: dict, index: int, dimensions: list[dict], bounds: dict, ratio: float
+) -> None:
+    """Радиус скругления углов пластины — одним размером «R…» на каждый радиус.
+
+    Базовая линия M5 v2: ридер честно отвечал «радиус скругления углов не
+    указан на чертеже» — лист его и не проставлял. Скругление угла — дуга в
+    четверть окружности у угла плана; концы прорези — полуокружности внутри
+    контура, их здесь не берём. Размер — от центра дуги в сторону угла.
+
+    Угол — правый нижний: координаты отверстий идут от левой и нижней кромок,
+    и в левом нижнем углу подпись «R5» терялась среди их выносных.
+    """
+    import math
+
+    u_min, u_max = float(bounds["u_min"]), float(bounds["u_max"])
+    v_min, v_max = float(bounds["v_min"]), float(bounds["v_max"])
+    fillets: dict[float, tuple[float, float, float]] = {}
+    for item in view.get("visible") or []:
+        if item.get("type") != "arc" or not item.get("center") or not item.get("radius"):
+            continue
+        au, av = (float(value) for value in item["center"])
+        radius = float(item["radius"])
+        points = item.get("points") or []
+        if len(points) < 2:
+            continue
+        sweep = abs(
+            (
+                math.degrees(math.atan2(points[1][1] - av, points[1][0] - au))
+                - math.degrees(math.atan2(points[0][1] - av, points[0][0] - au))
+                + 180.0
+            )
+            % 360.0
+            - 180.0
+        )
+        tolerance = 0.02 * max(radius, 1.0)
+        at_corner = (
+            min(abs(au - u_min), abs(au - u_max)) - radius <= tolerance
+            and min(abs(av - v_min), abs(av - v_max)) - radius <= tolerance
+        )
+        if abs(sweep - 90.0) > 5.0 or not at_corner:
+            continue
+        value = round(radius / ratio, 3)
+        key = next((other for other in fillets if abs(other - value) <= 0.05), value)
+        best = fillets.get(key)
+        # Правее и ниже — лучше.
+        if best is None or (au - av) > (best[0] - best[1]):
+            fillets[key] = (au, av, radius)
+    for value, (au, av, radius) in sorted(fillets.items()):
+        du = math.copysign(1.0, au - (u_min + u_max) / 2.0)
+        dv = math.copysign(1.0, av - (v_min + v_max) / 2.0)
+        tip = (au + du * radius / math.sqrt(2.0), av + dv * radius / math.sqrt(2.0))
+        dimensions.append(
+            {
+                "view_index": index,
+                "kind": "Radius",
+                "label": f"R{value:g}",
+                "anchors_mm": [[au, av], [tip[0], tip[1]]],
+                "value_mm": value,
+                "measured_by": "view_arc",
+                "ir_kind": "radial",
+            }
+        )
 
 
 def _is_bolt_circle(
