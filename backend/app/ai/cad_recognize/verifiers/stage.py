@@ -253,6 +253,7 @@ def _shaft(image_bytes: bytes, body: dict[str, Any], report: dict[str, Any]) -> 
             report["items"].append(_step_item(index, step, "unmeasurable", {}, reason))
         _keyways(gray, [], body, report)
         _cross_holes(gray, [], body, report)
+        _turned_details(gray, [], body, report)
         return reason
     # Масштаб — по цепочке, а не по прочитанной сумме (`chain_frame`): одно
     # неверное звено иначе уводит всё — и ступени, и пазы.
@@ -261,6 +262,7 @@ def _shaft(image_bytes: bytes, body: dict[str, Any], report: dict[str, Any]) -> 
     frame, profile = views[0]
     spans = _keyways(gray, [view_frame for view_frame, _profile in views], body, report)
     _cross_holes(gray, [view_frame for view_frame, _profile in views], body, report)
+    _turned_details(gray, views, body, report)
     verdict = verify(
         Hypothesis(
             "shaft_profile",
@@ -448,6 +450,86 @@ def _cross_holes(
             )
 
 
+def _turned_details(
+    gray: Any, views: list[tuple[Any, Any]], body: dict[str, Any], report: dict[str, Any]
+) -> None:
+    """Канавки и фаски на торцах — по профилю главного вида (Ф3.0c).
+
+    Проверяльщику нужен и лист, и профиль вида (`ShaftProfile`: стенки
+    канавки — его грани, дно — его полувысота); виды — по очереди.
+    """
+    from app.ai.cad_recognize.verifiers.chamfer import chamfer_tolerance
+    from app.ai.cad_recognize.verifiers.groove import groove_tolerances
+
+    def check(kind: str, path: str, feature: dict, read: dict[str, Any]) -> dict[str, Any]:
+        item = {
+            "kind": kind,
+            "path": path,
+            "feature_id": feature.get("id"),
+            "read": read,
+            "status": "unmeasurable",
+            "measured": {},
+            "reason": "",
+        }
+        report["items"].append(item)
+        verdict = None
+        frame = None
+        for view_frame, profile in views or [(None, None)]:
+            candidate = verify(Hypothesis(kind, path, read), view_frame, (gray, profile))
+            if verdict is None or candidate.status != "unmeasurable":
+                verdict, frame = candidate, view_frame
+            if candidate.status != "unmeasurable":
+                break
+        item.update(status=verdict.status, measured=dict(verdict.measured), reason=verdict.reason)
+        if frame is not None:
+            if kind == "groove":
+                position_tol, width_tol, depth_tol = groove_tolerances(frame.scale_mean)
+                item["tolerance_mm"] = {
+                    "position": round(position_tol, 3),
+                    "width": round(width_tol, 3),
+                    "depth": round(depth_tol, 3),
+                }
+            else:
+                item["tolerance_mm"] = {"size": round(chamfer_tolerance(frame.scale_mean), 3)}
+        return item
+
+    for index, groove in enumerate(body.get("grooves") or []):
+        if (
+            not isinstance(groove, dict)
+            or groove.get("internal")
+            or not _is_number(groove.get("axial_position_mm"))
+            or not _is_number(groove.get("width_mm"))
+        ):
+            continue
+        read = {
+            key: groove.get(key)
+            for key in ("axial_position_mm", "width_mm", "depth_mm")
+            if _is_number(groove.get(key))
+        }
+        item = check("groove", f"main_view.grooves[{index}]", groove, read)
+        if item["status"] == "refuted":
+            got = item["measured"]
+            report["notes"].append(
+                f"канавка {index + 1}: прочитано {_mm(read['width_mm'])} на "
+                f"{_mm(read['axial_position_mm'])}, по листу — {_mm(got['width_mm'])}×"
+                f"{_mm(got['depth_mm'])} на {_mm(got['axial_position_mm'])} — проверить"
+            )
+    for index, chamfer in enumerate(body.get("chamfers") or []):
+        if (
+            not isinstance(chamfer, dict)
+            or chamfer.get("location") not in ("left_end", "right_end")
+            or not _is_number(chamfer.get("size_mm"))
+        ):
+            continue
+        read = {"size_mm": chamfer["size_mm"], "location": chamfer["location"]}
+        item = check("chamfer", f"main_view.chamfers[{index}]", chamfer, read)
+        if item["status"] == "refuted":
+            report["notes"].append(
+                f"фаска {index + 1}: прочитано {_mm(chamfer['size_mm'])}, по листу — "
+                f"{_mm(item['measured']['size_mm'])} — проверить"
+            )
+
+
 def _first_measured(hypothesis: Hypothesis, frames: list[Any], sheet: Any) -> tuple[Any, Any]:
     """Первый вид, на котором гипотеза измерима; иначе — отказ первого вида."""
     if not frames:
@@ -492,6 +574,8 @@ _GRAPH_FIELDS = {
     "shaft_step": (("diameter_mm", "diameter"), ("length_mm", "length")),
     "keyway": (("axial_start_mm", "length"), ("length_mm", "length"), ("width_mm", "width")),
     "cross_hole": (("axial_position_mm", "position"), ("diameter_mm", "diameter")),
+    "groove": (("axial_position_mm", "position"), ("width_mm", "width"), ("depth_mm", "depth")),
+    "chamfer": (("size_mm", "size"),),
 }
 
 

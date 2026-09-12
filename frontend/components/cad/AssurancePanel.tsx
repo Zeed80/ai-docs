@@ -19,6 +19,8 @@ const VERIFY_KINDS = new Set([
   "shaft_step",
   "keyway",
   "cross_hole",
+  "groove",
+  "chamfer",
 ]);
 
 /** «Отверстие 3» из `main_view.profile.holes[2]` — номер элемента с единицы. */

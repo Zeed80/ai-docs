@@ -741,6 +741,8 @@
       "assurance_verify_kind_shaft_step": "Ступень {index}",
       "assurance_verify_kind_keyway": "Паз {index}",
       "assurance_verify_kind_cross_hole": "Поперечное отверстие {index}",
+      "assurance_verify_kind_groove": "Канавка {index}",
+      "assurance_verify_kind_chamfer": "Фаска {index}",
       "profile_editor_title": "Отверстия плана (можно исправить)",
       "profile_editor_hint": "Координаты — как на листе: от левой и нижней кромки. Где проверка по листу разошлась с прочитанным, рядом показан замер — его можно взять одной кнопкой; решение за вами.",
       "profile_editor_hint_circle": "Координаты — от центра детали. Фазу окружности болтов лист обычно не несёт: её мерит проверка по листу.",

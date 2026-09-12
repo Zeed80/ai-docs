@@ -649,7 +649,115 @@ def eval_cross_hole(png: bytes, truth: dict) -> list[dict[str, Any]]:
     return outcomes
 
 
+def _shaft_sheets(png: bytes, outer: list[dict]) -> tuple[Any, list[tuple[Any, Any]]]:
+    """Серый лист и виды вала (система координат, профиль) — как в стадии."""
+    import numpy as np
+    from PIL import Image
+
+    from app.ai.cad_recognize.verifiers.shaft_frame import locate_shaft_views
+
+    gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))
+    total = sum(float(step["length_mm"]) for step in outer)
+    return gray, locate_shaft_views(gray, total)
+
+
+def _first_view_verdict(kind: str, read: dict, gray: Any, views: list) -> Any:
+    from app.ai.cad_recognize.verifiers import Hypothesis, verify
+
+    first = None
+    for frame, profile in views or [(None, None)]:
+        verdict = verify(Hypothesis(kind, kind, read), frame, (gray, profile))
+        if verdict.status != "unmeasurable":
+            return verdict
+        first = first or verdict
+    return first
+
+
+def eval_groove(png: bytes, truth: dict) -> list[dict[str, Any]]:
+    """Канавки вала: случаи ``truth``; ``position`` (+1,5), ``width`` (+1), ``depth`` (+0,5)."""
+    from app.ai.cad_recognize.verifiers.groove import groove_tolerances
+
+    main_view = truth["spec"].get("main_view") or {}
+    grooves = [
+        g for g in main_view.get("grooves") or [] if g.get("depth_mm") and not g.get("internal")
+    ]
+    outer = main_view.get("outer") or []
+    if not grooves or len(outer) < 2:
+        return []
+    gray, views = _shaft_sheets(png, outer)
+    scale = views[0][0].scale_mean if views else 0.2
+    position_tol, width_tol, depth_tol = groove_tolerances(scale)
+    outcomes = []
+    for groove in grooves:
+        real = {k: float(groove[k]) for k in ("axial_position_mm", "width_mm", "depth_mm")}
+        cases = [
+            ("truth", real),
+            ("position", {**real, "axial_position_mm": real["axial_position_mm"] + 1.5}),
+            ("width", {**real, "width_mm": real["width_mm"] + 1.0}),
+            ("depth", {**real, "depth_mm": real["depth_mm"] + 0.5}),
+        ]
+        for case, read in cases:
+            verdict = _first_view_verdict("groove", read, gray, views)
+            got = verdict.measured
+            accurate = bool(got) and (
+                abs(got["axial_position_mm"] - real["axial_position_mm"]) <= position_tol
+                and abs(got["width_mm"] - real["width_mm"]) <= width_tol
+                and abs(got["depth_mm"] - real["depth_mm"]) <= depth_tol
+            )
+            wanted = "confirmed" if case == "truth" else "refuted"
+            outcomes.append(
+                {
+                    "case": case,
+                    "found": verdict.status != "unmeasurable",
+                    "correct": verdict.status == wanted and accurate,
+                    "error_rel": (
+                        abs(got["width_mm"] - real["width_mm"]) / real["width_mm"] if got else None
+                    ),
+                    "unit_px": real["width_mm"] / scale,
+                }
+            )
+    return outcomes
+
+
+def eval_chamfer(png: bytes, truth: dict) -> list[dict[str, Any]]:
+    """Фаски на торцах: случаи ``truth``; ``size`` (+0,6 мм)."""
+    from app.ai.cad_recognize.verifiers.chamfer import chamfer_tolerance
+
+    main_view = truth["spec"].get("main_view") or {}
+    chamfers = [
+        c for c in main_view.get("chamfers") or [] if c.get("location") in ("left_end", "right_end")
+    ]
+    outer = main_view.get("outer") or []
+    if not chamfers or len(outer) < 2:
+        return []
+    gray, views = _shaft_sheets(png, outer)
+    scale = views[0][0].scale_mean if views else 0.2
+    tolerance = chamfer_tolerance(scale)
+    outcomes = []
+    for chamfer in chamfers:
+        real = {"size_mm": float(chamfer["size_mm"]), "location": chamfer["location"]}
+        for case, read in (("truth", real), ("size", {**real, "size_mm": real["size_mm"] + 0.6})):
+            verdict = _first_view_verdict("chamfer", read, gray, views)
+            got = verdict.measured
+            accurate = bool(got) and abs(got["size_mm"] - real["size_mm"]) <= tolerance
+            wanted = "confirmed" if case == "truth" else "refuted"
+            outcomes.append(
+                {
+                    "case": case,
+                    "found": verdict.status != "unmeasurable",
+                    "correct": verdict.status == wanted and accurate,
+                    "error_rel": (
+                        abs(got["size_mm"] - real["size_mm"]) / real["size_mm"] if got else None
+                    ),
+                    "unit_px": real["size_mm"] / scale,
+                }
+            )
+    return outcomes
+
+
 _VERIFIERS = {
+    "groove": eval_groove,
+    "chamfer": eval_chamfer,
     "cross_hole": eval_cross_hole,
     "bolt_circle": eval_bolt_circle,
     "keyway": eval_keyway,
