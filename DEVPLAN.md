@@ -4,9 +4,11 @@
 
 Пилот `/api/agent/chat-runs` сохраняет запросы и события в БД и исполняется worker;
 основной UI переключён на HTTP и восстанавливает события. Архивные чаты только
-для чтения; checkpoint записывается на границах инструментов. Продолжение после
-подтверждения и resume ещё в плане.
-Проверка: `python3 -m pytest backend/tests/test_durable_chat.py backend/tests/test_work_order_checkpoint.py -q`.
+для чтения; checkpoint записывается на границах инструментов. Карточка и
+`POST /{id}/resume` продолжают только подтверждённый владельцем ожидающий вызов:
+точные аргументы, одноразовое решение на 30 минут, новая ревизия без повторения
+выполненного. Произвольный сбой и неизвестные внешние эффекты не возобновляются.
+Проверка: `python3 -m pytest backend/tests/test_chat_checkpoints.py backend/tests/test_durable_chat.py backend/tests/test_work_order_checkpoint.py -q`.
 
 > Подробный план и фактический статус инженерного направления «Оцифровка в DXF» находятся в [`DXF_CAD_DEVELOPMENT_PLAN.md`](./DXF_CAD_DEVELOPMENT_PLAN.md).
 > Исполнимый roadmap `чертёж → EngineeringDrawingGraph → CadIR/DXF` находится в [`CAD_DRAWING_GRAPH_PLAN.md`](./docs/archive/CAD_DRAWING_GRAPH_PLAN.md).

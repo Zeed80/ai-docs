@@ -17,6 +17,72 @@ beforeEach(() => { vi.useFakeTimers(); fetcher.mockReset(); emit.mockReset(); tr
 afterEach(() => { transport.close(); vi.useRealTimers(); });
 
 describe("долговечный транспорт чата", () => {
+  const checkpoint = {can_resume: true, attempt_id: "attempt", sha256: "a".repeat(64),
+    confirmation: {tool: "email.send", args: {message_id: "draft"}}};
+
+  async function waiting() {
+    const blocked = {...run, status: "blocked"};
+    fetcher.mockResolvedValueOnce(response({run: blocked, legacy: false}))
+      .mockResolvedValueOnce(response(blocked)).mockResolvedValueOnce(page([event(7, "text", "До подтверждения")]))
+      .mockResolvedValueOnce(response(checkpoint));
+    await transport.watchSession("session"); await flush();
+  }
+
+  it("восстанавливает карточку, но не принимает решение автоматически", async () => {
+    await waiting();
+    expect(emit).toHaveBeenCalledWith({type: "durable_confirmation", checkpoint});
+    expect(fetcher.mock.calls.every(([, init]) => init?.method === "GET")).toBe(true);
+  });
+
+  it("повторяет точное решение и продолжает чтение с сохранённого cursor", async () => {
+    await waiting();
+    fetcher.mockRejectedValueOnce(new TypeError("network"))
+      .mockResolvedValueOnce(response(run)).mockResolvedValueOnce(response(run)).mockResolvedValueOnce(page());
+    transport.send(JSON.stringify({type: "resume", approved: true}));
+    transport.send(JSON.stringify({type: "resume", approved: true})); await flush();
+    const posts = fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(posts).toHaveLength(2);
+    expect(posts[0][0]).toBe("/api/agent/chat-runs/run/resume");
+    expect(posts[0][1]?.body).toBe(posts[1][1]?.body);
+    expect(JSON.parse(String(posts[0][1]?.body))).toEqual({attempt_id: "attempt", sha256: checkpoint.sha256, approved: true});
+    expect(fetcher).toHaveBeenLastCalledWith("/api/agent/chat-runs/run/events?after=7&limit=100", expect.anything());
+    expect(emit.mock.calls.filter(([e]) => e.type === "text")).toHaveLength(1);
+  });
+
+  it("передаёт отказ и убирает карточку без запуска", async () => {
+    await waiting();
+    const blocked = {...run, status: "blocked"};
+    fetcher.mockResolvedValueOnce(response(blocked)).mockResolvedValueOnce(response(blocked))
+      .mockResolvedValueOnce(page()).mockResolvedValueOnce(response({can_resume: false}));
+    transport.send(JSON.stringify({type: "resume", approved: false})); await flush();
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    expect(emit).toHaveBeenCalledWith({type: "durable_confirmation", checkpoint: null});
+    expect(emit).toHaveBeenLastCalledWith({type: "done"});
+  });
+
+  it("не предлагает продолжение при неизвестном внешнем эффекте", async () => {
+    const blocked = {...run, status: "blocked"};
+    fetcher.mockResolvedValueOnce(response({run: blocked, legacy: false}))
+      .mockResolvedValueOnce(response(blocked)).mockResolvedValueOnce(page())
+      .mockResolvedValueOnce(response({can_resume: false, phase: "tool_started"}));
+    await transport.watchSession("session"); await flush();
+    transport.send(JSON.stringify({type: "resume", approved: true})); await flush();
+    expect(fetcher.mock.calls.every(([, init]) => init?.method === "GET")).toBe(true);
+    expect(emit).toHaveBeenLastCalledWith({type: "done"});
+  });
+
+  it("не переносит запоздавшее подтверждение в другой чат", async () => {
+    await waiting();
+    let resolve!: (value: Response) => void;
+    fetcher.mockReturnValueOnce(new Promise<Response>((r) => { resolve = r; }))
+      .mockResolvedValueOnce(response({run: null, legacy: false}));
+    transport.send(JSON.stringify({type: "resume", approved: true}));
+    await transport.watchSession("new");
+    const count = emit.mock.calls.length;
+    resolve(response(run)); await flush();
+    expect(emit.mock.calls).toHaveLength(count);
+  });
+
   it("восстанавливает задачу без повторной отправки сообщения", async () => {
     fetcher.mockResolvedValueOnce(response({run, legacy: false}))
       .mockResolvedValueOnce(response(run)).mockResolvedValueOnce(page([event(1, "text", "Ответ")]));

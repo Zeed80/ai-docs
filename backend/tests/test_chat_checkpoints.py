@@ -2,19 +2,27 @@
 
 import copy
 import uuid
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.ai.agent_config import BuiltinAgentConfig
 from app.ai.agent_loop import AgentSession
 from app.ai.chat_checkpoint import ChatCheckpointError, pack_checkpoint, unpack_checkpoint
-from app.api.chat_runs import ChatRunCreate, get_chat_checkpoint, submit_chat_run
+from app.api.chat_runs import (
+    ChatResumeRequest,
+    ChatRunCreate,
+    get_chat_checkpoint,
+    resume_chat_run,
+    submit_chat_run,
+)
 from app.auth.jwt import _DEV_USER
-from app.db.models import WorkOrder, WorkStepAttempt
-from app.domain.work_orders import claim_ready_step
+from app.db.models import WorkEvent, WorkOrder, WorkPlan, WorkStep, WorkStepAttempt
+from app.domain.work_orders import claim_ready_step, fail_attempt
 
 
 def call(call_id="one"):
@@ -37,6 +45,7 @@ def session(send=None):
     obj._checkpoint_sink = None
     obj._checkpoint_pending = []
     obj._checkpoint_in_flight = None
+    obj._granted_approvals = set()
     obj._iteration = 0
     obj.total_tokens = {"input_tokens": 0, "output_tokens": 0}
     obj._role_context = "role"
@@ -235,3 +244,275 @@ async def test_confirmation_keeps_prior_results_and_survives_failure_settlement(
         with pytest.raises(HTTPException) as stale:
             await get_chat_checkpoint(run["id"], db, _DEV_USER)
         assert stale.value.status_code == 409
+
+
+async def stopped_confirmation(factory, monkeypatch, *, repeat=False):
+    from app.ai import agent_config
+
+    config = BuiltinAgentConfig()
+    monkeypatch.setattr(agent_config, "get_builtin_agent_config", lambda: config)
+    run, step_id, attempt_id = await claim(factory)
+    obj = session()
+    obj.messages = [
+        {"role": "user", "content": "Perform two actions"},
+        {"role": "assistant", "tool_calls": [call(), call("two")]},
+        {"role": "tool", "tool_call_id": "one", "content": '{"result":"one"}'},
+    ]
+    obj._checkpoint_pending = [call("two")]
+    if repeat:
+        repeated = {"id": "three", "function": {"name": "test", "arguments": {"id": "two"}}}
+        obj._checkpoint_pending.append(repeated)
+        obj.messages[1]["tool_calls"].append(repeated)
+    obj._checkpoint_in_flight = "two"
+    sink = AsyncMock()
+    obj.set_checkpoint_sink(sink)
+    await obj.save_checkpoint("confirmation_required", {"tool": "test", "args": {"id": "two"}})
+    snapshot = sink.call_args.args[0]
+    async with factory() as db:
+        order = await db.get(WorkOrder, run["work_order_id"])
+        step = await db.get(WorkStep, step_id)
+        attempt = await db.get(WorkStepAttempt, attempt_id)
+        await fail_attempt(
+            db,
+            order=order,
+            step=step,
+            attempt=attempt,
+            error={"code": "confirmation_required"},
+            retryable=False,
+            actor="test",
+            checkpoint={
+                "kind": "durable_chat",
+                "owner_key": order.owner_key,
+                "work_order_id": str(order.id),
+                "step_id": str(step.id),
+                "attempt_id": str(attempt.id),
+                "plan_id": str(step.plan_id),
+                "plan_revision": order.plan_revision,
+                "snapshot": snapshot,
+            },
+        )
+        await db.commit()
+    body = ChatResumeRequest(attempt_id=attempt_id, sha256=snapshot["sha256"], approved=True)
+    return run, body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repeat", [False, True])
+async def test_confirmation_resume_is_atomic_and_executes_only_pending_tail(
+    test_engine, monkeypatch, repeat
+):
+    import asyncio
+
+    from app.ai import orchestrator
+    from app.tasks.work_orders import execute_claimed_step
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    run, body = await stopped_confirmation(factory, monkeypatch, repeat=repeat)
+    async with factory() as db:
+        summary = await get_chat_checkpoint(run["id"], db, _DEV_USER)
+        assert summary["can_resume"] is True
+        assert summary["confirmation"] == {"tool": "test", "args": {"id": "two"}}
+        assert "messages" not in summary
+
+    async def approve():
+        async with factory() as db:
+            return await resume_chat_run(run["id"], body, db, _DEV_USER)
+
+    results = await asyncio.gather(approve(), approve())
+    assert all(result["status"] == "ready" for result in results)
+    async with factory() as db:
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(WorkPlan)
+                .where(WorkPlan.work_order_id == run["work_order_id"])
+            )
+            == 2
+        )
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(WorkEvent)
+                .where(
+                    WorkEvent.work_order_id == run["work_order_id"],
+                    WorkEvent.event_type == "chat.continuation_decided",
+                )
+            )
+            == 1
+        )
+        _, step, attempt = await claim_ready_step(
+            db, worker_id="resume-worker", work_order_id=run["work_order_id"]
+        )
+        await db.commit()
+        step_id, attempt_id = step.id, attempt.id
+
+    effects = []
+
+    class Agent:
+        def __init__(self, send):
+            obj = self._executor = session(send)
+            obj._refresh_runtime_config = lambda: None
+            obj._init_mcp = AsyncMock()
+
+            async def execute(tc, iteration):
+                assert await obj._request_approval("test", tc["function"]["arguments"]) is True
+                obj._granted_approvals.add("test")
+                effects.append(tc["id"])
+                return "test", {"result": tc["id"]}, tc["id"]
+
+            async def finish(**kwargs):
+                assert kwargs == {"start_iteration": 1, "restored": True}
+                assert obj._granted_approvals == set()
+                assert [m["tool_call_id"] for m in obj.messages if m["role"] == "tool"] == [
+                    "one",
+                    "two",
+                ]
+                assert sum(m["role"] == "user" for m in obj.messages) == 1
+                assert obj._restored_system == "Private system context"
+                await send({"type": "text", "content": "Done"})
+
+            obj._execute_single_tool = execute
+            obj._run = finish
+
+        def hydrate_history(self, history):
+            self._executor.messages = list(history)
+
+        async def on_user_message(self, *args, **kwargs):
+            pytest.fail("Resume must not submit the user prompt again")
+
+    monkeypatch.setattr(orchestrator, "AgentOrchestrator", Agent)
+    assert await execute_claimed_step(
+        step_id, attempt_id, session_factory=factory, schedule_verification=False
+    ) is (not repeat)
+    assert effects == ["two"]
+    if repeat:
+        async with factory() as db:
+            summary = await get_chat_checkpoint(run["id"], db, _DEV_USER)
+            assert summary["can_resume"] is True
+            assert summary["attempt_id"] == attempt_id
+            assert summary["pending_tool_count"] == 1
+    assert not await execute_claimed_step(
+        step_id, attempt_id, session_factory=factory, schedule_verification=False
+    )
+    assert effects == ["two"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    [
+        "foreign",
+        "agent",
+        "digest",
+        "revision",
+        "in_flight",
+        "arguments",
+        "config",
+        "budget",
+        "new_turn",
+    ],
+)
+async def test_invalid_continuations_do_not_create_plans(test_engine, monkeypatch, case):
+    from app.ai import agent_config
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    run, body = await stopped_confirmation(factory, monkeypatch)
+    user = _DEV_USER
+    async with factory() as db:
+        order = await db.get(WorkOrder, run["work_order_id"])
+        attempt = await db.get(WorkStepAttempt, body.attempt_id)
+        if case == "foreign":
+            user = user.model_copy(update={"sub": "foreign"})
+        elif case == "agent":
+            user = user.model_copy(update={"via_agent": True})
+        elif case == "digest":
+            body = body.model_copy(update={"sha256": "0" * 64})
+        elif case == "revision":
+            order.plan_revision += 1
+        elif case in {"in_flight", "arguments"}:
+            record = copy.deepcopy(attempt.checkpoint)
+            payload = unpack_checkpoint(record["snapshot"])
+            if case == "in_flight":
+                payload["phase"] = "tool_started"
+            else:
+                payload["confirmation"]["args"] = {"id": "forged"}
+            record["snapshot"] = pack_checkpoint(payload)
+            attempt.checkpoint = record
+            body = body.model_copy(update={"sha256": record["snapshot"]["sha256"]})
+        elif case == "config":
+            monkeypatch.setattr(
+                agent_config, "get_builtin_agent_config", lambda: BuiltinAgentConfig(max_steps=99)
+            )
+        elif case == "budget":
+            order.started_at = datetime.now(UTC) - timedelta(hours=3)
+        elif case == "new_turn":
+            await submit_chat_run(
+                ChatRunCreate(
+                    request_id=uuid.uuid4(), session_id=run["session_id"], content="New turn"
+                ),
+                db,
+                user,
+            )
+        await db.commit()
+    async with factory() as db:
+        with pytest.raises(HTTPException) as denied:
+            await resume_chat_run(run["id"], body, db, user)
+        assert denied.value.status_code == {"foreign": 404, "agent": 403}.get(case, 409)
+    async with factory() as db:
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(WorkPlan)
+                .where(WorkPlan.work_order_id == run["work_order_id"])
+            )
+            == 1
+        )
+
+
+@pytest.mark.asyncio
+async def test_rejection_is_immutable_and_cannot_be_approved_later(test_engine, monkeypatch):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    run, body = await stopped_confirmation(factory, monkeypatch)
+    rejected = body.model_copy(update={"approved": False})
+    for _ in range(2):
+        async with factory() as db:
+            assert (await resume_chat_run(run["id"], rejected, db, _DEV_USER))[
+                "status"
+            ] == "blocked"
+    async with factory() as db:
+        assert (await get_chat_checkpoint(run["id"], db, _DEV_USER))["can_resume"] is False
+        with pytest.raises(HTTPException) as denied:
+            await resume_chat_run(run["id"], body, db, _DEV_USER)
+        assert denied.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_expired_decision_stops_worker_before_agent_creation(test_engine, monkeypatch):
+    from unittest.mock import Mock
+
+    from app.ai import orchestrator
+    from app.tasks.work_orders import execute_claimed_step
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    run, body = await stopped_confirmation(factory, monkeypatch)
+    async with factory() as db:
+        await resume_chat_run(run["id"], body, db, _DEV_USER)
+    async with factory() as db:
+        event = await db.scalar(
+            select(WorkEvent).where(
+                WorkEvent.work_order_id == run["work_order_id"],
+                WorkEvent.event_type == "chat.continuation_decided",
+            )
+        )
+        event.payload = {
+            **event.payload,
+            "expires_at": (datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
+        }
+        _, step, attempt = await claim_ready_step(
+            db, worker_id="expired-worker", work_order_id=run["work_order_id"]
+        )
+        await db.commit()
+    agent = Mock()
+    monkeypatch.setattr(orchestrator, "AgentOrchestrator", agent)
+    assert not await execute_claimed_step(step.id, attempt.id, session_factory=factory)
+    agent.assert_not_called()

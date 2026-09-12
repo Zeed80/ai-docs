@@ -2070,6 +2070,8 @@ class AgentSession:
         cached: a config change should take effect on the very next turn,
         not require a session restart.
         """
+        if getattr(self, "_restored_system", None) is not None:
+            return self._restored_system
         system = f"{self._system}\n\n{_today_context()}"
         tone_hint = _tone_style_hint(getattr(self._config, "agent_tone", "neutral"))
         if tone_hint:
@@ -2079,6 +2081,7 @@ class AgentSession:
         return system
 
     async def on_user_message(self, content: str) -> None:
+        self._restored_system = None
         self._refresh_runtime_config()
         await self._init_mcp()
         # Одобрение действует на ход, а не навсегда: новое сообщение человека
@@ -2087,6 +2090,30 @@ class AgentSession:
         self.messages.append({"role": "user", "content": content})
         self._trim_history()
         await self._run()
+
+    async def resume_checkpoint(self, payload: dict) -> None:
+        """Continue only a validated pending batch; never re-submit the user prompt."""
+        from app.domain.chat_continuation import validate_current_config
+
+        self._refresh_runtime_config()
+        validate_current_config(payload, self._config)
+        await self._init_mcp()
+        runtime = payload["runtime"]
+        self._restored_system = runtime["system_prompt"]
+        self.messages = json.loads(json.dumps(payload["messages"]))
+        self._role_context = runtime["role_context"]
+        self._active_role = runtime["active_role"]
+        self._turn_model_override = runtime["model_override"]
+        self._response_budget = runtime["response_budget"]
+        self._excluded_tools = set(runtime["excluded_tools"])
+        self._recommended_capabilities = set(runtime["recommended_capabilities"])
+        self._workspace_expected = runtime["workspace_expected"]
+        self.total_tokens = dict(payload["tokens_used"])
+        self._iteration = int(payload["iteration"])
+        self._granted_approvals.clear()
+        self._pending_args_override = None
+        await self._execute_tools_sequential(payload["pending_calls"], self._iteration)
+        await self._run(start_iteration=self._iteration + 1, restored=True)
 
     async def _publish_canvas(
         self,
@@ -2348,7 +2375,7 @@ class AgentSession:
         self._remember_latest_turn(answer)
         return True
 
-    async def _run(self) -> None:
+    async def _run(self, *, start_iteration: int = 0, restored: bool = False) -> None:
         try:
             if not self._config.enabled:
                 await self._send(
@@ -2360,15 +2387,16 @@ class AgentSession:
                 return
 
             # Deterministic fast-path: skip the LLM for high-confidence count questions.
-            if await self._try_fast_intent():
+            if not restored and await self._try_fast_intent():
                 return
 
-            await self._append_memory_context()
-            await self._inject_rating_hint()
-            await self._inject_learning_rules()
+            if not restored:
+                await self._append_memory_context()
+                await self._inject_rating_hint()
+                await self._inject_learning_rules()
 
             consecutive_empty_responses = 0
-            for iteration in range(self._config.max_steps):
+            for iteration in range(start_iteration, self._config.max_steps):
                 self._iteration = iteration
 
                 # Context compression before each LLM call
@@ -2934,6 +2962,9 @@ class AgentSession:
             if self._checkpoint_sink is not None:
                 self._checkpoint_pending = self._checkpoint_pending[1:]
                 self._checkpoint_in_flight = None
+                # One explicit confirmation never authorizes another call with
+                # identical arguments later in the same resumed turn.
+                self._granted_approvals.clear()
                 await self.save_checkpoint("tool_recorded")
             self._trim_history()
         return results

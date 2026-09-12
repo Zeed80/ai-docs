@@ -6,7 +6,7 @@ import {
   buildAgentApprovalMessage,
   buildAgentUserMessage,
 } from "@/lib/agent-ws";
-import { DurableChatTransport } from "@/lib/durable-chat";
+import { DurableChatTransport, type DurableConfirmation } from "@/lib/durable-chat";
 import { useDegradedMode } from "@/lib/degraded-mode";
 import { useAgentName } from "@/lib/agent-name";
 import { mutFetch } from "@/lib/auth";
@@ -314,6 +314,8 @@ export function AssistantPanel() {
   const [input, setInput] = useState("");
   const [isConnected, setIsConnected] = useState(false);
   const [isLegacyChat, setIsLegacyChat] = useState(false);
+  const [durableConfirmation, setDurableConfirmation] = useState<DurableConfirmation | null>(null);
+  const [decisionPending, setDecisionPending] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -575,6 +577,14 @@ export function AssistantPanel() {
 
   function handleServerMessage(data: Record<string, unknown>) {
     const type = data.type as string;
+    if (type === "durable_confirmation") {
+      setDurableConfirmation((data.checkpoint as DurableConfirmation | null) ?? null);
+      return;
+    }
+    if (type === "durable_decision_pending") {
+      setDecisionPending(Boolean(data.pending));
+      return;
+    }
     if (type === "durable_mode") {
       setIsLegacyChat(Boolean(data.legacy));
       return;
@@ -1379,8 +1389,19 @@ export function AssistantPanel() {
       <div className="border-b border-slate-700">
         <p className="px-4 py-2 text-xs text-amber-200" role="status">
           {isLegacyChat ? "Архивный чат: создайте новый для долговечного исполнения." :
-            "Долговечный чат: задача работает независимо от вкладки. Новые подтверждения пока блокируют запуск; автоматического повтора после сбоя нет."}
+            "Долговечный чат: задача работает независимо от вкладки. Подтверждение разрешает одно действие; автоматического повтора после сбоя нет."}
         </p>
+        {durableConfirmation && (
+          <section aria-label="Подтверждение сохранённого действия" className="m-3 rounded border border-amber-600 p-3 text-sm text-slate-100">
+            <p>Разрешить одно действие: <strong>{durableConfirmation.confirmation.tool}</strong>?</p>
+            <pre className="my-2 max-h-48 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(durableConfirmation.confirmation.args, null, 2)}</pre>
+            <p className="mb-2 text-xs text-slate-300">Будут использованы именно эти аргументы. Разрешение действует 30 минут. Отказ окончателен для этого снимка.</p>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" disabled={decisionPending || isStreaming} onClick={() => wsRef.current?.send(JSON.stringify({type: "resume", approved: true}))} className="rounded bg-amber-700 px-3 py-1 disabled:opacity-50">Разрешить действие</button>
+              <button type="button" disabled={decisionPending || isStreaming} onClick={() => wsRef.current?.send(JSON.stringify({type: "resume", approved: false}))} className="rounded border border-slate-500 px-3 py-1 disabled:opacity-50">Отказать</button>
+            </div>
+          </section>
+        )}
         <GpuStatusBar variant="dark" />
         <div className="px-4 py-2.5 flex min-w-0 items-center gap-2">
           <span

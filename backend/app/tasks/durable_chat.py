@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import uuid
 
 from sqlalchemy import func, select
 
@@ -51,6 +52,12 @@ async def _run_durable_chat(
             or not attempt_owns_lease(step, attempt)
         ):
             raise ChatRunStopped("Execution stopped or lease expired; no automatic replay")
+        from app.domain.chat_continuation import validate_wall_budget
+
+        try:
+            validate_wall_budget(order)
+        except ValueError as exc:
+            raise ChatRunStopped(str(exc)) from exc
         return order
 
     async with factory() as db:
@@ -82,6 +89,43 @@ async def _run_durable_chat(
         step = await db.get(WorkStep, step_id)
         reasoning_mode = (step.input_ or {}).get("reasoning_mode", "normal")
         workspace_context = (step.input_ or {}).get("workspace_context", {})
+        continuation_id = (step.input_ or {}).get("continuation_event_id")
+        continuation_payload = None
+        decision = None
+        if continuation_id:
+            from app.domain.chat_continuation import confirmation_state, decision_not_expired
+
+            event = await db.get(WorkEvent, uuid.UUID(continuation_id))
+            if (
+                event is None
+                or event.work_order_id != order.id
+                or event.event_type != "chat.continuation_decided"
+                or event.actor != order.owner_key
+            ):
+                raise ChatRunStopped("Invalid continuation authorization")
+            decision = event.payload
+            if (
+                decision.get("approved") is not True
+                or decision.get("target_step_id") != str(step.id)
+                or decision.get("target_revision") != order.plan_revision
+            ):
+                raise ChatRunStopped("Continuation authorization does not match this step")
+            decision_not_expired(decision)
+            source_attempt = await db.get(WorkStepAttempt, uuid.UUID(decision["attempt_id"]))
+            source_step = await db.get(WorkStep, source_attempt.step_id) if source_attempt else None
+            if source_attempt is None or source_step is None:
+                raise ChatRunStopped("Continuation source missing")
+            continuation_payload = confirmation_state(
+                source_attempt.checkpoint or {},
+                order,
+                source_step,
+                source_attempt,
+                source_revision=decision["source_revision"],
+            )
+            if source_attempt.checkpoint["snapshot"]["sha256"] != decision["sha256"]:
+                raise ChatRunStopped("Authorized checkpoint changed")
+            if continuation_payload["pending_calls"][0]["id"] != decision["call_id"]:
+                raise ChatRunStopped("Authorized call changed")
     chunks, errors = [], []
 
     async def collect(event):
@@ -165,15 +209,35 @@ async def _run_durable_chat(
     if checkpointed:
         agent._executor.set_checkpoint_sink(save_snapshot)
 
+    authorization_used = False
+
     async def require_confirmation(skill_name, args):
+        nonlocal authorization_used
+        if decision is not None and not authorization_used:
+            from app.domain.chat_continuation import canonical, decision_not_expired
+
+            expected = continuation_payload["confirmation"]
+            if (
+                agent._executor._checkpoint_in_flight == decision["call_id"]
+                and skill_name == expected["tool"]
+                and canonical(args) == canonical(expected["args"])
+            ):
+                decision_not_expired(decision)
+                await collect(
+                    {
+                        "type": "confirmation_consumed",
+                        "decision_id": continuation_id,
+                        "call_id": decision["call_id"],
+                    }
+                )
+                authorization_used = True
+                return True
         if checkpointed:
             await agent._executor.save_checkpoint(
                 "confirmation_required", {"tool": skill_name, "args": args}
             )
         await collect({"type": "confirmation_required", "tool": skill_name, "args": args})
-        raise ChatRunStopped(
-            "Durable approval continuation is not yet enabled; action not executed"
-        )
+        raise ChatRunStopped("Human confirmation required; pending action not executed")
 
     agent._executor._request_approval = require_confirmation
 
@@ -184,7 +248,9 @@ async def _run_durable_chat(
                 await active(db)
 
     execution = asyncio.create_task(
-        agent.on_user_message(
+        agent._executor.resume_checkpoint(continuation_payload)
+        if continuation_payload is not None
+        else agent.on_user_message(
             prompt, reasoning_mode=reasoning_mode, workspace_context=workspace_context
         )
     )

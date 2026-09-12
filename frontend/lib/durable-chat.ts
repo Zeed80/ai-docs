@@ -3,6 +3,9 @@
 import { mutFetch } from "@/lib/auth";
 
 type Event = Record<string, unknown>;
+export type DurableConfirmation = {
+  attempt_id: string; sha256: string; confirmation: {tool: string; args: Record<string, unknown>};
+};
 type Run = {
   id: string; session_id: string; work_order_id: string; request_id: string;
   status: string; result_message_id: string | null; blocker: unknown;
@@ -17,6 +20,8 @@ export class DurableChatTransport {
   private run: Run | null = null;
   private busy = false;
   private pendingCancel = false;
+  private cursor = 0;
+  private confirmation: DurableConfirmation | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private emit: (event: Event) => void) {}
@@ -42,6 +47,10 @@ export class DurableChatTransport {
     this.busy = false;
     this.pendingCancel = false;
     this.run = null;
+    this.cursor = 0;
+    this.confirmation = null;
+    this.emit({type: "durable_confirmation", checkpoint: null});
+    this.emit({type: "durable_decision_pending", pending: false});
     this.emit({type: "durable_state", active: false});
     const generation = ++this.generation;
     clearTimeout(this.timer);
@@ -69,6 +78,10 @@ export class DurableChatTransport {
   send(raw: string) {
     const message = JSON.parse(raw) as Event;
     if (message.type === "stop") { void this.cancel(); return; }
+    if (message.type === "resume") {
+      if (!this.busy && this.confirmation && typeof message.approved === "boolean") void this.resume(message.approved);
+      return;
+    }
     if (message.type !== "message") {
       this.emit({type: "error", content: "Продолжение после подтверждения пока недоступно. Действие не выполнено."});
       return;
@@ -81,6 +94,9 @@ export class DurableChatTransport {
     this.busy = true;
     this.run = null;
     this.pendingCancel = false;
+    this.cursor = 0;
+    this.confirmation = null;
+    this.emit({type: "durable_confirmation", checkpoint: null});
     const generation = ++this.generation;
     clearTimeout(this.timer);
     const requestId = crypto.randomUUID();
@@ -113,6 +129,44 @@ export class DurableChatTransport {
     }
   }
 
+  private async resume(approved: boolean) {
+    if (!this.run || !this.confirmation) return;
+    const runId = this.run.id;
+    const body = {attempt_id: this.confirmation.attempt_id, sha256: this.confirmation.sha256, approved};
+    const generation = ++this.generation;
+    clearTimeout(this.timer);
+    this.busy = true;
+    this.pendingCancel = false;
+    this.emit({type: "durable_decision_pending", pending: true});
+    this.emit({type: "durable_state", active: true});
+    try {
+      let run: Run;
+      try {
+        run = await this.request(`/api/agent/chat-runs/${runId}/resume`, body) as Run;
+      } catch (error) {
+        if (String(error).includes("HTTP 4")) throw error;
+        run = await this.request(`/api/agent/chat-runs/${runId}/resume`, body) as Run;
+      }
+      if (generation !== this.generation) return;
+      this.run = run;
+      this.confirmation = null;
+      this.busy = !terminal.has(run.status);
+      this.emit({type: "durable_confirmation", checkpoint: null});
+      this.emit({type: "durable_state", active: this.busy});
+      if (this.pendingCancel) await this.cancel();
+      void this.poll(generation, this.cursor, new Set());
+    } catch (error) {
+      if (generation !== this.generation) return;
+      this.confirmation = null;
+      this.emit({type: "durable_confirmation", checkpoint: null});
+      this.emit({type: "status", content: `Решение не подтверждено: ${String(error)}. Проверяю состояние задачи…`});
+      // Reconcile an ambiguous reply without resubmitting a different decision.
+      void this.poll(generation, this.cursor, new Set());
+    } finally {
+      if (generation === this.generation) this.emit({type: "durable_decision_pending", pending: false});
+    }
+  }
+
   private async cancel() {
     if (!this.run) { this.pendingCancel = true; return; }
     try {
@@ -135,18 +189,33 @@ export class DurableChatTransport {
         if (item.sequence <= cursor) continue;
         const event = item.payload.event;
         if (event && event.type !== "done" && !(event.type === "text" && run.result_message_id && saved.has(run.result_message_id))) {
-          if (event.type === "confirmation_required") this.emit({type: "status", content: "Нужно новое разрешение. Запуск будет заблокирован до действия; продолжение после подтверждения пока недоступно."});
+          if (event.type === "confirmation_required") this.emit({type: "status", content: "Действие остановлено до подтверждения владельцем."});
           else this.emit(event);
         }
         cursor = item.sequence;
       }
+      this.cursor = cursor;
       if (terminal.has(run.status) && page.items.length < 100) {
+        let checkpoint: DurableConfirmation | null = null;
+        if (run.status === "blocked") {
+          try {
+            const state = await this.request(`/api/agent/chat-runs/${run.id}/checkpoint`) as DurableConfirmation & {can_resume: boolean};
+            if (state.can_resume) checkpoint = state;
+          } catch (error) {
+            if (!String(error).includes("HTTP 409")) throw error;
+          }
+          if (generation !== this.generation) return;
+        }
+        this.confirmation = checkpoint;
+        this.emit({type: "durable_confirmation", checkpoint});
         this.busy = false;
         if (run.status !== "completed") this.emit({type: "status", content: `Задача: ${run.status}. ${run.blocker ? JSON.stringify(run.blocker) : ""}`});
         this.emit({type: "done"});
         return;
       }
       this.busy = true;
+      this.confirmation = null;
+      this.emit({type: "durable_confirmation", checkpoint: null});
       this.emit({type: "durable_state", active: true});
     } catch {
       if (generation !== this.generation) return;

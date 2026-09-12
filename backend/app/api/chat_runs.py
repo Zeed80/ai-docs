@@ -3,6 +3,7 @@
 import hashlib
 import json
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -29,7 +30,12 @@ from app.db.models import (
     WorkStepAttempt,
 )
 from app.db.session import get_db
-from app.domain.work_orders import ACTIVE_WORK_STATUSES, create_single_step_plan, create_work_order
+from app.domain.work_orders import (
+    ACTIVE_WORK_STATUSES,
+    append_event,
+    create_single_step_plan,
+    create_work_order,
+)
 
 router = APIRouter(prefix="/api/agent/chat-runs", tags=["durable-chat"])
 
@@ -49,6 +55,115 @@ class ChatRunCreate(BaseModel):
     reasoning_mode: Literal["normal", "strict"] = "normal"
     attachments: list[ChatRunAttachment] = Field(default_factory=list, max_length=20)
     workspace_context: dict = Field(default_factory=dict)
+
+
+class ChatResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    attempt_id: uuid.UUID
+    sha256: str = Field(pattern="^[a-f0-9]{64}$")
+    approved: bool = Field(strict=True)
+
+
+async def existing_decision(db, order_id, attempt_id):
+    return await db.scalar(
+        select(WorkEvent)
+        .where(
+            WorkEvent.work_order_id == order_id,
+            WorkEvent.event_type == "chat.continuation_decided",
+            WorkEvent.payload["attempt_id"].as_string() == str(attempt_id),
+        )
+        .limit(1)
+    )
+
+
+@router.post("/{run_id}/resume", status_code=202)
+async def resume_chat_run(
+    run_id: uuid.UUID,
+    body: ChatResumeRequest,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+):
+    from app.ai.agent_config import get_builtin_agent_config
+    from app.domain.chat_continuation import (
+        confirmation_state,
+        validate_current_config,
+        validate_wall_budget,
+    )
+
+    if is_service_account(user):
+        raise HTTPException(403, "Continuation requires a human owner")
+    run = await owned_run(db, run_id, user)
+    await db.execute(
+        select(ChatSession.id).where(ChatSession.id == run.session_id).with_for_update()
+    )
+    # Same lock as cancellation and intake settlement; duplicate clicks cannot
+    # allocate two revisions or decide the same snapshot twice.
+    order = await db.get(WorkOrder, run.work_order_id, with_for_update=True)
+    old = await existing_decision(db, order.id, body.attempt_id)
+    if old:
+        if old.payload["sha256"] != body.sha256 or old.payload["approved"] != body.approved:
+            raise HTTPException(409, "Checkpoint already decided differently")
+        return describe(run, order)
+    if order.status != "blocked" or run.result_message_id is not None:
+        raise HTTPException(409, "Chat is not waiting at a confirmation boundary")
+    # Intake locks the session before creating another turn. Do not revise an
+    # earlier turn after the user has moved this conversation forward.
+    latest = await db.scalar(
+        select(DurableChatRun.id)
+        .where(DurableChatRun.session_id == run.session_id)
+        .order_by(DurableChatRun.created_at.desc(), DurableChatRun.id.desc())
+        .limit(1)
+    )
+    if latest != run.id:
+        raise HTTPException(409, "A newer conversation turn exists")
+    attempt = await db.get(WorkStepAttempt, body.attempt_id)
+    step = await db.get(WorkStep, attempt.step_id) if attempt else None
+    if attempt is None or step is None:
+        raise HTTPException(409, "Checkpoint attempt not found")
+    record = attempt.checkpoint or {}
+    try:
+        payload = confirmation_state(record, order, step, attempt)
+        if record["snapshot"]["sha256"] != body.sha256:
+            raise ValueError("Checkpoint digest changed")
+        if body.approved:
+            validate_current_config(payload, get_builtin_agent_config())
+            validate_wall_budget(order)
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        raise HTTPException(409, str(exc)) from exc
+    decision = {
+        "attempt_id": str(attempt.id),
+        "sha256": body.sha256,
+        "approved": body.approved,
+        "source_revision": order.plan_revision,
+        "call_id": payload["pending_calls"][0]["id"],
+        "expires_at": (datetime.now(UTC) + timedelta(minutes=30)).isoformat(),
+    }
+    event = await append_event(
+        db, order.id, "chat.continuation_decided", actor=user.sub, payload=decision
+    )
+    if body.approved:
+        _, continuation = await create_single_step_plan(
+            db,
+            order,
+            kind="agent_turn",
+            title="Continue confirmed chat action",
+            input_data={
+                "runner": "durable_chat",
+                "continuation_event_id": str(event.id),
+                "workspace_context": (step.input_ or {}).get("workspace_context", {}),
+            },
+            max_attempts=1,
+            timeout_seconds=7200,
+            actor=user.sub,
+        )
+        event.payload = {
+            **decision,
+            "target_step_id": str(continuation.id),
+            "target_revision": order.plan_revision,
+        }
+        order.blocker = None
+    await db.commit()
+    return describe(run, order)
 
 
 def describe(run, order):
@@ -308,10 +423,35 @@ async def get_chat_checkpoint(
         payload = unpack_checkpoint(record.get("snapshot") or {})
     except (ValueError, TypeError, AttributeError) as exc:
         raise HTTPException(409, "Invalid checkpoint integrity") from exc
+    from app.ai.agent_config import get_builtin_agent_config
+    from app.domain.chat_continuation import (
+        confirmation_state,
+        validate_current_config,
+        validate_wall_budget,
+    )
+
+    can_resume = False
+    if order.status == "blocked" and run.result_message_id is None:
+        try:
+            confirmation_state(record, order, step, attempt)
+            validate_current_config(payload, get_builtin_agent_config())
+            validate_wall_budget(order)
+            latest = await db.scalar(
+                select(DurableChatRun.id)
+                .where(DurableChatRun.session_id == run.session_id)
+                .order_by(DurableChatRun.created_at.desc(), DurableChatRun.id.desc())
+                .limit(1)
+            )
+            can_resume = (
+                latest == run.id and await existing_decision(db, order.id, attempt.id) is None
+            )
+        except (ValueError, TypeError, KeyError, AttributeError):
+            pass
     # Full model context stays private storage, not an API/debug transcript.
     return {
         "available": True,
-        "can_resume": False,
+        "can_resume": can_resume,
+        "confirmation": payload.get("confirmation") if can_resume else None,
         "phase": payload["phase"],
         "plan_revision": order.plan_revision,
         "attempt_id": attempt.id,
