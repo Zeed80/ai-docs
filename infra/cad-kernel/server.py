@@ -2408,6 +2408,10 @@ def solve_assembly(request: AssemblySolveRequest) -> dict[str, Any]:
 #   front — look along -Y: u = +Z (axis runs left→right), v = +X
 #   side  — look along -Z (down the axis): u = +X, v = +Y  → concentric circles
 #   top   — look along -X: u = +Z, v = +Y
+#   bottom — look along +X: u = +Z, v = +Y. The face a keyway at angle 0 sits on:
+#            from `front` the keyway is a sliver along the top edge and from
+#            `top` it is hidden behind the shaft, so a keyed shaft's main view
+#            — keyway face-on, cross holes as circles — needs this direction.
 # ``Drawing.project`` returns geometry ALREADY FLATTENED into the XY plane
 # (z == 0), not in model coordinates, so each view only needs a 2D mapping from
 # that plane to sheet (u, v). Verified against a stepped shaft: projecting a
@@ -2417,6 +2421,9 @@ _VIEW_FRAMES: dict[str, tuple[tuple[float, float, float], float, float]] = {
     "front": ((0.0, -1.0, 0.0), -1.0, 1.0),
     "side": ((0.0, 0.0, -1.0), 1.0, 1.0),
     "top": ((-1.0, 0.0, 0.0), -1.0, 1.0),
+    # Signs fixed by probing a keyed shaft: the keyway must land at the same u as
+    # on `front` (no mirrored part) — see the backend test of the probe numbers.
+    "bottom": ((1.0, 0.0, 0.0), -1.0, 1.0),
 }
 
 
@@ -2424,7 +2431,7 @@ class ProjectRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     candidate: Candidate
-    views: list[Literal["front", "side", "top"]] = Field(min_length=1, max_length=3)
+    views: list[Literal["front", "side", "top", "bottom"]] = Field(min_length=1, max_length=4)
     confirm_assumptions: bool = False
     # Curves the projector cannot express exactly (a projected ellipse, a spline
     # silhouette) are sampled; straight and circular edges stay exact.
@@ -2541,7 +2548,7 @@ def project_views(request: ProjectRequest) -> dict[str, Any]:
             page.addView(view)
             view.Source = [body]
             view.Direction = App.Vector(*direction)
-            if name == "front":
+            if name in ("front", "bottom"):
                 view.XDirection = App.Vector(0.0, 0.0, 1.0)
             if "ScaleType" in view.PropertiesList:
                 view.ScaleType = "Custom"
@@ -2580,7 +2587,7 @@ def project_views(request: ProjectRequest) -> dict[str, Any]:
 class SheetViewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["front", "side", "top", "section", "detail"] = "front"
+    kind: Literal["front", "side", "top", "bottom", "section", "detail"] = "front"
     # Geometry may be a regular section while the sheet presents it away from
     # the parent view as a removed section. Keeping construction and
     # presentation separate avoids teaching OpenCascade a fake fifth camera.
@@ -2865,7 +2872,7 @@ def build_drawing(request: DrawingRequest) -> dict[str, Any]:
                 view.Source = [body]
                 direction = _VIEW_FRAMES[wanted.kind][0]
                 view.Direction = App.Vector(*direction)
-                if wanted.kind == "front":
+                if wanted.kind in ("front", "bottom"):
                     view.XDirection = App.Vector(0.0, 0.0, 1.0)
                 if base_view is None:
                     base_view = view

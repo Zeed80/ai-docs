@@ -210,6 +210,16 @@ def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
         body = spec.get("main_view") or {}
         if body.get("keyways") or body.get("cross_holes") or body.get("axial_holes"):
             views.append({"kind": "side"})
+    if part_class == "solid_rotation":
+        body = spec.get("main_view") or {}
+        if body.get("keyways") or body.get("cross_holes"):
+            # Главный вид — лицом к пазу (ГОСТ 2.305: наиболее полное
+            # представление). С `front` паз под углом 0 — полоска по верхней
+            # кромке, поперечные отверстия — щели в силуэте; положение и длину
+            # паза лист не проставлял, и ридер читал пазы наугад (базовая
+            # линия v2: 0/2). `bottom` смотрит на паз, отверстия — окружностями.
+            # `front` остаётся основой для ядра и на лист не идёт.
+            views.insert(1, {"kind": "bottom"})
     return views
 
 
@@ -254,6 +264,13 @@ def _view_reasons(views: list[dict[str, Any]], part_class: str, spec: dict) -> l
             if item["kind"] == "front":
                 item["visible"] = False
                 item["reason"] = "техническая основа: главный вид плоской детали — план"
+    elif part_class == "solid_rotation" and any(view["kind"] == "bottom" for view in views):
+        for item in reasons:
+            if item["kind"] == "front":
+                item["visible"] = False
+                item["reason"] = "техническая основа: главный вид вала — лицом к пазу"
+            elif item["kind"] == "bottom":
+                item["reason"] = "главный вид: паз и поперечные отверстия лицом к наблюдателю"
     return reasons
 
 
@@ -377,6 +394,9 @@ def plan_sheet(
     scaffold: set[int] = set()
     right: set[int] = set()
     if part_class == "hollow_rotation" and any(v["kind"] == "section" for v in views):
+        scaffold = {index for index, view in enumerate(views) if view["kind"] == "front"}
+    elif part_class == "solid_rotation" and any(v["kind"] == "bottom" for v in views):
+        # Вал с пазом: главный вид — `bottom`, лицом к пазу.
         scaffold = {index for index, view in enumerate(views) if view["kind"] == "front"}
     elif part_class in ("flange", "plate"):
         # Главный вид плоской детали — план; вид на ребро `front` нужен ядру

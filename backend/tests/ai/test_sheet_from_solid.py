@@ -983,3 +983,39 @@ def test_a_slot_gets_its_centre_its_centre_distance_and_its_end_radius():
     assert slot == {("DistanceX", 19.0), ("Radius", 3.0)}
     assert centre == {("DistanceX", 33.0), ("DistanceY", 35.0)}
     assert not any("отв." in str(d.get("label")) for d in drawing["dimensions"])
+
+
+# ── Ф3.0a: главный вид вала с пазом — лицом к пазу ─────────────────────────
+# Проба ядра на shaft-1: с `front` концы паза — дуги у верхней кромки
+# (полоска), с `top` — невидимые линии (паз на обратной стороне, угол 0 = −X).
+
+
+def test_a_keyed_shaft_is_drawn_facing_its_keyway():
+    spec = {
+        "main_view": {
+            "outer": [{"diameter_mm": 30, "length_mm": 50}],
+            "keyways": [{"axial_start_mm": 10, "length_mm": 20, "width_mm": 8, "depth_mm": 4}],
+        },
+        "views": [],
+    }
+    kinds = [view["kind"] for view in plan_views("solid_rotation", spec)]
+
+    assert kinds[:2] == ["front", "bottom"]
+    assert "side" in kinds
+
+
+def test_a_plain_shaft_keeps_its_front_view():
+    spec = {"main_view": {"outer": [{"diameter_mm": 30, "length_mm": 50}]}, "views": []}
+    assert "bottom" not in [view["kind"] for view in plan_views("solid_rotation", spec)]
+
+
+def test_the_front_view_of_a_keyed_shaft_is_only_a_scaffold():
+    from app.ai.cad_ir.sheet_from_solid import _view_reasons
+
+    views = [{"kind": "front"}, {"kind": "bottom"}, {"kind": "side"}]
+    reasons = {
+        item["kind"]: item for item in _view_reasons(views, "solid_rotation", {"main_view": {}})
+    }
+
+    assert reasons["front"]["visible"] is False
+    assert "паз" in reasons["bottom"]["reason"]
