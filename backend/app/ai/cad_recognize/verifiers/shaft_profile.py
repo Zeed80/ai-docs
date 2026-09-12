@@ -42,7 +42,9 @@ def verify_shaft_profile(hypothesis: Hypothesis, frame: ViewFrame | None, sheet:
     profile = sheet
     scale_u, scale_v = frame.mm_per_px, frame.scale_v
     length_tol, diameter_tol = shaft_tolerances(frame.scale_mean)
-    shoulders = _shoulders(profile, jump_px=max(2.0, 0.5 / scale_v))
+    shoulders = _shoulders(
+        profile, jump_px=max(2.0, 0.5 / scale_v), min_plateau_px=max(4.0, 1.5 / scale_u)
+    )
     measured_steps = []
     problems = []
     station = 0.0
@@ -89,7 +91,9 @@ def verify_shaft_profile(hypothesis: Hypothesis, frame: ViewFrame | None, sheet:
     )
 
 
-def _shoulders(profile: Any, *, jump_px: float) -> list[tuple[float, float]]:
+def _shoulders(
+    profile: Any, *, jump_px: float, min_plateau_px: float = 1.0
+) -> list[tuple[float, float]]:
     """Уступы профиля: ``(столбец грани уступа, величина скачка в px)``.
 
     Профиль делится на площадки постоянного уровня. На фаске у уступа
@@ -98,7 +102,10 @@ def _shoulders(profile: Any, *, jump_px: float) -> list[tuple[float, float]]:
     уступа — там, где кончается или начинается МЕНЬШАЯ ступень: её кромка
     доходит до самой грани.
     """
-    plateaus = _plateaus(profile)
+    # Короткие площадки — не ступени: пара дуг поперечного отверстия даёт
+    # «ступень» в 2,5 мм и ложные уступы (shaft-20), канавка у уступа —
+    # площадку, из-за которой переход считался не между ступенями.
+    plateaus = [item for item in _plateaus(profile) if item[1] - item[0] + 1 >= min_plateau_px]
     result = []
     for (a_start, a_end, a_level), (b_start, b_end, b_level) in zip(plateaus, plateaus[1:]):
         jump = abs(b_level - a_level)
@@ -114,6 +121,12 @@ def _shoulders(profile: Any, *, jump_px: float) -> list[tuple[float, float]]:
         # до большей; нет такой — середина промежутка.
         middle = profile.x0 + (a_end + b_start) / 2.0
         window = max(8.0, (b_start - a_end) + 6.0)
+        # Из покрывающих скачок — ближайшая к границе БОЛЬШЕЙ ступени, а не к
+        # середине: канавка режется в меньшую ступень у самого уступа, и её
+        # стенка (слитая с выносной, тоже «покрывает») ближе к середине
+        # перехода (shaft-6: 96,4 вместо 99,9). Фаска стоит на кромке большей
+        # ступени, но грань и тогда в пределах размера фаски от этой границы.
+        anchor = profile.x0 + (b_start if a_level < b_level else a_end)
         small, big = min(a_level, b_level), max(a_level, b_level)
         bands = (
             (profile.axis_y - big, profile.axis_y - small),
@@ -132,7 +145,7 @@ def _shoulders(profile: Any, *, jump_px: float) -> list[tuple[float, float]]:
             if abs(face[0] - middle) <= window and cover(face) >= 0.5
         ]
         if nearby:
-            best = max(nearby, key=lambda face: (round(cover(face), 1), -abs(face[0] - middle)))
+            best = max(nearby, key=lambda face: (round(cover(face), 1), -abs(face[0] - anchor)))
             result.append((best[0], jump))
         else:
             result.append((middle, jump))
