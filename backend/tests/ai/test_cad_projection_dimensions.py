@@ -200,3 +200,48 @@ def test_a_horizontal_dimension_label_is_centred_not_rotated():
 
     assert label.rotation == 0.0
     assert label.anchor == "middle"
+
+
+def test_a_shaft_diameter_is_drawn_on_its_own_step_without_witness_lines():
+    """Ø25 на ступени длиной 12 уезжал на соседнюю: к нему применялся отступ длин."""
+    entities = dimensions_from_kernel(
+        [
+            {
+                "view_index": 0,
+                "kind": "DistanceY",
+                "label": "Ø",
+                "anchors_mm": [[0.0, -12.5], [0.0, 12.5]],
+                "value_mm": 25.0,
+                "place_u": 6.0,
+            }
+        ],
+        {"front": {"offset_u": 0.0, "offset_v": 100.0}},
+        ["front"],
+        px_per_mm=1.0,
+    )
+    segments = [item for item in entities if isinstance(item, Segment)]
+
+    assert len(segments) == 1  # только размерная линия, без выносных
+    assert segments[0].p1.x == segments[0].p2.x == 6.0
+
+
+def test_a_plate_height_still_goes_outside_with_witness_lines():
+    """Высота пластины — тоже DistanceY, но без `place_u`: выносится за контур."""
+    entities = dimensions_from_kernel(
+        [
+            {
+                "view_index": 0,
+                "kind": "DistanceY",
+                "label": "",
+                "anchors_mm": [[0.0, -25.0], [0.0, 25.0]],
+                "value_mm": 50.0,
+            }
+        ],
+        {"front": {"offset_u": 50.0, "offset_v": 100.0}},
+        ["front"],
+        px_per_mm=1.0,
+    )
+    segments = [item for item in entities if isinstance(item, Segment)]
+
+    assert len(segments) == 3  # две выносные и размерная
+    assert segments[2].p1.x < 50.0  # в стороне от контура

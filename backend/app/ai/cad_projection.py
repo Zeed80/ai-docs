@@ -496,8 +496,18 @@ def dimensions_from_kernel(
         # отступа и без выносных, как по ГОСТ 2.307. Сдвинутый в сторону, он
         # мерил бы хорду, а не диаметр.
         through_centre = str(item.get("kind") or "") == "Diameter"
-        offset = 0.0 if through_centre else DIM_OFFSET_MM
-        extension = 0.0 if through_centre else DIM_EXTENSION_MM
+        # Диаметр тела вращения на продольном виде — поперёк СВОЕЙ ступени, от
+        # образующей до образующей (`place_u` знает, где обе есть). Отступ,
+        # положенный длинам, уводил его на 8 мм листа в сторону — на листе 1:2
+        # это 16 мм детали, и Ø25 на ступени длиной 12 оказывался на соседней
+        # Ø28, а выносные тянулись к нему поперёк чужой ступени. Размер высоты
+        # пластины — тоже DistanceY, но без `place_u`: он выносится за контур.
+        across_step = str(item.get("kind") or "") == "DistanceY" and isinstance(
+            item.get("place_u"), (int, float)
+        )
+        on_contour = through_centre or across_step
+        offset = 0.0 if on_contour else DIM_OFFSET_MM
+        extension = 0.0 if on_contour else DIM_EXTENSION_MM
         ou, ov = nu * offset, nv * offset
         eu, ev = nu * (offset + extension), nv * (offset + extension)
 
@@ -514,7 +524,7 @@ def dimensions_from_kernel(
         # start at the ORIGINAL anchor: for a DistanceX between end faces at
         # different heights the witness lines differ in length, and that is
         # exactly what keeps the dimension line itself horizontal.
-        if not through_centre:
+        if not on_contour:
             entities.append(Segment(p1=to_point(a1u, a1v), p2=to_point(u1 + eu, v1 + ev), **style))
             entities.append(Segment(p1=to_point(a2u, a2v), p2=to_point(u2 + eu, v2 + ev), **style))
         # The dimension line itself.

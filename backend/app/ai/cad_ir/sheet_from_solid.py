@@ -406,10 +406,7 @@ def _dimension_requests(drawing: dict, spec: dict, plan: SheetPlan) -> list[dict
     wanted_diameters = sorted(
         {float(s["d"]) for s in outer if s.get("d")} | {float(s["d"]) for s in bore if s.get("d")}
     )
-    longest = max((float(s.get("l") or 0.0) for s in outer), default=0.0)
-    wanted_lengths = sorted(
-        {float(s["l"]) for s in outer if s.get("l") and abs(float(s["l"]) - longest) > 1e-6}
-    )
+    wanted_lengths = _chain_lengths(outer)
     total_length = sum(float(s.get("l") or 0.0) for s in outer)
 
     for view_index, view in enumerate(views):
@@ -613,6 +610,20 @@ def _prismatic_dimension_requests(
                 )
                 break
     return requests
+
+
+def _chain_lengths(outer: list[dict]) -> list[float]:
+    """Step lengths the sheet must state: every link but ONE — the longest.
+
+    ГОСТ 2.307 leaves exactly one link of a chain open under an overall size.
+    This was a SET of the lengths minus every length equal to the longest, so
+    repeats collapsed and ties were all dropped: a shaft with steps
+    12/30/35/80/15/80/15 got 12, 30, 35 and one 15 — three links open instead
+    of one. Measured on the verifier corpus with the metric corrected the same
+    way: 13 of 30 shaft sheets complete, not the 30 the set-based metric said.
+    """
+    lengths = sorted(float(s["l"]) for s in outer if s.get("l"))
+    return lengths[:-1]
 
 
 def _extreme_edge_pairs(view: dict) -> dict[str, tuple[float, int, int]]:

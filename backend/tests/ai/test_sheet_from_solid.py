@@ -708,3 +708,17 @@ def test_concentric_diameters_do_not_share_one_line():
         for item in drawing["dimensions"]
     }
     assert len(directions) == 2
+
+
+def test_a_chain_leaves_exactly_one_link_open_even_with_repeated_lengths():
+    """Вал shaft-1 корпуса: ступени 12/30/35/80/15/80/15.
+
+    Множество значений без всех «самых длинных» дало 12, 30, 35 и одну 15 —
+    открытыми остались три звена вместо одного.
+    """
+    from app.ai.cad_ir.sheet_from_solid import _chain_lengths
+
+    outer = [{"d": 25, "l": value} for value in (12, 30, 35, 80, 15, 80, 15)]
+
+    assert _chain_lengths(outer) == [12.0, 15.0, 15.0, 30.0, 35.0, 80.0]
+    assert _chain_lengths([{"d": 20, "l": 50}]) == []

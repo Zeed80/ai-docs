@@ -60,8 +60,10 @@ def needed_dimensions(spec: dict) -> dict[str, list[float]]:
         {s["diameter_mm"] for s in outer} | {s["diameter_mm"] for s in body.get("bore") or []}
     )
     lengths = [s["length_mm"] for s in outer]
-    longest = max(lengths)
-    open_chain = sorted({value for value in lengths if value != longest})
+    # Открыта ровно ОДНА ступень — самая длинная. Список, не множество: у вала
+    # shaft-1 две ступени по 80 и две по 15, лист не проставил обе «80» и
+    # последнюю «15», а метрика по множеству значений засчитала лист полным.
+    open_chain = sorted(lengths)[:-1]
     return {"diameters": diameters, "lengths": open_chain, "overall": [sum(lengths)]}
 
 
