@@ -2670,6 +2670,7 @@ async def _store_failed_reading(
     build_note: str | None = None,
     fallback_ir: Any | None = None,
     owner_sub: str | None = None,
+    verification: dict | None = None,
 ) -> bool:
     """Keep what was read when the part could not be built.
 
@@ -2704,6 +2705,20 @@ async def _store_failed_reading(
                 return False
             stored_solid = dict(solid_result or {"built": False})
             engineering_graph = stored_solid.pop("_engineering_model_graph", None)
+            # Деталь не собралась — проверка по листу всё равно сделана, и её
+            # вердикты нужнее всего именно здесь: человек дочитывает черновик.
+            # Без этого отчёт терялся на каждом прогоне с блокером гейта.
+            if engineering_graph is not None and verification and verification.get("items"):
+                from app.ai.cad_recognize.verifiers.stage import apply_verification
+
+                try:
+                    engineering_graph, _written = apply_verification(
+                        engineering_graph, verification, pass_id=f"verify-{gen_uuid}"
+                    )
+                except Exception as exc:  # noqa: BLE001 — the graph without verdicts still stands
+                    logger.warning(
+                        "cad_verify_graph_failed", generation_id=str(gen_uuid), error=str(exc)[:200]
+                    )
             graph_ref = None
             if engineering_graph is not None:
                 from app.services.engineering_model_graph import persist_pipeline_graph
@@ -2723,6 +2738,7 @@ async def _store_failed_reading(
                 "vectorize_method": "spec",
                 "spec": spec,
                 "spec_crosscheck": crosscheck,
+                **({"spec_verification": verification} if verification else {}),
                 "dimension_graph": build_dimension_graph(spec),
                 "spec_followup": followup_log,
                 "spec_review_warnings": review_warnings,
@@ -3879,6 +3895,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         build_note=build_note,
                         fallback_ir=fallback_ir,
                         owner_sub=owner_sub,
+                        verification=verification,
                     )
                     await _record(
                         "pipeline",
