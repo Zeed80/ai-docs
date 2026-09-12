@@ -50,6 +50,7 @@ def verify_spec_against_sheet(image_bytes: bytes, spec: dict[str, Any]) -> dict[
     from PIL import Image
 
     from app.ai.cad_recognize.verifiers.plate_frame import locate_plate_frame
+    from app.ai.cad_recognize.verifiers.plate_hole import plate_hole_tolerances
 
     gray = np.asarray(Image.open(io.BytesIO(image_bytes)).convert("L"))
     frame = locate_plate_frame(gray, float(width), float(height))
@@ -89,7 +90,13 @@ def verify_spec_against_sheet(image_bytes: bytes, spec: dict[str, Any]) -> dict[
                 "center_y_mm": round(verdict.measured["y_mm"] - half_h, 3),
                 "diameter_mm": verdict.measured["diameter_mm"],
             }
-        report["items"].append(_item(index, hole, verdict.status, measured, verdict.reason))
+        item = _item(index, hole, verdict.status, measured, verdict.reason)
+        position_tol, diameter_tol = plate_hole_tolerances(frame.scale_mean)
+        item["tolerance_mm"] = {
+            "position": round(position_tol, 3),
+            "diameter": round(diameter_tol, 3),
+        }
+        report["items"].append(item)
         if verdict.status == "refuted" and measured:
             report["notes"].append(
                 f"отверстие {index + 1}: прочитано Ø{_mm(hole['diameter_mm'])} "
@@ -102,12 +109,69 @@ def verify_spec_against_sheet(image_bytes: bytes, spec: dict[str, Any]) -> dict[
     return _finish(report, started, None)
 
 
+_HOLE_FIELDS = (
+    ("center_x_mm", "position"),
+    ("center_y_mm", "position"),
+    ("diameter_mm", "diameter"),
+)
+
+
+def apply_verification(graph: Any, report: dict[str, Any], *, pass_id: str) -> tuple[Any, int]:
+    """Записать вердикты стадии в граф EMG — по утверждению на каждое поле.
+
+    Вердикт по отверстию раскладывается на x, y и Ø: у plate-1 опровергнут
+    только y, и помечать противоречивым верный Ø значило бы солгать графу.
+    Поле, чьего утверждения в графе нет, пропускается. Возвращает новый граф
+    и число записанных вердиктов; патчи применяются по одному — каждый
+    строится на ревизии, оставленной предыдущим.
+    """
+    from app.ai.cad_recognize.verifiers.contract import Verdict
+    from app.ai.cad_recognize.verifiers.graph import verdict_patch
+    from app.domain.engineering_model_graph import apply_graph_patch
+
+    written = 0
+    for item in report.get("items") or []:
+        feature_id = item.get("feature_id")
+        if not feature_id:
+            continue
+        for field, tolerance_kind in _HOLE_FIELDS:
+            assertion_id = f"assertion:feature:{feature_id}:param:{field}"
+            if not any(assertion.id == assertion_id for assertion in graph.assertions):
+                continue
+            measured = (item.get("measured") or {}).get(field)
+            tolerance = (item.get("tolerance_mm") or {}).get(tolerance_kind)
+            read = item["read"][field]
+            if item["status"] == "unmeasurable" or measured is None or tolerance is None:
+                verdict = Verdict(status="unmeasurable", reason=item.get("reason") or "")
+            else:
+                wrong = abs(float(measured) - float(read)) > float(tolerance)
+                verdict = Verdict(
+                    status="refuted" if wrong else "confirmed",
+                    measured={field: measured},
+                    reason=(f"замер {measured:g}, прочитано {read:g}" if wrong else ""),
+                )
+            patch = verdict_patch(
+                graph,
+                Hypothesis(item["kind"], f"{item['path']}.{field}", {field: read}),
+                verdict,
+                assertion_id=assertion_id,
+                pass_id=pass_id,
+                measured_key=field,
+            )
+            graph = apply_graph_patch(graph, patch)
+            written += 1
+    return graph, written
+
+
 def _item(
     index: int, hole: dict[str, Any], status: str, measured: dict[str, Any], reason: str
 ) -> dict[str, Any]:
     return {
         "kind": "plate_hole",
         "path": f"main_view.profile.holes[{index}]",
+        # Стабильный id элемента (`assign_stable_feature_ids`) — по нему
+        # вердикт находит узел Feature в графе.
+        "feature_id": hole.get("id"),
         "read": {key: hole[key] for key in ("center_x_mm", "center_y_mm", "diameter_mm")},
         "status": status,
         "measured": measured,

@@ -75,6 +75,41 @@ def test_without_the_plan_on_the_sheet_every_hole_is_unmeasurable_with_a_reason(
     assert report["notes"] == []
 
 
+def test_verdicts_reach_the_graph_per_field_of_each_hole():
+    """Путь продукта: id признаков → граф сборки → вердикт по x, y и Ø отдельно."""
+    from app.ai.cad_emg_compat import spec_feature_tree_as_graph
+    from app.ai.cad_recognize.spec_vectorize import assign_stable_feature_ids
+    from app.ai.cad_recognize.verifiers.stage import apply_verification
+    from app.ai.cad_solid import feature_tree_from_spec
+
+    read = list(HOLES)
+    read[2] = (52.0, 26.0, 6.6)  # y переставлен, Ø верен
+    spec = _spec(read)
+    spec["main_view"]["profile"]["thickness_mm"] = 10.0
+    assign_stable_feature_ids(spec)
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    graph = spec_feature_tree_as_graph(spec, candidate, graph_id="image-generation:verify")
+
+    report = verify_spec_against_sheet(_png(), spec)
+    graph, written = apply_verification(graph, report, pass_id="verify-test")
+
+    assert written == 12  # 4 отверстия × (x, y, Ø)
+    active = {
+        item.supersedes_assertion_id: item
+        for item in graph.assertions
+        if item.state == "active" and item.supersedes_assertion_id
+    }
+    prefix = "assertion:feature:0:profile.holes:2:param:"
+    assert active[f"{prefix}center_y_mm"].assurance == "contradicted"
+    assert active[f"{prefix}center_x_mm"].assurance == "corroborated"
+    assert active[f"{prefix}diameter_mm"].assurance == "corroborated"
+    (measured,) = [
+        item for item in graph.assertions if item.id.startswith(f"{prefix}center_y_mm@measured")
+    ]
+    assert abs(measured.value.value - 7.0) <= 0.3
+
+
 def test_a_spec_without_plate_holes_has_nothing_to_check():
     report = verify_spec_against_sheet(_png(), {"main_view": {"profile": {"shape": "circle"}}})
 

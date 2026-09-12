@@ -3904,6 +3904,22 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     spec, crosscheck, solid_result
                 )
                 engineering_graph = solid_result.pop("_engineering_model_graph", None)
+                if engineering_graph is not None and verification and verification["items"]:
+                    # Вердикты проверки — свидетельствами в граф: подтверждённое
+                    # становится corroborated, опровергнутое — contradicted с
+                    # измеренным вариантом рядом (выбор — за согласованием).
+                    from app.ai.cad_recognize.verifiers.stage import apply_verification
+
+                    try:
+                        engineering_graph, _verdicts_written = apply_verification(
+                            engineering_graph, verification, pass_id=f"verify-{generation_id}"
+                        )
+                    except Exception as exc:  # noqa: BLE001 — the graph without verdicts still stands
+                        logger.warning(
+                            "cad_verify_graph_failed",
+                            generation_id=generation_id,
+                            error=str(exc)[:200],
+                        )
                 spec_ir = solid_result.pop("_sheet_ir", None)
                 if spec_ir is None:
                     return await _fail(

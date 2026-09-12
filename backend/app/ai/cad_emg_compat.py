@@ -463,6 +463,10 @@ _FEATURE_PARAM_FIELDS = (
     "start_angle_deg",
     "internal",
     "through",
+    # Центр отверстия пластины: без него в графе нет того, что опровергает
+    # проверяльщик отверстий (plate-1: y переставлены — Ø при этом верны).
+    "center_x_mm",
+    "center_y_mm",
 )
 
 # feature.kind value per spec list name — the spec's own vocabulary, not a
