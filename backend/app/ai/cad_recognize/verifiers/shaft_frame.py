@@ -262,7 +262,11 @@ def _profile(lines: list[Any], axis_y: float, width: int, min_length: int):
 def _end_faces(
     vertical: list[Any], axis_y: float, x0: int, x1: int, half: Any, sheet: _Sheet
 ) -> tuple[int, int] | None:
-    """Торцы — основные вертикали через ось у обоих концов профиля; нет обоих — не ось."""
+    """Торцы — основные вертикали через ось у обоих концов профиля; нет обоих — не ось.
+
+    Вертикаль должна перекрывать большую часть высоты концевой ступени, а
+    положение уточняется по самому внешнему прогону у оси (`_outer_x`).
+    """
     import numpy as np
 
     from app.ai.cad_recognize.verifiers.plate_frame import _stroke
@@ -270,9 +274,24 @@ def _end_faces(
     reach = max(3.0, 0.03 * (x1 - x0))
     extent = float(np.nanmax(half[x0 : x1 + 1]))
     near_axis = (axis_y - 0.25 * extent, axis_y + 0.25 * extent)
+    edge = max(3, int(0.05 * (x1 - x0)))
 
-    def is_face(line: Any) -> bool:
+    def end_height(lo: int, hi: int) -> float:
+        values = half[max(0, lo) : max(0, hi) + 1]
+        values = values[~np.isnan(values)]
+        return float(np.median(values)) if values.size else extent
+
+    left_height = end_height(x0, x0 + edge)
+    right_height = end_height(x1 - edge, x1)
+
+    def is_face(line: Any, height: float) -> bool:
         if not line.start <= axis_y <= line.end:
+            return False
+        # Торец идёт через большую часть высоты концевой ступени: короткий
+        # обрывок через ось (метка, конец выноски) стал торцом у shaft-2 на
+        # 150 dpi. Фаска укорачивает торец на свой размер — это меньше 40 %.
+        span = min(line.end, axis_y + height) - max(line.start, axis_y - height)
+        if span < 0.6 * 2.0 * height:
             return False
         weight = _stroke(sheet.gray, sheet.ink, line, near_axis, axis=1)
         return weight >= sheet.main_weight
@@ -280,16 +299,47 @@ def _end_faces(
     left = [
         line.position
         for line in vertical
-        if x0 - reach <= line.position <= x0 + reach and is_face(line)
+        if x0 - reach <= line.position <= x0 + reach and is_face(line, left_height)
     ]
     right = [
         line.position
         for line in vertical
-        if x1 - reach <= line.position <= x1 + reach and is_face(line)
+        if x1 - reach <= line.position <= x1 + reach and is_face(line, right_height)
     ]
     if not left or not right:
         return None
-    return int(round(min(left))), int(round(max(right)))
+    band = 0.2 * min(left_height, right_height)
+    rows = (axis_y - band, axis_y + band)
+    x_left = _outer_x(sheet.ink, min(left), rows, reach, side=-1)
+    x_right = _outer_x(sheet.ink, max(right), rows, reach, side=1)
+    return int(round(x_left)), int(round(x_right))
+
+
+def _outer_x(ink: Any, x: float, rows: tuple[float, float], reach: float, *, side: int) -> float:
+    """Самый внешний прогон чернил у торца — по строкам у оси, медиана середин.
+
+    По ЕСКД фаска на торце вала — ещё одна вертикаль через всю высоту на
+    расстоянии фаски от торца; на 150 dpi она в 3 px от торца, линии сливаются
+    в одну компоненту, и её центр уезжал внутрь (shaft-25: 858,9 вместо 862,2,
+    shaft-7: 1077,5 вместо 1083,7 — масштаб вида мимо на 1,5 %). Окно — от
+    найденной вертикали наружу на ширину окна торца.
+    """
+    import numpy as np
+
+    width = ink.shape[1]
+    if side > 0:
+        lo, hi = max(0, int(x) - 2), min(width, int(x + reach) + 1)
+    else:
+        lo, hi = max(0, int(x - reach)), min(width, int(x) + 3)
+    middles = []
+    for y in range(max(0, int(rows[0])), min(ink.shape[0], int(rows[1]) + 1)):
+        columns = np.nonzero(ink[y, lo:hi])[0]
+        if columns.size == 0:
+            continue
+        runs = np.split(columns, np.nonzero(np.diff(columns) > 1)[0] + 1)
+        run = runs[-1] if side > 0 else runs[0]
+        middles.append((run[0] + run[-1]) / 2.0 + lo)
+    return float(np.median(middles)) if middles else float(x)
 
 
 def _face_x(ink: Any, line: Any, inside: tuple[float, float]) -> float:
