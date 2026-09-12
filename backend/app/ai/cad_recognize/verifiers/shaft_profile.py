@@ -64,6 +64,7 @@ def verify_shaft_profile(hypothesis: Hypothesis, frame: ViewFrame | None, sheet:
         and isinstance(item.get("axial_start_mm"), (int, float))
         and isinstance(item.get("length_mm"), (int, float))
     ]
+    frame = chain_frame(frame, profile, [step.get("length_mm") for step in steps])
     scale_u, scale_v = frame.mm_per_px, frame.scale_v
     length_tol, diameter_tol = shaft_tolerances(frame.scale_mean)
     shoulders = _shoulders(
@@ -79,8 +80,17 @@ def verify_shaft_profile(hypothesis: Hypothesis, frame: ViewFrame | None, sheet:
         station += float(step.get("length_mm") or 0.0)
         boundaries.append(station)
     matched = [0.0]
+    # Конец вида — измеренный торец, а не прочитанная сумма: при неверном
+    # звене цепочки сумма мимо (shaft-1: 285 вместо 267).
+    end_mm = (float(profile.x1) - frame.origin_px[0]) * scale_u
     for index, boundary in enumerate(boundaries[1:-1]):
         x = frame.origin_px[0] + boundary / scale_u
+        # И от правого торца: неверное звено сдвигает все станции за ним, а
+        # от конца граница за ним стоит на месте.
+        predictions = [x]
+        from_right = end_mm - (boundaries[-1] - boundary)
+        if abs(from_right - boundary) > length_tol:
+            predictions.append(frame.origin_px[0] + from_right / scale_u)
         # Окно — не ±1 мм, а до 40 % более короткой соседней ступени: граница,
         # прочитанная на 2 мм мимо, давала «уступ не найден» без замера, и
         # оператор не видел, где уступ на самом деле (харнесс: 0/28 случаев
@@ -92,21 +102,35 @@ def verify_shaft_profile(hypothesis: Hypothesis, frame: ViewFrame | None, sheet:
         d_left = float(steps[index].get("diameter_mm") or 0.0)
         d_right = float(steps[index + 1].get("diameter_mm") or 0.0)
         sign = 0.0 if d_right == d_left else (1.0 if d_right > d_left else -1.0)
+
+        def gap(s: float, predictions: list[float] = predictions) -> float:
+            return min(abs(s - p) for p in predictions)
+
         window = [
             (s, jump)
             for s, jump in shoulders
-            if abs(s - x) * scale_u <= reach_mm and (sign == 0.0 or jump * sign > 0)
+            if gap(s) * scale_u <= reach_mm and (sign == 0.0 or jump * sign > 0)
         ]
         if window:
-            best = min(window, key=lambda item: abs(item[0] - x))[0]
+            best = min(window, key=lambda item: gap(item[0]))[0]
             matched.append((best - frame.origin_px[0]) * scale_u)
         else:
             matched.append(None)
-    matched.append(boundaries[-1])
+    matched.append(end_mm)
     for index, step in enumerate(steps):
         start, end = boundaries[index], boundaries[index + 1]
-        a = frame.origin_px[0] + (start + _CORE[0] * (end - start)) / scale_u
-        b = frame.origin_px[0] + (start + _CORE[1] * (end - start)) / scale_u
+        # Ø — в середине ступени, найденной на листе: за неверным звеном
+        # прочитанные границы сдвинуты, и окно ложилось на соседнюю ступень
+        # (харнесс «неверное звено»: Ø мимо у ступени сразу за ним).
+        core_start, core_end = start, end
+        if (
+            matched[index] is not None
+            and matched[index + 1] is not None
+            and matched[index + 1] > matched[index]
+        ):
+            core_start, core_end = matched[index], matched[index + 1]
+        a = frame.origin_px[0] + (core_start + _CORE[0] * (core_end - core_start)) / scale_u
+        b = frame.origin_px[0] + (core_start + _CORE[1] * (core_end - core_start)) / scale_u
         halves = [profile.half_at(x) for x in np.arange(a, b + 1.0)]
         halves = [h for h in halves if h is not None]
         under_key = any(k0 < end and k1 > start for k0, k1 in keyways)
@@ -166,6 +190,60 @@ def verify_shaft_profile(hypothesis: Hypothesis, frame: ViewFrame | None, sheet:
         evidence_bbox_px=frame.bbox_px,
         reason="; ".join(problems),
     )
+
+
+def chain_frame(frame: ViewFrame | None, profile: Any, lengths_mm: list[Any]) -> ViewFrame | None:
+    """Масштаб вида по прочитанной цепочке, а не по её сумме.
+
+    Система координат вала делит прочитанную сумму длин на длину вида в px.
+    Одно неверное звено (shaft-1: 98 вместо 80) уводит масштаб на 6,7 %, и
+    расходится всё — предохранитель «не тот вид» прятал настоящую ошибку
+    ридера. Масштаб — тот, при котором больше прочитанных станций цепочки
+    ложится на уступы листа (торец — тоже уступ). Верное чтение базовый
+    масштаб объясняет целиком — он и остаётся.
+    """
+    from itertools import accumulate
+
+    if frame is None or profile is None:
+        return frame
+    lengths = [float(v) for v in lengths_mm if isinstance(v, (int, float)) and v > 0]
+    if len(lengths) < 2 or len(lengths) != len(lengths_mm):
+        return frame
+    x0, base = frame.origin_px[0], frame.mm_per_px
+    marks = [
+        s
+        for s, _jump in _shoulders(
+            profile, jump_px=max(2.0, 0.5 / frame.scale_v), min_plateau_px=max(4.0, 1.5 / base)
+        )
+    ]
+    x1 = float(profile.x1)
+    marks.append(x1)
+    stations = list(accumulate(lengths))
+    total = stations[-1]
+
+    def inliers(scale: float) -> int:
+        # Станция совпадает от левого торца или от правого: звенья за
+        # неверным сдвинуты от левого, но стоят на месте от правого.
+        # Сама сумма от правого торца совпадает всегда — её не считаем.
+        tolerance_px = shaft_tolerances(scale)[0] / scale
+        hits = 0
+        for c in stations:
+            places = [x0 + c / scale]
+            if c < total:
+                places.append(x1 - (total - c) / scale)
+            if min(abs(p - m) for p in places for m in marks) <= tolerance_px:
+                hits += 1
+        return hits
+
+    candidates = [c / (m - x0) for c in stations for m in marks if m - x0 > 4.0]
+    candidates += [(total - c) / (x1 - m) for c in stations[:-1] for m in marks if x1 - m > 4.0]
+    candidates = [s for s in candidates if 0.5 * base <= s <= 2.0 * base]
+    if not candidates:
+        return frame
+    best = max(candidates, key=lambda s: (inliers(s), -abs(s - base)))
+    if inliers(best) < 2 or inliers(best) <= inliers(base):
+        return frame
+    return ViewFrame(bbox_px=frame.bbox_px, mm_per_px=best, origin_px=frame.origin_px)
 
 
 def _shoulders(

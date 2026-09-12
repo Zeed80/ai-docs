@@ -133,6 +133,45 @@ def test_a_wrong_step_diameter_is_refuted_with_the_measured_one():
     assert abs(verdict.measured["steps"][1]["diameter_mm"] - 20.0) <= 0.3
 
 
+def test_a_wrong_link_of_the_chain_is_refuted_not_hidden_as_the_wrong_view():
+    """shaft-1 вживую: 98 вместо 80 уводило масштаб из суммы на 6,7 % — «не тот вид»."""
+    verdict = _check([(30.0, 30.0), (20.0, 40.0), (25.0, 36.0)])  # на листе 30
+
+    assert verdict.status == "refuted", verdict.reason
+    steps = verdict.measured["steps"]
+    assert abs(steps[2]["length_mm"] - 30.0) <= 0.5, steps
+    assert abs(steps[0]["diameter_mm"] - 30.0) <= 0.3, steps
+    assert abs(steps[1]["length_mm"] - 40.0) <= 0.5, steps
+
+
+def test_a_wrong_link_in_the_middle_keeps_the_links_after_it():
+    """Неверное звено сдвигает станции за ним — граница за ним ищется от торца."""
+    image = Image.new("L", (2800, 2000), 255)
+    draw = ImageDraw.Draw(image)
+    x, previous = X0, 0.0
+    steps = [(30.0, 20.0), (20.0, 40.0), (25.0, 20.0), (18.0, 20.0)]
+    for diameter, length in steps:
+        r = diameter / 2 * PX
+        x_end = x + length * PX
+        draw.line([(x, AXIS - r), (x_end, AXIS - r)], fill=0, width=MAIN)
+        draw.line([(x, AXIS + r), (x_end, AXIS + r)], fill=0, width=MAIN)
+        low, high = min(previous, r), max(previous, r)
+        if previous == 0.0:
+            draw.line([(x, AXIS - r), (x, AXIS + r)], fill=0, width=MAIN)
+        else:
+            draw.line([(x, AXIS - high), (x, AXIS - low)], fill=0, width=MAIN)
+            draw.line([(x, AXIS + low), (x, AXIS + high)], fill=0, width=MAIN)
+        previous, x = r, x_end
+    draw.line([(x, AXIS - previous), (x, AXIS + previous)], fill=0, width=MAIN)
+    read = [(30.0, 20.0), (20.0, 48.0), (25.0, 20.0), (18.0, 20.0)]  # вторая — 40
+    verdict = _verdict(read, sheet=np.asarray(image))
+
+    assert verdict.status == "refuted", verdict.reason
+    got = [step["length_mm"] for step in verdict.measured["steps"]]
+    assert abs(got[1] - 40.0) <= 0.5, got
+    assert abs(got[2] - 20.0) <= 0.5 and abs(got[3] - 20.0) <= 0.5, got
+
+
 def test_a_shifted_shoulder_is_refuted_with_the_measured_lengths():
     verdict = _check([(30.0, 32.0), (20.0, 38.0), (25.0, 30.0)])
 

@@ -96,13 +96,13 @@ def locate_shaft_views(sheet: Any, total_length_mm: float) -> list[tuple[ViewFra
     from app.ai.cad_recognize.verifiers.plate_frame import _ink, _lines, _stroke
 
     if not total_length_mm or total_length_mm <= 0:
-        return None
+        return []
     gray = np.asarray(sheet)
     ink = _ink(gray)
     min_length = max(6, int(round(0.006 * min(gray.shape))))
     lines = _segments(ink, min_length)
     if len(lines) < 2:
-        return None
+        return []
     # Нижний квартиль толщины: у короткой размерной линии залитые стрелки
     # занимают почти половину длины, и по медиане она выходила основной
     # (shaft-4: пара размерных «30» и «16», симметричных оси, — «Ø72»).

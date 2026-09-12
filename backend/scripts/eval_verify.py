@@ -454,6 +454,10 @@ def eval_shaft_profile(png: bytes, truth: dict) -> list[dict[str, Any]]:
     if middle + 1 < len(steps):
         wrong_l[middle]["length_mm"] += 2.0
         wrong_l[middle + 1]["length_mm"] -= 2.0
+    # Неверное звено цепочки — и габарит мимо (живой shaft-1: 98 вместо 80):
+    # система координат из прочитанной суммы уезжает, как в продукте.
+    wrong_link = [dict(item) for item in steps]
+    wrong_link[middle]["length_mm"] += 8.0
     outcomes = []
     # Ступени под пазом Ø не мерят (проверяльщик честно отдаёт пустой замер) —
     # их Ø из точности исключается, как в продукте.
@@ -468,7 +472,13 @@ def eval_shaft_profile(png: bytes, truth: dict) -> list[dict[str, Any]]:
         and key["axial_start_mm"] < stations[index + 1]
         and key["axial_start_mm"] + float(key.get("length_mm") or 0.0) > stations[index]
     }
-    for case, read in (("truth", steps), ("diameter", wrong_d), ("length", wrong_l)):
+    cases = (("truth", steps), ("diameter", wrong_d), ("length", wrong_l), ("link", wrong_link))
+    for case, read in cases:
+        read_total = sum(item["length_mm"] for item in read)
+        if abs(read_total - total) > 1e-6:
+            # Как в продукте: система координат — из прочитанной суммы.
+            located = locate_shaft_frame(gray, read_total)
+            frame, profile = located if located else (None, None)
         verdict = verify(
             Hypothesis(
                 "shaft_profile",

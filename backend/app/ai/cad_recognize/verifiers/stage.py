@@ -232,7 +232,7 @@ def _shaft(image_bytes: bytes, body: dict[str, Any], report: dict[str, Any]) -> 
     «не измеримо» у каждой ступени с той же причиной, а не молчание.
     """
     from app.ai.cad_recognize.verifiers.shaft_frame import locate_shaft_views
-    from app.ai.cad_recognize.verifiers.shaft_profile import shaft_tolerances
+    from app.ai.cad_recognize.verifiers.shaft_profile import chain_frame, shaft_tolerances
 
     outer = body.get("outer") or []
     steps = [
@@ -253,6 +253,10 @@ def _shaft(image_bytes: bytes, body: dict[str, Any], report: dict[str, Any]) -> 
             report["items"].append(_step_item(index, step, "unmeasurable", {}, reason))
         _keyways(gray, [], body, report)
         return reason
+    # Масштаб — по цепочке, а не по прочитанной сумме (`chain_frame`): одно
+    # неверное звено иначе уводит всё — и ступени, и пазы.
+    lengths = [float(step["length_mm"]) for _, step in steps]
+    views = [(chain_frame(view, shape, lengths), shape) for view, shape in views]
     frame, profile = views[0]
     _keyways(gray, [view_frame for view_frame, _profile in views], body, report)
     verdict = verify(
