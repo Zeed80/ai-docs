@@ -82,3 +82,21 @@ def test_adjacent_steps_never_share_a_diameter():
         outer = synth_spec("shaft", seed)["main_view"]["outer"]
         for left, right in zip(outer, outer[1:], strict=False):
             assert left["diameter_mm"] != right["diameter_mm"], seed
+
+
+def test_no_cross_hole_is_drilled_into_a_keyway():
+    """shaft-6 корпуса: Ø6 на 94,9 в пазу 83..96 — контур паза на листе ломался."""
+    for seed in range(400):
+        body = synth_spec("shaft", seed)["main_view"]
+        for hole in body.get("cross_holes") or []:
+            reach = hole["diameter_mm"] / 2.0 + 1.0 - 1e-6
+            for keyway in body.get("keyways") or []:
+                start, end = (
+                    keyway["axial_start_mm"],
+                    keyway["axial_start_mm"] + keyway["length_mm"],
+                )
+                assert not (start - reach < hole["axial_position_mm"] < end + reach), (
+                    seed,
+                    hole,
+                    keyway,
+                )

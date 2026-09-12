@@ -43,13 +43,16 @@ def _shaft(rng: random.Random) -> dict[str, Any]:
     total = sum(item["length_mm"] for item in outer)
     stations = _stations(outer)
 
+    name = rng.choice(_NAMES_SHAFT)
+    keyways = _keyways(rng, stations)
+    grooves = _grooves(rng, stations)
     body: dict[str, Any] = {
-        "name": rng.choice(_NAMES_SHAFT),
+        "name": name,
         "type": "тело вращения",
         "outer": outer,
-        "keyways": _keyways(rng, stations),
-        "grooves": _grooves(rng, stations),
-        "cross_holes": _cross_holes(rng, stations),
+        "keyways": keyways,
+        "grooves": grooves,
+        "cross_holes": _cross_holes(rng, stations, keyways),
         "chamfers": _chamfers(rng, outer),
     }
     if rng.random() < 0.3:
@@ -182,7 +185,18 @@ def _grooves(rng: random.Random, stations) -> list[dict[str, Any]]:
     return grooves
 
 
-def _cross_holes(rng: random.Random, stations) -> list[dict[str, Any]]:
+def _cross_holes(
+    rng: random.Random, stations, keyways: list[dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
+    """Поперечные отверстия — не в пазу.
+
+    Генератор ставил отверстие в конец паза (shaft-6: Ø6 на 94,9 в пазу
+    83..96) — такой детали не делают, и контур паза на листе ломается.
+    Попавшее в паз отверстие сдвигается к ближайшему свободному месту своей
+    ступени — без новых случайных чисел, чтобы остальной корпус не поплыл;
+    места нет — отверстия нет.
+    """
+    busy = [(k["axial_start_mm"], k["axial_start_mm"] + k["length_mm"]) for k in keyways or []]
     holes = []
     for start, end, diameter in stations:
         length = end - start
@@ -191,15 +205,36 @@ def _cross_holes(rng: random.Random, stations) -> list[dict[str, Any]]:
         hole = float(rng.choice((3, 4, 5, 6, 8)))
         if hole >= diameter * 0.4:
             continue
+        position = round(rng.uniform(start + 5, end - 5), 1)
+        clearance = hole / 2.0 + 1.0
+        position = _free_position(position, start + 5, end - 5, busy, clearance)
+        if position is None:
+            continue
         holes.append(
             {
                 "diameter_mm": hole,
-                "axial_position_mm": round(rng.uniform(start + 5, end - 5), 1),
+                "axial_position_mm": position,
                 "angle_deg": 0.0,
                 "through": True,
             }
         )
     return holes
+
+
+def _free_position(
+    position: float, low: float, high: float, busy: list[tuple[float, float]], clearance: float
+) -> float | None:
+    """Ближайшее к ``position`` место в ``[low, high]`` не ближе ``clearance`` к занятому."""
+    blocked = [(a - clearance, b + clearance) for a, b in busy]
+    if not any(a < position < b for a, b in blocked):
+        return position
+    candidates = [low, high] + [edge for a, b in blocked for edge in (a, b)]
+    free = [
+        round(c, 1)
+        for c in candidates
+        if low <= c <= high and not any(a < c < b for a, b in blocked)
+    ]
+    return min(free, key=lambda c: abs(c - position)) if free else None
 
 
 def _chamfers(rng: random.Random, outer: list[dict[str, Any]]) -> list[dict[str, Any]]:

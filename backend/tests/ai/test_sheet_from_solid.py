@@ -1231,3 +1231,23 @@ def test_arcs_the_kernel_returns_twice_are_counted_once():
     groups = _arc_groups(view, {"u_min": -50, "u_max": 50, "v_min": -20, "v_max": 20})
 
     assert len(groups) == 1 and abs(groups[0][3] - 360.0) < 1.0
+
+
+def test_outer_and_bore_diameters_of_one_step_do_not_share_a_place():
+    """shaft-2 корпуса: «Ø35» полого вала лёг поверх «Ø15» расточки."""
+    from app.ai.cad_ir.sheet_from_solid import _diameter_requests
+
+    view = {
+        "visible": [
+            {"type": "line", "edge_index": 1, "points": [[0.0, 17.5], [60.0, 17.5]]},
+            {"type": "line", "edge_index": 2, "points": [[0.0, -17.5], [60.0, -17.5]]},
+            {"type": "line", "edge_index": 3, "points": [[0.0, 7.5], [60.0, 7.5]]},
+            {"type": "line", "edge_index": 4, "points": [[0.0, -7.5], [60.0, -7.5]]},
+        ]
+    }
+    requests = _diameter_requests(view, 0, [35.0, 15.0], 1.0)
+
+    places = sorted(r["_place_u"] for r in requests)
+    assert len(places) == 2
+    assert places[1] - places[0] >= 2.5 * 3.5
+    assert all(0.0 <= place <= 60.0 for place in places)

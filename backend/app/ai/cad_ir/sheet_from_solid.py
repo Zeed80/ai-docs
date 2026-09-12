@@ -913,6 +913,7 @@ def _diameter_requests(
     # keyway.
     requests: list[dict[str, Any]] = []
     used: set[int] = set()
+    placed: list[float] = []
     for _shared, diameter_mm, edge_a, edge_b, lo, hi in sorted(candidates, key=lambda c: -c[0]):
         if edge_a in used or edge_b in used:
             continue
@@ -921,6 +922,8 @@ def _diameter_requests(
             continue
         wanted.remove(match)
         used.update({edge_a, edge_b})
+        place_u = _separated_place(lo, hi, placed)
+        placed.append(place_u)
         requests.append(
             {
                 "view_index": view_index,
@@ -934,10 +937,29 @@ def _diameter_requests(
                 # есть. Привязки TechDraw — начальные вершины рёбер, и у
                 # соседних ступеней это одна и та же точка на уступе: Ø25 и
                 # Ø28 синтетического вала легли друг на друга ровно там.
-                "_place_u": (lo + hi) / 2.0,
+                "_place_u": place_u,
             }
         )
     return requests
+
+
+def _separated_place(lo: float, hi: float, placed: list[float]) -> float:
+    """Где встать диаметру на своём участке, не поверх соседнего диаметра.
+
+    Середина общего участка образующих — хорошее место, пока участок у
+    диаметра свой. У наружного диаметра и расточки одной ступени участок
+    общий, и подписи «Ø35» и «Ø15» полого вала ложились одна на другую
+    (корпус, shaft-2). Занятая середина — сдвиг на четверть участка туда, где
+    дальше от соседей; с участка диаметр не уходит.
+    """
+    from app.ai.cad_projection import DIM_TEXT_MM
+
+    gap = 2.5 * DIM_TEXT_MM
+    options = [(lo + hi) / 2.0, lo + (hi - lo) * 0.25, lo + (hi - lo) * 0.75]
+    for option in options:
+        if all(abs(option - other) >= gap for other in placed):
+            return option
+    return max(options, key=lambda option: min(abs(option - other) for other in placed))
 
 
 def _closest(value: float, pool: list[float], *, tolerance: float = 0.01) -> float | None:
