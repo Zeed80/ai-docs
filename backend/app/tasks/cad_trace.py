@@ -3769,16 +3769,24 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     )
                     verification = None
                 if verification and verification["items"]:
-                    await _record(
-                        "verify.plate_hole",
-                        "completed",
-                        "Прочитанные отверстия проверены по листу",
-                        {
-                            **verification["summary"],
-                            "frame": verification["frame"],
-                            "items": verification["items"],
-                        },
-                    )
+                    # Событие на каждый вид проверки: verify.plate_hole,
+                    # verify.bolt_circle — со сводкой и вердиктами.
+                    for verify_kind in sorted({i["kind"] for i in verification["items"]}):
+                        kind_items = [i for i in verification["items"] if i["kind"] == verify_kind]
+                        await _record(
+                            f"verify.{verify_kind}",
+                            "completed",
+                            "Прочитанное проверено по листу",
+                            {
+                                "checked": len(kind_items),
+                                **{
+                                    status: sum(1 for i in kind_items if i["status"] == status)
+                                    for status in ("confirmed", "refuted", "unmeasurable")
+                                },
+                                "frame": verification["frame"],
+                                "items": kind_items,
+                            },
+                        )
                     if verification["notes"]:
                         spec = {
                             **spec,

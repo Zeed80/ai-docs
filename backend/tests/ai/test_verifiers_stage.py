@@ -110,8 +110,87 @@ def test_verdicts_reach_the_graph_per_field_of_each_hole():
     assert abs(measured.value.value - 7.0) <= 0.3
 
 
-def test_a_spec_without_plate_holes_has_nothing_to_check():
+def test_a_spec_without_checkable_elements_has_nothing_to_check():
     report = verify_spec_against_sheet(_png(), {"main_view": {"profile": {"shape": "circle"}}})
 
     assert report["items"] == []
     assert report["summary"]["checked"] == 0
+
+
+def _flange_png() -> bytes:
+    """Фланец Ø100 при 6 px/мм, 6 отв. Ø6,6 на Ø60 с фазой 15°."""
+    import math
+
+    image = Image.new("L", (1300, 1000), 255)
+    draw = ImageDraw.Draw(image)
+    cx, cy = 600.0, 500.0
+
+    def ring(x, y, r, width):
+        half = width / 2
+        draw.ellipse(
+            [x - r - half, y - r - half, x + r + half, y + r + half], outline=0, width=width
+        )
+
+    ring(cx, cy, 300, 4)
+    ring(cx, cy, 180, 2)
+    for index in range(6):
+        angle = math.radians(15.0 + 60.0 * index)
+        ring(cx + 180 * math.cos(angle), cy - 180 * math.sin(angle), 19.8, 4)
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _flange_spec() -> dict:
+    return {
+        "main_view": {
+            "profile": {
+                "shape": "circle",
+                "diameter_mm": 100.0,
+                "thickness_mm": 12.0,
+                # Ридер: углового размера на листе нет — фаза 0°.
+                "hole_patterns": [
+                    {
+                        "kind": "bolt_circle",
+                        "count": 6,
+                        "bolt_circle_diameter_mm": 60.0,
+                        "hole_diameter_mm": 6.6,
+                        "start_angle_deg": 0.0,
+                    }
+                ],
+            }
+        }
+    }
+
+
+def test_a_flange_bolt_circle_is_checked_and_only_the_phase_is_refuted_in_the_graph():
+    from app.ai.cad_emg_compat import spec_feature_tree_as_graph
+    from app.ai.cad_recognize.spec_vectorize import assign_stable_feature_ids
+    from app.ai.cad_recognize.verifiers.stage import apply_verification
+    from app.ai.cad_solid import feature_tree_from_spec
+
+    spec = _flange_spec()
+    assign_stable_feature_ids(spec)
+    report = verify_spec_against_sheet(_flange_png(), spec)
+
+    (item,) = report["items"]
+    assert item["kind"] == "bolt_circle" and item["status"] == "refuted", item
+    assert abs(item["measured"]["start_angle_deg"] - 15.0) <= 1.0
+    assert "фаза 15°" in report["notes"][0]
+
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    graph = spec_feature_tree_as_graph(spec, candidate, graph_id="image-generation:flange")
+    graph, written = apply_verification(graph, report, pass_id="verify-flange")
+
+    assert written == 4  # число, PCD, Ø, фаза
+    active = {
+        item.supersedes_assertion_id: item.assurance
+        for item in graph.assertions
+        if item.state == "active" and item.supersedes_assertion_id
+    }
+    prefix = "assertion:feature:0:profile.hole_patterns:0:param:"
+    assert active[f"{prefix}start_angle_deg"] == "contradicted"
+    assert active[f"{prefix}count"] == "corroborated"
+    assert active[f"{prefix}bolt_circle_diameter_mm"] == "corroborated"
+    assert active[f"{prefix}hole_diameter_mm"] == "corroborated"

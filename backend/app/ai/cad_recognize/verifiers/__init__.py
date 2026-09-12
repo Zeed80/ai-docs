@@ -18,6 +18,7 @@ __all__ = ["Hypothesis", "Verdict", "ViewFrame", "register", "registered_kinds",
 
 # Регистрация встроенных проверяльщиков — импортом модулей.
 from app.ai.cad_recognize.verifiers import (
+    bolt_circle,  # noqa: E402,F401
     dimension_line,  # noqa: E402,F401
     plate_hole,  # noqa: E402,F401
 )

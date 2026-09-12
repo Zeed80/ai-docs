@@ -238,7 +238,107 @@ def eval_plate_hole(png: bytes, truth: dict, frame_source: str = "truth") -> lis
     return outcomes
 
 
-_VERIFIERS = {"dimension_line": eval_dimension_line, "plate_hole": eval_plate_hole}
+def eval_bolt_circle(png: bytes, truth: dict) -> list[dict[str, Any]]:
+    """Окружность болтов фланца: система координат — по контуру на листе.
+
+    Случаи: ``truth`` — должно подтвердиться; ``count`` (+2 отверстия),
+    ``pcd`` (+6 мм), ``diameter`` (Ø +1,1 мм) и ``phase_zero`` — фаза 0°, когда
+    настоящая не кратна шагу (так ошибается ридер: углового размера на листе
+    нет) — должны опровергнуться, а измеренное — совпасть с эталоном.
+    Точность системы координат — против середины точек размера наружного Ø.
+    """
+    import math
+
+    import numpy as np
+    from PIL import Image
+
+    from app.ai.cad_recognize.verifiers import Hypothesis, verify
+    from app.ai.cad_recognize.verifiers.bolt_circle import _angle_gap
+    from app.ai.cad_recognize.verifiers.circle_frame import locate_circle_frame
+    from app.ai.cad_recognize.verifiers.plate_hole import plate_hole_tolerances
+
+    profile = (truth["spec"].get("main_view") or {}).get("profile") or {}
+    patterns = [
+        item
+        for item in profile.get("hole_patterns") or []
+        if (item.get("kind") or "bolt_circle") == "bolt_circle" and item.get("count")
+    ]
+    if profile.get("shape") != "circle" or not patterns or not profile.get("diameter_mm"):
+        return []
+    outer_mm = float(profile["diameter_mm"])
+    outer = next(
+        (
+            item
+            for item in truth.get("labels") or []
+            if item.get("kind") == "dimension"
+            and item.get("dimension_kind") == "diameter"
+            and item.get("value_mm") is not None
+            and abs(item["value_mm"] - outer_mm) <= 0.05
+            and len(item.get("anchors_px") or []) == 2
+        ),
+        None,
+    )
+    if outer is None:
+        return []
+    (ax, ay), (bx, by) = outer["anchors_px"]
+    ref_scale = outer_mm / math.hypot(bx - ax, by - ay)
+    gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))
+    frame = locate_circle_frame(gray, outer_mm)
+    frame_error = None
+    if frame is not None:
+        frame_error = {
+            "scale_rel": abs(frame.mm_per_px / ref_scale - 1.0),
+            "origin_px": max(
+                abs(frame.origin_px[0] - (ax + bx) / 2.0),
+                abs(frame.origin_px[1] - (ay + by) / 2.0),
+            ),
+        }
+    position_tol, diameter_tol = plate_hole_tolerances(ref_scale)
+    outcomes = []
+    for pattern in patterns:
+        count = int(pattern["count"])
+        pcd = float(pattern["bolt_circle_diameter_mm"])
+        hole = float(pattern["hole_diameter_mm"])
+        step = 360.0 / count
+        phase = float(pattern.get("start_angle_deg") or 0.0) % step
+        read = {"count": count, "pcd_mm": pcd, "hole_diameter_mm": hole, "start_angle_deg": phase}
+        cases = [
+            ("truth", read),
+            ("count", {**read, "count": count + 2}),
+            ("pcd", {**read, "pcd_mm": pcd + 6.0}),
+            ("diameter", {**read, "hole_diameter_mm": hole + 1.1}),
+        ]
+        if _angle_gap(phase, 0.0, step) > 5.0:
+            cases.append(("phase_zero", {**read, "start_angle_deg": 0.0}))
+        for case, expected in cases:
+            verdict = verify(Hypothesis("bolt_circle", "hole_patterns", expected), frame, gray)
+            measured = verdict.measured
+            accurate = bool(measured) and (
+                measured["count"] == count
+                and abs(measured["pcd_mm"] - pcd) <= 2.0 * position_tol
+                and abs(measured["hole_diameter_mm"] - hole) <= diameter_tol
+                and _angle_gap(measured["start_angle_deg"], phase, step) <= 2.0
+            )
+            wanted = "confirmed" if case == "truth" else "refuted"
+            outcomes.append(
+                {
+                    "case": case,
+                    "found": verdict.status != "unmeasurable",
+                    "correct": verdict.status == wanted and accurate,
+                    "error_rel": (abs(measured["pcd_mm"] - pcd) / pcd if measured else None),
+                    "unit_px": hole / 2.0 / ref_scale,
+                    "frame_found": frame is not None,
+                    "frame_error": frame_error,
+                }
+            )
+    return outcomes
+
+
+_VERIFIERS = {
+    "bolt_circle": eval_bolt_circle,
+    "dimension_line": eval_dimension_line,
+    "plate_hole": eval_plate_hole,
+}
 
 
 def main() -> int:
@@ -320,7 +420,7 @@ def main() -> int:
             f"{(f'{error:.1%}' if error is not None else '—'):>15} {item['median_text_px']:>9.1f} "
             f"{dewarp_count[step]:>11}"
         )
-    if args.verifier == "plate_hole" and args.frame == "sheet":
+    if any(item.get("frame_error") for items in by_step.values() for item in items):
         print("\nсистема координат плана по листу:")
         for step, items in by_step.items():
             truth_cases = [item for item in items if item.get("case") == "truth"]
