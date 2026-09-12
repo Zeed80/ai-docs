@@ -406,6 +406,14 @@ def _cut_at_witness_lines(
     middles = np.array([(run[0] + run[-1]) / 2.0 for run in runs])
     before = middles[middles < centre]
     after = middles[middles > centre]
+    if not after.size and before.size >= 2:
+        # Подпись на полке за концом размера (ГОСТ 2.307: не поместилась между
+        # стрелками) — обе выносные по одну сторону от неё, и размер — между
+        # двумя ближайшими. Без этого замер шёл от ближней выносной до конца
+        # полки: «4.3» на 25 px мерилось как 165 (корпус v5, размеры под видом).
+        return [float(before[-2]), line[1], float(before[-1]), line[3]]
+    if not before.size and after.size >= 2:
+        return [float(after[0]), line[1], float(after[1]), line[3]]
     new_left = float(before.max()) if before.size else line[0]
     new_right = float(after.min()) if after.size else line[2]
     # Порог здесь ниже, чем у самого прогона: пересечение уже подтверждено

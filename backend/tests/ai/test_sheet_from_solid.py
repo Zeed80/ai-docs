@@ -975,6 +975,12 @@ def test_a_slot_gets_its_centre_its_centre_distance_and_its_end_radius():
     _hole_dimensions(drawing, _plan("plate"))
 
     slot = {(d["kind"], d["value_mm"]) for d in drawing["dimensions"] if d["measured_by"] == "slot"}
+    # Межцентровое — под видом: над ним выносная координаты центра шла через середину.
+    assert all(
+        d.get("below")
+        for d in drawing["dimensions"]
+        if d["measured_by"] == "slot" and d["kind"] == "DistanceX"
+    )
     centre = {
         (d["kind"], d["value_mm"])
         for d in drawing["dimensions"]

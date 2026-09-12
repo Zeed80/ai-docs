@@ -116,3 +116,14 @@ def test_a_blurred_label_fused_with_the_arrows_is_not_a_witness_line():
 
     assert line is not None
     assert abs((line[2] - line[0]) - (right - left)) <= 2
+
+
+def test_a_short_dimension_with_its_label_on_a_shelf_is_measured_between_its_witnesses():
+    """Корпус v5, «4.3» под видом вала: подпись вынесена на полку справа от
+    размера, обе выносные — слева от неё, и замер шёл до конца полки (165 px вместо 25)."""
+    ink = _chain([150, 400, 425], outside={(400, 425)})
+
+    line = _span_from_ink(ink, [470.0, ROW - 50.0, 496.0, ROW - 19.0], UNIT)
+
+    assert line is not None
+    assert abs((line[2] - line[0]) - 25) <= 2

@@ -1283,7 +1283,12 @@ def _slots(
             "measured_by": "slot",
             "ir_kind": "linear",
         }
-        if not horizontal:
+        if horizontal:
+            # Под вид: над ним — координаты от левой кромки, и выносная
+            # координаты центра прорези шла ровно через середину этого размера
+            # (проверяльщик размерных линий мерил половину, корпус v5 plate-3).
+            distance["below"] = True
+        else:
             distance.update({"place_u": u_min, "outside": True})
         dimensions.append(distance)
         tip = (high[0] + radius, high[1]) if horizontal else (high[0], high[1] + radius)
