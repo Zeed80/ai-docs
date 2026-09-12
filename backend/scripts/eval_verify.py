@@ -138,15 +138,17 @@ def _plate_frame(truth: dict):
             height_dim = (min(y1, y2), max(y1, y2))
     if width_dim is None or height_dim is None:
         return None
-    mm_per_px = width / (width_dim[1] - width_dim[0])
+    # Масштаб по каждой оси своим размером: выпрямленное фото не изотропно,
+    # и масштаб одной ширины уводил верх плана на 16 px (plate-3@photo).
     return ViewFrame(
         bbox_px=(width_dim[0] - 5, height_dim[0] - 5, width_dim[1] + 5, height_dim[1] + 5),
-        mm_per_px=mm_per_px,
+        mm_per_px=width / (width_dim[1] - width_dim[0]),
         origin_px=(width_dim[0], height_dim[1]),
+        mm_per_px_v=height / (height_dim[1] - height_dim[0]),
     )
 
 
-def eval_plate_hole(png: bytes, truth: dict) -> list[dict[str, Any]]:
+def eval_plate_hole(png: bytes, truth: dict, frame_source: str = "truth") -> list[dict[str, Any]]:
     """Отверстия пластины: гипотезы из эталона и искажённые, как ошибается ридер.
 
     ``truth`` — должно подтвердиться; ``swap_y`` — y от соседнего отверстия
@@ -160,13 +162,28 @@ def eval_plate_hole(png: bytes, truth: dict) -> list[dict[str, Any]]:
     from app.ai.cad_recognize.verifiers.plate_hole import plate_hole_tolerances
     from app.ai.verify_corpus.score import expand_holes
 
-    frame = _plate_frame(truth)
-    if frame is None:
+    reference = _plate_frame(truth)
+    if reference is None:
         return []
     profile = truth["spec"]["main_view"]["profile"]
     width, height = float(profile["width_mm"]), float(profile["height_mm"])
     holes = [(x + width / 2.0, y + height / 2.0, d) for x, y, d in expand_holes(profile)]
     gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))
+    frame, frame_error = reference, None
+    if frame_source == "sheet":
+        # Как в продукте: ширину и высоту дал ридер (на пластинах — 100 %),
+        # план ищется по листу. Эталонная система — только для оценки.
+        from app.ai.cad_recognize.verifiers.plate_frame import locate_plate_frame
+
+        frame = locate_plate_frame(gray, width, height)
+        if frame is not None:
+            frame_error = {
+                "scale_rel": abs(frame.mm_per_px / reference.mm_per_px - 1.0),
+                "origin_px": max(
+                    abs(frame.origin_px[0] - reference.origin_px[0]),
+                    abs(frame.origin_px[1] - reference.origin_px[1]),
+                ),
+            }
     cases: list[tuple[str, tuple[float, float, float], tuple[float, float, float]]] = []
     for index, hole in enumerate(holes):
         cases.append(("truth", hole, hole))
@@ -198,7 +215,7 @@ def eval_plate_hole(png: bytes, truth: dict) -> list[dict[str, Any]]:
             gray,
         )
         measured = verdict.measured
-        position_tol, diameter_tol = plate_hole_tolerances(frame.mm_per_px)
+        position_tol, diameter_tol = plate_hole_tolerances(reference.scale_mean)
         accurate = bool(measured) and (
             abs(measured["y_mm"] - real[1]) <= position_tol
             and abs(measured["diameter_mm"] - real[2]) <= diameter_tol
@@ -213,7 +230,9 @@ def eval_plate_hole(png: bytes, truth: dict) -> list[dict[str, Any]]:
                 "error_rel": (
                     abs(measured["diameter_mm"] - real[2]) / real[2] if measured else None
                 ),
-                "unit_px": real[2] / 2.0 / frame.mm_per_px,
+                "unit_px": real[2] / 2.0 / reference.scale_mean,
+                "frame_found": frame is not None,
+                "frame_error": frame_error,
             }
         )
     return outcomes
@@ -236,6 +255,12 @@ def main() -> int:
         type=float,
         help="гейт: код 1, если доля верных на какой-либо ступени ниже порога",
     )
+    parser.add_argument(
+        "--frame",
+        default="truth",
+        choices=("truth", "sheet"),
+        help="plate_hole: система координат плана из эталона или найденная по листу",
+    )
     args = parser.parse_args()
 
     rows = [
@@ -244,6 +269,8 @@ def main() -> int:
         if line.strip()
     ]
     evaluate = _VERIFIERS[args.verifier]
+    if args.verifier == "plate_hole":
+        evaluate = lambda png, truth: eval_plate_hole(png, truth, args.frame)  # noqa: E731
     by_step: dict[str, list[dict]] = defaultdict(list)
     by_kind_step: dict[tuple[str, str], list[dict]] = defaultdict(list)
     dewarp_count: dict[str, int] = defaultdict(int)
@@ -293,6 +320,17 @@ def main() -> int:
             f"{(f'{error:.1%}' if error is not None else '—'):>15} {item['median_text_px']:>9.1f} "
             f"{dewarp_count[step]:>11}"
         )
+    if args.verifier == "plate_hole" and args.frame == "sheet":
+        print("\nсистема координат плана по листу:")
+        for step, items in by_step.items():
+            truth_cases = [item for item in items if item.get("case") == "truth"]
+            located = [item["frame_error"] for item in truth_cases if item["frame_error"]]
+            scale = statistics.median(e["scale_rel"] for e in located) if located else None
+            origin = statistics.median(e["origin_px"] for e in located) if located else None
+            print(
+                f"  {step:<11} найдена {len(located)}/{len(truth_cases)}"
+                + (f"  масштаб ±{scale:.2%}  начало ±{origin:.1f} px" if located else "")
+            )
     cases = sorted({item["case"] for items in by_step.values() for item in items if "case" in item})
     for case in cases:
         print(f"\n{case}:")

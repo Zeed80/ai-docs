@@ -47,12 +47,12 @@ def verify_plate_hole(hypothesis: Hypothesis, frame: ViewFrame | None, sheet: An
     if x_mm is None or diameter_mm is None:
         return Verdict(status="unmeasurable", reason="нет прочитанного x или Ø")
     gray = np.asarray(sheet)
-    radius_px = diameter_mm / 2.0 / frame.mm_per_px
+    radius_px = diameter_mm / 2.0 / frame.scale_mean
     cx, _cy = frame.to_px(x_mm, y_mm if y_mm is not None else 0.0)
     x0b, y0b, x1b, y1b = (int(round(v)) for v in frame.bbox_px)
     # Прочитанному Ø верить нельзя (plate-1: Ø11 прочитан как 6,5), опора —
     # только x: полоса и диапазон радиусов берут отверстие до 2,5 раз больше.
-    half = int(round(_RADIUS_SPAN[1] * radius_px + _POSITION_MM / frame.mm_per_px)) + 2
+    half = int(round(_RADIUS_SPAN[1] * radius_px + _POSITION_MM / frame.scale_mean)) + 2
     left, right = max(x0b, int(cx) - half), min(x1b, int(cx) + half)
     top, bottom = max(y0b, 0), min(y1b, gray.shape[0])
     if right - left < 2 * radius_px or bottom - top < 2 * radius_px:
@@ -68,7 +68,7 @@ def verify_plate_hole(hypothesis: Hypothesis, frame: ViewFrame | None, sheet: An
     # Прочитанный x выбирает окружность: из тех, чей центр на этом x, —
     # ближайшая к прочитанному y (если его нет — к середине полосы).
     target_y = frame.to_px(x_mm, y_mm)[1] - top if y_mm is not None else strip.shape[0] / 2.0
-    tolerance_px = max(2.0, _POSITION_MM / frame.mm_per_px)
+    tolerance_px = max(2.0, _POSITION_MM / frame.scale_mean)
     on_column = [c for c in circles if abs(c[0] + left - cx) <= tolerance_px + 0.35 * radius_px]
     if not on_column:
         return Verdict(
@@ -97,10 +97,10 @@ def verify_plate_hole(hypothesis: Hypothesis, frame: ViewFrame | None, sheet: An
     measured = {
         "x_mm": round(measured_x, 3),
         "y_mm": round(measured_y, 3),
-        "diameter_mm": round(2.0 * r * frame.mm_per_px, 3),
+        "diameter_mm": round(2.0 * r * frame.scale_mean, 3),
     }
     bbox = (centre_px[0] - r, centre_px[1] - r, centre_px[0] + r, centre_px[1] + r)
-    position_tol, diameter_tol = plate_hole_tolerances(frame.mm_per_px)
+    position_tol, diameter_tol = plate_hole_tolerances(frame.scale_mean)
     problems = []
     if abs(measured["x_mm"] - x_mm) > position_tol:
         problems.append(f"x {measured['x_mm']:g} мм, прочитано {x_mm:g}")
