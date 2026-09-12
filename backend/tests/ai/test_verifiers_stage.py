@@ -143,6 +143,72 @@ def test_no_checkable_hypothesis_leaves_the_stage_without_a_verdict():
         )
 
 
+def _shaft_png() -> bytes:
+    """Вал Ø30×30 → Ø20×40 → Ø25×30 при 5 px/мм на листе размера настоящего."""
+    image = Image.new("L", (2800, 2000), 255)
+    draw = ImageDraw.Draw(image)
+    x, axis, previous = 200.0, 500.0, 0.0
+    for diameter, length in ((30.0, 30.0), (20.0, 40.0), (25.0, 30.0)):
+        r = diameter / 2 * 5.0
+        x_end = x + length * 5.0
+        draw.line([(x, axis - r), (x_end, axis - r)], fill=0, width=6)
+        draw.line([(x, axis + r), (x_end, axis + r)], fill=0, width=6)
+        if previous == 0.0:
+            draw.line([(x, axis - r), (x, axis + r)], fill=0, width=6)
+        else:
+            low, high = min(previous, r), max(previous, r)
+            draw.line([(x, axis - high), (x, axis - low)], fill=0, width=6)
+            draw.line([(x, axis + low), (x, axis + high)], fill=0, width=6)
+        previous, x = r, x_end
+    draw.line([(x, axis - previous), (x, axis + previous)], fill=0, width=6)
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def test_a_shaft_is_checked_step_by_step_and_only_the_wrong_diameter_is_refuted():
+    from app.ai.cad_emg_compat import spec_feature_tree_as_graph
+    from app.ai.cad_recognize.spec_vectorize import assign_stable_feature_ids
+    from app.ai.cad_recognize.verifiers.stage import apply_verification
+    from app.ai.cad_solid import feature_tree_from_spec
+
+    spec = {
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 30.0, "length_mm": 30.0},
+                {"diameter_mm": 22.0, "length_mm": 40.0},  # на листе Ø20
+                {"diameter_mm": 25.0, "length_mm": 30.0},
+            ]
+        }
+    }
+    assign_stable_feature_ids(spec)
+    report = verify_spec_against_sheet(_shaft_png(), spec)
+
+    assert [item["kind"] for item in report["items"]] == ["shaft_step"] * 3
+    assert [item["status"] for item in report["items"]] == [
+        "confirmed",
+        "refuted",
+        "confirmed",
+    ], report
+    assert abs(report["items"][1]["measured"]["diameter_mm"] - 20.0) <= 0.3
+    assert "ступень 2" in report["notes"][0]
+
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    graph = spec_feature_tree_as_graph(spec, candidate, graph_id="image-generation:shaft")
+    graph, written = apply_verification(graph, report, pass_id="verify-shaft")
+
+    assert written == 6  # 3 ступени × (Ø, длина)
+    active = {
+        item.supersedes_assertion_id: item.assurance
+        for item in graph.assertions
+        if item.state == "active" and item.supersedes_assertion_id
+    }
+    assert active["assertion:feature:0:outer:1:param:diameter_mm"] == "contradicted"
+    assert active["assertion:feature:0:outer:1:param:length_mm"] == "corroborated"
+    assert active["assertion:feature:0:outer:0:param:diameter_mm"] == "corroborated"
+
+
 def test_a_spec_without_checkable_elements_has_nothing_to_check():
     report = verify_spec_against_sheet(_png(), {"main_view": {"profile": {"shape": "circle"}}})
 

@@ -12,7 +12,12 @@ import type {
   Solid3dSummary,
 } from "@/lib/studio-api";
 
-const VERIFY_KINDS = new Set(["plate_hole", "bolt_circle", "concentric_hole"]);
+const VERIFY_KINDS = new Set([
+  "plate_hole",
+  "bolt_circle",
+  "concentric_hole",
+  "shaft_step",
+]);
 
 /** «Отверстие 3» из `main_view.profile.holes[2]` — номер элемента с единицы. */
 function verifyElement(

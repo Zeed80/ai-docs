@@ -45,8 +45,10 @@ def verify_spec_against_sheet(image_bytes: bytes, spec: dict[str, Any]) -> dict[
         reason = _plate_holes(image_bytes, profile, report)
     elif shape == "circle":
         reason = _circular(image_bytes, profile, report)
+    elif ((spec or {}).get("main_view") or {}).get("outer"):
+        reason = _shaft(image_bytes, (spec or {}).get("main_view") or {}, report)
     else:
-        reason = "нет проверяемых элементов (пластина или круглая деталь)"
+        reason = "нет проверяемых элементов (пластина, круглая деталь, тело вращения)"
     return _finish(report, started, reason)
 
 
@@ -222,6 +224,105 @@ def _circular(image_bytes: bytes, profile: dict[str, Any], report: dict[str, Any
     return None
 
 
+def _shaft(image_bytes: bytes, body: dict[str, Any], report: dict[str, Any]) -> str | None:
+    """Наружный профиль тела вращения: Ø и длина каждой ступени по главному виду.
+
+    Проверяльщик отвечает на весь профиль сразу; здесь вердикт раскладывается
+    по ступеням. Грубый лист, «не тот вид» и прочие отказы профиля в целом —
+    «не измеримо» у каждой ступени с той же причиной, а не молчание.
+    """
+    from app.ai.cad_recognize.verifiers.shaft_frame import locate_shaft_frame
+    from app.ai.cad_recognize.verifiers.shaft_profile import shaft_tolerances
+
+    outer = body.get("outer") or []
+    steps = [
+        (index, step)
+        for index, step in enumerate(outer)
+        if isinstance(step, dict)
+        and _is_number(step.get("diameter_mm"))
+        and _is_number(step.get("length_mm"))
+    ]
+    if len(steps) < 2 or len(steps) != len(outer):
+        return "нет полного наружного профиля (Ø и длина каждой ступени)"
+    total = sum(float(step["length_mm"]) for _, step in steps)
+    gray = _gray(image_bytes)
+    located = locate_shaft_frame(gray, total)
+    if located is None:
+        reason = "главный вид вала на листе не найден"
+        for index, step in steps:
+            report["items"].append(_step_item(index, step, "unmeasurable", {}, reason))
+        return reason
+    frame, profile = located
+    verdict = verify(
+        Hypothesis(
+            "shaft_profile",
+            "main_view.outer",
+            {
+                "steps": [
+                    {
+                        "diameter_mm": float(step["diameter_mm"]),
+                        "length_mm": float(step["length_mm"]),
+                    }
+                    for _, step in steps
+                ],
+                "keyways": body.get("keyways") or [],
+            },
+        ),
+        frame,
+        profile,
+    )
+    report["frame"] = _frame_payload(frame)
+    length_tol, diameter_tol = shaft_tolerances(frame.scale_mean)
+    measured_steps = verdict.measured.get("steps") or []
+    whole_unmeasurable = verdict.status == "unmeasurable"
+    for index, step in steps:
+        got = measured_steps[index] if index < len(measured_steps) else {}
+        measured = {key: value for key, value in got.items() if value is not None}
+        own = [
+            part for part in verdict.reason.split("; ") if part.startswith(f"ступень {index + 1}:")
+        ]
+        wrong = any(
+            key in measured and abs(measured[key] - float(step[key])) > tolerance
+            for key, tolerance in (("diameter_mm", diameter_tol), ("length_mm", length_tol))
+        )
+        if whole_unmeasurable:
+            status, reason, measured = "unmeasurable", verdict.reason, {}
+        elif wrong:
+            status, reason = "refuted", "; ".join(own)
+        elif measured:
+            status, reason = "confirmed", ""
+        else:
+            status, reason = "unmeasurable", "; ".join(own) or "ступень по виду не измерена"
+        item = _step_item(index, step, status, measured, reason)
+        item["tolerance_mm"] = {
+            "diameter": round(diameter_tol, 3),
+            "length": round(length_tol, 3),
+        }
+        report["items"].append(item)
+        if status == "refuted":
+            report["notes"].append(
+                f"ступень {index + 1}: прочитано Ø{_mm(step['diameter_mm'])} × "
+                f"{_mm(step['length_mm'])}, по листу — "
+                f"Ø{_mm(measured['diameter_mm']) if 'diameter_mm' in measured else '—'} × "
+                f"{_mm(measured['length_mm']) if 'length_mm' in measured else '—'} — проверить"
+            )
+    return verdict.reason if whole_unmeasurable else None
+
+
+def _step_item(
+    index: int, step: dict[str, Any], status: str, measured: dict[str, Any], reason: str
+) -> dict[str, Any]:
+    return {
+        "kind": "shaft_step",
+        "path": f"main_view.outer[{index}]",
+        "feature_id": step.get("id"),
+        "read": {key: step.get(key) for key in ("diameter_mm", "length_mm")},
+        "status": status,
+        "measured": measured,
+        "reason": reason,
+    }
+
+
 # Поля вердикта в графе: поле спека → вид допуска.
 _GRAPH_FIELDS = {
     "plate_hole": (
@@ -236,6 +337,7 @@ _GRAPH_FIELDS = {
         ("start_angle_deg", "phase"),
     ),
     "concentric_hole": (("diameter_mm", "diameter"),),
+    "shaft_step": (("diameter_mm", "diameter"), ("length_mm", "length")),
 }
 
 
