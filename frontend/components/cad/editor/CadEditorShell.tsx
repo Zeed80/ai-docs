@@ -46,6 +46,7 @@ import Ribbon, {
   type RibbonTabId,
 } from "@/components/cad/editor/Ribbon";
 import SketchCanvas from "@/components/cad/editor/sketch/SketchCanvas";
+import ProfileHolesEditor from "@/components/cad/ProfileHolesEditor";
 import SpecEditorPanel from "@/components/cad/SpecEditorPanel";
 import type { SketchProfileSegment } from "@/lib/cad-sketch-api";
 import {
@@ -74,6 +75,7 @@ import {
   type KernelFaceDescriptor,
   type Solid3dSummary,
   type SpecAssumption,
+  type SpecVerification,
 } from "@/lib/studio-api";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -336,6 +338,9 @@ export default function CadEditorShell({
     Record<string, unknown> | undefined;
   const specAssumptions = (gen?.params?.spec_assumptions ??
     []) as SpecAssumption[];
+  // Проверка прочитанного по листу — замер рядом с опровергнутым полем.
+  const specVerification = gen?.params?.spec_verification as
+    SpecVerification | undefined;
   const assumptions = useMemo(() => solid?.assumptions ?? [], [solid]);
   const guessedOperationIds = useMemo(
     () => operationsNeedingReview(tree?.operations ?? [], assumptions),
@@ -909,6 +914,22 @@ export default function CadEditorShell({
         <main className="flex min-w-0 flex-1 flex-col">
           {ribbonTab === "spec" ? (
             <div className="min-h-0 flex-1 overflow-y-auto p-3">
+              <ProfileHolesEditor
+                generationId={generationId}
+                spec={specForEditing}
+                verification={specVerification}
+                busy={busy}
+                onDone={(result) => {
+                  if (result?.rebuild_task_id) {
+                    setRebuildTaskId(result.rebuild_task_id);
+                    setRebuildStatus("QUEUED");
+                  } else {
+                    void load();
+                  }
+                }}
+                onError={setError}
+                t={t}
+              />
               <SpecEditorPanel
                 generationId={generationId}
                 spec={specForEditing}
