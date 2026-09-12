@@ -302,3 +302,40 @@ def test_a_pitch_circle_is_drawn_as_a_thin_centre_line():
     circles = [e for e in entities if isinstance(e, Circle)]
     assert len(circles) == 1
     assert circles[0].line_class == "axis" and circles[0].radius == 36.5
+
+
+def _diameter_label(radius: float, label: str):
+    from app.ai.cad_ir.schema import TextEntity
+
+    entities = dimensions_from_kernel(
+        [
+            {
+                "view_index": 0,
+                "kind": "Diameter",
+                "label": label,
+                "anchors_mm": [[-radius, 0.0], [radius, 0.0]],
+                "value_mm": 2 * radius,
+            }
+        ],
+        {"side": {"offset_u": 100.0, "offset_v": 100.0}},
+        ["side"],
+        px_per_mm=1.0,
+    )
+    text = next(item for item in entities if isinstance(item, TextEntity))
+    segments = [item for item in entities if isinstance(item, Segment)]
+    return text, segments
+
+
+def test_the_label_of_a_small_hole_goes_past_the_circle_onto_a_shelf():
+    """«4 отв. Ø5.5» ложился поперёк окружности Ø5.5 поверх обеих стрелок."""
+    text, segments = _diameter_label(2.75, "4 отв. Ø5.5")
+
+    assert text.position.x - 100.0 > 2.75 + 3.5  # за окружностью и стрелкой
+    assert len(segments) == 2  # размерная линия и полка под подписью
+
+
+def test_the_label_of_a_large_circle_stays_on_its_diameter():
+    text, segments = _diameter_label(60.0, "Ø120")
+
+    assert abs(text.position.x - 100.0) < 60.0
+    assert len(segments) == 1

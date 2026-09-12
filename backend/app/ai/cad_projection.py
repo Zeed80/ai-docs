@@ -353,6 +353,9 @@ DIM_EXTENSION_MM = 2.0  # extension line runs past the dimension line
 DIM_ARROW_MM = 3.5
 DIM_ARROW_GAP_MM = 1.0  # bare line wanted between two inside arrowheads
 DIM_TEXT_MM = 3.5
+# Average advance of a digit/letter in the sheet font, in text heights — enough
+# to tell whether a label fits its dimension line.
+_LABEL_EM = 0.62
 
 
 # Шаг между рядами размеров, мм листа (ГОСТ 2.307: не менее 7 мм между
@@ -618,6 +621,24 @@ def dimensions_from_kernel(
             # it, because DistanceY runs upward. The label is drawn horizontal
             # until now, straddling the line it labels.
             vertical = not through_centre and abs(du) <= 1e-6 * span
+            # A value wider than its own dimension line is taken past the end
+            # of the line, onto a shelf (ГОСТ 2.307). Centred on the line, the
+            # label of a small hole — «4 отв. Ø5.5» across a 5.5 mm circle —
+            # lay over the circle and both arrows.
+            label_mm = len(text) * _LABEL_EM * DIM_TEXT_MM
+            if not vertical and label_mm > span:
+                start = carry
+                reach = start + DIM_EXTENSION_MM + label_mm
+                entities.append(
+                    Segment(
+                        p1=to_point(u2 + ou + tu * start, v2 + ov + tv * start),
+                        p2=to_point(u2 + ou + tu * reach, v2 + ov + tv * reach),
+                        **style,
+                    )
+                )
+                along = reach - label_mm / 2.0
+                mid_u = u2 + ou + tu * along + nu * 1.5
+                mid_v = v2 + ov + tv * along + nv * 1.5
             entities.append(
                 TextEntity(
                     position=to_point(mid_u, mid_v),
