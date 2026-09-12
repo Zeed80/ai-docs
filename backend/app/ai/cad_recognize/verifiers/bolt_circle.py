@@ -53,6 +53,13 @@ def verify_bolt_circle(hypothesis: Hypothesis, frame: ViewFrame | None, sheet: A
     y1 = min(gray.shape[0], int(cy + ring_outer) + 1)
     roi = gray[y0:y1, x0:x1]
     radius_px = hole / 2.0 / scale
+    # Уточнение каждого отверстия — как у пластины (`cross_hole._ring`):
+    # подгонка по сектору оставалась у радиуса Hough, Ø мелких отверстий
+    # массива выходил на +0,4 мм.
+    from app.ai.cad_recognize.verifiers.cross_hole import _ring
+    from app.ai.cad_recognize.verifiers.plate_frame import _ink
+
+    roi_ink = _ink(np.ascontiguousarray(roi))
     holes: list[tuple[float, float, float]] = []
     for u, v, r in _hough(roi, radius_px):
         distance = math.hypot(u + x0 - cx, v + y0 - cy)
@@ -61,6 +68,9 @@ def verify_bolt_circle(hypothesis: Hypothesis, frame: ViewFrame | None, sheet: A
         fitted = _fit_circle(roi, u, v, r)
         if fitted is None or fitted[3] < _MIN_COVERAGE:
             continue
+        refined = _ring(roi_ink, fitted[0], fitted[1], fitted[2])
+        if refined is not None:
+            fitted = (refined[0], refined[1], refined[2], fitted[3])
         fu, fv, fr = fitted[0] + x0, fitted[1] + y0, fitted[2]
         if all(math.hypot(fu - hx, fv - hy) > fr for hx, hy, _ in holes):
             holes.append((fu, fv, fr))
