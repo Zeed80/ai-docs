@@ -53,14 +53,26 @@ def verify_shaft_profile(hypothesis: Hypothesis, frame: ViewFrame | None, sheet:
         station += float(step.get("length_mm") or 0.0)
         boundaries.append(station)
     matched = [0.0]
-    for boundary in boundaries[1:-1]:
+    for index, boundary in enumerate(boundaries[1:-1]):
         x = frame.origin_px[0] + boundary / scale_u
-        # В окне станции — уступ с наибольшим скачком: край канавки у уступа
-        # ближе, но мельче (shaft-0: канавка 0,3 мм у границы 57 давала
-        # длины 14,5 и 25,5 вместо 15 и 25).
-        window = [(s, jump) for s, jump in shoulders if abs(s - x) * scale_u <= 2.0 * length_tol]
+        # Окно — не ±1 мм, а до 40 % более короткой соседней ступени: граница,
+        # прочитанная на 2 мм мимо, давала «уступ не найден» без замера, и
+        # оператор не видел, где уступ на самом деле (харнесс: 0/28 случаев
+        # «сдвинутая граница» с верным замером). Направление скачка — из
+        # прочитанных Ø; из подходящих — ближайший к прочитанной станции.
+        neighbours = [float(steps[index].get("length_mm") or 0.0)]
+        neighbours.append(float(steps[index + 1].get("length_mm") or 0.0))
+        reach_mm = max(2.0 * length_tol, 0.4 * min(neighbours))
+        d_left = float(steps[index].get("diameter_mm") or 0.0)
+        d_right = float(steps[index + 1].get("diameter_mm") or 0.0)
+        sign = 0.0 if d_right == d_left else (1.0 if d_right > d_left else -1.0)
+        window = [
+            (s, jump)
+            for s, jump in shoulders
+            if abs(s - x) * scale_u <= reach_mm and (sign == 0.0 or jump * sign > 0)
+        ]
         if window:
-            best = max(window, key=lambda item: item[1])[0]
+            best = min(window, key=lambda item: abs(item[0] - x))[0]
             matched.append((best - frame.origin_px[0]) * scale_u)
         else:
             matched.append(None)
@@ -94,7 +106,9 @@ def verify_shaft_profile(hypothesis: Hypothesis, frame: ViewFrame | None, sheet:
 def _shoulders(
     profile: Any, *, jump_px: float, min_plateau_px: float = 1.0
 ) -> list[tuple[float, float]]:
-    """Уступы профиля: ``(столбец грани уступа, величина скачка в px)``.
+    """Уступы профиля: ``(столбец грани уступа, скачок полувысоты в px со знаком)``.
+
+    Знак: ``+`` — подъём (следующая ступень больше), ``−`` — спуск.
 
     Профиль делится на площадки постоянного уровня. На фаске у уступа
     горизонтальной пары нет — между площадками пропуск, и первая версия
@@ -146,9 +160,9 @@ def _shoulders(
         ]
         if nearby:
             best = max(nearby, key=lambda face: (round(cover(face), 1), -abs(face[0] - anchor)))
-            result.append((best[0], jump))
+            result.append((best[0], b_level - a_level))
         else:
-            result.append((middle, jump))
+            result.append((middle, b_level - a_level))
     return result
 
 
