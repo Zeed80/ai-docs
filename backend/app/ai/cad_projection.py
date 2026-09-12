@@ -407,20 +407,41 @@ def _projected_dimension_points(
     return ((u1, v1), (u1, v1)), ((u2, v2), (u2, v2))
 
 
+def _placed_u(item: dict[str, Any], tier: int) -> float | None:
+    """Where a DistanceY stands along u: across its step, or in a row left of the view."""
+    place_u = item.get("place_u")
+    if not isinstance(place_u, (int, float)):
+        return None
+    if item.get("outside"):
+        return float(place_u) - tier * DIM_TIER_STEP_MM
+    return float(place_u)
+
+
 def _length_tiers(dimensions: list[dict[str, Any]]) -> dict[int, int]:
-    """Row for each DistanceX on its view: overlapping lengths never share a row.
+    """Row for each length on its view: overlapping lengths never share a row.
 
     Greedy by span, shortest first, so the chain sits nearest the part and the
     overall length — which overlaps every link of the chain — goes outside.
     Links that merely TOUCH at a shoulder share a row: that is what a chain is.
+
+    Hole coordinates stacked LEFT of a plan view (a DistanceY marked
+    ``outside``) are rowed the same way, by their spans along v: every one of
+    them starts at the same bottom edge, so without rows they lie on one line.
     """
     by_view: dict[Any, list[tuple[float, float, int]]] = {}
     for position, item in enumerate(dimensions):
         anchors = item.get("anchors_mm") or []
-        if str(item.get("kind") or "") != "DistanceX" or len(anchors) < 2:
+        kind = str(item.get("kind") or "")
+        if len(anchors) < 2:
             continue
-        lo, hi = sorted((float(anchors[0][0]), float(anchors[1][0])))
-        by_view.setdefault(item.get("view_index"), []).append((lo, hi, position))
+        if kind == "DistanceX":
+            axis = 0
+        elif kind == "DistanceY" and item.get("outside"):
+            axis = 1
+        else:
+            continue
+        lo, hi = sorted((float(anchors[0][axis]), float(anchors[1][axis])))
+        by_view.setdefault((item.get("view_index"), kind), []).append((lo, hi, position))
     tiers: dict[int, int] = {}
     for spans in by_view.values():
         rows: list[list[tuple[float, float]]] = []
@@ -485,9 +506,7 @@ def dimensions_from_kernel(
             (float(anchors[1][0]), float(anchors[1][1])),
             top=float(bounds["v_max"]) if "v_max" in bounds else None,
             tier=tiers.get(position, 0),
-            place_u=float(item["place_u"])
-            if isinstance(item.get("place_u"), (int, float))
-            else None,
+            place_u=_placed_u(item, tiers.get(position, 0)),
         )
         (a1u, a1v), (u1, v1) = anchor_1
         (a2u, a2v), (u2, v2) = anchor_2
@@ -508,8 +527,10 @@ def dimensions_from_kernel(
         # это 16 мм детали, и Ø25 на ступени длиной 12 оказывался на соседней
         # Ø28, а выносные тянулись к нему поперёк чужой ступени. Размер высоты
         # пластины — тоже DistanceY, но без `place_u`: он выносится за контур.
-        across_step = str(item.get("kind") or "") == "DistanceY" and isinstance(
-            item.get("place_u"), (int, float)
+        across_step = (
+            str(item.get("kind") or "") == "DistanceY"
+            and isinstance(item.get("place_u"), (int, float))
+            and not item.get("outside")
         )
         on_contour = through_centre or across_step
         offset = 0.0 if on_contour else DIM_OFFSET_MM
@@ -533,6 +554,19 @@ def dimensions_from_kernel(
         if not on_contour:
             entities.append(Segment(p1=to_point(a1u, a1v), p2=to_point(u1 + eu, v1 + ev), **style))
             entities.append(Segment(p1=to_point(a2u, a2v), p2=to_point(u2 + eu, v2 + ev), **style))
+        if item.get("pitch_circle"):
+            # Окружность центров — тонкая штрихпунктирная (ГОСТ 2.303): её нет
+            # среди рёбер детали, и без неё Ø окружности центров был бы
+            # размером ни к чему.
+            entities.append(
+                Circle(
+                    center=to_point((u1 + u2) / 2.0, (v1 + v2) / 2.0),
+                    radius=span / 2.0 * px_per_mm,
+                    line_class="axis",
+                    width_class="thin",
+                    **_ORIGIN,
+                )
+            )
         # The dimension line itself.
         entities.append(
             Segment(

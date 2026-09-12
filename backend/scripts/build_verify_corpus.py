@@ -49,12 +49,19 @@ def needed_dimensions(spec: dict) -> dict[str, list[float]]:
     if isinstance(profile, dict):
         diameters = {h["diameter_mm"] for h in profile.get("holes") or []}
         diameters |= {p["hole_diameter_mm"] for p in profile.get("hole_patterns") or []}
+        # Окружность центров (PCD) — где стоят болтовые отверстия (X1).
+        diameters |= {
+            p["bolt_circle_diameter_mm"]
+            for p in profile.get("hole_patterns") or []
+            if p.get("kind", "bolt_circle") == "bolt_circle" and p.get("bolt_circle_diameter_mm")
+        }
         lengths = [profile["thickness_mm"]]
         if profile.get("shape") == "circle":
             diameters.add(profile["diameter_mm"])
         else:
             lengths += [profile["width_mm"], profile["height_mm"]]
-        return {"diameters": sorted(diameters), "lengths": sorted(set(lengths)), "overall": []}
+            lengths += _hole_coordinates(profile)
+        return {"diameters": sorted(diameters), "lengths": sorted(lengths), "overall": []}
     outer = body["outer"]
     diameters = sorted(
         {s["diameter_mm"] for s in outer} | {s["diameter_mm"] for s in body.get("bore") or []}
@@ -65,6 +72,31 @@ def needed_dimensions(spec: dict) -> dict[str, list[float]]:
     # последнюю «15», а метрика по множеству значений засчитала лист полным.
     open_chain = sorted(lengths)[:-1]
     return {"diameters": diameters, "lengths": open_chain, "overall": [sum(lengths)]}
+
+
+def _hole_coordinates(profile: dict) -> list[float]:
+    """Координаты центров отверстий пластины от левой и нижней кромки (X1).
+
+    Одинаковые значения — один раз по каждой оси, как их ставит лист.
+    """
+    from app.ai.verify_corpus.score import expand_holes
+
+    plain = {
+        "holes": profile.get("holes") or [],
+        "hole_patterns": [
+            p for p in profile.get("hole_patterns") or [] if p.get("kind") != "bolt_circle"
+        ],
+    }
+    xs: list[float] = []
+    ys: list[float] = []
+    for x, y, _diameter in expand_holes(plain):
+        x_from_left = round(x + profile["width_mm"] / 2.0, 3)
+        y_from_bottom = round(y + profile["height_mm"] / 2.0, 3)
+        if not any(abs(x_from_left - other) <= 0.05 for other in xs):
+            xs.append(x_from_left)
+        if not any(abs(y_from_bottom - other) <= 0.05 for other in ys):
+            ys.append(y_from_bottom)
+    return xs + ys
 
 
 def coverage(spec: dict, truth: dict) -> dict[str, float]:

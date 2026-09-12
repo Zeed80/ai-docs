@@ -913,6 +913,157 @@ def _closest(value: float, pool: list[float], *, tolerance: float = 0.01) -> flo
     return best
 
 
+def _hole_dimensions(drawing: dict, plan: SheetPlan) -> None:
+    """Где стоят отверстия плоской детали — координаты и окружность центров (X1).
+
+    На листе пластины и фланца стояли только диаметры отверстий: где они,
+    лист не говорил. Их центры и PCD — не рёбра, ядро их размером не назовёт,
+    но окружности отверстий оно уже измерило, проецируя план: центр и радиус
+    лежат в геометрии вида. Размеры строятся по ним, как диаметры в
+    `_diameters_from_circles`:
+
+    * три и больше одинаковых отверстий на одном радиусе от центра плана —
+      окружность центров: её Ø (PCD), сама окружность штрихпунктиром;
+    * остальные — координаты центра от левой и нижней кромки плана
+      (ГОСТ 2.307, от баз), одинаковые значения — один раз;
+    * к диаметру повторяющихся отверстий — «N отв.».
+
+    Базовая линия M5: фланцы корпуса несли Ø отверстий, но не PCD и не их
+    число, и прочитать массив с листа было нельзя.
+
+    Фаза окружности болтов (угол первого отверстия) пока не проставляется —
+    угловых размеров отрисовка не умеет.
+    """
+    import math
+
+    if plan.part_class not in ("plate", "flange"):
+        return
+    dimensions = drawing.setdefault("dimensions", [])
+    ratio = plan.ratio or 1.0
+    near = 0.05 * ratio  # 0.05 mm of the part, on the sheet
+    for index, view in enumerate(drawing.get("views") or []):
+        if view.get("kind") != "side" or index in plan.scaffold_views:
+            continue
+        bounds = view.get("bounds_mm") or {}
+        if not bounds:
+            continue
+        u_min, v_min = float(bounds["u_min"]), float(bounds["v_min"])
+        v_max = float(bounds["v_max"])
+        cu = (float(bounds["u_min"]) + float(bounds["u_max"])) / 2.0
+        cv = (v_min + v_max) / 2.0
+        circles = [
+            (float(item["center"][0]), float(item["center"][1]), float(item["radius"]))
+            for item in view.get("visible") or []
+            if item.get("type") == "circle" and item.get("center") and item.get("radius")
+        ]
+        # Наружный контур фланца и центральное отверстие стоят в центре плана —
+        # у них нет координат, только диаметр.
+        holes = [c for c in circles if math.hypot(c[0] - cu, c[1] - cv) > near]
+        if not holes:
+            continue
+
+        groups: dict[tuple[float, float], list[tuple[float, float, float]]] = {}
+        for hole in holes:
+            key = (round(math.hypot(hole[0] - cu, hole[1] - cv) / near), round(hole[2] / near))
+            groups.setdefault(key, []).append(hole)
+        on_pitch: list[tuple[float, float, float]] = []
+        concentric = sum(
+            1
+            for item in dimensions
+            if item.get("view_index") == index and item.get("measured_by") == "view_circle"
+        )
+        for members in groups.values():
+            if len(members) < 3:
+                continue
+            on_pitch.extend(members)
+            radius = math.hypot(members[0][0] - cu, members[0][1] - cv)
+            angle = math.radians(_CONCENTRIC_ANGLES[concentric % len(_CONCENTRIC_ANGLES)])
+            concentric += 1
+            du, dv = radius * math.cos(angle), radius * math.sin(angle)
+            value = round(2.0 * radius / ratio, 3)
+            dimensions.append(
+                {
+                    "view_index": index,
+                    "kind": "Diameter",
+                    "label": f"Ø{value:g}",
+                    "anchors_mm": [[cu - du, cv - dv], [cu + du, cv + dv]],
+                    "value_mm": value,
+                    "measured_by": "pitch_circle",
+                    "pitch_circle": True,
+                    "ir_kind": "diameter",
+                    "_centre": [round(cu, 3), round(cv, 3)],
+                }
+            )
+
+        xs: list[float] = []
+        ys: list[float] = []
+        for hole in holes:
+            if hole in on_pitch:
+                continue
+            x = round((hole[0] - u_min) / ratio, 3)
+            y = round((hole[1] - v_min) / ratio, 3)
+            if not any(abs(x - other) <= 0.05 for other in xs):
+                xs.append(x)
+                dimensions.append(
+                    {
+                        "view_index": index,
+                        "kind": "DistanceX",
+                        "label": f"{x:g}",
+                        "anchors_mm": [[u_min, v_max], [hole[0], hole[1]]],
+                        "value_mm": x,
+                        "measured_by": "hole_centre",
+                        "ir_kind": "linear",
+                    }
+                )
+            if not any(abs(y - other) <= 0.05 for other in ys):
+                ys.append(y)
+                dimensions.append(
+                    {
+                        "view_index": index,
+                        "kind": "DistanceY",
+                        "label": f"{y:g}",
+                        "anchors_mm": [[u_min, v_min], [hole[0], hole[1]]],
+                        "value_mm": y,
+                        "measured_by": "hole_centre",
+                        "ir_kind": "linear",
+                        "place_u": u_min,
+                        "outside": True,
+                    }
+                )
+        if xs or ys:
+            # Высота плана встаёт в те же ряды слева — самым внешним.
+            for item in dimensions:
+                if (
+                    item.get("view_index") == index
+                    and item.get("kind") == "DistanceY"
+                    and not isinstance(item.get("place_u"), (int, float))
+                ):
+                    item["place_u"] = u_min
+                    item["outside"] = True
+
+        counts: dict[float, int] = {}
+        for hole in holes:
+            diameter = round(2.0 * hole[2] / ratio, 3)
+            counts[diameter] = counts.get(diameter, 0) + 1
+        for item in dimensions:
+            if item.get("view_index") != index or item.get("kind") != "Diameter":
+                continue
+            if item.get("pitch_circle"):
+                continue
+            value = item.get("value_mm")
+            count = next(
+                (
+                    n
+                    for d, n in counts.items()
+                    if isinstance(value, (int, float)) and abs(d - value) <= 0.05
+                ),
+                0,
+            )
+            label = str(item.get("label") or f"Ø{value:g}")
+            if count >= 2 and "отв." not in label:
+                item["label"] = f"{count} отв. {label}"
+
+
 def _label_dimensions(dimensions: list[dict], requests: list[dict], spec: dict) -> None:
     """Give each measured dimension the text the sheet actually carries.
 
@@ -1024,6 +1175,7 @@ async def build_sheet_from_solid(
         )
     drawing["dimensions"] = measured
     _label_dimensions(measured, requests, spec)
+    _hole_dimensions(drawing, plan)
 
     ir, extent = _assemble(drawing, spec, plan)
     geometry_verification = verify_views_against_solid(

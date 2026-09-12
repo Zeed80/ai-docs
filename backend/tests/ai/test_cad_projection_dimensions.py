@@ -245,3 +245,60 @@ def test_a_plate_height_still_goes_outside_with_witness_lines():
 
     assert len(segments) == 3  # две выносные и размерная
     assert segments[2].p1.x < 50.0  # в стороне от контура
+
+
+def test_hole_coordinates_left_of_a_plan_stack_in_rows():
+    """Все координаты по v начинаются от нижней кромки — без рядов легли бы на одну линию."""
+    dimensions = [
+        {
+            "view_index": 0,
+            "kind": "DistanceY",
+            "outside": True,
+            "place_u": -50.0,
+            "anchors_mm": [[-50.0, -25.0], [10.0, 9.0]],
+            "value_mm": 34.0,
+            "label": "34",
+        },
+        {
+            "view_index": 0,
+            "kind": "DistanceY",
+            "outside": True,
+            "place_u": -50.0,
+            "anchors_mm": [[-50.0, -25.0], [-28.0, 14.0]],
+            "value_mm": 39.0,
+            "label": "39",
+        },
+    ]
+    tiers = _length_tiers(dimensions)
+    assert tiers == {0: 0, 1: 1}
+
+    entities = dimensions_from_kernel(
+        dimensions, {"side": {"offset_u": 100.0, "offset_v": 100.0}}, ["side"], px_per_mm=1.0
+    )
+    lines = [s for s in entities if isinstance(s, Segment) and s.p1.x == s.p2.x]
+    xs = sorted({round(s.p1.x, 3) for s in lines})
+    assert len(xs) == 2 and xs[1] - xs[0] == 7.0  # два ряда, шаг 7 мм
+    assert all(x < 100.0 - 50.0 for x in xs)  # слева от плана
+
+
+def test_a_pitch_circle_is_drawn_as_a_thin_centre_line():
+    from app.ai.cad_ir.schema import Circle
+
+    entities = dimensions_from_kernel(
+        [
+            {
+                "view_index": 0,
+                "kind": "Diameter",
+                "pitch_circle": True,
+                "label": "Ø73",
+                "anchors_mm": [[-36.5, 0.0], [36.5, 0.0]],
+                "value_mm": 73.0,
+            }
+        ],
+        {"side": {"offset_u": 100.0, "offset_v": 100.0}},
+        ["side"],
+        px_per_mm=1.0,
+    )
+    circles = [e for e in entities if isinstance(e, Circle)]
+    assert len(circles) == 1
+    assert circles[0].line_class == "axis" and circles[0].radius == 36.5

@@ -764,3 +764,103 @@ def test_the_thickness_view_of_a_plate_stands_right_of_the_plan():
     assert placements[1]["offset_u"] == 0.0  # план — главный вид
     assert placements[2]["offset_u"] > 100.0  # толщина — справа от плана
     assert placements[2]["offset_v"] == placements[1]["offset_v"]  # на одной оси
+
+
+# ── X1: где стоят отверстия плоской детали ──────────────────────────────────
+# Числа — из пробы ядра: план пластины 100×50 (u, v от центра), отверстия
+# (10, 9) Ø13.5 и (−28, 14) Ø11; фланец Ø120, центр Ø32, 4 отв. Ø5.5 на Ø73.
+
+
+def _plan(part_class: str):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(part_class=part_class, ratio=1.0, scaffold_views={0})
+
+
+def _circle(u: float, v: float, r: float) -> dict:
+    return {"type": "circle", "center": [u, v], "radius": r}
+
+
+def test_plate_holes_get_coordinates_from_the_left_and_bottom_edges():
+    from app.ai.cad_ir.sheet_from_solid import _hole_dimensions
+
+    drawing = {
+        "views": [
+            {"kind": "front"},
+            {
+                "kind": "side",
+                "bounds_mm": {"u_min": -50, "u_max": 50, "v_min": -25, "v_max": 25},
+                "visible": [_circle(10, 9, 6.75), _circle(-28, 14, 5.5)],
+            },
+        ],
+        "dimensions": [
+            {
+                "view_index": 1,
+                "kind": "DistanceY",
+                "value_mm": 50.0,
+                "anchors_mm": [[-50, -25], [-50, 25]],
+            }
+        ],
+    }
+
+    _hole_dimensions(drawing, _plan("plate"))
+
+    xs = sorted(d["value_mm"] for d in drawing["dimensions"] if d["kind"] == "DistanceX")
+    ys = sorted(
+        d["value_mm"]
+        for d in drawing["dimensions"]
+        if d["kind"] == "DistanceY" and d.get("measured_by") == "hole_centre"
+    )
+    assert xs == [22.0, 60.0]
+    assert ys == [34.0, 39.0]
+    height = drawing["dimensions"][0]
+    assert height["outside"] and height["place_u"] == -50  # высота — в тех же рядах слева
+
+
+def test_a_bolt_circle_gets_its_pitch_diameter_and_the_hole_count():
+    from app.ai.cad_ir.sheet_from_solid import _hole_dimensions
+
+    bolts = [
+        _circle(36.5, 0, 2.75),
+        _circle(0, 36.5, 2.75),
+        _circle(-36.5, 0, 2.75),
+        _circle(0, -36.5, 2.75),
+    ]
+    drawing = {
+        "views": [
+            {"kind": "front"},
+            {"kind": "section"},
+            {
+                "kind": "side",
+                "bounds_mm": {"u_min": -60, "u_max": 60, "v_min": -60, "v_max": 60},
+                "visible": [_circle(0, 0, 60), _circle(0, 0, 16), *bolts],
+            },
+        ],
+        "dimensions": [
+            {"view_index": 2, "kind": "Diameter", "value_mm": 5.5, "label": "Ø5.5"},
+        ],
+    }
+
+    _hole_dimensions(drawing, _plan("flange"))
+
+    pitch = [d for d in drawing["dimensions"] if d.get("pitch_circle")]
+    assert [d["value_mm"] for d in pitch] == [73.0]
+    assert drawing["dimensions"][0]["label"] == "4 отв. Ø5.5"
+    # Отверстия на окружности центров координат не получают.
+    assert not [d for d in drawing["dimensions"] if d.get("measured_by") == "hole_centre"]
+
+
+def test_a_rotation_body_gets_no_hole_coordinates():
+    from app.ai.cad_ir.sheet_from_solid import _hole_dimensions
+
+    drawing = {
+        "views": [
+            {
+                "kind": "side",
+                "bounds_mm": {"u_min": -10, "u_max": 10, "v_min": -10, "v_max": 10},
+                "visible": [_circle(5, 5, 1)],
+            }
+        ]
+    }
+    _hole_dimensions(drawing, _plan("solid_rotation"))
+    assert not drawing.get("dimensions")
