@@ -275,7 +275,24 @@ def _check_profile(profile: dict, body_index: int) -> list[CrossCheckFinding]:
         hole_diameter = _num(hole.get("diameter_mm"))
         if x is None or y is None or not hole_diameter:
             continue
-        if math.hypot(x, y) + hole_diameter / 2.0 > half_width * (1 + _SUM_TOLERANCE):
+        if diameter or not (width and height):
+            outside = math.hypot(x, y) + hole_diameter / 2.0 > half_width * (1 + _SUM_TOLERANCE)
+        else:
+            # Прямоугольник — не круг радиусом в половину меньшей стороны:
+            # так отверстие у длинного конца пластины 80×50 (24; 1) Ø5,5
+            # «выходило за контур», и ошибка блокировала каждую такую
+            # пластину. Граф размеров считает то же самое верно — общая мера.
+            from app.ai.cad_dimension_graph import _circle_fits_rounded_rectangle
+
+            outside = not _circle_fits_rounded_rectangle(
+                x,
+                y,
+                hole_diameter / 2.0,
+                width * (1 + _SUM_TOLERANCE),
+                height * (1 + _SUM_TOLERANCE),
+                _num(profile.get("corner_radius_mm")) or 0.0,
+            )
+        if outside:
             findings.append(
                 CrossCheckFinding(
                     code="hole_outside_profile",

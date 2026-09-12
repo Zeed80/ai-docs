@@ -102,6 +102,28 @@ def test_a_hole_outside_the_outline_is_an_error():
     assert "hole_outside_profile" in _codes(check_spec_arithmetic(spec))
 
 
+def test_a_plate_hole_is_checked_against_the_rectangle_not_an_inscribed_circle():
+    """Живой прогон plate-1: (24; 1) Ø5,5 на пластине 80×50 блокировалось как
+    «выходит за контур» — проверка брала круг радиусом в половину меньшей стороны."""
+
+    def plate(x, y):
+        return {
+            "main_view": {
+                "profile": {
+                    "shape": "rectangle",
+                    "width_mm": 80,
+                    "height_mm": 50,
+                    "thickness_mm": 10,
+                    "corner_radius_mm": 5,
+                    "holes": [{"center_x_mm": x, "center_y_mm": y, "diameter_mm": 5.5}],
+                }
+            }
+        }
+
+    assert "hole_outside_profile" not in _codes(check_spec_arithmetic(plate(24, 1)))
+    assert "hole_outside_profile" in _codes(check_spec_arithmetic(plate(39, 0)))
+
+
 def test_a_bolt_circle_that_does_not_fit_is_an_error():
     spec = {
         "main_view": {

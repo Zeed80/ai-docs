@@ -1322,6 +1322,11 @@ DOMAIN_ADAPTERS: dict[str, DomainAdapter] = {
         supported_edge_types=[
             "contains",
             "part_of",
+            # Область листа, из которой прочитано значение (SourceRegion →
+            # DocumentSet). Такие рёбра `cad_emg_compat` пишет с 2026-08-09,
+            # а механический адаптер их не знал: допуск графа отказывал на
+            # каждом чтении с рамками, и сборка уходила в черновик под ревью.
+            "located_in",
             "represented_by",
             "same_object_across_views",
             "defines",
