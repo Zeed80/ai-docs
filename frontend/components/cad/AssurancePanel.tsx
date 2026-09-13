@@ -33,6 +33,22 @@ function verifyElement(
   return t(`vector.assurance_verify_kind_${item.kind}`, { index });
 }
 
+const FIELD_KEYS = new Set([
+  "diameter_mm",
+  "length_mm",
+  "width_mm",
+  "bolt_circle_diameter_mm",
+  "hole_diameter_mm",
+]);
+
+/** «длина» из `length_mm`: имя поля спека — оператору не язык. */
+function fieldLabel(
+  field: string,
+  t: (k: string, v?: Record<string, string | number>) => string,
+): string {
+  return FIELD_KEYS.has(field) ? t(`vector.assurance_field_${field}`) : field;
+}
+
 /** What the digitization actually established, and what it did not.
  *
  * All of this was computed and shown to nobody: the cross-check against the
@@ -181,6 +197,46 @@ export default function AssurancePanel({
                   detail={item.reason}
                 />
               ))}
+            {/* Согласование: принятое по листу — с прежним прочитанным,
+                спорное — оба варианта, решение за человеком. */}
+            {(verification.reconciliation ?? []).map((decision) => (
+              <Row
+                key={`reconcile-${decision.path}-${decision.field}`}
+                ok={decision.action === "adopt"}
+                label={
+                  decision.action === "adopt"
+                    ? t("vector.assurance_reconcile_adopted", {
+                        element: verifyElement(
+                          {
+                            ...decision,
+                            read: {},
+                            measured: {},
+                            status: "confirmed",
+                          },
+                          t,
+                        ),
+                        field: fieldLabel(decision.field, t),
+                        read: decision.read,
+                        value: decision.value ?? decision.measured,
+                      })
+                    : t("vector.assurance_reconcile_ask", {
+                        element: verifyElement(
+                          {
+                            ...decision,
+                            read: {},
+                            measured: {},
+                            status: "refuted",
+                          },
+                          t,
+                        ),
+                        field: fieldLabel(decision.field, t),
+                        read: decision.read,
+                        measured: decision.measured,
+                      })
+                }
+                detail={decision.reason}
+              />
+            ))}
           </>
         ) : null}
 

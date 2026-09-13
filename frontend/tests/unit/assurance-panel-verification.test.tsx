@@ -67,6 +67,63 @@ describe("AssurancePanel — проверка прочитанного по ли
     expect(screen.queryByText(/Отверстие 1:/)).toBeNull();
   });
 
+  it("shows what was taken from the sheet and what waits for a person's decision", () => {
+    const verification: SpecVerification = {
+      items: [
+        {
+          kind: "shaft_step",
+          path: "main_view.outer[5]",
+          read: { diameter_mm: 35, length_mm: 80 },
+          status: "confirmed",
+          measured: { diameter_mm: 35.03, length_mm: 80.035 },
+          reason: "принято по листу: length_mm 98 → 80",
+          reconciled: { length_mm: { read: 98, adopted: 80 } },
+        },
+        {
+          kind: "shaft_step",
+          path: "main_view.outer[1]",
+          read: { diameter_mm: 40, length_mm: 30 },
+          status: "refuted",
+          measured: { diameter_mm: 27.917, length_mm: 29.95 },
+          reason: "ступень 2: Ø 27.917, прочитано 40",
+        },
+      ],
+      summary: { checked: 2, confirmed: 1, refuted: 1, unmeasurable: 0 },
+      reconciliation: [
+        {
+          kind: "shaft_step",
+          path: "main_view.outer[5]",
+          field: "length_mm",
+          read: 98,
+          measured: 80.035,
+          action: "adopt",
+          value: 80,
+          reason: "замер 80.035 совпал с надписью «80» на листе",
+        },
+        {
+          kind: "shaft_step",
+          path: "main_view.outer[1]",
+          field: "diameter_mm",
+          read: 40,
+          measured: 27.917,
+          action: "ask_human",
+          reason: "прочитанное 40 тоже есть на листе",
+        },
+      ],
+    };
+    render(<AssurancePanel verification={verification} t={t} />);
+
+    expect(
+      screen.getByText("Принято по листу: Ступень 6, длина 98 → 80"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Нужно ваше решение: Ступень 2, Ø — прочитано 40, по листу 27.917",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText(/прочитанное 40 тоже есть на листе/)).toBeTruthy();
+  });
+
   it("renders nothing when there is nothing checked at all", () => {
     const { container } = render(<AssurancePanel t={t} />);
     expect(container.innerHTML).toBe("");

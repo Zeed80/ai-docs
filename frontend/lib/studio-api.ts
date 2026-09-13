@@ -1046,6 +1046,20 @@ export interface SpecVerification {
     /** Допуски сравнения стадии: position/diameter у отверстия пластины,
      * count/pcd/diameter/phase у окружности болтов. */
     tolerance_mm?: Record<string, number>;
+    /** Поля, где согласование приняло число с листа вместо прочитанного. */
+    reconciled?: Record<string, { read: number; adopted: number }>;
+  }>;
+  /** Согласование (Ф8): принятое по листу и то, что решает человек. */
+  reconciliation?: Array<{
+    kind: string;
+    path: string;
+    feature_id?: string | null;
+    field: string;
+    read: number;
+    measured: number;
+    action: "adopt" | "ask_human";
+    value?: number;
+    reason: string;
   }>;
   summary: {
     checked: number;

@@ -3843,6 +3843,35 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                                 "items": kind_items,
                             },
                         )
+                    # Согласование (план, Ф8): опровергнутое надписанное поле
+                    # принимает замер сам, только если замер совпал с числом,
+                    # которое ридер выписал с листа, а прочитанного на листе
+                    # нет (живой shaft-1: длина 98 → 80); остальное — решение
+                    # человеку с обоими вариантами. Принятое — в спек до сборки.
+                    from app.ai.cad_recognize.verifiers.reconcile import (
+                        apply_reconciliation,
+                        reconcile,
+                    )
+
+                    decisions = reconcile(spec, verification)
+                    if decisions:
+                        spec, verification = apply_reconciliation(spec, verification, decisions)
+                        verification["reconciliation"] = decisions
+                        adopted = [d for d in decisions if d["action"] == "adopt"]
+                        await _record(
+                            "reconcile.sheet",
+                            "completed",
+                            (
+                                f"Согласование: принято по листу {len(adopted)}, "
+                                f"решение за человеком {len(decisions) - len(adopted)}"
+                            ),
+                            {"decisions": decisions},
+                        )
+                        for decision in adopted:
+                            verification["notes"].append(
+                                f"принято по листу: {decision['path']}.{decision['field']} "
+                                f"{decision['read']:g} → {decision['value']:g}"
+                            )
                     if verification["notes"]:
                         spec = {
                             **spec,
