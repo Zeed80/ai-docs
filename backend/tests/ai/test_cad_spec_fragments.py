@@ -1809,3 +1809,19 @@ async def test_a_rectangular_plate_gets_no_bolt_circle_note(monkeypatch):
     )
 
     assert notes == []
+
+
+def test_a_cross_hole_diameter_is_the_number_after_the_diameter_mark():
+    """Живой z4-r4: «Форма кромки (вид Е): R0,8, ширина 3, диаметр φ21,7» давало
+    «поперечное отверстие Ø0,8» — бралось первое число строки (радиус R0,8)."""
+    from app.ai.cad_recognize.spec_fragments import _feature_completeness_issues
+
+    issues = _feature_completeness_issues(
+        {"dimensions": [{"value": "Форма кромки (вид Е): R0,8, ширина 3, диаметр φ21,7"}]},
+        {},
+        [],
+        {"observations": []},
+    )
+
+    holes = [issue for issue in issues if "поперечное отверстие" in issue]
+    assert holes == ["поперечное отверстие Ø21.7 указано, но не локализовано"]

@@ -536,7 +536,13 @@ def _stale_profile_note(note: str, diameters: set[float]) -> bool:
     if any(marker in note for marker in _STALE_PROFILE):
         return True
     match = _CROSS_HOLE_NOTE.search(note)
-    return bool(match) and round(float(match.group(1).replace(",", ".")), 3) in diameters
+    if not match:
+        return False
+    value = round(float(match.group(1).replace(",", ".")), 3)
+    # Ø ступени — это не отверстие; Ø чуть меньше Ø ступени — дно канавки
+    # или проточки на выносном виде (z4-r4: Ø24,5 у Ø25, Ø21,7 у Ø22, Ø15,7
+    # у M18). Поперечное отверстие много меньше вала, в котором сверлится.
+    return any(0.8 * d <= value <= d for d in diameters)
 
 
 def _profile_text(steps: list[dict[str, Any]]) -> str:

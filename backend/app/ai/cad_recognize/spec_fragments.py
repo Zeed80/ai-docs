@@ -3075,9 +3075,13 @@ def _feature_completeness_issues(
     ]
     named_small_holes: set[float] = set()
     for text in texts:
-        if not _DIAMETER_MARK.search(text):
+        mark = _DIAMETER_MARK.search(text)
+        if not mark:
             continue
-        nominal = re.search(r"\d+(?:[.,]\d+)?", text)
+        # Число ПОСЛЕ знака Ø, а не первое в строке: пояснение ридера
+        # «Форма кромки (вид Е): R0,8, ширина 3, диаметр φ21,7» давало
+        # «поперечное отверстие Ø0,8» (живой z4-r4: Ø0,8 и Ø1 из R0,8 и R1).
+        nominal = re.search(r"\d+(?:[.,]\d+)?", text[mark.end() :])
         if not nominal:
             continue
         value = float(nominal.group().replace(",", "."))
