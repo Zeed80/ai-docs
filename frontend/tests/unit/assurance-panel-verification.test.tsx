@@ -161,6 +161,38 @@ describe("AssurancePanel — проверка прочитанного по ли
     expect(screen.getByText(/по листу не подтвердился/)).toBeTruthy();
   });
 
+  it("shows a keyway found on the sheet that the reader missed", () => {
+    const verification: SpecVerification = {
+      items: [
+        {
+          kind: "shaft_step",
+          path: "main_view.outer[6]",
+          read: { diameter_mm: 22, length_mm: 52 },
+          status: "confirmed",
+          measured: {},
+          reason: "",
+        },
+      ],
+      summary: { checked: 1, confirmed: 1, refuted: 0, unmeasurable: 0 },
+      keyway_additions: [
+        {
+          step_index: 6,
+          axial_start_mm: 150,
+          length_mm: 25,
+          width_mm: 6,
+          depth_mm: 3.5,
+          reason: "паз найден на листе, ридер его не выписал",
+        },
+      ],
+    };
+    render(<AssurancePanel verification={verification} t={t} />);
+
+    expect(
+      screen.getByText("Паз найден по листу: 150…175 мм, 6 × 3.5"),
+    ).toBeTruthy();
+    expect(screen.getByText(/ридер его не выписал/)).toBeTruthy();
+  });
+
   it("renders nothing when there is nothing checked at all", () => {
     const { container } = render(<AssurancePanel t={t} />);
     expect(container.innerHTML).toBe("");

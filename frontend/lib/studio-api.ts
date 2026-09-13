@@ -1076,6 +1076,16 @@ export interface SpecVerification {
     total_mm?: number;
     station_error_mm?: number;
   };
+  /** Пазы, которые проверка нашла на листе, а ридер не выписал, — приняты
+   * по надписям листа. */
+  keyway_additions?: Array<{
+    step_index: number;
+    axial_start_mm: number;
+    length_mm: number;
+    width_mm: number;
+    depth_mm: number;
+    reason: string;
+  }>;
   /** Профиль по листу принят вместо прочитанного целиком. */
   profile_adoption?: {
     reason: string;

@@ -212,6 +212,20 @@ export default function AssurancePanel({
                 detail={verification.profile_adoption.reason}
               />
             ) : null}
+            {/* Пазы, найденные на листе и не выписанные ридером. */}
+            {(verification.keyway_additions ?? []).map((addition) => (
+              <Row
+                key={`keyway-added-${addition.axial_start_mm}`}
+                ok
+                label={t("vector.assurance_keyway_added", {
+                  start: addition.axial_start_mm,
+                  end: addition.axial_start_mm + addition.length_mm,
+                  width: addition.width_mm,
+                  depth: addition.depth_mm,
+                })}
+                detail={addition.reason}
+              />
+            ))}
             {/* Согласование: принятое по листу — с прежним прочитанным,
                 спорное — оба варианта, решение за человеком. */}
             {(verification.reconciliation ?? []).map((decision) => (

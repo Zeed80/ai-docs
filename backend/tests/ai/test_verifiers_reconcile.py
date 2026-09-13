@@ -270,3 +270,59 @@ def test_two_labels_placing_the_keyway_differently_leave_it_to_a_person():
     )
 
     assert reconcile(spec, report) == []
+
+
+def _unread_keyway_case(dimensions):
+    """z4-r4: второй паз на Ø22 (133…185) ридер не выписал; замер 149,7…175."""
+    spec, report = _keyway_case(dimensions)
+    spec["main_view"]["outer"] = [
+        {"id": "0:outer:0", "diameter_mm": 30.0, "length_mm": 133.0},
+        {"id": "0:outer:1", "diameter_mm": 22.0, "length_mm": 52.0},
+    ]
+    spec["main_view"]["keyways"] = []
+    report["items"] = []
+    report["keyway_proposals"] = [
+        {
+            "step_index": 1,
+            "axial_start_mm": 149.653,
+            "length_mm": 25.342,
+            "width_mm": 6.127,
+            "standard_mm": [6.0, 3.5],
+            "evidence_bbox_px": [2626.0, 670.0, 3024.0, 766.0],
+        }
+    ]
+    return spec, report
+
+
+def test_a_keyway_found_on_the_sheet_is_added_by_its_labels():
+    from app.ai.cad_recognize.verifiers.reconcile import apply_keyway_additions, keyway_additions
+
+    spec, report = _unread_keyway_case(
+        [
+            _at("25", 162.0, 412),  # длина — над пазом
+            _at("10", 180.0, 412),  # от конца паза до торца 185
+            _at("185", 100.4, 245),
+        ]
+    )
+
+    additions = keyway_additions(spec, report)
+
+    assert [
+        (a["axial_start_mm"], a["length_mm"], a["width_mm"], a["depth_mm"]) for a in additions
+    ] == [(150.0, 25.0, 6.0, 3.5)], additions
+    fixed = apply_keyway_additions(spec, additions)
+    keyway = fixed["main_view"]["keyways"][0]
+    assert keyway["on_section_id"] == "0:outer:1"
+    assert keyway["evidence"][0]["bbox"] == [2626.0, 670.0, 3024.0, 766.0]
+    assert (
+        fixed["provenance"]["main_view.keyways[0].axial_start_mm"]["origin"] == "sheet_measurement"
+    )
+    assert spec["main_view"]["keyways"] == []  # исходный спек не тронут
+
+
+def test_a_keyway_found_without_a_position_label_is_not_added():
+    from app.ai.cad_recognize.verifiers.reconcile import keyway_additions
+
+    spec, report = _unread_keyway_case([_at("25", 162.0, 412), _at("185", 100.4, 245)])
+
+    assert keyway_additions(spec, report) == []

@@ -813,7 +813,61 @@ def eval_sheet_profile(png: bytes, truth: dict) -> list[dict[str, Any]]:
     ]
 
 
+def eval_keyway_discovery(png: bytes, truth: dict) -> list[dict[str, Any]]:
+    """Пазы, которых ридер не выписал: стадия ищет их на листе сама.
+
+    Случай ``unread``: из эталона убраны все пазы; каждый настоящий паз —
+    найден ли и точно ли (±0,6 мм), каждая лишняя находка — ошибка
+    (найдено, не верно).
+    """
+    from app.ai.cad_recognize.verifiers.stage import verify_spec_against_sheet
+
+    main_view = truth["spec"].get("main_view") or {}
+    outer = main_view.get("outer") or []
+    if len(outer) < 2:
+        return []
+    keys = main_view.get("keyways") or []
+    spec = {"main_view": {"outer": [dict(step) for step in outer]}}
+    report = verify_spec_against_sheet(png, spec)
+    proposals = list(report.get("keyway_proposals") or [])
+    scale = float((report.get("frame") or {}).get("mm_per_px") or 0.2)
+    outcomes = []
+    for key in keys:
+        match = next(
+            (
+                p
+                for p in proposals
+                if abs(p["axial_start_mm"] - float(key["axial_start_mm"])) <= 0.6
+                and abs(p["length_mm"] - float(key["length_mm"])) <= 0.6
+            ),
+            None,
+        )
+        if match is not None:
+            proposals.remove(match)
+        outcomes.append(
+            {
+                "case": "unread",
+                "found": match is not None,
+                "correct": match is not None,
+                "error_rel": None,
+                "unit_px": float(key.get("width_mm") or 4.0) / scale,
+            }
+        )
+    outcomes.extend(
+        {
+            "case": "unread",
+            "found": True,
+            "correct": False,
+            "error_rel": None,
+            "unit_px": float(p["width_mm"]) / scale,
+        }
+        for p in proposals
+    )
+    return outcomes
+
+
 _VERIFIERS = {
+    "keyway_discovery": eval_keyway_discovery,
     "sheet_profile": eval_sheet_profile,
     "groove": eval_groove,
     "chamfer": eval_chamfer,

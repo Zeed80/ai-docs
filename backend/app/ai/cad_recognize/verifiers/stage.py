@@ -263,6 +263,7 @@ def _shaft(
     views = [(chain_frame(view, shape, lengths), shape) for view, shape in views]
     frame, profile = views[0]
     spans = _keyways(gray, [view_frame for view_frame, _profile in views], body, report)
+    _unclaimed_keyways(gray, [view_frame for view_frame, _profile in views], body, spans, report)
     _cross_holes(gray, [view_frame for view_frame, _profile in views], body, report)
     _turned_details(gray, views, body, report)
     verdict = verify(
@@ -460,6 +461,86 @@ def _keyways(
                 f"{_mm(got['axial_start_mm'] + got['length_mm'])} × {_mm(got['width_mm'])}"
                 " — проверить"
             )
+    # Возврата не было с 551e257f: пролёты собирались и терялись, и проверка
+    # профиля не знала о пазах — «Ø под пазом не мерится» не работало.
+    return spans
+
+
+# Капсула паза не касается уступов своей ступени: контур самой короткой
+# ступени между уступами — тоже «капсула» (корпус v9: 24 ложные находки).
+_SHOULDER_CLEAR_MM = 1.5
+
+
+def _unclaimed_keyways(
+    gray: Any,
+    frames: list[Any],
+    body: dict[str, Any],
+    spans: list[dict[str, float]],
+    report: dict[str, Any],
+) -> None:
+    """Пазы на листе, которых ридер не выписал (живой z4-r4: второй паз на Ø22).
+
+    Та же проверка капсулы, но гипотеза — «паз где-то на этой ступени шириной
+    по ГОСТ 23360 для её Ø». Строго: капсула не касается уступов ступени,
+    ширина — в пределах допуска таблицы. Корпус v9, чистые листы: 29 из 31
+    паза найдено, ложных 0. Находка — только предложение
+    (``keyway_proposals``): принимает его согласование, и только по надписям.
+    """
+    from app.ai.cad_recognize.keyway_standard import _SECTION_TOLERANCE, standard_section
+
+    outer = body.get("outer") or []
+    if not outer or not all(
+        isinstance(step, dict)
+        and _is_number(step.get("length_mm"))
+        and _is_number(step.get("diameter_mm"))
+        for step in outer
+    ):
+        return
+    proposals = []
+    station = 0.0
+    for index, step in enumerate(outer):
+        low, high = station, station + float(step["length_mm"])
+        station = high
+        if any(
+            span["axial_start_mm"] < high and span["axial_start_mm"] + span["length_mm"] > low
+            for span in spans or []
+            if span
+        ):
+            continue
+        standard = standard_section(float(step["diameter_mm"]))
+        if standard is None:
+            continue
+        hypothesis = Hypothesis(
+            "keyway",
+            f"main_view.outer[{index}]",
+            {"axial_start_mm": low, "length_mm": high - low, "width_mm": standard[0]},
+        )
+        _frame, verdict = _first_measured(hypothesis, frames, gray)
+        got = verdict.measured
+        if verdict.status not in ("confirmed", "refuted") or not got:
+            continue
+        if (
+            got["axial_start_mm"] < low + _SHOULDER_CLEAR_MM
+            or got["axial_start_mm"] + got["length_mm"] > high - _SHOULDER_CLEAR_MM
+            or abs(got["width_mm"] - standard[0]) > standard[0] * _SECTION_TOLERANCE
+        ):
+            continue
+        proposals.append(
+            {
+                "step_index": index,
+                "axial_start_mm": float(got["axial_start_mm"]),
+                "length_mm": float(got["length_mm"]),
+                "width_mm": float(got["width_mm"]),
+                "standard_mm": [standard[0], standard[1]],
+                "evidence_bbox_px": (
+                    [round(float(v), 1) for v in verdict.evidence_bbox_px]
+                    if verdict.evidence_bbox_px
+                    else None
+                ),
+            }
+        )
+    if proposals:
+        report["keyway_proposals"] = proposals
 
 
 def _keyway_other_width(

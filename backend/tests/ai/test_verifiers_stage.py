@@ -474,3 +474,61 @@ def test_a_keyway_found_on_the_sheet_gets_evidence_of_where_it_was_found():
     # Прочитанное свидетельство не заменяется; исходный спек не тронут.
     assert fixed["main_view"]["chamfers"][0]["evidence"] == [{"bbox": [1, 2, 3, 4]}]
     assert "evidence" not in spec["main_view"]["keyways"][0]
+
+
+def test_the_step_under_a_keyway_found_on_the_sheet_is_not_measured_for_its_diameter():
+    """Пролёты пазов не доходили до проверки профиля (с 551e257f): Ø ступени
+    под пазом мерился по контуру паза, хотя должен был не мериться вовсе."""
+    spec = {
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 30.0, "length_mm": 30.0},
+                {"diameter_mm": 22.0, "length_mm": 40.0},  # на листе Ø20, под пазом
+                {"diameter_mm": 25.0, "length_mm": 30.0},
+            ],
+            "keyways": [
+                {"axial_start_mm": 40.0, "length_mm": 20.0, "width_mm": 6.0, "depth_mm": 3.5}
+            ],
+        }
+    }
+    report = verify_spec_against_sheet(_shaft_png(keyway=True), spec)
+
+    step = [item for item in report["items"] if item["kind"] == "shaft_step"][1]
+    assert "diameter_mm" not in step["measured"], step
+    assert step["status"] != "refuted", step
+
+
+def test_a_keyway_the_reader_missed_is_proposed_from_the_sheet():
+    """Живой z4-r4: второй паз ридер не выписал — проверка находит его сама."""
+    spec = {
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 30.0, "length_mm": 30.0},
+                {"diameter_mm": 20.0, "length_mm": 40.0},
+                {"diameter_mm": 25.0, "length_mm": 30.0},
+            ]
+        }
+    }
+    report = verify_spec_against_sheet(_shaft_png(keyway=True), spec)
+
+    proposals = report["keyway_proposals"]
+    assert len(proposals) == 1
+    found = proposals[0]
+    assert found["step_index"] == 1
+    assert abs(found["axial_start_mm"] - 40.0) <= 0.6 and abs(found["length_mm"] - 20.0) <= 0.6
+    assert found["standard_mm"] == [6.0, 3.5]  # ГОСТ 23360 для Ø20
+
+
+def test_no_keyway_is_proposed_where_the_sheet_has_none():
+    spec = {
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 30.0, "length_mm": 30.0},
+                {"diameter_mm": 20.0, "length_mm": 40.0},
+                {"diameter_mm": 25.0, "length_mm": 30.0},
+            ]
+        }
+    }
+    report = verify_spec_against_sheet(_shaft_png(), spec)
+
+    assert "keyway_proposals" not in report

@@ -199,7 +199,6 @@ def _keyway_position(
     иначе — человеку.
     """
     from app.ai.cad_recognize.keyway_standard import step_for, steps_with_stations
-    from app.ai.cad_recognize.verifiers.sheet_profile import sheet_labels
 
     if item.get("kind") != "keyway" or item.get("status") != "refuted":
         return []
@@ -225,23 +224,9 @@ def _keyway_position(
     sheet_error = float((report.get("profile_adoption") or {}).get("station_error_mm") or 0.0)
     accuracy = max(tolerance, 1.25 * sheet_error)
     margin = 0.08 * total
-    band = (box[3] - box[1]) * 0.6
     key = _resolve(spec, str(item.get("path") or "")) or {}
     own = {float(v) for v in (length, key.get("width_mm"), key.get("depth_mm"), total) if v}
-    labels = []
-    for entry in spec.get("dimensions") or []:
-        if not isinstance(entry, dict):
-            continue
-        parsed = sheet_labels({"dimensions": [entry]}).axial
-        bbox = entry.get("bbox")
-        if not parsed or not (isinstance(bbox, (list, tuple)) and len(bbox) == 4):
-            continue
-        value = parsed[0][0]
-        row = (float(bbox[1]) + float(bbox[3])) / 2.0
-        if value in own or not box[1] - band <= row <= box[3] + band:
-            continue
-        column = ((float(bbox[0]) + float(bbox[2])) / 2.0 - float(origin[0])) * float(scale)
-        labels.append((value, column))
+    labels = [(v, c) for v, c in _axial_labels(spec, frame) if v not in own]
     found: dict[float, str] = {}
     for value, column in labels:
         for anchor, start_c, first, second in (
@@ -280,6 +265,162 @@ def _keyway_position(
             "reason": f"положение паза по надписи листа: {detail} (лист точен до {accuracy:.1f} мм)",
         }
     ]
+
+
+def _axial_labels(spec: dict[str, Any], frame: dict[str, Any]) -> list[tuple[float, float]]:
+    """Осевые надписи главного вида: ``(значение, центр вдоль оси, мм)``.
+
+    Только с рамкой ридера и в полосе главного вида: надписи выносных видов и
+    сечений (z4-r4: «3» канавки, «3,5» сечения Б-Б) — не про положения вала.
+    """
+    from app.ai.cad_recognize.verifiers.sheet_profile import sheet_labels
+
+    origin, scale, box = frame.get("origin_px"), frame.get("mm_per_px"), frame.get("bbox_px")
+    if not origin or not isinstance(scale, (int, float)) or not box:
+        return []
+    band = (box[3] - box[1]) * 0.6
+    labels = []
+    for entry in spec.get("dimensions") or []:
+        if not isinstance(entry, dict):
+            continue
+        parsed = sheet_labels({"dimensions": [entry]}).axial
+        bbox = entry.get("bbox")
+        if not parsed or not (isinstance(bbox, (list, tuple)) and len(bbox) == 4):
+            continue
+        row = (float(bbox[1]) + float(bbox[3])) / 2.0
+        if not box[1] - band <= row <= box[3] + band:
+            continue
+        column = ((float(bbox[0]) + float(bbox[2])) / 2.0 - float(origin[0])) * float(scale)
+        labels.append((parsed[0][0], column))
+    return labels
+
+
+def keyway_additions(spec: dict[str, Any], report: dict[str, Any]) -> list[dict[str, Any]]:
+    """Пазы, которые проверка нашла на листе, а ридер не выписал, — по надписям.
+
+    Живой z4-r4: второй паз на Ø22 (149,7…175 × 6,1 по замеру) ридер
+    пропустил; на листе «25» — его длина, «10» — от его конца до торца 185.
+    Паз принимается, только если длину даёт надпись над ним, а положение —
+    надпись от уступа ступени до его начала или конца, и оба сходятся с
+    замером в точности листа; вариант один. Сечение — по ГОСТ 23360 для Ø
+    ступени (ширина по замеру ему отвечает, это условие предложения).
+    """
+    proposals = report.get("keyway_proposals") or []
+    frame = report.get("frame") or {}
+    outer = [s for s in ((spec.get("main_view") or {}).get("outer") or []) if isinstance(s, dict)]
+    if not proposals or not outer:
+        return []
+    stations = [0.0]
+    for step in outer:
+        stations.append(stations[-1] + float(step.get("length_mm") or 0.0))
+    total = stations[-1]
+    sheet_error = float((report.get("profile_adoption") or {}).get("station_error_mm") or 0.0)
+    accuracy = max(0.5, 1.25 * sheet_error)
+    margin = 0.08 * total
+    labels = [(v, c) for v, c in _axial_labels(spec, frame) if abs(v - total) > 1e-6]
+    additions = []
+    for proposal in proposals:
+        index = proposal.get("step_index")
+        if not isinstance(index, int) or not 0 <= index < len(outer):
+            continue
+        low, high = stations[index], stations[index + 1]
+        start, span = float(proposal["axial_start_mm"]), float(proposal["length_mm"])
+        found: dict[tuple[float, float], str] = {}
+        for i, (length, length_column) in enumerate(labels):
+            if abs(length - span) > accuracy:
+                continue
+            if not start - margin <= length_column <= start + span + margin:
+                continue
+            for j, (value, column) in enumerate(labels):
+                if i == j:
+                    continue
+                for start_c, first, second, anchor, side in (
+                    (low + value, low, low + value, low, "начала"),
+                    (high - value - length, high - value, high, high, "конца"),
+                ):
+                    if not (low <= start_c and start_c + length <= high):
+                        continue
+                    if not first - margin <= column <= second + margin:
+                        continue
+                    if (
+                        abs(start_c - start) > accuracy
+                        or abs(start_c + length - (start + span)) > accuracy
+                    ):
+                        continue
+                    found[(round(start_c, 3), length)] = (
+                        f"«{length:g}» — длина, «{value:g}» — от уступа {anchor:g} до {side} "
+                        f"паза: {start_c:g}…{start_c + length:g}; замер {start:g}…{start + span:g}"
+                    )
+        if len(found) != 1:
+            continue
+        (value, length), detail = next(iter(found.items()))
+        width, depth = proposal["standard_mm"]
+        additions.append(
+            {
+                "step_index": index,
+                "axial_start_mm": value,
+                "length_mm": length,
+                "width_mm": float(width),
+                "depth_mm": float(depth),
+                "evidence_bbox_px": proposal.get("evidence_bbox_px"),
+                "reason": (
+                    f"паз найден на листе, ридер его не выписал: {detail}; сечение "
+                    f"{width:g} × {depth:g} по ГОСТ 23360 для Ø"
+                    f"{float(outer[index].get('diameter_mm') or 0):g} "
+                    f"(ширина по замеру {float(proposal['width_mm']):g}); "
+                    f"лист точен до {accuracy:.1f} мм"
+                ),
+            }
+        )
+    return additions
+
+
+def apply_keyway_additions(spec: dict[str, Any], additions: list[dict[str, Any]]) -> dict[str, Any]:
+    """Найденные по листу пазы — в копию спека, с происхождением и свидетельством."""
+    from app.ai.cad_recognize.keyway_standard import ground_keyways
+
+    spec = copy.deepcopy(spec)
+    main = spec.setdefault("main_view", {})
+    keyways = main.setdefault("keyways", [])
+    outer = main.get("outer") or []
+    provenance = spec.setdefault("provenance", {})
+    if not isinstance(provenance, dict):
+        provenance = {}
+        spec["provenance"] = provenance
+    for addition in additions:
+        index = len(keyways)
+        box = addition.get("evidence_bbox_px")
+        keyways.append(
+            {
+                "id": f"sheet:keyways:{index}",
+                "kind": "parallel",
+                "end_type": "closed",
+                "axial_start_mm": addition["axial_start_mm"],
+                "length_mm": addition["length_mm"],
+                "width_mm": addition["width_mm"],
+                "depth_mm": addition["depth_mm"],
+                "angle_deg": 0.0,
+                "standard_ref": "ГОСТ 23360",
+                "on_section_id": (outer[addition["step_index"]] or {}).get("id"),
+                "evidence": (
+                    [{"image_index": 0, "bbox": list(box), "raw_text": "паз найден по листу"}]
+                    if box
+                    else []
+                ),
+                "review_required": False,
+            }
+        )
+        for field in ("axial_start_mm", "length_mm", "width_mm", "depth_mm"):
+            provenance[f"main_view.keyways[{index}].{field}"] = {
+                "origin": "sheet_measurement",
+                "detail": addition["reason"],
+                "value_mm": addition[field],
+            }
+    spec["unresolved"] = [
+        note for note in spec.get("unresolved") or [] if not str(note).startswith("шпоночный паз ")
+    ]
+    ground_keyways(main, spec["unresolved"])
+    return spec
 
 
 # Положение → вид допуска стадии (как в `stage._GRAPH_FIELDS`).
