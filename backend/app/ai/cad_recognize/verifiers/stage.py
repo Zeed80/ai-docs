@@ -434,6 +434,10 @@ def _keyways(
             continue
         hypothesis = Hypothesis("keyway", item["path"], {k: float(key[k]) for k in _KEYWAY_KEYS})
         frame, verdict = _first_measured(hypothesis, frames, gray)
+        if verdict.reason == NOT_FOUND_REASON:
+            frame, verdict = _keyway_other_width(
+                key, body, item["path"], frames, gray, frame, verdict
+            )
         item.update(status=verdict.status, measured=dict(verdict.measured), reason=verdict.reason)
         if verdict.status in ("confirmed", "refuted"):
             spans.append(
@@ -456,6 +460,78 @@ def _keyways(
                 f"{_mm(got['axial_start_mm'] + got['length_mm'])} × {_mm(got['width_mm'])}"
                 " — проверить"
             )
+
+
+def _keyway_other_width(
+    key: dict[str, Any],
+    body: dict[str, Any],
+    path: str,
+    frames: list[Any],
+    gray: Any,
+    frame: Any,
+    verdict: Any,
+) -> tuple[Any, Any]:
+    """Паз не найден по прочитанной ширине — искать по другой, судить по прочитанному.
+
+    Окно поиска капсулы — от прочитанной ширины (×0,4…1,8). Живой z4-r4:
+    ридер переставил ширину и глубину (4 и 8 вместо 8 и 4), паз 8 мм в окно
+    не попадал и «не находился», хотя на листе он есть. Другие ширины —
+    прочитанная глубина (перестановка) и ГОСТ 23360 для Ø ступени паза.
+    Найденное сравнивается с прочитанным, как обычно.
+    """
+    from app.ai.cad_recognize.keyway_standard import (
+        standard_section,
+        step_for,
+        steps_with_stations,
+    )
+    from app.ai.cad_recognize.verifiers.contract import Verdict
+    from app.ai.cad_recognize.verifiers.shaft_profile import shaft_tolerances
+
+    read = {k: float(key[k]) for k in _KEYWAY_KEYS}
+    options: list[tuple[float, str]] = []
+    if _is_number(key.get("depth_mm")) and float(key["depth_mm"]) > 0:
+        options.append(
+            (
+                float(key["depth_mm"]),
+                "прочитанной глубине — ширина и глубина, похоже, переставлены",
+            )
+        )
+    holder, _inside = step_for(
+        steps_with_stations([s for s in body.get("outer") or [] if isinstance(s, dict)]),
+        read["axial_start_mm"],
+        read["length_mm"],
+    )
+    diameter = holder[2].get("diameter_mm") if holder else None
+    standard = standard_section(float(diameter)) if _is_number(diameter) else None
+    if standard:
+        options.append((standard[0], f"ширине по ГОСТ 23360 для Ø{_mm(float(diameter))}"))
+    for width, why in options:
+        if abs(width - read["width_mm"]) <= 0.25 * read["width_mm"]:
+            continue  # то же окно — уже искали
+        found_frame, found = _first_measured(
+            Hypothesis("keyway", path, {**read, "width_mm": width}), frames, gray
+        )
+        if found.status not in ("confirmed", "refuted") or found_frame is None:
+            continue
+        length_tol, width_tol = shaft_tolerances(found_frame.scale_mean)
+        got = found.measured
+        problems = [
+            f"{title} {got[field]:g} мм, прочитано {read[field]:g}"
+            for field, title, tolerance in (
+                ("axial_start_mm", "начало", length_tol),
+                ("length_mm", "длина", length_tol),
+                ("width_mm", "ширина", width_tol),
+            )
+            if abs(got[field] - read[field]) > tolerance
+        ]
+        note = f"паз найден по {why}"
+        return found_frame, Verdict(
+            status="refuted" if problems else "confirmed",
+            measured=dict(got),
+            evidence_bbox_px=found.evidence_bbox_px,
+            reason=f"{'; '.join(problems)} ({note})" if problems else note,
+        )
+    return frame, verdict
 
 
 _CROSS_HOLE_KEYS = ("axial_position_mm", "diameter_mm")

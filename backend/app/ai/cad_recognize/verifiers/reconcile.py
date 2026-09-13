@@ -63,7 +63,11 @@ def reconcile(spec: dict[str, Any], report: dict[str, Any]) -> list[dict[str, An
         if item.get("status") != "refuted":
             continue
         tolerances = item.get("tolerance_mm") or {}
+        swap = _keyway_swap(spec, item)
+        decisions.extend(swap)
         for field, tolerance_kind in ADOPTABLE.get(item.get("kind"), ()):
+            if swap and field == "width_mm":
+                continue
             read = (item.get("read") or {}).get(field)
             measured = (item.get("measured") or {}).get(field)
             tolerance = tolerances.get(tolerance_kind)
@@ -105,6 +109,88 @@ def reconcile(spec: dict[str, Any], report: dict[str, Any]) -> list[dict[str, An
             decisions.append(decision)
     return decisions
 
+
+def _keyway_swap(spec: dict[str, Any], item: dict[str, Any]) -> list[dict[str, Any]]:
+    """Ширина и глубина паза переставлены — поменять местами.
+
+    Живой z4-r4: ридер дал паз 4 × 8 (ширина × глубина), на листе и по
+    ГОСТ 23360 для Ø30 — 8 × 4. Правило общего вида («прочитанное тоже есть
+    на листе» → человеку) здесь отдало бы решение человеку: «4» на листе
+    есть — это глубина. Но свидетельств три и независимых: замер ширины
+    совпал с прочитанной глубиной, а пара (глубина, ширина) — с табличным
+    сечением для Ø ступени паза. Тогда перестановка принимается.
+    """
+    from app.ai.cad_recognize.keyway_standard import (
+        _SECTION_TOLERANCE,
+        standard_section,
+        step_for,
+        steps_with_stations,
+    )
+
+    if item.get("kind") != "keyway":
+        return []
+    key = _resolve(spec, str(item.get("path") or ""))
+    read = item.get("read") or {}
+    width = read.get("width_mm")
+    measured = (item.get("measured") or {}).get("width_mm")
+    depth = (key or {}).get("depth_mm")
+    tolerance = (item.get("tolerance_mm") or {}).get("width")
+    start, length = read.get("axial_start_mm"), read.get("length_mm")
+    if not all(
+        isinstance(v, (int, float)) for v in (width, measured, depth, tolerance, start, length)
+    ):
+        return []
+    if abs(measured - width) <= tolerance or abs(measured - depth) > tolerance:
+        return []
+    outer = [s for s in ((spec.get("main_view") or {}).get("outer") or []) if isinstance(s, dict)]
+    holder, _inside = step_for(steps_with_stations(outer), float(start), float(length))
+    diameter = holder[2].get("diameter_mm") if holder else None
+    standard = standard_section(float(diameter)) if isinstance(diameter, (int, float)) else None
+    if standard is None:
+        return []
+    b, t = standard
+    if abs(depth - b) > b * _SECTION_TOLERANCE or abs(width - t) > t * _SECTION_TOLERANCE:
+        return []
+    reason = (
+        f"ширина и глубина паза переставлены: замер ширины {float(measured):g} совпал с "
+        f"прочитанной глубиной {float(depth):g}, ГОСТ 23360 для Ø{float(diameter):g} — "
+        f"{b:g} × {t:g}"
+    )
+    base = {
+        "kind": "keyway",
+        "path": item["path"],
+        "feature_id": item.get("feature_id"),
+        "action": "adopt",
+        "source": "keyway_swap",
+        "reason": reason,
+    }
+    return [
+        {
+            **base,
+            "field": "width_mm",
+            "read": float(width),
+            "measured": float(measured),
+            "value": float(depth),
+        },
+        {
+            **base,
+            "field": "depth_mm",
+            "read": float(depth),
+            "measured": float(width),
+            "value": float(width),
+        },
+    ]
+
+
+# Положение → вид допуска стадии (как в `stage._GRAPH_FIELDS`).
+_OTHER_TOLERANCE = {
+    "axial_start_mm": "length",
+    "axial_position_mm": "position",
+    "center_x_mm": "position",
+    "center_y_mm": "position",
+    "start_angle_deg": "phase",
+    "count": "count",
+}
 
 _INDEX = re.compile(r"^(\w+)\[(\d+)\]$")
 
@@ -175,7 +261,9 @@ def apply_reconciliation(
             and isinstance(tolerances.get(kind), (int, float))
             and abs(item["measured"][field] - item["read"][field]) > tolerances[kind]
         ]
-        # Опровергнутое не из надписанных полей (положение) остаётся опровергнутым.
+        # Опровергнутое не из надписанных полей (положение) остаётся
+        # опровергнутым; совпавшее с замером положение — не расхождение (паз
+        # z4-r4 после перестановки ширины и глубины: начало сошлось).
         other = [
             key
             for key in (item.get("measured") or {})
@@ -183,6 +271,11 @@ def apply_reconciliation(
             and key in (item.get("read") or {})
             and isinstance(item["read"][key], (int, float))
             and isinstance(item["measured"][key], (int, float))
+            and not (
+                isinstance(tolerances.get(_OTHER_TOLERANCE.get(key, "")), (int, float))
+                and abs(item["measured"][key] - item["read"][key])
+                <= tolerances[_OTHER_TOLERANCE[key]]
+            )
         ]
         if not remaining and not other:
             item["status"] = "confirmed"

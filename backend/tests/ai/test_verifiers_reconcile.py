@@ -113,3 +113,74 @@ def test_positions_and_confirmed_items_are_never_adopted():
     )
 
     assert reconcile(spec, _report([keyway, confirmed])) == []
+
+
+def test_a_keyway_with_width_and_depth_swapped_is_put_right():
+    """Живой z4-r4: 4 × 8 прочитано, на листе и по ГОСТ 23360 для Ø30 — 8 × 4."""
+    spec = {
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 35.0, "length_mm": 34.0},
+                {"diameter_mm": 30.0, "length_mm": 30.0},
+            ],
+            "keyways": [
+                {"axial_start_mm": 36.0, "length_mm": 22.0, "width_mm": 4.0, "depth_mm": 8.0}
+            ],
+        },
+        "dimensions": [{"value": "22"}, {"value": "4"}, {"value": "8"}],
+    }
+    report = {
+        "items": [
+            {
+                "kind": "keyway",
+                "path": "main_view.keyways[0]",
+                "read": {"axial_start_mm": 36.0, "length_mm": 22.0, "width_mm": 4.0},
+                "status": "refuted",
+                "measured": {"axial_start_mm": 36.1, "length_mm": 22.1, "width_mm": 8.1},
+                "reason": "ширина 8.1 мм, прочитано 4",
+                "tolerance_mm": {"length": 0.5, "width": 0.3},
+            }
+        ],
+        "summary": {"checked": 1, "confirmed": 0, "refuted": 1, "unmeasurable": 0},
+    }
+
+    decisions = reconcile(spec, report)
+
+    assert {(d["field"], d["action"], d["value"]) for d in decisions} == {
+        ("width_mm", "adopt", 8.0),
+        ("depth_mm", "adopt", 4.0),
+    }
+    fixed, fixed_report = apply_reconciliation(spec, report, decisions)
+    keyway = fixed["main_view"]["keyways"][0]
+    assert (keyway["width_mm"], keyway["depth_mm"]) == (8.0, 4.0)
+    assert fixed_report["items"][0]["status"] == "confirmed"
+
+
+def test_a_keyway_width_the_standard_does_not_back_is_not_swapped():
+    spec = {
+        "main_view": {
+            "outer": [{"diameter_mm": 30.0, "length_mm": 64.0}],
+            "keyways": [
+                {"axial_start_mm": 36.0, "length_mm": 22.0, "width_mm": 5.0, "depth_mm": 8.0}
+            ],
+        },
+        "dimensions": [{"value": "5"}, {"value": "8"}],
+    }
+    report = {
+        "items": [
+            {
+                "kind": "keyway",
+                "path": "main_view.keyways[0]",
+                "read": {"axial_start_mm": 36.0, "length_mm": 22.0, "width_mm": 5.0},
+                "status": "refuted",
+                "measured": {"axial_start_mm": 36.0, "length_mm": 22.0, "width_mm": 8.1},
+                "reason": "",
+                "tolerance_mm": {"length": 0.5, "width": 0.3},
+            }
+        ]
+    }
+
+    decisions = reconcile(spec, report)
+
+    # Глубина 5 при ГОСТ 4 — это не перестановка: решает человек.
+    assert [(d["field"], d["action"]) for d in decisions] == [("width_mm", "ask_human")]

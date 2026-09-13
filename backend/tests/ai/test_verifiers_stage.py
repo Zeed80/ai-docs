@@ -420,3 +420,26 @@ def test_a_flange_bolt_circle_is_checked_and_only_the_phase_is_refuted_in_the_gr
     ]
     assert abs(scale.value.value - 1 / 6.0) <= 0.002
     assert scale.origin == "traced" and scale.evidence_ids
+
+
+def test_a_keyway_read_with_width_and_depth_swapped_is_still_found():
+    """Живой z4-r4: паз 4 × 8 вместо 8 × 4 — по прочитанной ширине не находился."""
+    spec = {
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 30.0, "length_mm": 30.0},
+                {"diameter_mm": 20.0, "length_mm": 40.0},
+                {"diameter_mm": 25.0, "length_mm": 30.0},
+            ],
+            # На листе паз 40…60 × 6 (ГОСТ 23360 для Ø20: 6 × 3,5).
+            "keyways": [
+                {"axial_start_mm": 40.0, "length_mm": 20.0, "width_mm": 3.0, "depth_mm": 6.0}
+            ],
+        }
+    }
+    report = verify_spec_against_sheet(_shaft_png(keyway=True), spec)
+
+    item = next(item for item in report["items"] if item["kind"] == "keyway")
+    assert item["status"] == "refuted", item
+    assert abs(item["measured"]["width_mm"] - 6.0) <= 0.3
+    assert "переставлены" in item["reason"]
