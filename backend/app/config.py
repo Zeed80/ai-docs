@@ -163,6 +163,11 @@ class Settings(BaseSettings):
     # ComfyUI (image generation / editing — drawings studio). On-prem only.
     # Default targets the optional compose service; override: COMFYUI_URL=http://host:8188
     comfyui_url: str = "http://comfyui:8188"
+    # Оцифровка «по описанию»: грубый лист (основная линия тоньше, чем нужно
+    # проверяльщикам) перед чтением увеличивается SeedVR2 в этом ComfyUI (план,
+    # E17). Любой отказ — работа с исходником. CAD_AUTO_UPSCALE=false выключает.
+    cad_auto_upscale: bool = True
+    cad_upscale_timeout_s: float = 600.0
     # Technical-drawing line vectorizer (infra/technical-vectorizer) —
     # vendored, openly-licensed (MPL-2.0), pretrained Deep Vectorization of
     # Technical Drawings model. Validated live (2026-07-11): zero-shot

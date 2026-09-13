@@ -3311,6 +3311,43 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 "Нормализация и dewarp исходника завершены",
                 {"bytes": len(content)},
             )
+        # Stage 0.95: грубый лист (основная линия тоньше, чем нужно
+        # проверяльщикам) увеличивается SeedVR2 в локальном ComfyUI перед
+        # чтением (план, E17): ридер читает не хуже, проверка по листу из «не
+        # измеримо» становится почти как на 300 dpi и ловит выдумки ридера.
+        # Любой отказ — исходник, как без апскейла; исходник хранится рядом.
+        upscale_report: dict[str, Any] | None = None
+        if content and vectorize_method == "spec" and params.get("auto_upscale", True):
+            import asyncio as _asyncio
+
+            from app.ai.cad_recognize.sheet_upscale import upscale_sheet
+            from app.config import settings as _upscale_settings
+
+            if _upscale_settings.cad_auto_upscale:
+                upscaled = await _asyncio.to_thread(
+                    upscale_sheet,
+                    content,
+                    comfy_url=_upscale_settings.comfyui_url,
+                    timeout_s=_upscale_settings.cad_upscale_timeout_s,
+                )
+                upscale_report = upscaled.as_event()
+                if upscaled.applied:
+                    original_path = (
+                        f"image-gen/{owner_sub or 'shared'}/{generation_id}_normalized_original.png"
+                    )
+                    upload_file(content, original_path, "image/png")
+                    upscale_report["original_path"] = original_path
+                    content = upscaled.content
+                await _record(
+                    "source.upscale",
+                    "completed",
+                    (
+                        f"Лист улучшен перед чтением: {upscaled.reason}"
+                        if upscaled.applied
+                        else f"Лист не увеличивался: {upscaled.reason}"
+                    ),
+                    upscale_report,
+                )
         normalized_source_path = None
         normalized_source_sha256 = source_sha256
         if content:
@@ -3336,6 +3373,9 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 manifest_gen.params = {
                     **(manifest_gen.params or {}),
                     "cad_pipeline_manifest": pipeline_manifest,
+                    # Улучшен ли лист перед чтением и почему (E17) — рядом
+                    # путь исходника, если на чтение ушёл увеличенный лист.
+                    **({"source_upscale": upscale_report} if upscale_report else {}),
                     **(
                         {
                             "normalized_source_path": normalized_source_path,
