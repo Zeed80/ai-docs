@@ -623,7 +623,9 @@ def check_outline_against_image(
     return findings
 
 
-def detect_axial_hatching(ink: Any) -> dict[str, Any] | None:
+def detect_axial_hatching(
+    ink: Any, region: tuple[float, float, float, float] | None = None
+) -> dict[str, Any] | None:
     """Does the sheet show a bounded band of ~45° parallel hatching?
 
     check_outline_against_image above names the exact gap this fills: "is
@@ -644,6 +646,12 @@ def detect_axial_hatching(ink: Any) -> dict[str, Any] | None:
     and reports presence/count/extent only — no attempt to derive a bore
     diameter or depth from it. V1: presence/absence evidence, not
     reconstruction.
+
+    ``region`` — рамка главного вида, если она уже известна: полость на
+    разрезе вала заштрихована ВНУТРИ вида. Живой z4-r4: по всему листу
+    нашлось 84 диагональных штриха — сечения А-А и Б-Б через пазы (сплошной
+    круг с вырезом) и выносные виды канавок; объединённая рамка накрыла лист,
+    и сплошной вал ушёл в блокер «полость не прочитана».
     """
     import cv2
     import numpy as np
@@ -669,6 +677,11 @@ def detect_axial_hatching(ink: Any) -> dict[str, Any] | None:
         x1, y1, x2, y2 = (float(v) for v in line)
         angle = math.degrees(math.atan2(y2 - y1, x2 - x1)) % 180
         if 30 <= angle <= 60 or 120 <= angle <= 150:
+            if region is not None and not (
+                region[0] <= (x1 + x2) / 2.0 <= region[2]
+                and region[1] <= (y1 + y2) / 2.0 <= region[3]
+            ):
+                continue
             hatch_segments.append((x1, y1, x2, y2))
     # A handful of stray diagonal lines (a chamfer edge, a leader line) is
     # noise, not hatching — real section fill draws many closely-spaced
@@ -760,8 +773,16 @@ def measure_circle_radii(ink: Any) -> list[float]:
     ]
 
 
-def cross_check_spec(spec: dict, ink: Any | None = None) -> dict[str, Any]:
-    """Run every available check and report them in one reviewable block."""
+def cross_check_spec(
+    spec: dict,
+    ink: Any | None = None,
+    main_view_bbox_px: tuple[float, float, float, float] | None = None,
+) -> dict[str, Any]:
+    """Run every available check and report them in one reviewable block.
+
+    ``main_view_bbox_px`` — рамка главного вида по проверке листа: штриховка
+    полости ищется только в ней.
+    """
     findings = check_spec_arithmetic(spec)
     measured: list[float] = []
     dominant: float | None = None
@@ -770,7 +791,11 @@ def cross_check_spec(spec: dict, ink: Any | None = None) -> dict[str, Any]:
         findings.extend(check_spec_against_raster(spec, measured))
         dominant = measure_dominant_circle_px(ink)
         findings.extend(check_outline_against_image(spec, dominant))
-        findings.extend(check_axial_hatching_against_bore(spec, detect_axial_hatching(ink)))
+        findings.extend(
+            check_axial_hatching_against_bore(
+                spec, detect_axial_hatching(ink, region=main_view_bbox_px)
+            )
+        )
     stated_circles = len(_spec_circle_diameters(spec))
     raster_state = (
         "not_attempted"

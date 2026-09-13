@@ -881,6 +881,8 @@ def _frame_payload(frame: Any) -> dict[str, Any]:
         "origin_px": [round(v, 1) for v in frame.origin_px],
         "mm_per_px": round(frame.mm_per_px, 5),
         "mm_per_px_v": round(frame.scale_v, 5),
+        # Рамка вида на листе: где искать штриховку полости и прочее «в виде».
+        "bbox_px": [round(float(v), 1) for v in frame.bbox_px],
     }
 
 

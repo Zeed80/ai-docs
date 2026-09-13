@@ -3863,6 +3863,23 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         verification = None
                     if verification is not None:
                         verification["profile_adoption"] = adoption
+                # Полость по штриховке — только штриховка внутри главного вида,
+                # когда проверка его нашла: сечения через пазы (сплошной круг)
+                # и выносные виды на том же листе полостью не являются.
+                main_view_box = ((verification or {}).get("frame") or {}).get("bbox_px")
+                if main_view_box and any(
+                    finding["code"] == "axial_hatching_bore_mismatch"
+                    for finding in crosscheck["findings"]
+                ):
+                    crosscheck = cross_check_spec(
+                        spec, check_ink, main_view_bbox_px=tuple(main_view_box)
+                    )
+                    blocking_checks = [
+                        finding["message"]
+                        for finding in crosscheck["findings"]
+                        if finding["severity"] == "error"
+                    ]
+                    blocking_checks.extend(dimension_graph["errors"])
                 if verification and verification["items"]:
                     # Событие на каждый вид проверки: verify.plate_hole,
                     # verify.bolt_circle — со сводкой и вердиктами.

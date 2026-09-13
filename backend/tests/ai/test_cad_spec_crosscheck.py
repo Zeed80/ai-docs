@@ -349,6 +349,17 @@ def test_a_bounded_45_degree_band_is_detected_as_hatching():
     assert result["segment_count"] == 15
 
 
+def test_hatching_outside_the_main_view_is_not_a_bore():
+    """Живой z4-r4: штриховка сечений через пазы и выносных видов стоит вне
+    главного вида — полостью вала она не является."""
+    ink = np.zeros((200, 200), dtype="uint8")
+    segments = tuple((40 + i * 4, 60, 40 + i * 4 + 20, 80) for i in range(15))
+    with patch("cv2.HoughLinesP", return_value=_lines(*segments)):
+        assert detect_axial_hatching(ink, region=(0, 120, 200, 200)) is None
+        inside = detect_axial_hatching(ink, region=(0, 40, 200, 100))
+    assert inside is not None and inside["segment_count"] == 15
+
+
 def test_a_handful_of_stray_diagonal_lines_is_not_hatching():
     ink = np.zeros((200, 200), dtype="uint8")
     segments = tuple((40 + i * 4, 60, 40 + i * 4 + 20, 80) for i in range(3))
