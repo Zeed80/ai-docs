@@ -154,9 +154,18 @@ def verify_groove(hypothesis: Hypothesis, frame: ViewFrame | None, sheet: Any) -
         problems.append(f"ширина {measured['width_mm']:g} мм, прочитано {float(width):g}")
     if isinstance(depth, (int, float)) and abs(measured["depth_mm"] - float(depth)) > depth_tol:
         problems.append(f"глубина {measured['depth_mm']:g} мм, прочитано {float(depth):g}")
+    # Как у фаски: канавку выхода инструмента допускается изображать не в
+    # масштабе (ГОСТ 2.305; размеры — на выносном элементе), поэтому замер
+    # надпись не опровергает — совпало — подтверждение, нет — «не измеримо»
+    # с замером для справки.
     return Verdict(
-        status="refuted" if problems else "confirmed",
+        status="unmeasurable" if problems else "confirmed",
         measured=measured,
         evidence_bbox_px=(a, profile.axis_y - own, b, profile.axis_y + own),
-        reason="; ".join(problems),
+        reason=(
+            "; ".join(problems) + " — мелкий элемент допускается изображать не в масштабе "
+            "(ГОСТ 2.305), замер надпись не опровергает"
+            if problems
+            else ""
+        ),
     )

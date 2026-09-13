@@ -476,9 +476,14 @@ def _turned_details(
         frame = None
         for view_frame, profile in views or [(None, None)]:
             candidate = verify(Hypothesis(kind, path, read), view_frame, (gray, profile))
-            if verdict is None or candidate.status != "unmeasurable":
+            # Вид, давший замер, — последний, даже если вердикт «не измеримо»
+            # (изображение не в масштабе): иначе следующий вид мерил что-то
+            # другое и «подтверждал» неверное чтение (корпус v9: канавка, 2
+            # случая из 26).
+            measured = candidate.status != "unmeasurable" or bool(candidate.measured)
+            if verdict is None or measured:
                 verdict, frame = candidate, view_frame
-            if candidate.status != "unmeasurable":
+            if measured:
                 break
         item.update(status=verdict.status, measured=dict(verdict.measured), reason=verdict.reason)
         if frame is not None:

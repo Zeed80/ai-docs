@@ -667,7 +667,8 @@ def _first_view_verdict(kind: str, read: dict, gray: Any, views: list) -> Any:
     first = None
     for frame, profile in views or [(None, None)]:
         verdict = verify(Hypothesis(kind, kind, read), frame, (gray, profile))
-        if verdict.status != "unmeasurable":
+        # Как в стадии: вид, давший замер, — последний.
+        if verdict.status != "unmeasurable" or verdict.measured:
             return verdict
         first = first or verdict
     return first
@@ -704,11 +705,11 @@ def eval_groove(png: bytes, truth: dict) -> list[dict[str, Any]]:
                 and abs(got["width_mm"] - real["width_mm"]) <= width_tol
                 and abs(got["depth_mm"] - real["depth_mm"]) <= depth_tol
             )
-            wanted = "confirmed" if case == "truth" else "refuted"
+            wanted = "confirmed" if case == "truth" else "unmeasurable"
             outcomes.append(
                 {
                     "case": case,
-                    "found": verdict.status != "unmeasurable",
+                    "found": bool(got),
                     "correct": verdict.status == wanted and accurate,
                     "error_rel": (
                         abs(got["width_mm"] - real["width_mm"]) / real["width_mm"] if got else None
@@ -740,11 +741,11 @@ def eval_chamfer(png: bytes, truth: dict) -> list[dict[str, Any]]:
             verdict = _first_view_verdict("chamfer", read, gray, views)
             got = verdict.measured
             accurate = bool(got) and abs(got["size_mm"] - real["size_mm"]) <= tolerance
-            wanted = "confirmed" if case == "truth" else "refuted"
+            wanted = "confirmed" if case == "truth" else "unmeasurable"
             outcomes.append(
                 {
                     "case": case,
-                    "found": verdict.status != "unmeasurable",
+                    "found": bool(got),
                     "correct": verdict.status == wanted and accurate,
                     "error_rel": (
                         abs(got["size_mm"] - real["size_mm"]) / real["size_mm"] if got else None

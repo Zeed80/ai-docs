@@ -87,9 +87,20 @@ def verify_chamfer(hypothesis: Hypothesis, frame: ViewFrame | None, sheet: Any) 
     measured = {"size_mm": round(measured_size, 3)}
     tolerance = chamfer_tolerance(scale)
     wrong = abs(measured_size - float(size)) > tolerance
+    # Замер надпись фаски НЕ опровергает: ГОСТ 2.305 разрешает изображать
+    # мелкие элементы с отступлением от масштаба (и не изображать вовсе).
+    # Живой z4-r4: «1,6×45°» и «3×45°» нарисованы линиями в 1 и 1,6 мм — обе
+    # надписи верны, а проверка их опровергала. Совпало — подтверждение,
+    # не совпало — «не измеримо» с замером для справки.
     return Verdict(
-        status="refuted" if wrong else "confirmed",
+        status="unmeasurable" if wrong else "confirmed",
         measured=measured,
         evidence_bbox_px=(lo, axis - radius, hi, axis + radius),
-        reason=(f"фаска {measured_size:.2g} мм, прочитано {float(size):g}" if wrong else ""),
+        reason=(
+            f"на листе фаска {measured_size:.2g} мм при надписи {float(size):g} — мелкий "
+            "элемент допускается изображать не в масштабе (ГОСТ 2.305), замер надпись "
+            "не опровергает"
+            if wrong
+            else ""
+        ),
     )

@@ -77,28 +77,33 @@ def test_a_groove_at_the_shoulder_is_confirmed_with_width_and_depth():
     assert abs(verdict.measured["axial_position_mm"] - 68.5) <= 0.3
 
 
-def test_a_wrong_groove_width_or_depth_is_refuted_with_the_sheet_values():
+def test_a_groove_drawn_off_its_label_is_not_refuted_but_measured():
+    """ГОСТ 2.305: канавку допускается изображать не в масштабе — замер надпись
+    не опровергает, а даёт справку и «не измеримо» с причиной."""
     sheet = _sheet()
     frame, profile = _frame_and_profile(sheet)
     for field, delta in (("width_mm", 1.0), ("depth_mm", 0.6)):
         read = {**GROOVE, field: GROOVE[field] + delta}
         verdict = verify(Hypothesis("groove", "g", read), frame, (sheet, profile))
 
-        assert verdict.status == "refuted", (field, verdict.measured)
+        assert verdict.status == "unmeasurable", (field, verdict.measured)
+        assert "не в масштабе" in verdict.reason
         assert abs(verdict.measured[field] - GROOVE[field]) <= 0.3, (field, verdict.measured)
 
 
-def test_an_end_chamfer_is_confirmed_and_a_wrong_size_refuted():
+def test_an_end_chamfer_is_confirmed_and_one_drawn_off_its_label_is_not_refuted():
+    """Живой z4-r4: «1,6×45°» и «3×45°» нарисованы линиями в 1 и 1,6 мм — надписи
+    верны, изображение условное (ГОСТ 2.305), опровергать их нельзя."""
     sheet = _sheet()
     frame, profile = _frame_and_profile(sheet)
     confirmed = verify(Hypothesis("chamfer", "c", CHAMFER), frame, (sheet, profile))
-    refuted = verify(
-        Hypothesis("chamfer", "c", {**CHAMFER, "size_mm": 1.0}), frame, (sheet, profile)
-    )
+    other = verify(Hypothesis("chamfer", "c", {**CHAMFER, "size_mm": 1.0}), frame, (sheet, profile))
 
     assert confirmed.status == "confirmed", (confirmed.reason, confirmed.measured)
     assert abs(confirmed.measured["size_mm"] - 2.0) <= 0.3
-    assert refuted.status == "refuted"
+    assert other.status == "unmeasurable"
+    assert "не в масштабе" in other.reason
+    assert abs(other.measured["size_mm"] - 2.0) <= 0.3
 
 
 def test_a_coarse_sheet_is_unmeasurable_not_a_guess():
@@ -131,7 +136,8 @@ def test_the_stage_checks_grooves_and_chamfers_of_a_shaft():
         item["kind"]: item for item in report["items"] if item["kind"] in ("groove", "chamfer")
     }
 
-    assert by_kind["groove"]["status"] == "refuted", by_kind["groove"]
+    # Канавка на листе 3 мм при надписи 2 — справка, а не опровержение.
+    assert by_kind["groove"]["status"] == "unmeasurable", by_kind["groove"]
     assert abs(by_kind["groove"]["measured"]["width_mm"] - 3.0) <= 0.3
     assert by_kind["chamfer"]["status"] == "confirmed", by_kind["chamfer"]
-    assert any(note.startswith("канавка 1") for note in report["notes"])
+    assert not any(note.startswith("канавка 1") for note in report["notes"])

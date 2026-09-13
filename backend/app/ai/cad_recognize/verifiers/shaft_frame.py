@@ -388,12 +388,20 @@ def _end_faces(
         return None
     band = 0.2 * min(left_height, right_height)
     rows = (axis_y - band, axis_y + band)
-    x_left = _outer_x(sheet.ink, min(left), rows, reach, side=-1)
-    x_right = _outer_x(sheet.ink, max(right), rows, reach, side=1)
+    x_left = _outer_x(sheet.ink, min(left), rows, reach, side=-1, min_width=sheet.main_weight)
+    x_right = _outer_x(sheet.ink, max(right), rows, reach, side=1, min_width=sheet.main_weight)
     return int(round(x_left)), int(round(x_right))
 
 
-def _outer_x(ink: Any, x: float, rows: tuple[float, float], reach: float, *, side: int) -> float:
+def _outer_x(
+    ink: Any,
+    x: float,
+    rows: tuple[float, float],
+    reach: float,
+    *,
+    side: int,
+    min_width: float = 0.0,
+) -> float:
     """Самый внешний прогон чернил у торца — по строкам у оси, медиана середин.
 
     По ЕСКД фаска на торце вала — ещё одна вертикаль через всю высоту на
@@ -409,8 +417,9 @@ def _outer_x(ink: Any, x: float, rows: tuple[float, float], reach: float, *, sid
         lo, hi = max(0, int(x) - 2), min(width, int(x + reach) + 1)
     else:
         lo, hi = max(0, int(x - reach)), min(width, int(x) + 3)
-    # Середины прогонов по строкам полосы у оси.
+    # Середины прогонов по строкам полосы у оси — и ширина каждого прогона.
     samples: list[tuple[int, float]] = []
+    widths: dict[tuple[int, float], float] = {}
     inked_rows = 0
     for y in range(max(0, int(rows[0])), min(ink.shape[0], int(rows[1]) + 1)):
         columns = np.nonzero(ink[y, lo:hi])[0]
@@ -418,7 +427,9 @@ def _outer_x(ink: Any, x: float, rows: tuple[float, float], reach: float, *, sid
             continue
         inked_rows += 1
         for run in np.split(columns, np.nonzero(np.diff(columns) > 1)[0] + 1):
-            samples.append((y, (run[0] + run[-1]) / 2.0 + lo))
+            sample = (y, (run[0] + run[-1]) / 2.0 + lo)
+            samples.append(sample)
+            widths[sample] = float(run[-1] - run[0] + 1)
     if not samples:
         return float(x)
     # Край — вертикаль: один столбец почти во всех строках. Метку у торца
@@ -433,6 +444,16 @@ def _outer_x(ink: Any, x: float, rows: tuple[float, float], reach: float, *, sid
         else:
             groups.append([item])
     steady = [group for group in groups if len({row for row, _ in group}) >= 0.8 * inked_rows]
+    # Край торца — толстый штрих (торец, слитый с фаской), не тонкая линия:
+    # на увеличенном фото z4-r4 размерная линия резьбы M18 стояла в 50 px
+    # снаружи торца, ровная через ось, и «краем» становилась она — масштаб
+    # вида съезжал, фаска мерилась 4,2 мм вместо 1,6.
+    if min_width > 0.0:
+        steady = [
+            group
+            for group in steady
+            if float(np.median([widths[item] for item in group])) >= min_width
+        ]
     if not steady:
         return float(x)
     edge = steady[-1] if side > 0 else steady[0]
