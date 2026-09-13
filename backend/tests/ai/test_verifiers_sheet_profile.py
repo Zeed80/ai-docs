@@ -111,6 +111,26 @@ def test_a_chain_with_an_open_link_is_assembled_exactly():
     assert _steps(proposal) == truth
 
 
+def test_a_cross_hole_inside_a_step_is_not_a_shoulder():
+    # shaft-6: поперечное отверстие посреди ступени Ø14 даёт на виде короткие
+    # площадки Ø4,9 и Ø25,3 — это одна ступень, уступов там нет.
+    segments = [
+        (0.0, 40.0, 30.0),
+        (40.0, 60.0, 14.0),
+        (60.0, 62.5, 4.9),
+        (62.5, 65.0, 14.0),
+        (65.0, 67.5, 25.3),
+        (67.5, 90.0, 14.0),
+        (90.0, 120.0, 22.0),
+    ]
+    labels = _dims("40", "50", "30", "120", "Ø30", "Ø14", "Ø22", "Ø6")
+
+    proposal, why = propose_profile(_profile(segments), sheet_labels(labels), 128.0)
+
+    assert proposal is not None, why
+    assert _steps(proposal) == [(30.0, 40.0), (14.0, 50.0), (22.0, 30.0)]
+
+
 def test_a_coarse_sheet_gives_no_profile():
     proposal, why = propose_profile(
         _profile(Z4_DRAWN, line_px=3.0), sheet_labels(Z4_LABELS), 192.0, reserved=(22.0, 4.0)

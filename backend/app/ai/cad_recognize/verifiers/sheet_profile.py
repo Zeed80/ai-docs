@@ -276,7 +276,13 @@ def _main_steps(profile: Any) -> list[tuple[int, int, float]]:
             for f in (steps[-1] if steps else None, merged[end] if end < len(merged) else None)
             if f
         ]
-        if not (flanks and all(item[2] < min(f[2] for f in flanks) for item in run)):
+        # Внутри одной ступени (соседи по обе стороны одного уровня) короткая
+        # серия — не уступ, а след элемента на виде: поперечное отверстие
+        # (shaft-6: Ø4,9 и Ø25,3 посреди Ø14), выноска паза (shaft-4: Ø23
+        # посреди Ø12). У уступа — канавка или фаска, если серия ниже соседей.
+        inside = len(flanks) == 2 and same(flanks[0][2], flanks[1][2])
+        lower = bool(flanks) and all(item[2] < min(f[2] for f in flanks) for item in run)
+        if not (inside or lower):
             for item in run:
                 add(item)
         index = end
