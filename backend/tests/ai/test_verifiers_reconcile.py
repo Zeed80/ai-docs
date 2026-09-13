@@ -128,6 +128,10 @@ def test_a_keyway_with_width_and_depth_swapped_is_put_right():
             ],
         },
         "dimensions": [{"value": "22"}, {"value": "4"}, {"value": "8"}],
+        "unresolved": [
+            "шпоночный паз 0: ширина 4 мм при Ø30 и ничем не подтверждена, а ГОСТ 23360 даёт 8 мм — проверьте выноску",
+            "PMI: 4 рамок с неразличимым знаком или значением",
+        ],
     }
     report = {
         "items": [
@@ -153,6 +157,8 @@ def test_a_keyway_with_width_and_depth_swapped_is_put_right():
     fixed, fixed_report = apply_reconciliation(spec, report, decisions)
     keyway = fixed["main_view"]["keyways"][0]
     assert (keyway["width_mm"], keyway["depth_mm"]) == (8.0, 4.0)
+    # Замечание ГОСТ о прежней ширине устарело — снято; чужое осталось.
+    assert fixed["unresolved"] == ["PMI: 4 рамок с неразличимым знаком или значением"]
     assert fixed_report["items"][0]["status"] == "confirmed"
 
 

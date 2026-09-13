@@ -3959,6 +3959,11 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                                 f"принято {how}: {decision['path']}.{decision['field']} "
                                 f"{decision['read']:g} → {decision['value']:g}"
                             )
+                    # Найденное проверкой на листе — со свидетельством места
+                    # находки: иначе гейт держит паз и фаски «без evidence».
+                    from app.ai.cad_recognize.verifiers.stage import attach_sheet_evidence
+
+                    spec = attach_sheet_evidence(spec, verification)
                     if verification["notes"]:
                         spec = {
                             **spec,

@@ -438,7 +438,7 @@ def _keyways(
             frame, verdict = _keyway_other_width(
                 key, body, item["path"], frames, gray, frame, verdict
             )
-        item.update(status=verdict.status, measured=dict(verdict.measured), reason=verdict.reason)
+        _record_verdict(item, verdict)
         if verdict.status in ("confirmed", "refuted"):
             spans.append(
                 {
@@ -570,7 +570,7 @@ def _cross_holes(
             "cross_hole", item["path"], {k: float(hole[k]) for k in _CROSS_HOLE_KEYS}
         )
         frame, verdict = _first_measured(hypothesis, frames, gray)
-        item.update(status=verdict.status, measured=dict(verdict.measured), reason=verdict.reason)
+        _record_verdict(item, verdict)
         if frame is not None:
             position_tol, diameter_tol = plate_hole_tolerances(frame.scale_mean)
             item["tolerance_mm"] = {
@@ -621,7 +621,7 @@ def _turned_details(
                 verdict, frame = candidate, view_frame
             if measured:
                 break
-        item.update(status=verdict.status, measured=dict(verdict.measured), reason=verdict.reason)
+        _record_verdict(item, verdict)
         if frame is not None:
             if kind == "groove":
                 position_tol, width_tol, depth_tol = groove_tolerances(frame.scale_mean)
@@ -669,6 +669,43 @@ def _turned_details(
                 f"фаска {index + 1}: прочитано {_mm(chamfer['size_mm'])}, по листу — "
                 f"{_mm(item['measured']['size_mm'])} — проверить"
             )
+
+
+def _record_verdict(item: dict[str, Any], verdict: Any) -> None:
+    """Вердикт — в элемент отчёта; с рамкой находки, если элемент на листе найден."""
+    item.update(status=verdict.status, measured=dict(verdict.measured), reason=verdict.reason)
+    if verdict.measured and verdict.evidence_bbox_px:
+        item["evidence_bbox_px"] = [round(float(v), 1) for v in verdict.evidence_bbox_px]
+
+
+def attach_sheet_evidence(spec: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
+    """Элементы, найденные проверкой на листе, получают свидетельство — место находки.
+
+    Гейт сборки не пускает геометрию без локализованного свидетельства (живой
+    z4-r4: паз и фаски — «без evidence»). Проверка нашла их на листе и
+    измерила — рамка находки и есть такое свидетельство. Прочитанное
+    свидетельство не заменяется; не найденное — не получает ничего.
+    """
+    import copy
+
+    from app.ai.cad_recognize.verifiers.reconcile import _resolve
+
+    spec = copy.deepcopy(spec)
+    for item in report.get("items") or []:
+        box = item.get("evidence_bbox_px")
+        if not box or not item.get("measured"):
+            continue
+        node = _resolve(spec, str(item.get("path") or ""))
+        if node is None or node.get("evidence"):
+            continue
+        node["evidence"] = [
+            {
+                "image_index": 0,
+                "bbox": list(box),
+                "raw_text": f"найдено проверкой по листу ({item['kind']})",
+            }
+        ]
+    return spec
 
 
 def _first_measured(hypothesis: Hypothesis, frames: list[Any], sheet: Any) -> tuple[Any, Any]:

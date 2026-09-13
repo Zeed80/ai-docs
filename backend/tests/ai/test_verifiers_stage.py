@@ -443,3 +443,34 @@ def test_a_keyway_read_with_width_and_depth_swapped_is_still_found():
     assert item["status"] == "refuted", item
     assert abs(item["measured"]["width_mm"] - 6.0) <= 0.3
     assert "переставлены" in item["reason"]
+
+
+def test_a_keyway_found_on_the_sheet_gets_evidence_of_where_it_was_found():
+    """Живой z4-r4: гейт держал найденный проверкой паз «без evidence»."""
+    from app.ai.cad_recognize.verifiers.stage import attach_sheet_evidence
+
+    spec = {
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 30.0, "length_mm": 30.0},
+                {"diameter_mm": 20.0, "length_mm": 40.0},
+                {"diameter_mm": 25.0, "length_mm": 30.0},
+            ],
+            "keyways": [
+                {"axial_start_mm": 40.0, "length_mm": 20.0, "width_mm": 6.0, "depth_mm": 3.5}
+            ],
+            "chamfers": [
+                {"size_mm": 1.0, "location": "left_end", "evidence": [{"bbox": [1, 2, 3, 4]}]}
+            ],
+        }
+    }
+    report = verify_spec_against_sheet(_shaft_png(keyway=True), spec)
+
+    item = next(item for item in report["items"] if item["kind"] == "keyway")
+    assert item["status"] == "confirmed" and len(item["evidence_bbox_px"]) == 4
+    fixed = attach_sheet_evidence(spec, report)
+    evidence = fixed["main_view"]["keyways"][0]["evidence"]
+    assert evidence[0]["bbox"] == item["evidence_bbox_px"]
+    # Прочитанное свидетельство не заменяется; исходный спек не тронут.
+    assert fixed["main_view"]["chamfers"][0]["evidence"] == [{"bbox": [1, 2, 3, 4]}]
+    assert "evidence" not in spec["main_view"]["keyways"][0]

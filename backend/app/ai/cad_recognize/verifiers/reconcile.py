@@ -283,6 +283,18 @@ def apply_reconciliation(
                 f"{field} {value['read']:g} → {value['adopted']:g}"
                 for field, value in item["reconciled"].items()
             )
+    # Принятое у паза (живой z4-r4: ширина и глубина переставлены) делает
+    # прежние замечания ГОСТ 23360 и «паз выходит за ступень» устаревшими —
+    # они считаются заново по исправленному пазу.
+    if any(d.get("kind") == "keyway" and d.get("action") == "adopt" for d in decisions):
+        from app.ai.cad_recognize.keyway_standard import ground_keyways
+
+        spec["unresolved"] = [
+            note
+            for note in spec.get("unresolved") or []
+            if not str(note).startswith("шпоночный паз ")
+        ]
+        ground_keyways(spec.get("main_view") or {}, spec["unresolved"])
     # Сводка — по статусам после согласования: иначе панель показывает
     # опровергнутым то, что уже принято по листу.
     summary = report.get("summary")
