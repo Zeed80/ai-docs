@@ -1440,6 +1440,71 @@
      0
     ]
    }
+  },
+  "sheet_profile": {
+   "blur-150": {
+    "garbage": [
+     28,
+     0,
+     0
+    ]
+   },
+   "clean-300": {
+    "garbage": [
+     28,
+     20,
+     20
+    ]
+   },
+   "dpi-100": {
+    "garbage": [
+     28,
+     0,
+     0
+    ]
+   },
+   "dpi-150": {
+    "garbage": [
+     28,
+     0,
+     0
+    ]
+   },
+   "dpi-200": {
+    "garbage": [
+     28,
+     0,
+     0
+    ]
+   },
+   "dpi-75": {
+    "garbage": [
+     28,
+     0,
+     0
+    ]
+   },
+   "jpeg-150": {
+    "garbage": [
+     28,
+     0,
+     0
+    ]
+   },
+   "noise-150": {
+    "garbage": [
+     28,
+     0,
+     0
+    ]
+   },
+   "photo": {
+    "garbage": [
+     28,
+     0,
+     0
+    ]
+   }
   }
  },
  "fingerprint": "44ca58000c8ae434197d29a9bd8870a203dc2b6f956bbf9f56694aa48363cf3f"

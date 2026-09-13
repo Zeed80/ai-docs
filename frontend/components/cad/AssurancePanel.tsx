@@ -197,6 +197,21 @@ export default function AssurancePanel({
                   detail={item.reason}
                 />
               ))}
+            {/* Профиль вала собран по листу вместо прочитанного целиком. */}
+            {verification.profile_adoption ? (
+              <Row
+                ok
+                label={t("vector.assurance_profile_adopted", {
+                  steps: verification.profile_adoption.value
+                    .map(
+                      (step) =>
+                        `${step.thread?.designation ?? `Ø${step.diameter_mm}`}×${step.length_mm}`,
+                    )
+                    .join(" · "),
+                })}
+                detail={verification.profile_adoption.reason}
+              />
+            ) : null}
             {/* Согласование: принятое по листу — с прежним прочитанным,
                 спорное — оба варианта, решение за человеком. */}
             {(verification.reconciliation ?? []).map((decision) => (

@@ -46,7 +46,7 @@ def verify_spec_against_sheet(image_bytes: bytes, spec: dict[str, Any]) -> dict[
     elif shape == "circle":
         reason = _circular(image_bytes, profile, report)
     elif ((spec or {}).get("main_view") or {}).get("outer"):
-        reason = _shaft(image_bytes, (spec or {}).get("main_view") or {}, report)
+        reason = _shaft(image_bytes, (spec or {}).get("main_view") or {}, report, spec or {})
     else:
         reason = "нет проверяемых элементов (пластина, круглая деталь, тело вращения)"
     return _finish(report, started, reason)
@@ -224,7 +224,9 @@ def _circular(image_bytes: bytes, profile: dict[str, Any], report: dict[str, Any
     return None
 
 
-def _shaft(image_bytes: bytes, body: dict[str, Any], report: dict[str, Any]) -> str | None:
+def _shaft(
+    image_bytes: bytes, body: dict[str, Any], report: dict[str, Any], spec: dict[str, Any]
+) -> str | None:
     """Наружный профиль тела вращения: Ø и длина каждой ступени по главному виду.
 
     Проверяльщик отвечает на весь профиль сразу; здесь вердикт раскладывается
@@ -318,7 +320,65 @@ def _shaft(image_bytes: bytes, body: dict[str, Any], report: dict[str, Any]) -> 
                 f"Ø{_mm(measured['diameter_mm']) if 'diameter_mm' in measured else '—'} × "
                 f"{_mm(measured['length_mm']) if 'length_mm' in measured else '—'} — проверить"
             )
+    if _sheet_profile(profile, total, body, spec, report):
+        return None
     return verdict.reason if whole_unmeasurable else None
+
+
+def _sheet_profile(
+    profile: Any,
+    read_total: float,
+    body: dict[str, Any],
+    spec: dict[str, Any],
+    report: dict[str, Any],
+) -> bool:
+    """Профиль по листу (`sheet_profile`): уступы вида + надписи, которые выписал ридер.
+
+    Совпал с прочитанным — ступени подтверждены по листу, даже если замер
+    разошёлся с надписью больше допуска: нарисованный не точно в масштабе
+    лист (z4-r4: уступы до 1,7 мм от надписей, Ø на 1,5 % шире по фото)
+    иначе опровергал бы верное чтение. Не совпал — предложение ложится в
+    отчёт (``profile_proposal``), решает согласование. Возвращает True, если
+    прочитанное подтверждено так.
+    """
+    from app.ai.cad_recognize.verifiers.sheet_profile import propose_profile, sheet_labels
+
+    reserved = tuple(
+        float(keyway[key])
+        for keyway in body.get("keyways") or []
+        if isinstance(keyway, dict)
+        for key in ("length_mm", "width_mm")
+        if _is_number(keyway.get(key))
+    )
+    proposal, why = propose_profile(
+        profile,
+        sheet_labels(spec),
+        read_total,
+        allow_threads=not body.get("bore"),
+        reserved=reserved,
+    )
+    if proposal is None:
+        report["profile_proposal"] = {"steps": None, "reason": why}
+        return False
+    read = [
+        (float(step["diameter_mm"]), float(step["length_mm"])) for step in body.get("outer") or []
+    ]
+    same = len(read) == len(proposal.steps) and all(
+        abs(d - step["diameter_mm"]) <= 0.01 and abs(length - step["length_mm"]) <= 0.01
+        for (d, length), step in zip(read, proposal.steps)
+    )
+    if not same:
+        report["profile_proposal"] = proposal.as_payload()
+        return False
+    reason = (
+        "уступы и Ø вида объясняются надписями листа "
+        f"(уступы до {proposal.station_error_mm:.1f} мм от надписей)"
+    )
+    for item in report["items"]:
+        if item["kind"] == "shaft_step" and item["status"] != "confirmed":
+            item["status"], item["reason"] = "confirmed", reason
+    report["notes"] = [note for note in report["notes"] if not note.startswith("ступень ")]
+    return True
 
 
 _KEYWAY_KEYS = ("axial_start_mm", "length_mm", "width_mm")

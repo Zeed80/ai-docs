@@ -1034,6 +1034,13 @@ export interface SpecCrossCheck {
 /** The reading checked against the sheet itself (verify stage): one verdict
  * per checkable element — a refuted value is NOT replaced, the measurement is
  * shown next to it for the person to decide. */
+/** Ступень профиля вала, собранного по листу. */
+export interface ShaftProfileStep {
+  diameter_mm: number;
+  length_mm: number;
+  thread?: { designation?: string } | null;
+}
+
 export interface SpecVerification {
   items: Array<{
     kind: "plate_hole" | "bolt_circle" | "concentric_hole" | string;
@@ -1061,6 +1068,20 @@ export interface SpecVerification {
     value?: number;
     reason: string;
   }>;
+  /** Профиль вала, собранный по листу (уступы вида + надписи), когда он
+   * не совпал с прочитанным; ``steps: null`` — собрать не удалось. */
+  profile_proposal?: {
+    steps: ShaftProfileStep[] | null;
+    reason?: string;
+    total_mm?: number;
+    station_error_mm?: number;
+  };
+  /** Профиль по листу принят вместо прочитанного целиком. */
+  profile_adoption?: {
+    reason: string;
+    read: Array<Array<number | null>>;
+    value: ShaftProfileStep[];
+  };
   summary: {
     checked: number;
     confirmed: number;

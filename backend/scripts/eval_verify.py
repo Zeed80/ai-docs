@@ -756,7 +756,65 @@ def eval_chamfer(png: bytes, truth: dict) -> list[dict[str, Any]]:
     return outcomes
 
 
+def eval_sheet_profile(png: bytes, truth: dict) -> list[dict[str, Any]]:
+    """Профиль вала по листу: надписи — как выписал бы ридер, прочитанный профиль — мимо.
+
+    Случай ``garbage``: габарит прочитан на 8 мм больше (как у z4-r4 и
+    shaft-1), ступени не сходятся; длину и ширину паза ридер отдал пазу.
+    Предложение обязано совпасть с эталоном точно — или его нет: найдено —
+    предложение есть, верно — совпало (найдено и не верно — ошибка).
+    """
+    from app.ai.cad_recognize.verifiers.sheet_profile import propose_profile, sheet_labels
+
+    main_view = truth["spec"].get("main_view") or {}
+    outer = main_view.get("outer") or []
+    if len(outer) < 2:
+        return []
+    real = [(float(step["diameter_mm"]), float(step["length_mm"])) for step in outer]
+    read_total = sum(length for _d, length in real) + 8.0
+    labels = sheet_labels(
+        {
+            "dimensions": [
+                {"value": label["text"], "bbox": label.get("bbox_px")}
+                for label in truth.get("labels") or []
+                if label.get("kind") == "dimension"
+            ]
+        }
+    )
+    reserved = tuple(
+        float(keyway[key])
+        for keyway in main_view.get("keyways") or []
+        for key in ("length_mm", "width_mm")
+        if keyway.get(key)
+    )
+    gray, views = _shaft_sheets(png, [{"length_mm": read_total}])
+    proposal = None
+    if views:
+        proposal, _why = propose_profile(
+            views[0][1],
+            labels,
+            read_total,
+            allow_threads=not main_view.get("bore"),
+            reserved=reserved,
+        )
+    got = [(step["diameter_mm"], step["length_mm"]) for step in proposal.steps] if proposal else []
+    correct = len(got) == len(real) and all(
+        abs(a - c) <= 0.01 and abs(b - d) <= 0.01 for (a, b), (c, d) in zip(got, real)
+    )
+    scale = views[0][0].scale_mean if views else 0.2
+    return [
+        {
+            "case": "garbage",
+            "found": proposal is not None,
+            "correct": correct,
+            "error_rel": None,
+            "unit_px": min(d for d, _length in real) / 2.0 / scale,
+        }
+    ]
+
+
 _VERIFIERS = {
+    "sheet_profile": eval_sheet_profile,
     "groove": eval_groove,
     "chamfer": eval_chamfer,
     "cross_hole": eval_cross_hole,

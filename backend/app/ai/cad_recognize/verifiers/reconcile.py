@@ -199,3 +199,126 @@ def apply_reconciliation(
                 1 for item in report.get("items") or [] if item.get("status") == status
             )
     return spec, report
+
+
+def profile_decision(spec: dict[str, Any], report: dict[str, Any]) -> dict[str, Any] | None:
+    """Принять профиль вала, собранный по листу, вместо прочитанного.
+
+    Предложение `sheet_profile` строгое: каждый уступ вида объяснён своей
+    надписью, каждый Ø — надписью Ø или резьбой, неоднозначность — отказ
+    (корпус v9, чистые листы: 20 верных, 0 неверных). Принимается, только
+    если прочитанный профиль по листу не подтвердился — хотя бы одна ступень
+    опровергнута или не измерена (живой z4-r4: «не тот вид», 12 расхождений
+    из 13). Подтверждённое проверкой не заменяется.
+    """
+    proposal = report.get("profile_proposal") or {}
+    steps = proposal.get("steps")
+    items = [item for item in report.get("items") or [] if item.get("kind") == "shaft_step"]
+    if not steps or not items or all(item.get("status") == "confirmed" for item in items):
+        return None
+    outer = ((spec.get("main_view") or {}).get("outer")) or []
+    read = [[step.get("diameter_mm"), step.get("length_mm")] for step in outer]
+    return {
+        "kind": "shaft_profile",
+        "path": "main_view.outer",
+        "field": "outer",
+        "action": "adopt",
+        "read": read,
+        "value": [dict(step) for step in steps],
+        "reason": (
+            f"уступы вида и надписи листа дают профиль {_profile_text(steps)} "
+            f"(габарит {proposal.get('total_mm'):g}, уступы до "
+            f"{proposal.get('station_error_mm', 0.0):.1f} мм от надписей); "
+            f"прочитанный {_profile_text(outer)} "
+            "по листу не подтвердился"
+        ),
+    }
+
+
+def apply_profile(spec: dict[str, Any], decision: dict[str, Any]) -> dict[str, Any]:
+    """Профиль по листу — в копию спека, с происхождением каждой величины.
+
+    Паз переносится на ступень, в которую попадает его начало: прежняя
+    ссылка указывала на ступень прочитанного профиля.
+    """
+    spec = copy.deepcopy(spec)
+    main = spec.setdefault("main_view", {})
+    outer = []
+    for index, step in enumerate(decision["value"]):
+        entry: dict[str, Any] = {
+            "id": f"0:outer:{index}",
+            "diameter_mm": float(step["diameter_mm"]),
+            "length_mm": float(step["length_mm"]),
+            "note": None,
+            "evidence": [],
+            "review_required": False,
+        }
+        thread = step.get("thread")
+        if isinstance(thread, dict):
+            entry["thread"] = {**thread, "length_mm": float(step["length_mm"]), "evidence": []}
+            entry["note"] = f"резьба {thread.get('designation')}"
+        outer.append(entry)
+    main["outer"] = outer
+    stations = [0.0]
+    for entry in outer:
+        stations.append(stations[-1] + entry["length_mm"])
+    for keyway in main.get("keyways") or []:
+        start = keyway.get("axial_start_mm") if isinstance(keyway, dict) else None
+        if isinstance(start, (int, float)):
+            index = next(
+                (i for i in range(len(outer)) if stations[i] <= start < stations[i + 1]), None
+            )
+            if index is not None:
+                keyway["on_section_id"] = outer[index]["id"]
+    provenance = spec.setdefault("provenance", {})
+    if not isinstance(provenance, dict):
+        provenance = {}
+        spec["provenance"] = provenance
+    for index, entry in enumerate(outer):
+        for field in ("diameter_mm", "length_mm"):
+            provenance[f"main_view.outer[{index}].{field}"] = {
+                "origin": "sheet_measurement",
+                "detail": decision["reason"],
+                "value_mm": entry[field],
+            }
+    # Замечания ридера о прежнем профиле устарели: резьбы теперь на своих
+    # ступенях, Ø ступеней объяснены надписями (живой z4-r4: «резьбы не
+    # привязаны», «поперечное отверстие Ø25 не локализовано» — это Ø ступени).
+    diameters = {round(entry["diameter_mm"], 3) for entry in outer}
+    spec["unresolved"] = [
+        note
+        for note in spec.get("unresolved") or []
+        if not _stale_profile_note(str(note), diameters)
+    ]
+    # Голоса проходов чтения по прежним ступеням к новым не относятся.
+    votes = spec.get("value_provenance")
+    if isinstance(votes, dict):
+        spec["value_provenance"] = {
+            key: value for key, value in votes.items() if not key.startswith("main_view/outer")
+        }
+    return spec
+
+
+_STALE_PROFILE = ("резьбы указаны, но не привязаны", "наружные диаметры не подтверждены")
+_CROSS_HOLE_NOTE = re.compile(
+    r"поперечное отверстие Ø(\d+(?:[.,]\d+)?) указано, но не локализовано"
+)
+
+
+def _stale_profile_note(note: str, diameters: set[float]) -> bool:
+    if any(marker in note for marker in _STALE_PROFILE):
+        return True
+    match = _CROSS_HOLE_NOTE.search(note)
+    return bool(match) and round(float(match.group(1).replace(",", ".")), 3) in diameters
+
+
+def _profile_text(steps: list[dict[str, Any]]) -> str:
+    def number(value: Any) -> str:
+        return f"{float(value):g}" if isinstance(value, (int, float)) else "?"
+
+    parts = []
+    for step in steps:
+        thread = step.get("thread") if isinstance(step.get("thread"), dict) else None
+        head = thread.get("designation") if thread else f"Ø{number(step.get('diameter_mm'))}"
+        parts.append(f"{head}×{number(step.get('length_mm'))}")
+    return " · ".join(parts)

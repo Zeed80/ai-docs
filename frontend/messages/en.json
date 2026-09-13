@@ -742,6 +742,7 @@
       "assurance_verify_kind_keyway": "Keyway {index}",
       "assurance_verify_kind_cross_hole": "Cross hole {index}",
       "assurance_verify_kind_groove": "Groove {index}",
+      "assurance_profile_adopted": "Shaft profile assembled from the sheet: {steps}",
       "assurance_reconcile_adopted": "Taken from the sheet: {element}, {field} {read} → {value}",
       "assurance_reconcile_ask": "Your decision needed: {element}, {field} — read {read}, sheet shows {measured}",
       "assurance_field_diameter_mm": "Ø",

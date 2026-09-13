@@ -124,6 +124,43 @@ describe("AssurancePanel — проверка прочитанного по ли
     expect(screen.getByText(/прочитанное 40 тоже есть на листе/)).toBeTruthy();
   });
 
+  it("shows a shaft profile assembled from the sheet instead of the reading", () => {
+    const verification: SpecVerification = {
+      items: [
+        {
+          kind: "shaft_step",
+          path: "main_view.outer[0]",
+          read: { diameter_mm: 18, length_mm: 15 },
+          status: "confirmed",
+          measured: {},
+          reason: "уступы и Ø вида объясняются надписями листа",
+        },
+      ],
+      summary: { checked: 1, confirmed: 1, refuted: 0, unmeasurable: 0 },
+      profile_adoption: {
+        reason: "прочитанный Ø15.7×15 · Ø25×19 по листу не подтвердился",
+        read: [
+          [15.7, 15],
+          [25, 19],
+        ],
+        value: [
+          {
+            diameter_mm: 18,
+            length_mm: 15,
+            thread: { designation: "M18" },
+          },
+          { diameter_mm: 25, length_mm: 19 },
+        ],
+      },
+    };
+    render(<AssurancePanel verification={verification} t={t} />);
+
+    expect(
+      screen.getByText("Профиль вала собран по листу: M18×15 · Ø25×19"),
+    ).toBeTruthy();
+    expect(screen.getByText(/по листу не подтвердился/)).toBeTruthy();
+  });
+
   it("renders nothing when there is nothing checked at all", () => {
     const { container } = render(<AssurancePanel t={t} />);
     expect(container.innerHTML).toBe("");

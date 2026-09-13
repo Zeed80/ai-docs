@@ -742,6 +742,7 @@
       "assurance_verify_kind_keyway": "Паз {index}",
       "assurance_verify_kind_cross_hole": "Поперечное отверстие {index}",
       "assurance_verify_kind_groove": "Канавка {index}",
+      "assurance_profile_adopted": "Профиль вала собран по листу: {steps}",
       "assurance_reconcile_adopted": "Принято по листу: {element}, {field} {read} → {value}",
       "assurance_reconcile_ask": "Нужно ваше решение: {element}, {field} — прочитано {read}, по листу {measured}",
       "assurance_field_diameter_mm": "Ø",

@@ -3824,6 +3824,45 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         error=str(exc)[:200],
                     )
                     verification = None
+                # Профиль по листу (план, Ф3/Ф8): прочитанный профиль не
+                # подтвердился, а уступы вида и надписи, выписанные ридером,
+                # строго дают другой — он принимается целиком, до сборки
+                # (живой z4-r4: у ридера 12 расхождений из 13, профиль по
+                # листу точный, с обеими резьбами). Сверка, граф размеров и
+                # проверка считаются заново — уже по принятому профилю.
+                from app.ai.cad_recognize.verifiers.reconcile import (
+                    apply_profile,
+                    profile_decision,
+                )
+
+                adoption = profile_decision(spec, verification) if verification else None
+                if adoption:
+                    spec = _revalidated_spec(apply_profile(spec, adoption))
+                    crosscheck = cross_check_spec(spec, check_ink)
+                    blocking_checks = [
+                        finding["message"]
+                        for finding in crosscheck["findings"]
+                        if finding["severity"] == "error"
+                    ]
+                    dimension_graph = build_dimension_graph(spec)
+                    blocking_checks.extend(dimension_graph["errors"])
+                    await _record(
+                        "reconcile.profile",
+                        "completed",
+                        "Профиль вала собран по листу",
+                        {"decision": adoption},
+                    )
+                    try:
+                        verification = verify_spec_against_sheet(content, spec)
+                    except Exception as exc:  # noqa: BLE001 — a check must not break the run
+                        logger.warning(
+                            "cad_verify_failed",
+                            generation_id=generation_id,
+                            error=str(exc)[:200],
+                        )
+                        verification = None
+                    if verification is not None:
+                        verification["profile_adoption"] = adoption
                 if verification and verification["items"]:
                     # Событие на каждый вид проверки: verify.plate_hole,
                     # verify.bolt_circle — со сводкой и вердиктами.

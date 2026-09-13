@@ -219,6 +219,44 @@ def test_a_shaft_is_checked_step_by_step_and_only_the_wrong_diameter_is_refuted(
     assert active["assertion:feature:0:outer:0:param:diameter_mm"] == "corroborated"
 
 
+def test_a_reading_the_sheet_does_not_confirm_gets_a_profile_assembled_from_the_sheet():
+    # Ридер ошибся почти во всём (как на живом z4-r4), но надписи выписал.
+    spec = {
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 28.0, "length_mm": 45.0},
+                {"diameter_mm": 22.0, "length_mm": 25.0},
+                {"diameter_mm": 25.0, "length_mm": 38.0},
+            ]
+        },
+        "dimensions": [{"value": v} for v in ("30", "40", "30", "100", "Ø30", "Ø20", "Ø25")],
+    }
+    report = verify_spec_against_sheet(_shaft_png(), spec)
+
+    assert report["profile_proposal"]["steps"] == [
+        {"diameter_mm": 30.0, "length_mm": 30.0},
+        {"diameter_mm": 20.0, "length_mm": 40.0},
+        {"diameter_mm": 25.0, "length_mm": 30.0},
+    ]
+
+
+def test_a_reading_matching_the_sheet_profile_is_confirmed_without_a_proposal():
+    spec = {
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 30.0, "length_mm": 30.0},
+                {"diameter_mm": 20.0, "length_mm": 40.0},
+                {"diameter_mm": 25.0, "length_mm": 30.0},
+            ]
+        },
+        "dimensions": [{"value": v} for v in ("30", "40", "30", "100", "Ø30", "Ø20", "Ø25")],
+    }
+    report = verify_spec_against_sheet(_shaft_png(), spec)
+
+    assert [item["status"] for item in report["items"]] == ["confirmed"] * 3
+    assert "profile_proposal" not in report
+
+
 def test_a_keyway_is_checked_and_only_its_wrong_length_is_contradicted_in_the_graph():
     from app.ai.cad_emg_compat import spec_feature_tree_as_graph
     from app.ai.cad_recognize.spec_vectorize import assign_stable_feature_ids
