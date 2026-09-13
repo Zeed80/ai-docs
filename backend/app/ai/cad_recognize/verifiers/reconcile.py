@@ -65,6 +65,7 @@ def reconcile(spec: dict[str, Any], report: dict[str, Any]) -> list[dict[str, An
         tolerances = item.get("tolerance_mm") or {}
         swap = _keyway_swap(spec, item)
         decisions.extend(swap)
+        decisions.extend(_keyway_position(spec, item, report))
         for field, tolerance_kind in ADOPTABLE.get(item.get("kind"), ()):
             if swap and field == "width_mm":
                 continue
@@ -179,6 +180,105 @@ def _keyway_swap(spec: dict[str, Any], item: dict[str, Any]) -> list[dict[str, A
             "measured": float(width),
             "value": float(width),
         },
+    ]
+
+
+def _keyway_position(
+    spec: dict[str, Any], item: dict[str, Any], report: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Начало паза по надписям листа, выбранным замером.
+
+    Положения на листе — цепочки и выносные, их общее правило отдаёт
+    человеку. Но у паза опора известна: он в одной ступени, и его место
+    задано надписью от её уступа. Живой z4-r4: прочитано начало 63, замер
+    69,3…91,5; на листе «2» от уступа 95 до конца паза — конец 93, начало
+    93 − 22 = 71. Кандидаты — уступы ступени (по замеру середины паза) ±
+    надпись; надпись должна стоять между своими опорами (рамка ридера), в
+    полосе главного вида (не на выносном виде); и начало, и конец обязаны
+    сойтись с замером в точности самого листа. Кандидат один — принимается,
+    иначе — человеку.
+    """
+    from app.ai.cad_recognize.keyway_standard import step_for, steps_with_stations
+    from app.ai.cad_recognize.verifiers.sheet_profile import sheet_labels
+
+    if item.get("kind") != "keyway" or item.get("status") != "refuted":
+        return []
+    read = item.get("read") or {}
+    measured = item.get("measured") or {}
+    frame = report.get("frame") or {}
+    start_read, length = read.get("axial_start_mm"), read.get("length_mm")
+    start, span = measured.get("axial_start_mm"), measured.get("length_mm")
+    origin, scale, box = frame.get("origin_px"), frame.get("mm_per_px"), frame.get("bbox_px")
+    if not all(isinstance(v, (int, float)) for v in (start_read, length, start, span, scale)):
+        return []
+    if not origin or not box:
+        return []
+    tolerance = float((item.get("tolerance_mm") or {}).get("length") or 0.5)
+    if abs(start - start_read) <= tolerance:
+        return []
+    outer = [s for s in ((spec.get("main_view") or {}).get("outer") or []) if isinstance(s, dict)]
+    holder, _inside = step_for(steps_with_stations(outer), float(start), float(span))
+    if holder is None:
+        return []
+    low, high = float(holder[0]), float(holder[1])
+    total = sum(float(s.get("length_mm") or 0.0) for s in outer)
+    sheet_error = float((report.get("profile_adoption") or {}).get("station_error_mm") or 0.0)
+    accuracy = max(tolerance, 1.25 * sheet_error)
+    margin = 0.08 * total
+    band = (box[3] - box[1]) * 0.6
+    key = _resolve(spec, str(item.get("path") or "")) or {}
+    own = {float(v) for v in (length, key.get("width_mm"), key.get("depth_mm"), total) if v}
+    labels = []
+    for entry in spec.get("dimensions") or []:
+        if not isinstance(entry, dict):
+            continue
+        parsed = sheet_labels({"dimensions": [entry]}).axial
+        bbox = entry.get("bbox")
+        if not parsed or not (isinstance(bbox, (list, tuple)) and len(bbox) == 4):
+            continue
+        value = parsed[0][0]
+        row = (float(bbox[1]) + float(bbox[3])) / 2.0
+        if value in own or not box[1] - band <= row <= box[3] + band:
+            continue
+        column = ((float(bbox[0]) + float(bbox[2])) / 2.0 - float(origin[0])) * float(scale)
+        labels.append((value, column))
+    found: dict[float, str] = {}
+    for value, column in labels:
+        for anchor, start_c, first, second in (
+            (low, low + value, low, low + value),
+            (high, high - value - float(length), high - value, high),
+        ):
+            if not (low <= start_c and start_c + float(length) <= high):
+                continue
+            if not first - margin <= column <= second + margin:
+                continue
+            if (
+                abs(start_c - start) > accuracy
+                or abs(start_c + float(length) - (start + span)) > accuracy
+            ):
+                continue
+            side = "начала" if anchor == low else "конца"
+            found[round(start_c, 3)] = (
+                f"«{value:g}» от уступа {anchor:g} до {side} паза: начало {start_c:g}, "
+                f"конец {start_c + float(length):g}; замер {start:g}…{start + span:g}"
+            )
+    if len(found) != 1:
+        return []
+    value, detail = next(iter(found.items()))
+    item.setdefault("tolerance_mm", {})["length"] = round(accuracy, 3)
+    return [
+        {
+            "kind": "keyway",
+            "path": item["path"],
+            "feature_id": item.get("feature_id"),
+            "field": "axial_start_mm",
+            "read": float(start_read),
+            "measured": float(start),
+            "action": "adopt",
+            "source": "keyway_position",
+            "value": value,
+            "reason": f"положение паза по надписи листа: {detail} (лист точен до {accuracy:.1f} мм)",
+        }
     ]
 
 
@@ -330,6 +430,7 @@ def profile_decision(spec: dict[str, Any], report: dict[str, Any]) -> dict[str, 
         "action": "adopt",
         "read": read,
         "value": [dict(step) for step in steps],
+        "station_error_mm": float(proposal.get("station_error_mm") or 0.0),
         "reason": (
             f"уступы вида и надписи листа дают профиль {_profile_text(steps)} "
             f"(габарит {proposal.get('total_mm'):g}, уступы до "

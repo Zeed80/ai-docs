@@ -190,3 +190,83 @@ def test_a_keyway_width_the_standard_does_not_back_is_not_swapped():
 
     # Глубина 5 при ГОСТ 4 — это не перестановка: решает человек.
     assert [(d["field"], d["action"]) for d in decisions] == [("width_mm", "ask_human")]
+
+
+def _keyway_case(dimensions):
+    """z4-r4: паз прочитан с 63, на листе 69,3…91,5; лист точен до 1,7 мм.
+
+    Система координат: 0,0638 мм/px от x = 287, главный вид y 442…1006.
+    """
+    spec = {
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 35.0, "length_mm": 65.0},
+                {"diameter_mm": 30.0, "length_mm": 30.0},
+                {"diameter_mm": 25.0, "length_mm": 90.0},
+            ],
+            "keyways": [
+                {"axial_start_mm": 63.0, "length_mm": 22.0, "width_mm": 8.0, "depth_mm": 4.0}
+            ],
+        },
+        "dimensions": dimensions,
+        "unresolved": [],
+    }
+    report = {
+        "frame": {
+            "origin_px": [287.0, 724.0],
+            "mm_per_px": 0.0638,
+            "bbox_px": [284, 442, 3192, 1006],
+        },
+        "profile_adoption": {"station_error_mm": 1.677},
+        "items": [
+            {
+                "kind": "keyway",
+                "path": "main_view.keyways[0]",
+                "read": {"axial_start_mm": 63.0, "length_mm": 22.0, "width_mm": 8.0},
+                "status": "refuted",
+                "measured": {"axial_start_mm": 69.278, "length_mm": 22.243, "width_mm": 8.137},
+                "reason": "начало 69.278 мм, прочитано 63",
+                "tolerance_mm": {"length": 0.5, "width": 0.3},
+            }
+        ],
+    }
+    return spec, report
+
+
+def _at(value, x_mm, y):
+    x = 287.0 + x_mm / 0.0638
+    return {"value": value, "bbox": [x - 30, y - 18, x + 30, y + 18]}
+
+
+def test_a_keyway_position_comes_from_the_label_off_its_shoulder():
+    spec, report = _keyway_case(
+        [
+            _at("22", 81.0, 364),  # длина паза — своя надпись
+            _at("2", 97.2, 364),  # от конца паза до уступа 95
+            _at("3,5", 35.7, 1380),  # сечение Б-Б — ниже полосы вида
+            _at("3", 108.0, 1798),  # выносной вид канавки
+            _at("185", 100.4, 245),
+        ]
+    )
+
+    decisions = reconcile(spec, report)
+
+    assert [(d["field"], d["action"], d["value"]) for d in decisions] == [
+        ("axial_start_mm", "adopt", 71.0)
+    ], decisions
+    fixed, fixed_report = apply_reconciliation(spec, report, decisions)
+    assert fixed["main_view"]["keyways"][0]["axial_start_mm"] == 71.0
+    # Паз теперь целиком в ступени Ø30 — замечания «выходит за ступень» нет.
+    assert not [n for n in fixed["unresolved"] if "выходит за ступень" in n]
+    assert fixed_report["items"][0]["status"] == "confirmed"
+
+
+def test_two_labels_placing_the_keyway_differently_leave_it_to_a_person():
+    spec, report = _keyway_case(
+        [
+            _at("2", 97.2, 364),  # конец 93 → начало 71
+            _at("3", 70.0, 364),  # от уступа 65 → начало 68
+        ]
+    )
+
+    assert reconcile(spec, report) == []
