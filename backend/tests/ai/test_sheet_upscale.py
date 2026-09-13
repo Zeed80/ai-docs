@@ -51,6 +51,19 @@ def test_an_honest_upscale_agrees_and_a_swapped_label_does_not():
     assert sheet_upscale.agreement(low, forged)["worst_tile"] < sheet_upscale.MIN_TILE_AGREEMENT
 
 
+def test_texture_on_the_blank_field_and_at_the_frame_edge_is_not_a_disagreement():
+    """Живой z4-r4: SeedVR2 кладёт текстуру на ровное поле за листом и иначе
+    рисует край кадра — предохранитель отверг честный лист (худшая плитка 0,00)."""
+    low = _sheet(2, size=(700, 500)).copy()
+    low[:, 660:] = 200  # ровное поле за листом после выпрямления
+    honest = np.asarray(Image.fromarray(low).resize((2100, 1500), Image.LANCZOS)).copy()
+    rng = np.random.default_rng(0)
+    honest[:, 1980:] = np.clip(200 + rng.normal(0, 18, honest[:, 1980:].shape), 0, 255)
+    honest[:, -12:] = 0  # край кадра — другой тон
+
+    assert sheet_upscale.agreement(low, honest)["worst_tile"] >= sheet_upscale.MIN_TILE_AGREEMENT
+
+
 def test_a_sharp_sheet_is_left_as_is():
     buffer = io.BytesIO()
     Image.fromarray(_sheet(6)).save(buffer, format="PNG")

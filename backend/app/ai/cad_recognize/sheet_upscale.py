@@ -39,12 +39,19 @@ MAX_SIDE_PX = 7200
 _VRAM_NEEDED = 11 * 1024**3
 # Совпадение увеличенного листа с исходником (см. `agreement`). Калибровка
 # (`scripts/calibrate_sheet_upscale.py`, корпус v9-sr, 48 честных пар и 46 с
-# подменённой подписью размера): 0,75 — отвергнута 1 честная пара, пропущена
-# 1 подделка; 0,70 — 0 и 4. Ложный отказ лишь возвращает исходник, пропуск —
-# выдуманная цифра, поэтому порог выше.
-MIN_TILE_AGREEMENT = 0.75
+# подменённой подписью размера): 0,72 — честных не отвергнуто, пропущено 2
+# подделки; честный минимум 0,79; настоящее фото z4-r4 — 0,77. Ложный отказ
+# лишь возвращает исходник, пропуск — выдуманная цифра.
+MIN_TILE_AGREEMENT = 0.72
 _TILE_PX = 16
 _TILE_MIN_STD = 12.0
+# Плитка сравнивается, только если у исходника в ней есть чернила: на фото
+# SeedVR2 кладёт лёгкую текстуру на ровное поле за листом (после выпрямления),
+# и корреляция там ноль при честном листе (живой z4-r4: худшая плитка 0,00).
+_TILE_MIN_INK = 8
+# Полоса у краёв изображения не сравнивается: SeedVR2 обрабатывает край кадра
+# иначе, чем середину (z4-r4: рамка в последних 16 px — 0,68 при честном листе).
+_EDGE_PX = 16
 
 
 @dataclass
@@ -110,27 +117,32 @@ def upscale_factor(line_px: float, shape: tuple[int, int], min_line_px: float) -
 def agreement(original: Any, upscaled: Any) -> dict[str, float]:
     """Совпадение увеличенного листа с исходником после уменьшения обратно.
 
-    Корреляция градаций серого по плиткам 16×16 с шагом 8 (плитки без
-    рисунка пропускаются). Двоичные маски чернил не годятся: на 75–100 dpi
-    цифры — пятна в 8–12 px, и маски разных цифр с допуском в пиксель
-    совпадают (калибровка: подмена подписи проходила в 41 случае из 46), а
-    крапины, убранные апскейлом, давали нулевые плитки на честных листах.
-    Серое различает и размытые цифры. ``worst_tile`` — наихудшая плитка:
-    одна перерисованная подпись обрушивает именно её.
+    Корреляция градаций серого по плиткам 16×16 с шагом 8 — только там, где у
+    исходника есть чернила и есть рисунок, и не у самого края кадра. Двоичные
+    маски чернил не годятся: на 75–100 dpi цифры — пятна в 8–12 px, маски
+    разных цифр с допуском в пиксель совпадают (подмена подписи проходила в 41
+    случае из 46). ``worst_tile`` — наихудшая плитка: одна перерисованная
+    подпись обрушивает именно её.
     """
     import cv2
     import numpy as np
 
-    original = np.asarray(original, dtype=float)
-    height, width = original.shape
+    from app.ai.cad_recognize.verifiers.plate_frame import _ink
+
+    source = np.asarray(original, dtype=np.uint8)
+    height, width = source.shape
     back = cv2.resize(
         np.asarray(upscaled, dtype=np.uint8), (width, height), interpolation=cv2.INTER_AREA
     ).astype(float)
+    grey = source.astype(float)
+    ink = _ink(source)
     step = _TILE_PX // 2
     values = []
-    for y in range(0, height - _TILE_PX + 1, step):
-        for x in range(0, width - _TILE_PX + 1, step):
-            a = original[y : y + _TILE_PX, x : x + _TILE_PX]
+    for y in range(_EDGE_PX, height - _TILE_PX - _EDGE_PX + 1, step):
+        for x in range(_EDGE_PX, width - _TILE_PX - _EDGE_PX + 1, step):
+            if int(ink[y : y + _TILE_PX, x : x + _TILE_PX].sum()) < _TILE_MIN_INK:
+                continue
+            a = grey[y : y + _TILE_PX, x : x + _TILE_PX]
             b = back[y : y + _TILE_PX, x : x + _TILE_PX]
             if a.std() < _TILE_MIN_STD and b.std() < _TILE_MIN_STD:
                 continue
