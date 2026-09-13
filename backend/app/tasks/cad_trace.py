@@ -3856,20 +3856,51 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     decisions = reconcile(spec, verification)
                     if decisions:
                         spec, verification = apply_reconciliation(spec, verification, decisions)
+                        # Точечный переспрос (E7): спорный Ø/длину ступени модель
+                        # читает заново по вырезу вокруг ступени, не видя ни
+                        # прочитанного, ни замера; принимается только ответ,
+                        # совпавший с замером (живой shaft-1: 3 из 3 спорных Ø).
+                        if any(d["action"] == "ask_human" for d in decisions):
+                            from app.ai.cad_recognize.verifiers.reask import reask_disputed
+
+                            try:
+                                spec, verification, decisions, reask_log = await reask_disputed(
+                                    content, spec, verification, decisions
+                                )
+                            except Exception as exc:  # noqa: BLE001 — переспрос не ломает прогон
+                                logger.warning(
+                                    "cad_reask_failed",
+                                    generation_id=generation_id,
+                                    error=str(exc)[:200],
+                                )
+                                reask_log = []
+                            if reask_log:
+                                verification["reask"] = reask_log
+                                await _record(
+                                    "reask.sheet",
+                                    "completed",
+                                    (
+                                        "Переспрос по фрагменту: принято "
+                                        f"{sum(1 for e in reask_log if e['outcome'].startswith('принято'))}"
+                                        f" из {len(reask_log)}"
+                                    ),
+                                    {"questions": reask_log},
+                                )
                         verification["reconciliation"] = decisions
                         adopted = [d for d in decisions if d["action"] == "adopt"]
                         await _record(
                             "reconcile.sheet",
                             "completed",
                             (
-                                f"Согласование: принято по листу {len(adopted)}, "
+                                f"Согласование: принято {len(adopted)}, "
                                 f"решение за человеком {len(decisions) - len(adopted)}"
                             ),
                             {"decisions": decisions},
                         )
                         for decision in adopted:
+                            how = "переспросом" if decision.get("source") == "reask" else "по листу"
                             verification["notes"].append(
-                                f"принято по листу: {decision['path']}.{decision['field']} "
+                                f"принято {how}: {decision['path']}.{decision['field']} "
                                 f"{decision['read']:g} → {decision['value']:g}"
                             )
                     if verification["notes"]:

@@ -37,6 +37,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--corpus", type=pathlib.Path, required=True)
     parser.add_argument("--readings", type=pathlib.Path, nargs="+", required=True)
+    parser.add_argument(
+        "--reask",
+        action="store_true",
+        help="после согласования переспросить модель по спорным ступеням (нужен ридер)",
+    )
     args = parser.parse_args()
     totals = {"refuted": 0, "adopted": 0, "fixed": 0, "broken": 0, "adopted_wrong": 0, "human": 0}
     for readings in args.readings:
@@ -58,6 +63,19 @@ def main() -> int:
             report = verify_spec_against_sheet(png, spec)
             decisions = reconcile(spec, report)
             fixed_spec, _report = apply_reconciliation(spec, report, decisions)
+            if args.reask:
+                import asyncio
+
+                from app.ai.cad_recognize.verifiers.reask import reask_disputed
+
+                fixed_spec, _report, decisions, asked = asyncio.run(
+                    reask_disputed(png, fixed_spec, _report, decisions)
+                )
+                for entry in asked:
+                    print(
+                        f"   переспрос {entry['path']}.{entry['field']}: ответ {entry['answer_mm']} "
+                        f"(прочитано {entry['read']:g}, замер {entry['measured']:g}) — {entry['outcome']}"
+                    )
             refuted = sum(1 for item in report["items"] if item["status"] == "refuted")
             totals["refuted"] += refuted
             lines = []
