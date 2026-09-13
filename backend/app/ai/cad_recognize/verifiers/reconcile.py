@@ -250,7 +250,19 @@ def apply_profile(spec: dict[str, Any], decision: dict[str, Any]) -> dict[str, A
             "diameter_mm": float(step["diameter_mm"]),
             "length_mm": float(step["length_mm"]),
             "note": None,
-            "evidence": [],
+            # Свидетельство — участок главного вида, где стоит ступень: гейт
+            # сборки не пускает геометрию без него.
+            "evidence": (
+                [
+                    {
+                        "image_index": 0,
+                        "bbox": list(step["bbox_px"]),
+                        "raw_text": "уступы вида и надписи листа",
+                    }
+                ]
+                if isinstance(step.get("bbox_px"), (list, tuple)) and len(step["bbox_px"]) == 4
+                else []
+            ),
             "review_required": False,
         }
         thread = step.get("thread")
@@ -290,6 +302,11 @@ def apply_profile(spec: dict[str, Any], decision: dict[str, Any]) -> dict[str, A
         for note in spec.get("unresolved") or []
         if not _stale_profile_note(str(note), diameters)
     ]
+    # Паз против ступеней и ГОСТ 23360 — заново, по принятому профилю:
+    # прежние замечания называли ступени прочитанного (z4-r4: «Ø35 34..74»).
+    from app.ai.cad_recognize.keyway_standard import ground_keyways
+
+    ground_keyways(main, spec["unresolved"])
     # Голоса проходов чтения по прежним ступеням к новым не относятся.
     votes = spec.get("value_provenance")
     if isinstance(votes, dict):
@@ -299,7 +316,11 @@ def apply_profile(spec: dict[str, Any], decision: dict[str, Any]) -> dict[str, A
     return spec
 
 
-_STALE_PROFILE = ("резьбы указаны, но не привязаны", "наружные диаметры не подтверждены")
+_STALE_PROFILE = (
+    "резьбы указаны, но не привязаны",
+    "наружные диаметры не подтверждены",
+    "шпоночный паз ",
+)
 _CROSS_HOLE_NOTE = re.compile(
     r"поперечное отверстие Ø(\d+(?:[.,]\d+)?) указано, но не локализовано"
 )

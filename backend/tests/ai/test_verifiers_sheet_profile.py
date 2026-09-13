@@ -82,6 +82,9 @@ def test_an_off_scale_sheet_gives_the_labelled_profile_with_its_threads():
     threads = [(step.get("thread") or {}).get("designation") for step in proposal.steps]
     assert threads == ["M18", None, None, None, None, "M24x1.5", None]
     assert proposal.total_mm == 185.0
+    # Рамка ступени на листе: от левого торца (x0 = 100) до уступа 15 мм.
+    assert proposal.steps[0]["bbox_px"][0] == 100.0
+    assert abs(proposal.steps[0]["bbox_px"][2] - 250.0) <= 3.0
     assert 1.0 < proposal.station_error_mm < 2.0
 
 
@@ -177,6 +180,7 @@ READ_SPEC = {
         "малые элементы: резьбы указаны, но не привязаны к участкам: M18x1,5: несущий участок не локализован",
         "малые элементы: поперечное отверстие Ø25 указано, но не локализовано",
         "малые элементы: поперечное отверстие Ø0.8 указано, но не локализовано",
+        "шпоночный паз 0: 50..72 мм выходит за ступень Ø35 (34..74 мм) — паз фрезеруется",
     ],
 }
 PROPOSED = [
@@ -185,7 +189,7 @@ PROPOSED = [
         "length_mm": 15.0,
         "thread": {"designation": "M18", "nominal_diameter_mm": 18.0, "internal": False},
     },
-    {"diameter_mm": 25.0, "length_mm": 19.0},
+    {"diameter_mm": 25.0, "length_mm": 19.0, "bbox_px": [250.0, 375.0, 440.0, 625.0]},
     {"diameter_mm": 35.0, "length_mm": 31.0},
     {"diameter_mm": 30.0, "length_mm": 30.0},
 ]
@@ -210,10 +214,15 @@ def test_a_sheet_profile_replaces_a_reading_the_sheet_did_not_confirm():
     assert spec["provenance"]["main_view.outer[3].length_mm"]["origin"] == "sheet_measurement"
     assert "main_view/outer/0/diameter_mm" not in spec["value_provenance"]
     assert "part" in spec["value_provenance"]
-    # Замечания о прежнем профиле сняты; про Ø0,8 — не о профиле, осталось.
-    assert spec["unresolved"] == [
+    # Замечания о прежнем профиле сняты; про Ø0,8 — не о профиле, осталось;
+    # паз сверен заново — со ступенью принятого профиля (34..65), а не 34..74.
+    assert spec["unresolved"][0] == (
         "малые элементы: поперечное отверстие Ø0.8 указано, но не локализовано"
-    ]
+    )
+    assert len(spec["unresolved"]) == 2
+    assert "(34..65 мм)" in spec["unresolved"][1]
+    # Свидетельство ступени — её участок на листе.
+    assert outer[1]["evidence"][0]["bbox"] == [250.0, 375.0, 440.0, 625.0]
     # Исходный спек не тронут.
     assert READ_SPEC["main_view"]["outer"][0]["diameter_mm"] == 15.7
 

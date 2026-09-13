@@ -215,8 +215,20 @@ def propose_profile(
     values, correction = diameters
     stations = [0.0, *exact, total]
     result = []
-    for (diameter, thread), start, end in zip(values, stations, stations[1:]):
-        step: dict[str, Any] = {"diameter_mm": diameter, "length_mm": round(end - start, 3)}
+    for (diameter, thread), start, end, (_a, _b, level) in zip(
+        values, stations, stations[1:], steps
+    ):
+        step: dict[str, Any] = {
+            "diameter_mm": diameter,
+            "length_mm": round(end - start, 3),
+            # Где на листе стоит ступень — свидетельство для графа и гейта.
+            "bbox_px": [
+                round(profile.x0 + start / scale, 1),
+                round(profile.axis_y - level, 1),
+                round(profile.x0 + end / scale, 1),
+                round(profile.axis_y + level, 1),
+            ],
+        }
         if thread is not None:
             step["thread"] = thread
         result.append(step)

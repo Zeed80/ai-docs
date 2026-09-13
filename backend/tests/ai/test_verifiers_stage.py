@@ -233,7 +233,9 @@ def test_a_reading_the_sheet_does_not_confirm_gets_a_profile_assembled_from_the_
     }
     report = verify_spec_against_sheet(_shaft_png(), spec)
 
-    assert report["profile_proposal"]["steps"] == [
+    steps = report["profile_proposal"]["steps"]
+    assert all(len(step["bbox_px"]) == 4 for step in steps)
+    assert [{k: step[k] for k in ("diameter_mm", "length_mm")} for step in steps] == [
         {"diameter_mm": 30.0, "length_mm": 30.0},
         {"diameter_mm": 20.0, "length_mm": 40.0},
         {"diameter_mm": 25.0, "length_mm": 30.0},
