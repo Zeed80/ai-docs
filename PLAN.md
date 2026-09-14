@@ -45,7 +45,10 @@ isProject: false
 повторяется. Общий pause/resume после произвольного сбоя ещё не реализован.
 Журнал `/api/agent/chat-runs/{id}/actions` сохраняет логический UUID и результат
 атомарно с checkpoint. API наблюдений владельца фиксирует свидетельства неизвестного
-исхода, но не разрешает повтор. UI сверки и receipts получателей ещё в плане.
+исхода, но не разрешает повтор. UI `/work-orders/chat-journal?run_id=…` доступен
+из чата: детали действий, пагинация, запись наблюдения и источник. Проверка:
+`cd frontend && PLAYWRIGHT_MOCK_API=1 npx playwright test tests/e2e/chat-action-journal.spec.ts --project=chromium`.
+Проверенные receipts получателей и продолжение по ним ещё в плане.
 Миграция `20260912_0001`; журнал проверяется `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Проверка: `python3 -m pytest backend/tests/test_chat_checkpoints.py backend/tests/test_durable_chat.py backend/tests/test_work_order_checkpoint.py -q`.
 

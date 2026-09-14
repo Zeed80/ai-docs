@@ -47,6 +47,7 @@ export class DurableChatTransport {
     this.busy = false;
     this.pendingCancel = false;
     this.run = null;
+    this.emit({type: "durable_run", run_id: null});
     this.cursor = 0;
     this.confirmation = null;
     this.emit({type: "durable_confirmation", checkpoint: null});
@@ -62,6 +63,7 @@ export class DurableChatTransport {
         this.emit({type: "status", content: "Архивный чат доступен для чтения. Создайте новый чат для долговечного исполнения."});
       } else if (data.run) {
         this.run = data.run;
+        this.emit({type: "durable_run", run_id: data.run.id});
         this.busy = !terminal.has(data.run.status);
         this.emit({type: "durable_state", active: this.busy});
         void this.poll(generation, 0, savedMessageIds);
@@ -93,6 +95,7 @@ export class DurableChatTransport {
   private async submit(message: Event) {
     this.busy = true;
     this.run = null;
+    this.emit({type: "durable_run", run_id: null});
     this.pendingCancel = false;
     this.cursor = 0;
     this.confirmation = null;
@@ -115,6 +118,7 @@ export class DurableChatTransport {
       if (generation !== this.generation) return;
       this.run = run;
       this.session = run.session_id;
+      this.emit({type: "durable_run", run_id: run.id});
       this.emit({type: "session", session_id: run.session_id});
       if (this.pendingCancel) await this.cancel();
       void this.poll(generation, 0, new Set());

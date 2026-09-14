@@ -10,8 +10,10 @@
 выполненного. Произвольный сбой и неизвестные внешние эффекты не возобновляются.
 Журнал `/api/agent/chat-runs/{id}/actions` хранит логические UUID, запросы и результаты
 атомарно с checkpoint (миграция `20260912_0001`). Наблюдения владельца сохраняются
-без разрешения повторить неизвестный эффект. UI сверки и receipts получателей —
-следующий этап. Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
+без разрешения повторить неизвестный эффект. UI журнала и наблюдений доступен
+из чата по `/work-orders/chat-journal?run_id=…`. Проверенные receipts получателей —
+следующий этап. Проверка UI: `cd frontend && PLAYWRIGHT_MOCK_API=1 npx playwright test tests/e2e/chat-action-journal.spec.ts --project=chromium`.
+Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Проверка: `python3 -m pytest backend/tests/test_chat_checkpoints.py backend/tests/test_durable_chat.py backend/tests/test_work_order_checkpoint.py -q`.
 
 > Подробный план и фактический статус инженерного направления «Оцифровка в DXF» находятся в [`DXF_CAD_DEVELOPMENT_PLAN.md`](./DXF_CAD_DEVELOPMENT_PLAN.md).

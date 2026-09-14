@@ -18,7 +18,10 @@ AI-сотрудник **Света** (AiAgent agent) обрабатывает с
 Долговечный журнал действий: `/api/agent/chat-runs/{id}/actions`, подробности
 `/{action_id}`, наблюдения владельца `/{action_id}/observations`. Записи атомарны
 с checkpoint; неизвестный исход не разрешает повтор. Наблюдение не является
-проверенным эффектом или разрешением. Миграция `20260912_0001`, проверки:
+проверенным эффектом или разрешением. UI открывается из чата по
+`/work-orders/chat-journal?run_id=…`: детали и наблюдения, без кнопки исполнения.
+Проверка UI: `cd frontend && PLAYWRIGHT_MOCK_API=1 npx playwright test tests/e2e/chat-action-journal.spec.ts --project=chromium`.
+Миграция `20260912_0001`, проверки:
 `python3 -m pytest backend/tests/test_chat_action_journal.py backend/tests/test_chat_checkpoints.py -q`.
 
 ## Стек

@@ -314,6 +314,7 @@ export function AssistantPanel() {
   const [input, setInput] = useState("");
   const [isConnected, setIsConnected] = useState(false);
   const [isLegacyChat, setIsLegacyChat] = useState(false);
+  const [durableRunId, setDurableRunId] = useState<string | null>(null);
   const [durableConfirmation, setDurableConfirmation] = useState<DurableConfirmation | null>(null);
   const [decisionPending, setDecisionPending] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -577,6 +578,10 @@ export function AssistantPanel() {
 
   function handleServerMessage(data: Record<string, unknown>) {
     const type = data.type as string;
+    if (type === "durable_run") {
+      setDurableRunId(typeof data.run_id === "string" ? data.run_id : null);
+      return;
+    }
     if (type === "durable_confirmation") {
       setDurableConfirmation((data.checkpoint as DurableConfirmation | null) ?? null);
       return;
@@ -1391,6 +1396,7 @@ export function AssistantPanel() {
           {isLegacyChat ? "Архивный чат: создайте новый для долговечного исполнения." :
             "Долговечный чат: задача работает независимо от вкладки. Подтверждение разрешает одно действие; автоматического повтора после сбоя нет."}
         </p>
+        {durableRunId && <a className="block px-4 pb-2 text-xs text-blue-300 underline" href={`/work-orders/chat-journal?run_id=${encodeURIComponent(durableRunId)}`}>Журнал и сверка действий</a>}
         {durableConfirmation && (
           <section aria-label="Подтверждение сохранённого действия" className="m-3 rounded border border-amber-600 p-3 text-sm text-slate-100">
             <p>Разрешить одно действие: <strong>{durableConfirmation.confirmation.tool}</strong>?</p>

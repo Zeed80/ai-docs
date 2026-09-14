@@ -18,7 +18,7 @@ export function middleware(request: NextRequest) {
   const hasAuthCookie = request.cookies.has("access_token");
   if (!hasAuthCookie) {
     const loginUrl = new URL("/auth/login", request.url);
-    loginUrl.searchParams.set("next", pathname);
+    loginUrl.searchParams.set("next", pathname + request.nextUrl.search);
     return NextResponse.redirect(loginUrl);
   }
 

@@ -40,6 +40,7 @@ it("основная панель отправляет HTTP-задачу без 
   fireEvent.keyDown(input, {key: "Enter"});
   await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/agent/chat-runs", expect.objectContaining({method: "POST"})));
   expect(socket).not.toHaveBeenCalled();
+  expect(await screen.findByRole("link", {name: "Журнал и сверка действий"})).toHaveAttribute("href", "/work-orders/chat-journal?run_id=run");
   view.unmount();
   expect(fetcher.mock.calls.some(([path]) => path.endsWith("/cancel"))).toBe(false);
   socket.mockRestore();
