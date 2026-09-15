@@ -81,3 +81,25 @@ async def test_unknown_handler_failure_is_explicit_and_not_retried():
     result = await execute_skill({"_method": "mcp", "_handler": handler}, {}, BuiltinAgentConfig())
     handler.assert_awaited_once()
     assert result["status"] == "outcome_unknown"
+
+
+@pytest.mark.asyncio
+async def test_logical_key_is_transport_metadata_not_model_arguments(monkeypatch):
+    from app.ai import agent_loop
+
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.post.return_value = httpx.Response(200, json={"status": "proposed"})
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", MagicMock(return_value=client))
+    monkeypatch.setattr(agent_loop, "internal_headers", lambda: {"Authorization": "test-context"})
+    args = {"action": "task_propose", "objective": "Test"}
+    await execute_skill(
+        {"method": "POST", "path": "/api/agent/cap/agent_control"},
+        args,
+        BuiltinAgentConfig(),
+        idempotency_key="logical-action:attempt",
+    )
+    sent = client.post.call_args.kwargs
+    assert sent["headers"]["X-Agent-Idempotency-Key"] == "logical-action:attempt"
+    assert sent["headers"]["Authorization"] == "test-context"
+    assert sent["json"] == args

@@ -804,6 +804,7 @@ async def execute_skill(
     config: BuiltinAgentConfig,
     *,
     approval_granted: bool = False,
+    idempotency_key: str | None = None,
 ) -> dict:
     from app.ai.tool_transport import retry_safe, unknown_outcome
 
@@ -850,6 +851,8 @@ async def execute_skill(
     for attempt in range(max_retries):
         try:
             _hdrs = internal_headers()
+            if idempotency_key is not None:
+                _hdrs["X-Agent-Idempotency-Key"] = idempotency_key
             if approval_granted:
                 _hdrs["X-Agent-Approval"] = "granted"
                 # Привязываем одобрение к КОНКРЕТНЫМ аргументам вызова.
@@ -2874,11 +2877,22 @@ class AgentSession:
             self._pending_args_override = None
 
         if skill:
+            receipt_options = {}
+            action_id = getattr(self, "_checkpoint_action_ids", {}).get(tc_id)
+            attempt_id = getattr(self, "_recipient_attempt_id", None)
+            if (
+                action_id
+                and attempt_id
+                and skill.get("path") == "/api/agent/cap/agent_control"
+                and args.get("action") == "task_propose"
+            ):
+                receipt_options["idempotency_key"] = f"{action_id}:{attempt_id}"
             result = await execute_skill(
                 skill,
                 args,
                 self._config,
                 approval_granted=approval_granted,
+                **receipt_options,
             )
         else:
             available = sorted(self._skill_map.keys())[:30]

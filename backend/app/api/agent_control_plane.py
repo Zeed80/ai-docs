@@ -13,8 +13,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, Header, HTTPException
+from pydantic import AliasChoices, BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -227,7 +227,11 @@ class AgentTaskOut(BaseModel):
     status: str
     team_id: uuid.UUID | None = None
     output: str | None = None
-    metadata_: dict | None = Field(None, serialization_alias="metadata")
+    metadata_: dict | None = Field(
+        None,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
     created_at: datetime
     updated_at: datetime
 
@@ -546,7 +550,12 @@ async def _create_agent_task(payload: AgentTaskCreate, db: AsyncSession) -> Agen
     return task
 
 
-async def _propose_agent_task(payload: AgentTaskPropose, db: AsyncSession) -> AgentTask:
+async def _propose_agent_task(
+    payload: AgentTaskPropose,
+    db: AsyncSession,
+    *,
+    commit: bool = True,
+) -> AgentTask:
     metadata = {
         "proposal_kind": "agent_task",
         "approval_required": True,
@@ -565,7 +574,10 @@ async def _propose_agent_task(payload: AgentTaskPropose, db: AsyncSession) -> Ag
         metadata_=metadata,
     )
     db.add(task)
-    await db.commit()
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
     await db.refresh(task)
     return task
 
@@ -1020,9 +1032,27 @@ async def propose_agent_task_tool(
     payload: AgentTaskPropose,
     db: AsyncSession = Depends(get_db),
     _user: UserInfo = Depends(require_role(UserRole.admin)),
-) -> AgentTask:
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> AgentTask | dict:
     """Skill: task.propose — Propose autonomous work without executing it."""
-    return await _propose_agent_task(payload, db)
+    if idempotency_key is None:
+        return await _propose_agent_task(payload, db)
+    from app.domain.action_receipts import prepare_proposal_receipt, record_proposal_receipt
+
+    action, receipt = await prepare_proposal_receipt(
+        db,
+        idempotency_key,
+        _user,
+        payload,
+        AgentTaskPropose,
+    )
+    if receipt is not None:
+        return receipt["response"]
+    task = await _propose_agent_task(payload, db, commit=False)
+    response = AgentTaskOut.model_validate(task).model_dump(mode="json", by_alias=True)
+    await record_proposal_receipt(db, action, response)
+    await db.commit()
+    return response
 
 
 @router.post("/tasks/{task_id}/decide", response_model=AgentTaskOut)

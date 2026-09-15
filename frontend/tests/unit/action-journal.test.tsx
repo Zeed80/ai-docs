@@ -11,6 +11,21 @@ const response = (value: unknown, status = 200) => new Response(JSON.stringify(v
 beforeEach(() => fetcher.mockReset());
 afterEach(cleanup);
 
+it("показывает квитанцию отдельно от потерянного ответа без автоматического продолжения", async () => {
+  fetcher.mockResolvedValueOnce(response({items: [action], next_offset: 1, work_order_status: "blocked"}))
+    .mockResolvedValueOnce(response({...detail, recipient_receipt: {
+      operation: "agent_control.task_propose", response: {id: "committed-task-42"},
+      response_digest: "b".repeat(64), evidence_scope: "database_commit",
+    }}));
+  render(<ActionJournal runId="run" />);
+  fireEvent.click(await screen.findByRole("button", {name: /email.send/}));
+  await screen.findByRole("region", {name: "Квитанция получателя"});
+  expect(screen.getByText(/committed-task-42/)).toBeInTheDocument();
+  expect(screen.getByText("Результат не сохранён")).toBeInTheDocument();
+  expect(screen.getByText(/Это не проверка текущего состояния/)).toBeInTheDocument();
+  expect(fetcher.mock.calls.every(([, init]) => init?.method === "GET")).toBe(true);
+});
+
 async function open(status = "outcome_unknown", workStatus = "blocked") {
   fetcher.mockResolvedValueOnce(response({items: [{...action, status}], next_offset: 1, work_order_status: workStatus}))
     .mockResolvedValueOnce(response({...detail, status}));

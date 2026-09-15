@@ -6,7 +6,8 @@ import { mutFetch } from "@/lib/auth";
 type Observation = { request_id: string; actor?: string; outcome: string; note: string; evidence_reference: string };
 type Action = { id: string; tool: string; status: string; request_digest: string; latest_observation: Observation | null };
 type Page = { items: Action[]; next_offset: number; work_order_status: string };
-type Detail = { id: string; status: string; request: unknown; result: unknown; request_digest: string; result_digest: string | null };
+type Detail = { id: string; status: string; request: unknown; result: unknown; request_digest: string; result_digest: string | null;
+  recipient_receipt?: { operation: string; response: unknown; response_digest: string; evidence_scope: string } | null };
 type Submission = { request_id: string; request_digest: string; outcome: string; note: string; evidence_reference: string };
 const labels: Record<string, string> = {
   planned: "Не начато", started: "Вызов начат", waiting_confirmation: "Ожидает подтверждения",
@@ -106,6 +107,13 @@ function ActionDetail({runId, action, stopped}: {runId: string; action: Action; 
       <p className="break-all text-xs">Хеш запроса: {detail.request_digest}</p>
       <h3>Точные аргументы</h3><pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(detail.request, null, 2)}</pre>
       <h3>Сохранённый ответ</h3><pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all text-xs">{detail.result_digest ? JSON.stringify(detail.result, null, 2) : "Результат не сохранён"}</pre>
+      {detail.recipient_receipt && <section aria-label="Квитанция получателя" className="space-y-1">
+        <h3>Квитанция получателя</h3>
+        <p>Операция: {detail.recipient_receipt.operation}</p>
+        <p>Подтверждена запись в БД в момент выполнения. Это не проверка текущего состояния объекта и не подтверждение внешней доставки. Повтор и продолжение не разрешены автоматически.</p>
+        <p className="break-all text-xs">Хеш ответа: {detail.recipient_receipt.response_digest}</p>
+        <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(detail.recipient_receipt.response, null, 2)}</pre>
+      </section>}
       {saved && <section aria-label="Последнее наблюдение" aria-live="polite" className="space-y-1">
         <h3>Последнее наблюдение — не проверено</h3>
         <p>{outcomes[saved.outcome] ?? saved.outcome}</p><p className="whitespace-pre-wrap break-words">{saved.note}</p>

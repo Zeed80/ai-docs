@@ -11,8 +11,12 @@
 Журнал `/api/agent/chat-runs/{id}/actions` хранит логические UUID, запросы и результаты
 атомарно с checkpoint (миграция `20260912_0001`). Наблюдения владельца сохраняются
 без разрешения повторить неизвестный эффект. UI журнала и наблюдений доступен
-из чата по `/work-orders/chat-journal?run_id=…`. Проверенные receipts получателей —
-следующий этап. Проверка UI: `cd frontend && PLAYWRIGHT_MOCK_API=1 npx playwright test tests/e2e/chat-action-journal.spec.ts --project=chromium`.
+из чата по `/work-orders/chat-journal?run_id=…`. Для `agent_control.task_propose`
+реализован пилот: предложение и квитанция атомарны в БД, ключ связан с владельцем,
+аргументами и действующей попыткой; дубликат не создаёт задачу. UI показывает
+квитанцию прошлого commit, но не разрешает продолжение. Расширение на другие
+операции остаётся в плане. Проверка: `python3 -m pytest backend/tests/test_action_receipts.py -q`.
+Проверка UI: `cd frontend && PLAYWRIGHT_MOCK_API=1 npx playwright test tests/e2e/chat-action-journal.spec.ts --project=chromium`.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при
 сетевой ошибке/HTTP 5xx дают outcome_unknown и блокируют durable-цикл после

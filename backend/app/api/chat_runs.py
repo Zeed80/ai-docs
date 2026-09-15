@@ -389,6 +389,7 @@ async def get_chat_action(
     db: AsyncSession = Depends(get_db),
     user: UserInfo = Depends(get_current_user),
 ):
+    from app.domain.action_receipts import read_receipt
     from app.domain.chat_action_journal import action_state, digest
 
     run = await owned_run(db, run_id, user)
@@ -407,6 +408,7 @@ async def get_chat_action(
         "request_digest": action.request_digest,
         "result": action.result,
         "result_digest": action.result_digest,
+        "recipient_receipt": await read_receipt(db, action),
         "can_replay": False,
     }
 

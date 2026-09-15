@@ -211,6 +211,7 @@ async def _run_durable_chat(
     checkpointed = callable(getattr(agent._executor, "set_checkpoint_sink", None))
     if checkpointed:
         agent._executor.set_checkpoint_sink(save_snapshot)
+        agent._executor._recipient_attempt_id = str(attempt_id)
 
     authorization_used = False
 

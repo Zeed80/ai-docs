@@ -13,6 +13,7 @@ The target implementation structure is:
 ## Build, Test, and Development Commands
 
 Актуальный агентский срез: `AGENT_EMPLOYEE_IMPLEMENTATION_PLAN.md`.
+Атомарная квитанция получателя (пилот task_propose): `python3 -m pytest backend/tests/test_action_receipts.py -q`.
 Проверки границ и разрешений: `python3 -m pytest backend/tests/test_agent_execution_boundary.py backend/tests/test_agent_delegations.py -q`.
 Пилот долговечного чата: `python3 -m pytest backend/tests/test_durable_chat.py backend/tests/test_work_order_checkpoint.py -q`.
 Снимки исполнения и одноразовое продолжение после подтверждения владельца: `python3 -m pytest backend/tests/test_chat_checkpoints.py -q`.
