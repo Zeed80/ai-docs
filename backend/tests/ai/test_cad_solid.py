@@ -1139,3 +1139,39 @@ def test_a_reader_evidence_doubt_blocks_unless_the_sheet_confirmed_the_geometry(
     gate = solid_build_gate(verified, candidate)
     assert gate["allowed"] is True, gate
     assert any("подтверждена по самому листу" in item for item in gate["warnings"])
+
+
+def test_every_turned_feature_parameter_has_a_provenance_and_none_is_guessed():
+    """Живой z4-r4: параметры без происхождения граф считает угаданными
+    (начало и длина проверенного по листу паза, шаг и длина резьбы, ребро
+    фаски) — и полностью подтверждённый вал уходил в черновик на проверку."""
+    spec = _shaft_spec(
+        main_view={
+            "outer": [
+                {
+                    "diameter_mm": 18,
+                    "length_mm": 15,
+                    "thread": {
+                        "designation": "M18x1.5",
+                        "nominal_diameter_mm": 18,
+                        "pitch_mm": 1.5,
+                    },
+                },
+                {"diameter_mm": 30, "length_mm": 60},
+            ],
+            "keyways": [{"axial_start_mm": 25, "length_mm": 22, "width_mm": 8, "depth_mm": 4}],
+            "chamfers": [{"size_mm": 1.6, "location": "left_end", "angle_deg": 45}],
+        }
+    )
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+
+    kinds = {feature.kind for feature in candidate.features}
+    assert {"revolve", "thread", "keyway", "chamfer"} <= kinds, kinds
+    for feature in candidate.features:
+        if feature.kind not in {"revolve", "thread", "keyway", "chamfer"}:
+            continue
+        for name in feature.params:
+            provenance = feature.param_provenance.get(name)
+            assert provenance is not None, (feature.kind, name)
+            assert provenance.origin != "guessed", (feature.kind, name)

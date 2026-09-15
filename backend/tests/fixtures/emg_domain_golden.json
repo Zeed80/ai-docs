@@ -7,8 +7,8 @@
       "input": {"fixture": "detal_126_reference_spec_v2.json"},
       "expected": {
         "profile": "mechanical",
-        "canonical_sha256": "93e8aeb0139ce21e4852349c9666c4eb27972843c088bb31533be257ef48ecae",
-        "production_artifact_hash": "242b773ddd52ec9e7dcbaaa9e951dcbdb756418c4f1b9d7d47aef59a4ed6420e",
+        "canonical_sha256": "ddf5f9e961964c7cfc3dc12d2a8ed59846d77541132d17baf6d8f86ec5d8d9ac",
+        "production_artifact_hash": "6022b5c1ef2cdf5eb3fff6fa6897c3406707b652faa53723336d3a5634112856",
         "assertion_count": 246,
         "nodes_by_type": {"BuildOperation": 9, "DocumentSet": 1, "Material": 1, "Product": 1, "Sheet": 1, "View": 4},
         "edges_by_type": {"applies_to": 1, "contains": 6, "depends_on": 9},

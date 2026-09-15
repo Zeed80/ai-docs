@@ -792,6 +792,24 @@ def _one_rotation_body_features(body: dict) -> tuple[list[Feature3D], list[str]]
                                 "diameter_mm": ParamProvenance(
                                     origin="stated", detail="номинальный диаметр резьбы"
                                 ),
+                                "axial_start_mm": ParamProvenance(
+                                    origin="propagated", detail="начало резьбовой ступени"
+                                ),
+                                "length_mm": ParamProvenance(
+                                    origin="propagated", detail="длина резьбовой ступени"
+                                ),
+                                "internal": ParamProvenance(
+                                    origin="propagated",
+                                    detail="внутренняя — на расточке, наружная — на ступени",
+                                ),
+                                "pitch_mm": ParamProvenance(
+                                    origin="stated" if pitch else "standard",
+                                    detail=(
+                                        "шаг указан в обозначении"
+                                        if pitch
+                                        else "крупный шаг метрической резьбы по стандарту"
+                                    ),
+                                ),
                             },
                             confidence=0.85,
                             body_index=body_index,
@@ -985,10 +1003,35 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
                     "angle_deg": _num(keyway.get("angle_deg")) or 0.0,
                     "end_type": keyway.get("end_type") or "closed",
                 },
+                # Каждый параметр — с происхождением: без него граф считает
+                # значение угаданным, и проверенный по листу паз уводил всю
+                # сборку в черновик (живой z4-r4).
                 param_provenance={
+                    "axial_start_mm": ParamProvenance(
+                        origin="stated", detail="положение паза с чертежа"
+                    ),
+                    "length_mm": ParamProvenance(origin="stated", detail="длина паза с чертежа"),
                     "width_mm": ParamProvenance(origin="stated", detail="ширина паза с чертежа"),
                     "depth_mm": ParamProvenance(
                         origin="stated", detail="глубина паза t1 с чертежа"
+                    ),
+                    "angle_deg": ParamProvenance(
+                        origin="stated"
+                        if _num(keyway.get("angle_deg")) is not None
+                        else "standard",
+                        detail=(
+                            "угловое положение паза с чертежа"
+                            if _num(keyway.get("angle_deg")) is not None
+                            else "паз лицом к главному виду"
+                        ),
+                    ),
+                    "end_type": ParamProvenance(
+                        origin="stated" if keyway.get("end_type") else "standard",
+                        detail=(
+                            "исполнение паза с чертежа"
+                            if keyway.get("end_type")
+                            else "закрытый призматический паз по ГОСТ 23360"
+                        ),
                     ),
                 },
                 confidence=0.85,
@@ -1363,6 +1406,19 @@ def _edge_features(
                     param_provenance={
                         "size_mm": ParamProvenance(
                             origin="stated", detail=f"размер {kind} с чертежа"
+                        ),
+                        "edge_selector": ParamProvenance(
+                            origin="propagated",
+                            detail=f"ребро по месту на детали ({item.get('location')})",
+                        ),
+                        **(
+                            {
+                                "angle_deg": ParamProvenance(
+                                    origin="stated", detail="угол фаски с чертежа"
+                                )
+                            }
+                            if "angle_deg" in params
+                            else {}
                         ),
                     },
                     confidence=0.75,
