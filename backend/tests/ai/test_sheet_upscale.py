@@ -150,3 +150,18 @@ def test_a_sheet_that_disagrees_everywhere_is_not_taken(monkeypatch):
 
     assert result.applied is False
     assert "расходится" in result.reason
+
+
+def test_a_hollow_stroke_from_a_large_upscale_is_filled_and_text_keeps_its_holes():
+    """Живой part_02 (×8): основная линия вышла двумя полосками с белым зазором."""
+    image = np.full((60, 200), 255, np.uint8)
+    image[20:23, 10:190] = 0  # полоска
+    image[25:28, 10:190] = 0  # полоска, зазор 2 px
+    image[40:56, 150:170] = 0  # «буква» с просветом 8 px
+    image[44:52, 156:164] = 255
+
+    filled = sheet_upscale.fill_hollow_strokes(image, 8)
+
+    assert (filled[20:28, 20:180] < 128).all()  # штрих сплошной
+    assert (filled[45:51, 157:163] > 128).all()  # просвет буквы цел
+    assert (sheet_upscale.fill_hollow_strokes(image, 3) == image).all()  # ×3 — не трогаем

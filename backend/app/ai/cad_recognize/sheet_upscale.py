@@ -52,6 +52,8 @@ _SHIFT_PX = 1
 # Больше этой доли несошедшихся плиток — расхождение системное, лист целиком
 # не берётся; меньше — несошедшиеся заменяются простым увеличением.
 _MAX_PATCHED_SHARE = 0.01
+# С этого коэффициента SeedVR2 рисует толстую линию полой (part_02, ×8).
+_HOLLOW_FILL_FACTOR = 5
 _TILE_PX = 16
 _TILE_MIN_STD = 12.0
 # Плитка сравнивается, только если у исходника в ней есть чернила: на фото
@@ -352,6 +354,27 @@ def _vram_free(comfy: str) -> int | None:
         return None
 
 
+def fill_hollow_strokes(upscaled: Any, factor: int) -> Any:
+    """Закрыть светлый зазор внутри штриха, нарисованного SeedVR2 «полым».
+
+    Живой part_02 (лист 600 px, ×8): основная линия вышла двумя полосками по
+    2–3 px с белым зазором 2 px — разбор вида видел две тонкие линии, у
+    ступени не было пары основных кромок, и вал не находился. Серое
+    морфологическое открытие 3×3 (минимум, затем максимум) закрывает
+    зазоры до 2 px; просветы букв при таком увеличении много шире. Только
+    для больших коэффициентов (от ×5): при ×3 полых штрихов не было
+    (z4-r4), и лист не трогается.
+    """
+    import cv2
+    import numpy as np
+
+    if factor < _HOLLOW_FILL_FACTOR:
+        return upscaled
+    return cv2.morphologyEx(
+        np.asarray(upscaled, dtype=np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8)
+    )
+
+
 def upscale_sheet(
     content: bytes,
     *,
@@ -402,7 +425,7 @@ def upscale_sheet(
     finally:
         # Ридер идёт следом на той же карте.
         gpu_lock.unload_comfyui()
-    upscaled = np.asarray(Image.open(io.BytesIO(raw)).convert("L"))
+    upscaled = fill_hollow_strokes(np.asarray(Image.open(io.BytesIO(raw)).convert("L")), factor)
     seconds = time.monotonic() - started
     scores = agreement(gray, upscaled)
     patched = 0
