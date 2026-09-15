@@ -3979,6 +3979,31 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     # Сечения на листе — сплошные круги (живой z4-r4: А-А и Б-Б
                     # через пазы): вал сплошной доказан, «разрез не прочитан»
                     # становится предупреждением (`cad_solid.solid_build_gate`).
+                    # Вся геометрия подтверждена листом: каждая ступень, паз и
+                    # поперечное отверстие — «подтверждено», опровергнутого нет
+                    # (фаски и канавки не в счёт: их размер на листе условен).
+                    checked = [
+                        item
+                        for item in verification["items"]
+                        if item["kind"] in {"shaft_step", "keyway", "cross_hole"}
+                    ]
+                    steps_confirmed = [
+                        item
+                        for item in checked
+                        if item["kind"] == "shaft_step" and item["status"] == "confirmed"
+                    ]
+                    if (
+                        len(steps_confirmed) >= 2
+                        and all(item["status"] == "confirmed" for item in checked)
+                        and not any(i["status"] == "refuted" for i in verification["items"])
+                    ):
+                        spec = {
+                            **spec,
+                            "sheet_verified": {
+                                "all_confirmed": True,
+                                "confirmed": len(checked),
+                            },
+                        }
                     sections = verification.get("sections") or {}
                     if sections.get("solid"):
                         spec = {

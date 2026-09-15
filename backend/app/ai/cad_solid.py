@@ -141,7 +141,21 @@ def solid_build_gate(
             )
         )
     ]
-    blockers = [item for item in unresolved if item not in non_geometric]
+    # Не про геометрию тела: нечитаемые рамки допусков формы и расположения
+    # (живой z4-r4: «PMI: 4 рамок с неразличимым знаком»), и сомнение в
+    # свидетельствах ридера, когда каждую ступень и паз подтвердил сам лист
+    # (`sheet_verified`, проверка по листу, опровергнутого нет).
+    sheet_verified = bool((spec.get("sheet_verified") or {}).get("all_confirmed"))
+    advisory = [
+        item
+        for item in unresolved
+        if item not in non_geometric
+        and (
+            item.startswith("PMI:")
+            or (sheet_verified and "не удалось отделить геометрию от аннотаций" in item)
+        )
+    ]
+    blockers = [item for item in unresolved if item not in non_geometric and item not in advisory]
     from app.ai.cad_dimension_graph import build_dimension_graph
 
     blockers.extend(build_dimension_graph(spec)["errors"])
@@ -172,6 +186,15 @@ def solid_build_gate(
         item + " (не блокирует: это технологический параметр, геометрия резьбы из стандарта)"
         for item in non_geometric
     ]
+    warnings.extend(
+        item
+        + (
+            " (не блокирует: допуски формы и расположения на тело не влияют)"
+            if item.startswith("PMI:")
+            else " (не блокирует: вся геометрия подтверждена по самому листу)"
+        )
+        for item in advisory
+    )
     has_section = any(
         str(view.get("kind") or "").lower() in {"section", "cut", "разрез", "сечение"}
         for view in spec.get("views") or []

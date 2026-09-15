@@ -1112,3 +1112,30 @@ def test_a_section_on_the_sheet_blocks_a_solid_build_unless_it_is_shown_solid():
     gate = solid_build_gate(shown, candidate)
     assert gate["allowed"] is True, gate
     assert any("разрез не прочитан" in item for item in gate["warnings"])
+
+
+def test_unreadable_tolerance_frames_do_not_block_the_body():
+    """Живой z4-r4: «PMI: 4 рамок с неразличимым знаком» держало сборку вала,
+    хотя допуски формы и расположения на геометрию тела не влияют."""
+    spec = _shaft_spec(unresolved=["PMI: 4 рамок с неразличимым знаком или значением"])
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+
+    gate = solid_build_gate(spec, candidate)
+
+    assert gate["allowed"] is True, gate
+    assert any(item.startswith("PMI:") for item in gate["warnings"])
+
+
+def test_a_reader_evidence_doubt_blocks_unless_the_sheet_confirmed_the_geometry():
+    doubt = "малые элементы: evidence: не удалось отделить геометрию от аннотаций (пробовали: цвет)"
+    spec = _shaft_spec(unresolved=[doubt])
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+
+    assert solid_build_gate(spec, candidate)["allowed"] is False
+
+    verified = {**spec, "sheet_verified": {"all_confirmed": True, "confirmed": 2}}
+    gate = solid_build_gate(verified, candidate)
+    assert gate["allowed"] is True, gate
+    assert any("подтверждена по самому листу" in item for item in gate["warnings"])
