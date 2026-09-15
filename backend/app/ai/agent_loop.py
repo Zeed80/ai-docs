@@ -805,6 +805,8 @@ async def execute_skill(
     *,
     approval_granted: bool = False,
 ) -> dict:
+    from app.ai.tool_transport import retry_safe, unknown_outcome
+
     # MCP-derived skill entries (built-in or external-server tools loaded by
     # _init_mcp/load_mcp_tools) carry a direct async handler instead of an
     # HTTP method/path — call it in-process. Without this branch every MCP
@@ -814,7 +816,7 @@ async def execute_skill(
         try:
             return await skill["_handler"](args)
         except Exception as exc:
-            return {"error": str(exc)}
+            return unknown_outcome(f"Handler failed: {type(exc).__name__}")
 
     method = skill["method"].upper()
     path = skill["path"]
@@ -842,7 +844,8 @@ async def execute_skill(
             body_args[k] = v
 
     url = base_url + path
-    max_retries = 3
+    safe_to_retry = retry_safe(skill, args)
+    max_retries = 3 if safe_to_retry else 1
     last_error: Exception | None = None
     for attempt in range(max_retries):
         try:
@@ -874,6 +877,8 @@ async def execute_skill(
                     return resp.json()
                 except Exception:
                     return {"text": resp.text[:2000]}
+            elif resp.status_code >= 500 and not safe_to_retry:
+                return unknown_outcome(f"HTTP {resp.status_code}; recipient outcome not confirmed")
             elif resp.status_code in {502, 503, 504} and attempt < max_retries - 1:
                 last_error = Exception(f"HTTP {resp.status_code}")
                 await asyncio.sleep(2**attempt)
@@ -891,7 +896,9 @@ async def execute_skill(
                     return {"status": f"HTTP {resp.status_code}", **detail}
                 return {"error": f"HTTP {resp.status_code}", "detail": resp.text[:300]}
 
-        except (httpx.TimeoutException, httpx.ConnectError) as e:
+        except httpx.TransportError as e:
+            if not safe_to_retry:
+                return unknown_outcome(f"Transport failed: {type(e).__name__}")
             last_error = e
             logger.warning(
                 "skill_http_retry",
@@ -902,6 +909,8 @@ async def execute_skill(
             if attempt < max_retries - 1:
                 await asyncio.sleep(2**attempt)
         except Exception as e:
+            if not safe_to_retry:
+                return unknown_outcome(f"Transport outcome unavailable: {type(e).__name__}")
             return {"error": str(e)}
 
     return {"error": f"Skill execution failed after {max_retries} attempts: {last_error}"}
@@ -2983,6 +2992,12 @@ class AgentSession:
                         "result": result,
                     },
                 )
+                if isinstance(result, dict) and result.get("status") == "outcome_unknown":
+                    from app.ai.chat_checkpoint import ChatOutcomeUnknown
+
+                    raise ChatOutcomeUnknown(
+                        "Tool outcome unknown; recipient verification required"
+                    )
             self._trim_history()
         return results
 

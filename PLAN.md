@@ -49,6 +49,9 @@ isProject: false
 из чата: детали действий, пагинация, запись наблюдения и источник. Проверка:
 `cd frontend && PLAYWRIGHT_MOCK_API=1 npx playwright test tests/e2e/chat-action-journal.spec.ts --project=chromium`.
 Проверенные receipts получателей и продолжение по ним ещё в плане.
+Предварительно устранён слепой HTTP retry: повторяется только проверенное чтение;
+неизвестный эффект сохраняется и блокирует durable-цикл. Проверка:
+`python3 -m pytest backend/tests/test_tool_transport.py backend/tests/test_chat_checkpoints.py -q`.
 Миграция `20260912_0001`; журнал проверяется `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Проверка: `python3 -m pytest backend/tests/test_chat_checkpoints.py backend/tests/test_durable_chat.py backend/tests/test_work_order_checkpoint.py -q`.
 

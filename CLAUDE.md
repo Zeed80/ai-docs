@@ -25,6 +25,11 @@ AI-сотрудник **Света** (AiAgent agent) обрабатывает с
 `python3 -m pytest backend/tests/test_chat_action_journal.py backend/tests/test_chat_checkpoints.py -q`.
 
 ## Стек
+
+Транспорт повторяет только явно проверенное чтение из tool_catalog. Ошибка сети
+или HTTP 5xx для остальных операций — outcome_unknown без повторной отправки;
+durable-цикл сохраняет результат и блокирует работу до сверки. Receipts получателей
+ещё не реализованы. Проверка: `python3 -m pytest backend/tests/test_tool_transport.py backend/tests/test_chat_checkpoints.py -q`.
 - **Agent**: встроенный Python-агент в `backend/app/ai/` (orchestrator + AgentSession) — AI-сотрудник «Света»; `aiagent/` содержит только конфиги, промпты, реестры skills и сценарии
 - **Backend**: Python / FastAPI + Celery + Redis
 - **Frontend**: Next.js (PWA) + next-intl (RU по умолчанию)

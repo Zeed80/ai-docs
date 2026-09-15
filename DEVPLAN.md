@@ -14,6 +14,9 @@
 из чата по `/work-orders/chat-journal?run_id=…`. Проверенные receipts получателей —
 следующий этап. Проверка UI: `cd frontend && PLAYWRIGHT_MOCK_API=1 npx playwright test tests/e2e/chat-action-journal.spec.ts --project=chromium`.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
+Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при
+сетевой ошибке/HTTP 5xx дают outcome_unknown и блокируют durable-цикл после
+записи журнала. Проверка: `python3 -m pytest backend/tests/test_tool_transport.py backend/tests/test_chat_checkpoints.py -q`.
 Проверка: `python3 -m pytest backend/tests/test_chat_checkpoints.py backend/tests/test_durable_chat.py backend/tests/test_work_order_checkpoint.py -q`.
 
 > Подробный план и фактический статус инженерного направления «Оцифровка в DXF» находятся в [`DXF_CAD_DEVELOPMENT_PLAN.md`](./DXF_CAD_DEVELOPMENT_PLAN.md).

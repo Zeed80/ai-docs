@@ -535,7 +535,7 @@ async def test_expired_decision_stops_worker_before_agent_creation(test_engine, 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failed_phase", ["tool_started", "tool_recorded"])
+@pytest.mark.parametrize("failed_phase", ["tool_started", "tool_recorded", "unknown_result"])
 async def test_worker_journal_failure_fences_effect_and_preserves_unknown_outcome(
     test_engine, monkeypatch, failed_phase
 ):
@@ -560,6 +560,8 @@ async def test_worker_journal_failure_fences_effect_and_preserves_unknown_outcom
 
             async def execute(tc, iteration):
                 effects.append(tc["id"])
+                if failed_phase == "unknown_result":
+                    return "test", {"status": "outcome_unknown", "error": "timeout"}, tc["id"]
                 return "test", {"result": tc["id"]}, tc["id"]
 
             self._executor._execute_single_tool = execute
@@ -587,7 +589,9 @@ async def test_worker_journal_failure_fences_effect_and_preserves_unknown_outcom
             "two": "planned",
         }
         assert all(
-            item["result_available"] is False and item["can_replay"] is False
+            item["result_available"]
+            == (failed_phase == "unknown_result" and item["call_id"] == "one")
+            and item["can_replay"] is False
             for item in page["items"]
         )
         assert (await db.get(WorkOrder, run["work_order_id"])).status == "blocked"

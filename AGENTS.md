@@ -17,6 +17,7 @@ The target implementation structure is:
 Пилот долговечного чата: `python3 -m pytest backend/tests/test_durable_chat.py backend/tests/test_work_order_checkpoint.py -q`.
 Снимки исполнения и одноразовое продолжение после подтверждения владельца: `python3 -m pytest backend/tests/test_chat_checkpoints.py -q`.
 Журнал логических действий, наблюдения владельца и миграция: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
+Безопасность транспортных повторов: `python3 -m pytest backend/tests/test_tool_transport.py backend/tests/test_chat_checkpoints.py -q`.
 UI долговечного чата: `npm test`; браузерная проверка с подставным API — `PLAYWRIGHT_MOCK_API=1 npx playwright test tests/e2e/durable-chat.spec.ts --project=chromium` в `frontend/`.
 UI журнала и наблюдений: `npx vitest run tests/unit/action-journal.test.tsx`; `PLAYWRIGHT_MOCK_API=1 npx playwright test tests/e2e/chat-action-journal.spec.ts --project=chromium` в `frontend/`.
 Проверка frontend: `npm run typecheck` в `frontend/`. Перед выдачей изменений:

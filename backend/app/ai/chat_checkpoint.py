@@ -17,6 +17,10 @@ class ChatCheckpointError(BaseException):
     """Cross model recovery handlers when durable state cannot be recorded."""
 
 
+class ChatOutcomeUnknown(BaseException):
+    """Stop model recovery after saving an uncertain tool outcome."""
+
+
 def pack_checkpoint(state: dict) -> dict:
     if state.get("phase") not in PHASES:
         raise ValueError("Unknown checkpoint phase")

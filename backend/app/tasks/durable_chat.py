@@ -6,7 +6,7 @@ import uuid
 
 from sqlalchemy import func, select
 
-from app.ai.chat_checkpoint import ChatCheckpointError, unpack_checkpoint
+from app.ai.chat_checkpoint import ChatCheckpointError, ChatOutcomeUnknown, unpack_checkpoint
 from app.chat.store import append_chat_message
 from app.db.agent_runtime_models import DurableChatRun
 from app.db.models import ChatMessage, WorkEvent, WorkOrder, WorkPlan, WorkStep, WorkStepAttempt
@@ -28,7 +28,7 @@ async def run_durable_chat(
             session_factory=session_factory,
             agent_factory=agent_factory,
         )
-    except (ChatRunStopped, ChatCheckpointError) as exc:
+    except (ChatRunStopped, ChatCheckpointError, ChatOutcomeUnknown) as exc:
         raise RuntimeError(str(exc)) from exc
 
 
