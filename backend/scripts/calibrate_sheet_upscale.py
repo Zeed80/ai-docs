@@ -26,6 +26,7 @@ def main() -> int:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--corpus", type=pathlib.Path, required=True)
+    parser.add_argument("--shift", type=int, default=0, help="допуск сдвига плитки, px")
     args = parser.parse_args()
     rows = [
         json.loads(line)
@@ -42,7 +43,7 @@ def main() -> int:
             continue
         low = np.asarray(Image.open(args.corpus / f"{low_name}.png").convert("L"))
         sr = np.asarray(Image.open(args.corpus / f"{row['name']}.png").convert("L")).copy()
-        good.append((row["name"], agreement(low, sr)))
+        good.append((row["name"], agreement(low, sr, shift_px=args.shift)))
         # Подделка: подпись одного размера заменить подписью другого.
         truth = json.loads((args.corpus / f"{row['name']}.json").read_text())
         boxes = [
@@ -63,7 +64,7 @@ def main() -> int:
         (ax0, ay0, ax1, ay1), (bx0, by0, _bx1, _by1) = pairs[0]
         patch = sr[by0 : by0 + (ay1 - ay0), bx0 : bx0 + (ax1 - ax0)].copy()
         sr[ay0 : ay0 + patch.shape[0], ax0 : ax0 + patch.shape[1]] = patch
-        forged.append((row["name"], agreement(low, sr)))
+        forged.append((row["name"], agreement(low, sr, shift_px=args.shift)))
 
     def show(title: str, items: list) -> None:
         worst = sorted(item[1]["worst_tile"] for item in items)

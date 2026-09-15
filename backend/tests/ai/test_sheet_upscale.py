@@ -93,3 +93,60 @@ def test_an_unreachable_comfyui_falls_back_to_the_source(monkeypatch):
     assert "апскейл недоступен" in result.reason
     assert result.factor >= 2
     assert calls == ["free"]  # ComfyUI отпущен и после отказа
+
+
+def _fake_comfy(monkeypatch, image: np.ndarray) -> None:
+    monkeypatch.setattr(sheet_upscale, "_vram_free", lambda comfy: None)
+    monkeypatch.setattr("app.ai.gpu_lock.unload_comfyui", lambda: None)
+    monkeypatch.setattr("app.ai.gpu_lock.unload_ollama", lambda: 0)
+
+    def upscale(comfy, png, scale, *, timeout_s=600):
+        buffer = io.BytesIO()
+        Image.fromarray(image).save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    monkeypatch.setattr(sheet_upscale, "run_comfy_upscale", upscale)
+
+
+def _png(array: np.ndarray) -> bytes:
+    buffer = io.BytesIO()
+    Image.fromarray(array).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def test_a_redrawn_label_is_replaced_by_the_plain_upscale_and_the_sheet_is_kept(monkeypatch):
+    """Живой part_01: SeedVR2 перерисовал дату в штампе — 2 плитки из 16 802, и
+    отвергался весь лист. Теперь эти плитки — простым увеличением."""
+    low = _sheet(2)
+    factor = sheet_upscale.upscale_factor(sheet_upscale.main_line_px(low), low.shape, 4.5)
+    size = (low.shape[1] * factor, low.shape[0] * factor)
+    honest = np.asarray(Image.fromarray(low).resize(size, Image.LANCZOS))
+    forged = honest.copy()
+    # Подпись «12» заменена подписью «80» — как перерисованная цифра.
+    forged[100 * factor : 135 * factor, 175 * factor : 210 * factor] = honest[
+        100 * factor : 135 * factor, 625 * factor : 660 * factor
+    ]
+    _fake_comfy(monkeypatch, forged)
+
+    result = sheet_upscale.upscale_sheet(_png(low), comfy_url="http://comfy")
+
+    assert result.applied is True, result.reason
+    assert "простое увеличение" in result.reason
+    assert result.agreement["patched_tiles"] >= 1
+    kept = np.asarray(Image.open(io.BytesIO(result.content)).convert("L")).astype(float)
+    region = (slice(100 * factor, 135 * factor), slice(175 * factor, 210 * factor))
+    # Подделки на месте подписи больше нет — там простое увеличение исходника.
+    assert np.abs(kept[region] - honest[region].astype(float)).mean() < 8.0
+
+
+def test_a_sheet_that_disagrees_everywhere_is_not_taken(monkeypatch):
+    low = _sheet(2)
+    factor = sheet_upscale.upscale_factor(sheet_upscale.main_line_px(low), low.shape, 4.5)
+    rng = np.random.default_rng(1)
+    noise = rng.integers(0, 255, (low.shape[0] * factor, low.shape[1] * factor), dtype=np.uint8)
+    _fake_comfy(monkeypatch, noise)
+
+    result = sheet_upscale.upscale_sheet(_png(low), comfy_url="http://comfy")
+
+    assert result.applied is False
+    assert "расходится" in result.reason

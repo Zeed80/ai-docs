@@ -47,6 +47,11 @@ _VRAM_NEEDED = 11 * 1024**3
 # подделки; честный минимум 0,79; настоящее фото z4-r4 — 0,77. Ложный отказ
 # лишь возвращает исходник, пропуск — выдуманная цифра.
 MIN_TILE_AGREEMENT = 0.72
+# Допуск сдвига плитки при сравнении, px.
+_SHIFT_PX = 1
+# Больше этой доли несошедшихся плиток — расхождение системное, лист целиком
+# не берётся; меньше — несошедшиеся заменяются простым увеличением.
+_MAX_PATCHED_SHARE = 0.01
 _TILE_PX = 16
 _TILE_MIN_STD = 12.0
 # Плитка сравнивается, только если у исходника в ней есть чернила: на фото
@@ -121,15 +126,20 @@ def upscale_factor(line_px: float, shape: tuple[int, int], min_line_px: float) -
     return factor if factor >= 2 else 0
 
 
-def agreement(original: Any, upscaled: Any) -> dict[str, float]:
-    """Совпадение увеличенного листа с исходником после уменьшения обратно.
+def tile_scores(
+    original: Any, upscaled: Any, *, shift_px: int = _SHIFT_PX
+) -> list[tuple[float, int, int]]:
+    """Совпадение по плиткам: ``(корреляция, x, y)`` в координатах исходника.
 
     Корреляция градаций серого по плиткам 16×16 с шагом 8 — только там, где у
     исходника есть чернила и есть рисунок, и не у самого края кадра. Двоичные
     маски чернил не годятся: на 75–100 dpi цифры — пятна в 8–12 px, маски
     разных цифр с допуском в пиксель совпадают (подмена подписи проходила в 41
-    случае из 46). ``worst_tile`` — наихудшая плитка: одна перерисованная
-    подпись обрушивает именно её.
+    случае из 46). Сдвиг на пиксель — не подмена: SeedVR2 рисует тонкий штрих
+    чётче и на пиксель в сторону (part_01: «(√)» знака шероховатости — 0,44
+    без допуска, 0,85 с ним); берётся лучшая корреляция по сдвигам ±``shift_px``.
+    Калибровка (корпус v9-sr): честных 0 из 48 отвергнуто, подделок подписи
+    пропущено 2 из 46 — как без допуска.
     """
     import cv2
     import numpy as np
@@ -144,19 +154,35 @@ def agreement(original: Any, upscaled: Any) -> dict[str, float]:
     grey = source.astype(float)
     ink = _ink(source)
     step = _TILE_PX // 2
-    values = []
+    scores: list[tuple[float, int, int]] = []
     for y in range(_EDGE_PX, height - _TILE_PX - _EDGE_PX + 1, step):
         for x in range(_EDGE_PX, width - _TILE_PX - _EDGE_PX + 1, step):
             if int(ink[y : y + _TILE_PX, x : x + _TILE_PX].sum()) < _TILE_MIN_INK:
                 continue
             a = grey[y : y + _TILE_PX, x : x + _TILE_PX]
-            b = back[y : y + _TILE_PX, x : x + _TILE_PX]
-            if a.std() < _TILE_MIN_STD and b.std() < _TILE_MIN_STD:
+            if (
+                a.std() < _TILE_MIN_STD
+                and back[y : y + _TILE_PX, x : x + _TILE_PX].std() < _TILE_MIN_STD
+            ):
                 continue
             a = a - a.mean()
-            b = b - b.mean()
-            denominator = float(np.sqrt((a * a).sum() * (b * b).sum()))
-            values.append(float((a * b).sum()) / denominator if denominator > 0 else 0.0)
+            best = -1.0
+            for dy in range(-shift_px, shift_px + 1):
+                for dx in range(-shift_px, shift_px + 1):
+                    b = back[y + dy : y + dy + _TILE_PX, x + dx : x + dx + _TILE_PX]
+                    b = b - b.mean()
+                    denominator = float(np.sqrt((a * a).sum() * (b * b).sum()))
+                    best = max(best, float((a * b).sum()) / denominator if denominator > 0 else 0.0)
+            scores.append((best, x, y))
+    return scores
+
+
+def agreement(original: Any, upscaled: Any, *, shift_px: int = _SHIFT_PX) -> dict[str, float]:
+    """Сводка `tile_scores`: ``worst_tile`` — наихудшая плитка (одна
+    перерисованная подпись обрушивает именно её), ``tile_p1`` — 1-й процентиль."""
+    import numpy as np
+
+    values = [score for score, _x, _y in tile_scores(original, upscaled, shift_px=shift_px)]
     if not values:
         return {"worst_tile": 1.0, "tile_p1": 1.0, "tiles": 0.0}
     return {
@@ -164,6 +190,33 @@ def agreement(original: Any, upscaled: Any) -> dict[str, float]:
         "tile_p1": float(np.percentile(values, 1)),
         "tiles": float(len(values)),
     }
+
+
+def patch_disagreeing(
+    original: Any, upscaled: Any, factor: int, *, threshold: float = MIN_TILE_AGREEMENT
+) -> tuple[Any, int]:
+    """Несошедшиеся плитки — простым увеличением исходника (Lanczos).
+
+    Живой part_01: из 16 802 плиток не сошлись 2 — дата в штампе, которую
+    SeedVR2 перерисовал («30.07.2020» → «3000.1000»); весь лист из-за них
+    отвергался. Там, где увеличение расходится с исходником, берётся простое
+    увеличение: оно размыто, но ничего не выдумывает. Возвращает лист и
+    число заменённых плиток.
+    """
+    import cv2
+    import numpy as np
+
+    source = np.asarray(original, dtype=np.uint8)
+    result = np.array(upscaled, dtype=np.uint8, copy=True)
+    plain = cv2.resize(source, (result.shape[1], result.shape[0]), interpolation=cv2.INTER_LANCZOS4)
+    failing = [(x, y) for score, x, y in tile_scores(source, result) if score < threshold]
+    margin = _TILE_PX // 2
+    for x, y in failing:
+        x0, y0 = max(0, (x - margin) * factor), max(0, (y - margin) * factor)
+        x1 = min(result.shape[1], (x + _TILE_PX + margin) * factor)
+        y1 = min(result.shape[0], (y + _TILE_PX + margin) * factor)
+        result[y0:y1, x0:x1] = plain[y0:y1, x0:x1]
+    return result, len(failing)
 
 
 def workflow(image_name: str, scale: int, seed: int = 959948902156062) -> dict:
@@ -352,6 +405,12 @@ def upscale_sheet(
     upscaled = np.asarray(Image.open(io.BytesIO(raw)).convert("L"))
     seconds = time.monotonic() - started
     scores = agreement(gray, upscaled)
+    patched = 0
+    if scores["worst_tile"] < MIN_TILE_AGREEMENT:
+        candidate, patched = patch_disagreeing(gray, upscaled, factor)
+        if patched <= _MAX_PATCHED_SHARE * max(1.0, scores["tiles"]):
+            upscaled = candidate
+            scores = {**agreement(gray, upscaled), "patched_tiles": float(patched)}
     if scores["worst_tile"] < MIN_TILE_AGREEMENT:
         return UpscaleResult(
             content,
@@ -370,7 +429,8 @@ def upscale_sheet(
     return UpscaleResult(
         buffer.getvalue(),
         True,
-        f"лист увеличен ×{factor}: линия {line_px:.1f} px",
+        f"лист увеличен ×{factor}: линия {line_px:.1f} px"
+        + (f"; {patched} плиток расходились — там простое увеличение" if patched else ""),
         line_px=line_px,
         factor=factor,
         seconds=seconds,
