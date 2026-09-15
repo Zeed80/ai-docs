@@ -446,8 +446,11 @@ def _prismatic_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
 
     features: list[Feature3D] = []
     missing: list[str] = []
+    # Keyed by the operation's own parameter: under "thickness_mm" the graph
+    # saw depth_mm with no source and counted it guessed — every plate became
+    # a draft (live part_04: 90 × 100 × 3 built and verified, still preview).
     provenance = {
-        "thickness_mm": ParamProvenance(
+        "depth_mm": ParamProvenance(
             origin="stated", detail="толщина прочитана с чертежа (profile.thickness_mm)"
         )
     }
@@ -576,6 +579,9 @@ def _prismatic_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
                     "diameter_mm": ParamProvenance(origin="stated", detail="Ø отверстия с чертежа"),
                     "center_x_mm": ParamProvenance(origin="stated", detail="координата от центра"),
                     "center_y_mm": ParamProvenance(origin="stated", detail="координата от центра"),
+                    "through": ParamProvenance(
+                        origin="standard", detail="отверстие без глубины на листе — сквозное"
+                    ),
                 },
                 confidence=0.85,
             )
@@ -592,6 +598,22 @@ def _prismatic_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
             return None
         cx, cy = to_base(x, y)
         straight = max(length - width_mm, 0.0)
+        # Every parameter of the capsule's operations needs a source, or the
+        # graph counts it guessed and the whole plate builds as a draft.
+        slot_provenance = {
+            "profile": ParamProvenance(origin="standard", detail="прорезь — капсула"),
+            "depth_mm": ParamProvenance(origin="stated", detail="сквозь толщину пластины"),
+            "center_x_mm": ParamProvenance(origin="stated", detail="центр прорези с чертежа"),
+            "center_y_mm": ParamProvenance(origin="stated", detail="центр прорези с чертежа"),
+            "width_mm": ParamProvenance(origin="propagated", detail="длина прорези минус ширина"),
+            "height_mm": ParamProvenance(origin="stated", detail="ширина прорези с чертежа"),
+            "diameter_mm": ParamProvenance(origin="stated", detail="ширина прорези с чертежа"),
+            "through": ParamProvenance(origin="standard", detail="прорезь сквозная"),
+        }
+
+        def provenance_of(params: dict) -> dict:
+            return {key: slot_provenance[key] for key in params if key in slot_provenance}
+
         if abs(rotation_deg) > 1e-6:
             # Ф2.3: a rotated capsule is one sketch-profile pocket (a
             # closed line/arc loop rotated about the slot's own centre),
@@ -612,46 +634,51 @@ def _prismatic_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
                         "center_y_mm": cy + offset_y,
                     },
                     param_provenance={
+                        **slot_provenance,
                         "sketch_profile": ParamProvenance(
                             origin="stated",
                             detail=(
                                 f"паз {length:g}×{width_mm:g} повёрнут на "
                                 f"{rotation_deg:g}° по прочитанному углу"
                             ),
-                        )
+                        ),
                     },
                     confidence=0.8,
                 )
             )
             continue
         if straight > 0:
+            pocket_params = {
+                "profile": "rectangle",
+                "width_mm": straight,
+                "height_mm": width_mm,
+                "center_x_mm": cx,
+                "center_y_mm": cy,
+                "depth_mm": thickness,
+            }
             features.append(
                 Feature3D(
                     kind="pocket",
                     source_feature_ids=_source_feature_ids(slot),
-                    params={
-                        "profile": "rectangle",
-                        "width_mm": straight,
-                        "height_mm": width_mm,
-                        "center_x_mm": cx,
-                        "center_y_mm": cy,
-                        "depth_mm": thickness,
-                    },
+                    params=pocket_params,
+                    param_provenance=provenance_of(pocket_params),
                     confidence=0.8,
                 )
             )
         # The capsule ends: a slot is a rectangle plus a round at each end.
         for offset in (-straight / 2.0, straight / 2.0):
+            end_params = {
+                "diameter_mm": width_mm,
+                "center_x_mm": cx + offset,
+                "center_y_mm": cy,
+                "through": True,
+            }
             features.append(
                 Feature3D(
                     kind="hole",
                     source_feature_ids=_source_feature_ids(slot),
-                    params={
-                        "diameter_mm": width_mm,
-                        "center_x_mm": cx + offset,
-                        "center_y_mm": cy,
-                        "through": True,
-                    },
+                    params=end_params,
+                    param_provenance=provenance_of(end_params),
                     confidence=0.8,
                 )
             )

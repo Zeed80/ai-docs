@@ -206,6 +206,49 @@ def test_an_adopted_sheet_contour_passes_the_checks_that_blocked_the_live_plate(
     assert checks["ok"], checks
 
 
+def test_every_parameter_of_a_plate_has_a_source_so_it_is_not_a_draft():
+    """Живая планка part_04 (98529320): тело верное, но черновик — у depth_mm
+    (происхождение лежало под ключом thickness_mm) и through не было источника,
+    граф считал их угаданными."""
+    from app.ai.cad_recognize.verifiers.reconcile import apply_contour, contour_decision
+    from app.ai.cad_solid import feature_tree_from_spec
+
+    spec, report = _read_and_report(["unmeasurable", "unmeasurable"])
+    sketch_plate = apply_contour(spec, contour_decision(spec, report))
+    slotted = {
+        "main_view": {
+            "profile": {
+                "shape": "rectangle",
+                "width_mm": 80.0,
+                "height_mm": 50.0,
+                "thickness_mm": 5.0,
+                "holes": [{"center_x_mm": 20.0, "center_y_mm": 10.0, "diameter_mm": 6.0}],
+                "slots": [
+                    {"center_x_mm": -20.0, "center_y_mm": 0.0, "length_mm": 20.0, "width_mm": 8.0},
+                    {
+                        "center_x_mm": 0.0,
+                        "center_y_mm": -10.0,
+                        "length_mm": 16.0,
+                        "width_mm": 6.0,
+                        "rotation_deg": 30.0,
+                    },
+                ],
+            }
+        }
+    }
+
+    for spec_ in (sketch_plate, slotted):
+        candidate = feature_tree_from_spec(spec_)
+        assert candidate is not None
+        for feature in candidate.features:
+            missing = set(feature.params) - set(feature.param_provenance)
+            assert not missing, (feature.kind, missing)
+            guessed = [
+                key for key, value in feature.param_provenance.items() if value.origin == "guessed"
+            ]
+            assert not guessed, (feature.kind, guessed)
+
+
 def test_a_hole_outside_a_sketch_contour_is_still_reported():
     from app.ai.cad_recognize.spec_crosscheck import cross_check_spec
 

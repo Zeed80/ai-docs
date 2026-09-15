@@ -782,7 +782,7 @@ def test_a_plate_becomes_an_extrusion_of_its_read_outline():
     base = candidate.features[0]
     assert base.kind == "extrude"
     assert base.params == {"width_mm": 120, "height_mm": 60, "depth_mm": 10}
-    assert base.param_provenance["thickness_mm"].origin == "stated"
+    assert base.param_provenance["depth_mm"].origin == "stated"
 
 
 def test_a_rounded_plate_keeps_its_read_corner_radius_in_the_kernel_payload():
