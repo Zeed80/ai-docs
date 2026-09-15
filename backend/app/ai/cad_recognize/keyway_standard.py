@@ -51,6 +51,9 @@ _SECTIONS: tuple[tuple[float, float, float, float], ...] = (
 # измерения, а про «это явно другая шпонка».
 _SECTION_TOLERANCE = 0.15
 
+# Паз ближе этого к уступу своей ступени — «упирается в уступ».
+_SHOULDER_GAP_MM = 0.5
+
 
 def standard_section(shaft_diameter_mm: float) -> tuple[float, float] | None:
     """Ширина и глубина паза вала по ГОСТ 23360 для этого диаметра."""
@@ -131,6 +134,20 @@ def ground_keyways(body: dict[str, Any], unresolved: list[str]) -> dict[str, int
         low, high, section = holder
         diameter = _num(section.get("diameter_mm"))
         keyway["on_section_id"] = section.get("id")
+        # Закрытый паз со скруглёнными концами у самой грани уступа не
+        # фрезеруется: конец касается плоскости грани, и ядро строит неверное
+        # тело (живой shaft_detail: паз прочитан с 220 — ровно на уступе
+        # Ø30/Ø50, HTTP 500 «brep_valid False»). Под подозрением положение —
+        # помечаем, и при отказе ядра сборка повторяется без этого паза.
+        if contained and (
+            start - low < _SHOULDER_GAP_MM or high - (start + length) < _SHOULDER_GAP_MM
+        ):
+            keyway["review_required"] = True
+            unresolved.append(
+                f"шпоночный паз {index}: {start:g}..{start + length:g} мм упирается в уступ "
+                f"ступени Ø{diameter:g} ({low:g}..{high:g} мм) — закрытый паз у самой грани "
+                "не фрезеруется; под подозрением положение паза"
+            )
         if not contained:
             summary["straddling"] += 1
             keyway["review_required"] = True

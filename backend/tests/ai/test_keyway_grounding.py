@@ -431,3 +431,26 @@ def test_the_flag_never_enters_the_feature_params():
     from app.ai import cad_solid
 
     assert "review_required" not in inspect.getsource(cad_solid._cut_features)
+
+
+def test_a_closed_keyway_against_a_shoulder_is_marked_disputed():
+    """Живой shaft_detail: паз прочитан с 220 — ровно на уступе Ø30/Ø50; ядро
+    вернуло HTTP 500 («brep_valid False»), а повтор без спорного паза не
+    срабатывал — паз целиком в ступени и спорным не считался."""
+    body = {
+        "outer": [
+            {"diameter_mm": 30.0, "length_mm": 220.0},
+            {"diameter_mm": 50.0, "length_mm": 400.0},
+        ],
+        "keyways": [
+            {"axial_start_mm": 220.0, "length_mm": 120.0, "width_mm": 14.0, "depth_mm": 5.5},
+            {"axial_start_mm": 300.0, "length_mm": 120.0, "width_mm": 14.0, "depth_mm": 5.5},
+        ],
+    }
+    unresolved: list[str] = []
+
+    ground_keyways(body, unresolved)
+
+    assert body["keyways"][0].get("review_required") is True
+    assert not body["keyways"][1].get("review_required")
+    assert any("упирается в уступ" in note for note in unresolved)
