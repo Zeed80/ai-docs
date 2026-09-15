@@ -40,8 +40,9 @@ _MAIN_SHARE = 0.6
 # канавка: shaft-3 — 22 px, shaft-20 — 47 px), вид с торца отделён на 20–33 %.
 # От доли текущего куска профиль рвался, и торец находился на середине вала.
 _GAP_TOTAL_SHARE = 0.05
-# Сколько лучших кандидатов оси проверять на торцы.
-_AXIS_CANDIDATES = 6
+# Сколько лучших кандидатов оси проверять на торцы (part_02: у вала Ø6 на
+# мелком листе ось была седьмой — после рамки и штампа).
+_AXIS_CANDIDATES = 12
 # Второй вид того же вала: торцы на тех же столбцах в пределах этой доли длины.
 _SAME_VIEW_SHARE = 0.02
 
@@ -135,7 +136,11 @@ def locate_shaft_views(sheet: Any, total_length_mm: float) -> list[tuple[ViewFra
         passing.append((axis_y, x0, x1, segment, float(np.nansum(segment))))
     if not passing:
         return []
-    primary = passing[0]
+    # Главный вид — самый длинный из прошедших (при равной длине — первый по
+    # голосам). Живой part_02 (вал Ø6 на листе 600 px): длинные линии рамки и
+    # штампа набирали больше голосов, ось вала в 6 лучших не попадала, а
+    # первым проходил штамп — в 4 раза короче вала.
+    primary = max(passing, key=lambda item: item[2] - item[1])
     reach = _SAME_VIEW_SHARE * (primary[2] - primary[1])
     same_shaft = [
         item
