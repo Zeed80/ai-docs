@@ -16,9 +16,9 @@
  },
  "part_04_planka_gost": {
   "holes": 3,
-  "holes_extra": 2,
-  "holes_right": 0,
-  "thickness_right": 0
+  "holes_extra": 0,
+  "holes_right": 3,
+  "thickness_right": 1
  },
  "shaft_detail": {
   "keyways": 0,

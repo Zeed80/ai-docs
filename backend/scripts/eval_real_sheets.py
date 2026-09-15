@@ -32,9 +32,11 @@ TRUTH = (
 def run_chain(png: bytes, spec: dict) -> dict:
     """Цепочка `cad_trace` без модели: проверка, профиль, согласование, пазы."""
     from app.ai.cad_recognize.verifiers.reconcile import (
+        apply_contour,
         apply_keyway_additions,
         apply_profile,
         apply_reconciliation,
+        contour_decision,
         keyway_additions,
         profile_decision,
         reconcile,
@@ -47,6 +49,11 @@ def run_chain(png: bytes, spec: dict) -> dict:
         spec = apply_profile(spec, adoption)
         report = verify_spec_against_sheet(png, spec)
         report["profile_adoption"] = adoption
+    contour = contour_decision(spec, report)
+    if contour:
+        spec = apply_contour(spec, contour)
+        report = verify_spec_against_sheet(png, spec)
+        report["contour_adoption"] = contour
     decisions = reconcile(spec, report)
     if decisions:
         spec, report = apply_reconciliation(spec, report, decisions)
@@ -145,8 +152,11 @@ def score_plate(result: dict, truth: dict) -> dict:
     Центры спека прямоугольника — от середины пластины; эталон — от кромок.
     """
     profile = (result["spec"].get("main_view") or {}).get("profile") or {}
-    width = float(profile.get("width_mm") or 0.0)
-    height = float(profile.get("height_mm") or 0.0)
+    # У прямоугольника центры — от середины; у эскиза — от его первой вершины,
+    # левого нижнего угла (`plate_contour`).
+    sketch = profile.get("shape") == "sketch"
+    width = 0.0 if sketch else float(profile.get("width_mm") or 0.0)
+    height = 0.0 if sketch else float(profile.get("height_mm") or 0.0)
     got = [
         (
             float(h.get("diameter_mm") or 0.0),

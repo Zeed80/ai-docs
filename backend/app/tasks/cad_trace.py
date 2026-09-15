@@ -3863,6 +3863,43 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         verification = None
                     if verification is not None:
                         verification["profile_adoption"] = adoption
+                # Контур пластины по листу (Ф4/X1): прочитанные отверстия не
+                # подтвердились, а стороны, сопряжения и отверстия по листу
+                # строго объясняются надписями — принимается целиком (живая
+                # планка part_04: Г-образная деталь прочитана прямоугольником).
+                from app.ai.cad_recognize.verifiers.reconcile import (
+                    apply_contour,
+                    contour_decision,
+                )
+
+                contour = contour_decision(spec, verification) if verification else None
+                if contour:
+                    spec = _revalidated_spec(apply_contour(spec, contour))
+                    crosscheck = cross_check_spec(spec, check_ink)
+                    blocking_checks = [
+                        finding["message"]
+                        for finding in crosscheck["findings"]
+                        if finding["severity"] == "error"
+                    ]
+                    dimension_graph = build_dimension_graph(spec)
+                    blocking_checks.extend(dimension_graph["errors"])
+                    await _record(
+                        "reconcile.contour",
+                        "completed",
+                        "Контур пластины собран по листу",
+                        {"decision": contour},
+                    )
+                    try:
+                        verification = verify_spec_against_sheet(content, spec)
+                    except Exception as exc:  # noqa: BLE001 — a check must not break the run
+                        logger.warning(
+                            "cad_verify_failed",
+                            generation_id=generation_id,
+                            error=str(exc)[:200],
+                        )
+                        verification = None
+                    if verification is not None:
+                        verification["contour_adoption"] = contour
                 # Полость по штриховке — только штриховка внутри главного вида,
                 # когда проверка его нашла: сечения через пазы (сплошной круг)
                 # и выносные виды на том же листе полостью не являются.

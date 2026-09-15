@@ -49,7 +49,66 @@ def verify_spec_against_sheet(image_bytes: bytes, spec: dict[str, Any]) -> dict[
         reason = _shaft(image_bytes, (spec or {}).get("main_view") or {}, report, spec or {})
     else:
         reason = "нет проверяемых элементов (пластина, круглая деталь, тело вращения)"
+    if shape in {"rectangle", "sketch"}:
+        _plate_contour(image_bytes, spec or {}, profile, report)
     return _finish(report, started, reason)
+
+
+def _plate_contour(
+    image_bytes: bytes, spec: dict[str, Any], profile: dict[str, Any], report: dict[str, Any]
+) -> None:
+    """Контур пластины по листу (`plate_contour`): предложение, если он не как прочитан.
+
+    Живая планка part_04: Г-образная деталь прочитана прямоугольником с двумя
+    отверстиями не на местах — контур и отверстия по листу собираются точно.
+    Совпал с прочитанным — предложения нет.
+    """
+    from app.ai.cad_recognize.verifiers.plate_contour import propose_contour
+
+    holes = [h for h in profile.get("holes") or [] if isinstance(h, dict)]
+    proposal, why = propose_contour(_gray(image_bytes), spec, read_holes=len(holes))
+    if proposal is None:
+        report["contour_proposal"] = {"profile": None, "reason": why}
+        return
+    if _same_plate(profile, proposal.profile):
+        return
+    report["contour_proposal"] = {
+        "profile": proposal.profile,
+        "side_error_mm": round(proposal.side_error_mm, 3),
+        "bbox_px": [round(float(v), 1) for v in proposal.bbox_px],
+    }
+
+
+def _same_plate(read: dict[str, Any], sheet: dict[str, Any]) -> bool:
+    """Прочитанный прямоугольник совпадает с контуром по листу — и отверстия тоже."""
+    if read.get("shape") != "rectangle":
+        return False
+    width, height = read.get("width_mm"), read.get("height_mm")
+    if not (_is_number(width) and _is_number(height)):
+        return False
+    rectangle = [
+        {"kind": "line", "to": (float(width), 0.0)},
+        {"kind": "line", "to": (float(width), float(height))},
+        {"kind": "line", "to": (0.0, float(height))},
+        {"kind": "line", "to": (0.0, 0.0)},
+    ]
+    if [(s["kind"], tuple(s["to"])) for s in sheet.get("sketch") or []] != [
+        (s["kind"], s["to"]) for s in rectangle
+    ]:
+        return False
+    read_holes = sorted(
+        (
+            round(float(h.get("diameter_mm") or 0), 2),
+            round(float(h.get("center_x_mm") or 0) + float(width) / 2.0, 1),
+            round(float(h.get("center_y_mm") or 0) + float(height) / 2.0, 1),
+        )
+        for h in read.get("holes") or []
+    )
+    sheet_holes = sorted(
+        (round(h["diameter_mm"], 2), round(h["center_x_mm"], 1), round(h["center_y_mm"], 1))
+        for h in sheet.get("holes") or []
+    )
+    return read_holes == sheet_holes
 
 
 def _gray(image_bytes: bytes) -> Any:

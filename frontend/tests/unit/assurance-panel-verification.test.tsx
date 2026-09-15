@@ -193,6 +193,40 @@ describe("AssurancePanel — проверка прочитанного по ли
     expect(screen.getByText(/ридер его не выписал/)).toBeTruthy();
   });
 
+  it("shows a plate contour assembled from the sheet instead of the reading", () => {
+    const verification: SpecVerification = {
+      items: [
+        {
+          kind: "plate_hole",
+          path: "main_view.profile.holes[0]",
+          read: { diameter_mm: 16 },
+          status: "confirmed",
+          measured: {},
+          reason: "",
+        },
+      ],
+      summary: { checked: 1, confirmed: 1, refuted: 0, unmeasurable: 0 },
+      contour_adoption: {
+        reason: "прочитано: rectangle 90 × 100, отверстий 2 — по листу не подтвердились",
+        value: {
+          width_mm: 90,
+          height_mm: 100,
+          holes: [
+            { diameter_mm: 16, center_x_mm: 16, center_y_mm: 14 },
+            { diameter_mm: 10, center_x_mm: 80, center_y_mm: 14 },
+            { diameter_mm: 10, center_x_mm: 80, center_y_mm: 90 },
+          ],
+        },
+      },
+    };
+    render(<AssurancePanel verification={verification} t={t} />);
+
+    expect(
+      screen.getByText("Контур пластины собран по листу: 90 × 100, отверстий 3"),
+    ).toBeTruthy();
+    expect(screen.getByText(/по листу не подтвердились/)).toBeTruthy();
+  });
+
   it("renders nothing when there is nothing checked at all", () => {
     const { container } = render(<AssurancePanel t={t} />);
     expect(container.innerHTML).toBe("");

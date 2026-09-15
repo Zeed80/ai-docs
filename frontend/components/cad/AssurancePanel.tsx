@@ -212,6 +212,18 @@ export default function AssurancePanel({
                 detail={verification.profile_adoption.reason}
               />
             ) : null}
+            {/* Контур пластины собран по листу вместо прочитанного. */}
+            {verification.contour_adoption ? (
+              <Row
+                ok
+                label={t("vector.assurance_contour_adopted", {
+                  width: verification.contour_adoption.value.width_mm,
+                  height: verification.contour_adoption.value.height_mm,
+                  holes: verification.contour_adoption.value.holes?.length ?? 0,
+                })}
+                detail={verification.contour_adoption.reason}
+              />
+            ) : null}
             {/* Пазы, найденные на листе и не выписанные ридером. */}
             {(verification.keyway_additions ?? []).map((addition) => (
               <Row

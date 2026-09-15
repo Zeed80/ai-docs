@@ -582,6 +582,83 @@ def profile_decision(spec: dict[str, Any], report: dict[str, Any]) -> dict[str, 
     }
 
 
+def contour_decision(spec: dict[str, Any], report: dict[str, Any]) -> dict[str, Any] | None:
+    """Принять контур пластины по листу (`plate_contour`) вместо прочитанного.
+
+    Предложение строгое: каждая сторона — надписью, каждое сопряжение —
+    надписью R, каждое отверстие — надписью Ø и координатами по надписям,
+    неоднозначность — отказ. Принимается, если прочитанные отверстия по листу
+    не подтвердились (живая планка part_04: прямоугольник 90 × 100 с двумя
+    отверстиями «на заявленном x окружности нет»). Подтверждённое не
+    заменяется.
+    """
+    proposal = report.get("contour_proposal") or {}
+    sheet = proposal.get("profile")
+    if not sheet:
+        return None
+    items = [item for item in report.get("items") or [] if item.get("kind") == "plate_hole"]
+    if items and all(item.get("status") == "confirmed" for item in items):
+        return None
+    read = (spec.get("main_view") or {}).get("profile") or {}
+    arcs = sorted(
+        {
+            round(
+                ((s["to"][0] - s["center"][0]) ** 2 + (s["to"][1] - s["center"][1]) ** 2) ** 0.5, 1
+            )
+            for s in sheet.get("sketch") or []
+            if s.get("kind") == "arc"
+        }
+    )
+    holes = "; ".join(
+        f"Ø{h['diameter_mm']:g} ({h['center_x_mm']:g}; {h['center_y_mm']:g})"
+        for h in sheet.get("holes") or []
+    )
+    return {
+        "kind": "plate_contour",
+        "path": "main_view.profile",
+        "field": "profile",
+        "action": "adopt",
+        "read": {
+            "shape": read.get("shape"),
+            "width_mm": read.get("width_mm"),
+            "height_mm": read.get("height_mm"),
+            "holes": len(read.get("holes") or []),
+        },
+        "value": sheet,
+        "side_error_mm": float(proposal.get("side_error_mm") or 0.0),
+        "reason": (
+            f"контур по листу {sheet.get('width_mm'):g} × {sheet.get('height_mm'):g}, "
+            f"{len(sheet.get('sketch') or [])} участков"
+            + (f", сопряжения {', '.join(f'R{r:g}' for r in arcs)}" if arcs else "")
+            + f"; отверстия {holes or 'нет'}; прочитано: {read.get('shape')} "
+            f"{read.get('width_mm')} × {read.get('height_mm')}, отверстий "
+            f"{len(read.get('holes') or [])} — по листу не подтвердились"
+        ),
+    }
+
+
+def apply_contour(spec: dict[str, Any], decision: dict[str, Any]) -> dict[str, Any]:
+    """Контур пластины по листу — в копию спека, с происхождением."""
+    spec = copy.deepcopy(spec)
+    main = spec.setdefault("main_view", {})
+    read = main.get("profile") or {}
+    profile = copy.deepcopy(decision["value"])
+    if not profile.get("thickness_mm") and read.get("thickness_mm"):
+        profile["thickness_mm"] = read["thickness_mm"]
+    for index, hole in enumerate(profile.get("holes") or []):
+        hole.setdefault("id", f"0:profile.holes:{index}")
+    main["profile"] = profile
+    provenance = spec.setdefault("provenance", {})
+    if not isinstance(provenance, dict):
+        provenance = {}
+        spec["provenance"] = provenance
+    provenance["main_view.profile"] = {
+        "origin": "sheet_measurement",
+        "detail": decision["reason"],
+    }
+    return spec
+
+
 def apply_profile(spec: dict[str, Any], decision: dict[str, Any]) -> dict[str, Any]:
     """Профиль по листу — в копию спека, с происхождением каждой величины.
 

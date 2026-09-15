@@ -1086,6 +1086,16 @@ export interface SpecVerification {
     depth_mm: number;
     reason: string;
   }>;
+  /** Контур пластины собран по листу (стороны, сопряжения, отверстия) и
+   * принят вместо прочитанного. */
+  contour_adoption?: {
+    reason: string;
+    value: {
+      width_mm: number;
+      height_mm: number;
+      holes?: Array<{ diameter_mm: number; center_x_mm: number; center_y_mm: number }>;
+    };
+  };
   /** Профиль по листу принят вместо прочитанного целиком. */
   profile_adoption?: {
     reason: string;
