@@ -65,7 +65,10 @@ E03 завершена: полный evidence-based инвентарь 323 catal
 commit boundaries защищён fail-closed тестом; 47 недоказанных границ остаются
 `unknown` без automatic retry. Расхождение прав `task_propose` зафиксировано, но
 не исправлялось этой карточкой. Отчёт:
-`docs/agent-employee-delivery/E03-tool-effect-inventory.md`. Далее E04.
+`docs/agent-employee-delivery/E03-tool-effect-inventory.md`.
+E04 завершена: строгий ToolResult v1, отдельные решения об успехе вызова,
+приёмке работы и повторе; неизвестный legacy-ответ не нормализуется в успех.
+Отчёт: `docs/agent-employee-delivery/E04-tool-result-contract.md`. Далее E05.1.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя
 в WorkEvent, проверяет владельца/аргументы/попытку/lease. Детали журнала и UI

@@ -382,7 +382,7 @@ scope/time/action и запреты replay/resume, но нельзя выдум�
 
 ### E04 — Контракт ToolResult и правила классификации
 
-**Статус:** TODO. **После:** E03.
+**Статус:** REVIEWED; отчёт `docs/agent-employee-delivery/E04-tool-result-contract.md`. **После:** E03.
 **Файлы:** `ai/tool_result.py`, существующие consumers; создать
 `backend/tests/test_tool_result_contract.py`.
 

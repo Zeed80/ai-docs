@@ -34,7 +34,10 @@ E03 завершена: 323 активные catalog operations покрыты �
 effect/commit boundaries и fail-closed проверкой; 47 ambiguous boundaries отмечены
 `unknown` с запретом retry. Расхождение catalog/handler RBAC для `task_propose`
 только задокументировано. Отчёт
-`docs/agent-employee-delivery/E03-tool-effect-inventory.md`. Далее E04.
+`docs/agent-employee-delivery/E03-tool-effect-inventory.md`.
+E04 завершена: строгий ToolResult v1 и матрица негативных проверок, независимый
+прогон 110 тестов. Отчёт: `docs/agent-employee-delivery/E04-tool-result-contract.md`.
+Далее E05.1 — перевод адаптеров чтения на контракт.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при
 сетевой ошибке/HTTP 5xx дают outcome_unknown и блокируют durable-цикл после
