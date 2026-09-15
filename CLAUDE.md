@@ -9,6 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 AI-сотрудник **Света** (AiAgent agent) обрабатывает счета, письма, чертежи.
 
 ## Ключевые документы
+- `AGENT_EMPLOYEE_EXECUTION_PLAYBOOK.md` — подробный план передачи реализации другой модели: карточки E00–E52, ограничения, проверки и review gates. Выполнять одну карточку за заход; стартовый незавершённый участок — E00.
 - `AGENT_EMPLOYEE_IMPLEMENTATION_PLAN.md` — актуальный контракт цифрового сотрудника, реализованный срез и остаток работ; приоритет над архивными описаниями генерации скиллов и эвристического роутинга.
 - Основной чат использует HTTP `/api/agent/chat-runs` и сохранённые события. Архивные WS-чаты в UI только для чтения. Checkpoint сохраняется на границах инструментов. Карточка владельца и `POST /{id}/resume` продолжают только остановленное до действия подтверждение: точные аргументы, одноразовое решение на 30 минут, без повтора выполненных вызовов. Сбой с неизвестным эффектом не возобновляется. Проверки: `python3 -m pytest backend/tests/test_chat_checkpoints.py backend/tests/test_durable_chat.py backend/tests/test_work_order_checkpoint.py -q`.
 - `plan_claude.md` — полное ТЗ v2.0 (20 разделов)

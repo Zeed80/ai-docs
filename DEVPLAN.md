@@ -17,6 +17,11 @@
 квитанцию прошлого commit, но не разрешает продолжение. Расширение на другие
 операции остаётся в плане. Проверка: `python3 -m pytest backend/tests/test_action_receipts.py -q`.
 Проверка UI: `cd frontend && PLAYWRIGHT_MOCK_API=1 npx playwright test tests/e2e/chat-action-journal.spec.ts --project=chromium`.
+Подробные задания для последовательной реализации другой моделью:
+[`AGENT_EMPLOYEE_EXECUTION_PLAYBOOK.md`](./AGENT_EMPLOYEE_EXECUTION_PLAYBOOK.md).
+Следующая карточка E00 завершает непроверенную заготовку read-only verification;
+дальше E01–E52. Один ограниченный diff и проверяемый отчёт на карточку;
+опасные изменения не включать до указанного независимого review.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при
 сетевой ошибке/HTTP 5xx дают outcome_unknown и блокируют durable-цикл после

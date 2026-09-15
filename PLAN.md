@@ -48,6 +48,12 @@ isProject: false
 исхода, но не разрешает повтор. UI `/work-orders/chat-journal?run_id=…` доступен
 из чата: детали действий, пагинация, запись наблюдения и источник. Проверка:
 `cd frontend && PLAYWRIGHT_MOCK_API=1 npx playwright test tests/e2e/chat-action-journal.spec.ts --project=chromium`.
+Подробная последовательность остатка для модели-исполнителя:
+[`AGENT_EMPLOYEE_EXECUTION_PLAYBOOK.md`](./AGENT_EMPLOYEE_EXECUTION_PLAYBOOK.md).
+Карточки E00–E52 выполняются по одной, с указанными зависимостями и review gates.
+E00 — непроверенная заготовка сверки текущего AgentTask; её нельзя считать готовой
+по результатам тестов предыдущего пилота.
+
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя
 в WorkEvent, проверяет владельца/аргументы/попытку/lease. Детали журнала и UI
 показывают квитанцию независимо от потерянного ответа worker. Другие операции

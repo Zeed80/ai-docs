@@ -13,6 +13,9 @@ The target implementation structure is:
 ## Build, Test, and Development Commands
 
 Актуальный агентский срез: `AGENT_EMPLOYEE_IMPLEMENTATION_PLAN.md`.
+Подробный план передачи реализации: `AGENT_EMPLOYEE_EXECUTION_PLAYBOOK.md`.
+При поручении продолжить по нему брать одну карточку E00–E52, проверять зависимости,
+неизменяемые ограничения и Definition of Done. Не считать существующий WIP проверенным.
 Атомарная квитанция получателя (пилот task_propose): `python3 -m pytest backend/tests/test_action_receipts.py -q`.
 Проверки границ и разрешений: `python3 -m pytest backend/tests/test_agent_execution_boundary.py backend/tests/test_agent_delegations.py -q`.
 Пилот долговечного чата: `python3 -m pytest backend/tests/test_durable_chat.py backend/tests/test_work_order_checkpoint.py -q`.
