@@ -34,8 +34,13 @@ E02: Terra реализовала owner-only cursor-историю наблюд�
 отсутствие raw HTML/replay. Отчёт:
 `docs/agent-employee-delivery/E02-observation-history.md`. Пройдены 85 целевых
 backend-тестов, 75 frontend unit-тестов, typecheck и 4 Chromium mock-API сценария;
-production-сборка и `/health` проверены. Следующая карточка — E03, инвентаризация
-эффектов и транзакционных границ.
+production-сборка и `/health` проверены.
+E03: доказательная инвентаризация охватывает все 323 активные catalog operations;
+47 неразрешимых или многограничных случаев сохранены как `unknown` с запретом
+automatic retry. Fail-closed тест исключает тихий пропуск новой операции. Выявлено
+catalog/backend расхождение `task_propose` по admin; endpoint не ослаблялся.
+Отчёт: `docs/agent-employee-delivery/E03-tool-effect-inventory.md`. Следующая
+карточка — E04, контракт ToolResult.
 Push накопленной ветки был заблокирован автопроверкой из-за несвязанных CAD-коммитов;
 для публикации всей этой истории нужно отдельное разрешение. Не обходить запрет.
 

@@ -5,6 +5,9 @@ The action enum the model sees is injected from _DISPATCH, so a mismatch would
 mean the model is offered actions that cannot be routed (or vice versa).
 """
 
+import re
+from pathlib import Path
+
 from app.ai.agent_loop import _load_capabilities
 from app.api.capability_router import (
     capability_action_map,
@@ -103,3 +106,40 @@ def test_memory_prune_is_gated():
 
     memory = next(c for c in load_capability_manifest().capabilities if c.name == "memory")
     assert "prune" in memory.gate_actions
+
+
+def test_every_active_catalog_operation_has_a_fail_closed_effect_classification():
+    """E03: the inventory must not silently omit a newly active operation.
+
+    The inventory is intentionally a documentation artifact, rather than a
+    runtime policy source.  It must nevertheless cover the live ``TOOLS``
+    catalog exactly; unknown is an allowed conservative result and explicitly
+    prohibits automatic retry.
+    """
+    from app.ai.tool_catalog import TOOLS
+
+    inventory = (
+        Path(__file__).resolve().parents[2]
+        / "docs/agent-employee-delivery/tool-effect-inventory.md"
+    ).read_text(encoding="utf-8")
+    row_pattern = re.compile(
+        r"^\| `(?P<operation>[^`]+)` \|.*\| "
+        r"`(?P<classification>read-only|one-db-commit|db-async-enqueue|"
+        r"external-dispatch|browser-script-mcp|unknown)`; auto-retry "
+        r"(?P<retry>[^|]+) \|$",
+        re.MULTILINE,
+    )
+    rows = list(row_pattern.finditer(inventory))
+    classifications = {match["operation"]: match for match in rows}
+
+    assert len(classifications) == len(rows), "duplicate operation rows in E03 inventory"
+    assert set(classifications) == set(TOOLS), (
+        "E03 inventory drift: "
+        f"missing={sorted(set(TOOLS) - set(classifications))}; "
+        f"stale={sorted(set(classifications) - set(TOOLS))}"
+    )
+    assert all(
+        match["retry"].strip() == "prohibited"
+        for match in classifications.values()
+        if match["classification"] == "unknown"
+    ), "unknown classifications must prohibit automatic retry"

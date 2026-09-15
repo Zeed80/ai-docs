@@ -30,6 +30,11 @@ E02 завершена: owner-only GET истории наблюдений по 
 мутаций, replay или загрузки ссылки; UI постранично показывает предыдущие записи.
 Отчёт `docs/agent-employee-delivery/E02-observation-history.md`. Следующая
 карточка — E03, инвентаризация effect/commit boundaries.
+E03 завершена: 323 активные catalog operations покрыты документированными
+effect/commit boundaries и fail-closed проверкой; 47 ambiguous boundaries отмечены
+`unknown` с запретом retry. Расхождение catalog/handler RBAC для `task_propose`
+только задокументировано. Отчёт
+`docs/agent-employee-delivery/E03-tool-effect-inventory.md`. Далее E04.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при
 сетевой ошибке/HTTP 5xx дают outcome_unknown и блокируют durable-цикл после

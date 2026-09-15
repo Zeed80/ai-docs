@@ -61,6 +61,11 @@ E01 добавляет owner-facing UI текущей сверки: только
 owner-only история наблюдений постранична по устойчивому `sequence`, отображается
 отдельно от последнего наблюдения, не следует ссылкам и не открывает replay.
 Отчёт: `docs/agent-employee-delivery/E02-observation-history.md`. Далее E03.
+E03 завершена: полный evidence-based инвентарь 323 catalog operations и их effect/
+commit boundaries защищён fail-closed тестом; 47 недоказанных границ остаются
+`unknown` без automatic retry. Расхождение прав `task_propose` зафиксировано, но
+не исправлялось этой карточкой. Отчёт:
+`docs/agent-employee-delivery/E03-tool-effect-inventory.md`. Далее E04.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя
 в WorkEvent, проверяет владельца/аргументы/попытку/lease. Детали журнала и UI

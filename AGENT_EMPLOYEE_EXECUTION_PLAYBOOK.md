@@ -362,7 +362,8 @@ scope/time/action и запреты replay/resume, но нельзя выдум�
 
 ### E03 — Инвентаризация эффектов и транзакционных границ
 
-**Статус:** TODO, docs + проверочный тест. **После:** E02.
+**Статус:** REVIEWED; отчёт
+`docs/agent-employee-delivery/E03-tool-effect-inventory.md`. **После:** E02.
 **Читать:** `ai/tool_catalog.py`, `api/capability_router.py`, route handlers операций.
 **Создать:** `docs/agent-employee-delivery/tool-effect-inventory.md`.
 
