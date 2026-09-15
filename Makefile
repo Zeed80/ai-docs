@@ -4,7 +4,7 @@
         clean rebuild nuke \
         setup health logs ps shell-backend shell-celery shell-frontend \
         migrate migrate-new seed \
-        test test-frontend test-cov e2e regression emg-schema emg-schema-check emg-validate emg-regression emg-live-regression cad-verify-eval cad-verify-baseline cad-verify-corpus agent-regression agent-test agent-ws-smoke \
+        test test-frontend test-cov e2e regression emg-schema emg-schema-check emg-validate emg-regression emg-live-regression cad-verify-eval cad-verify-baseline cad-real-eval cad-verify-corpus agent-regression agent-test agent-ws-smoke \
         studio-queue-smoke cad-kernel-smoke cad-regression cad-candidate-gate cad-drawing-graph-eval cad-emg-corruption emg-artifact-regression emg-mechanical-live emg-domain-builds cad-class-balanced-dev cad-class-balanced-check cad-class-balanced-cycle \
         cad-final-freeze cad-final-leakage \
         cad-corpus-acquire cad-corpus-generate cad-pmi-truth \
@@ -287,6 +287,12 @@ cad-verify-eval:
 		--report ../test-results/cad_verify_gate.json
 
 # Зафиксировать улучшение: переписать базу текущим прогоном (дифф — в коммит).
+# Реальные листы валов (cad-dataset-out/real-sheets, эталон — tests/fixtures/
+# real_sheets_truth.json): цепочка проверки продукта без модели против эталона.
+cad-real-eval:
+	cd backend && PYTHONPATH=. python3 scripts/eval_real_sheets.py \
+		--sheets ../cad-dataset-out/real-sheets --baseline tests/fixtures/real_sheets_gate.json
+
 cad-verify-baseline:
 	cd backend && PYTHONPATH=. python3 scripts/verify_gate.py \
 		--corpus ../$(VERIFY_CORPUS)-ladder --baseline $(VERIFY_BASELINE) --update

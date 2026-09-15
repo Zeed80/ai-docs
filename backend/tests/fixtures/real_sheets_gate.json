@@ -1,0 +1,29 @@
+{
+ "part_02_val_gost": {
+  "keyways": 0,
+  "keyways_extra": 0,
+  "keyways_right": 0,
+  "profile_adopted": false,
+  "steps": 3,
+  "steps_confirmed": 0,
+  "steps_right": 1
+ },
+ "shaft_detail": {
+  "keyways": 0,
+  "keyways_extra": 1,
+  "keyways_right": 0,
+  "profile_adopted": false,
+  "steps": 3,
+  "steps_confirmed": 0,
+  "steps_right": 3
+ },
+ "z4-r4": {
+  "keyways": 2,
+  "keyways_extra": 0,
+  "keyways_right": 2,
+  "profile_adopted": true,
+  "steps": 7,
+  "steps_confirmed": 7,
+  "steps_right": 7
+ }
+}

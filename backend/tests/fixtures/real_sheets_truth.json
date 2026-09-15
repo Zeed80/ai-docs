@@ -1,0 +1,51 @@
+{
+  "schema": "real-sheet-truth/1",
+  "note": "Реальные листы валов с эталоном, выведенным вручную по самим листам (надписи и цепочки размеров). Изображения — cad-dataset-out/real-sheets/<name>.png (нормализованный лист продукта, как его видели проверяльщики), чтение ридера — <name>.spec.json. Эталон — значения надписей, не замер: листы бывают нарисованы не в масштабе.",
+  "sheets": [
+    {
+      "name": "z4-r4",
+      "source": "cleanup_test_files / ComfyUI input z4-r4.jpg — фото учебного листа ЮУрГУ «Вал», 2:1",
+      "total_mm": 185.0,
+      "outer": [
+        {"diameter_mm": 18.0, "length_mm": 15.0, "thread": "M18x1.5"},
+        {"diameter_mm": 25.0, "length_mm": 19.0},
+        {"diameter_mm": 35.0, "length_mm": 31.0},
+        {"diameter_mm": 30.0, "length_mm": 30.0},
+        {"diameter_mm": 25.0, "length_mm": 20.0},
+        {"diameter_mm": 24.0, "length_mm": 18.0, "thread": "M24x1.5"},
+        {"diameter_mm": 22.0, "length_mm": 52.0}
+      ],
+      "keyways": [
+        {"axial_start_mm": 71.0, "length_mm": 22.0, "width_mm": 8.0, "depth_mm": 4.0},
+        {"axial_start_mm": 150.0, "length_mm": 25.0, "width_mm": 6.0, "depth_mm": 3.5}
+      ],
+      "sections_solid": true
+    },
+    {
+      "name": "part_02_val_gost",
+      "source": "test-drawings/part_02_val_gost.png — учебный лист ЕСКД (cadinstructor.org), 600 px, 2:1",
+      "total_mm": 58.0,
+      "outer": [
+        {"diameter_mm": 6.0, "length_mm": 17.5},
+        {"diameter_mm": 6.5, "length_mm": 16.0},
+        {"diameter_mm": 6.0, "length_mm": 24.5}
+      ],
+      "keyways": [],
+      "note": "Сегментный паз R3,5 на ступени Ø6,5 (центр на 29,5 от левого торца), сечение А-А 2,5N9 × 2,7 — проверяльщиком паза не покрывается (только закрытый призматический).",
+      "sections_solid": true
+    },
+    {
+      "name": "shaft_detail",
+      "source": "example-drawings/shaft_detail.png — синтетический лист (толщины линий не по ЕСКД), 1:2",
+      "total_mm": 840.0,
+      "outer": [
+        {"diameter_mm": 30.0, "length_mm": 220.0},
+        {"diameter_mm": 50.0, "length_mm": 400.0},
+        {"diameter_mm": 30.0, "length_mm": 220.0}
+      ],
+      "keyways": [],
+      "note": "Паз 12×6 на ступени Ø50 без размеров положения на листе — положение не эталонное; поперечное отверстие Ø10H7.",
+      "sections_solid": null
+    }
+  ]
+}
