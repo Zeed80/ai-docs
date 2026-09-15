@@ -45,3 +45,35 @@ test("наблюдение сохраняется после reload, но не �
   expect(writes).toEqual([`/api/agent/chat-runs/${runId}/actions/action/observations`]);
   await expect(page.getByRole("button", {name: /Возобновить|Разрешить действие/})).toHaveCount(0);
 });
+
+test("текущая сверка видна и делает только GET без исполнения", async ({context, page}) => {
+  await context.addCookies([{name: "access_token", value: "mock-only", domain: "127.0.0.1", path: "/"}]);
+  const runId = "11111111-1111-4111-8111-111111111111";
+  const action = {id: "action", tool: "agent_control.task_propose", status: "result_recorded", request_digest: "a".repeat(64)};
+  const writes: string[] = [];
+  const verificationCalls: string[] = [];
+  await context.route("**/api/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (route.request().method() !== "GET") writes.push(path);
+    if (path === "/api/auth/me") return route.fulfill({json: {sub: "test-user", name: "Test", roles: ["admin"], groups: [], sections: []}});
+    if (path === "/api/chat/sessions") return route.fulfill({json: [{id: runId, title: "Журнал", created_at: "2026-09-15T00:00:00Z"}]});
+    if (path.endsWith("/messages")) return route.fulfill({json: []});
+    if (path === "/api/agent/chat-runs") return route.fulfill({json: {run: null, legacy: false}});
+    if (path.endsWith("/verification")) {
+      verificationCalls.push(route.request().method());
+      return route.fulfill({json: {action_id: action.id, status: "matched", observed_at: "2026-09-15T12:00:00Z", scope: "agent_task_content_snapshot", can_replay: false, can_resume: false}});
+    }
+    if (path.endsWith("/actions")) return route.fulfill({json: {items: [action], next_offset: 1, work_order_status: "blocked"}});
+    if (path.endsWith("/actions/action")) return route.fulfill({json: {...action, request: {objective: "Проверить"}, result: null, result_digest: null, recipient_receipt: {operation: "agent_control.task_propose", response: {id: "task-42"}, response_digest: "b".repeat(64), evidence_scope: "database_commit"}}});
+    return route.fulfill({json: {}});
+  });
+  await page.goto(`/work-orders/chat-journal?run_id=${runId}`);
+  await page.getByRole("button", {name: /agent_control.task_propose/}).click();
+  await page.getByRole("button", {name: "Проверить текущее состояние"}).click();
+  await expect(page.getByText("Статус: Совпадает на момент сверки")).toBeVisible();
+  await expect(page.getByText("Время наблюдения: 2026-09-15T12:00:00Z")).toBeVisible();
+  await expect(page.getByText("Область сверки: agent_task_content_snapshot")).toBeVisible();
+  expect(verificationCalls).toEqual(["GET"]);
+  expect(writes).toEqual([]);
+  await expect(page.getByRole("button", {name: /Возобновить|Разрешить|Повторить действие/})).toHaveCount(0);
+});

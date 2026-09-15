@@ -8,15 +8,16 @@ const fetcher = vi.mocked(mutFetch);
 const action = {id: "action", tool: "email.send", status: "outcome_unknown", request_digest: "a".repeat(64), latest_observation: null};
 const detail = {...action, request: {draft_id: "draft-42"}, result: null, result_digest: null};
 const response = (value: unknown, status = 200) => new Response(JSON.stringify(value), {status});
+const receipt = {operation: "agent_control.task_propose", response: {id: "committed-task-42"}, response_digest: "b".repeat(64), evidence_scope: "database_commit"};
+const verification = (status: "matched" | "changed" | "missing" | "inconclusive" = "matched") => ({
+  action_id: action.id, status, observed_at: "2026-09-15T12:00:00Z", scope: "agent_task_content_snapshot", can_replay: false, can_resume: false,
+});
 beforeEach(() => fetcher.mockReset());
 afterEach(cleanup);
 
 it("показывает квитанцию отдельно от потерянного ответа без автоматического продолжения", async () => {
   fetcher.mockResolvedValueOnce(response({items: [action], next_offset: 1, work_order_status: "blocked"}))
-    .mockResolvedValueOnce(response({...detail, recipient_receipt: {
-      operation: "agent_control.task_propose", response: {id: "committed-task-42"},
-      response_digest: "b".repeat(64), evidence_scope: "database_commit",
-    }}));
+    .mockResolvedValueOnce(response({...detail, recipient_receipt: receipt}));
   render(<ActionJournal runId="run" />);
   fireEvent.click(await screen.findByRole("button", {name: /email.send/}));
   await screen.findByRole("region", {name: "Квитанция получателя"});
@@ -24,6 +25,97 @@ it("показывает квитанцию отдельно от потерян
   expect(screen.getByText("Результат не сохранён")).toBeInTheDocument();
   expect(screen.getByText(/Это не проверка текущего состояния/)).toBeInTheDocument();
   expect(fetcher.mock.calls.every(([, init]) => init?.method === "GET")).toBe(true);
+});
+
+async function openReceipt(actionOverride: Partial<typeof action> = {}) {
+  const currentAction = {...action, ...actionOverride};
+  fetcher.mockResolvedValueOnce(response({items: [currentAction], next_offset: 1, work_order_status: "blocked"}))
+    .mockResolvedValueOnce(response({...detail, ...actionOverride, recipient_receipt: receipt}));
+  render(<ActionJournal runId="run" />);
+  fireEvent.click(await screen.findByRole("button", {name: new RegExp(currentAction.tool)}));
+  await screen.findByRole("region", {name: "Квитанция получателя"});
+}
+
+it("показывает matched как отдельную текущую сверку только через GET", async () => {
+  await openReceipt();
+  fetcher.mockResolvedValueOnce(response(verification()));
+  fireEvent.click(screen.getByRole("button", {name: "Проверить текущее состояние"}));
+  await screen.findByText("Статус: Совпадает на момент сверки");
+  expect(screen.getByText("Время наблюдения: 2026-09-15T12:00:00Z")).toBeInTheDocument();
+  expect(screen.getByText("Область сверки: agent_task_content_snapshot")).toBeInTheDocument();
+  const calls = fetcher.mock.calls.filter(([path]) => String(path).endsWith("/verification"));
+  expect(calls).toEqual([["/api/agent/chat-runs/run/actions/action/verification", expect.objectContaining({method: "GET"})]]);
+  expect(fetcher.mock.calls.every(([, init]) => init?.method === "GET")).toBe(true);
+  expect(fetcher.mock.calls.some(([path]) => String(path).includes("/resume"))).toBe(false);
+});
+
+it.each([
+  ["missing", "Объект больше не найден"],
+  ["changed", "Изменилось с момента квитанции"],
+] as const)("показывает %s без кнопки исполнения", async (status, label) => {
+  await openReceipt();
+  fetcher.mockResolvedValueOnce(response(verification(status)));
+  fireEvent.click(screen.getByRole("button", {name: "Проверить текущее состояние"}));
+  await screen.findByText(`Статус: ${label}`);
+  expect(screen.queryByRole("button", {name: /Возобновить|Разрешить|Повторить действие/})).not.toBeInTheDocument();
+  expect(fetcher.mock.calls.every(([, init]) => init?.method === "GET")).toBe(true);
+});
+
+it("очищает matched при повторной сверке и игнорирует поздний первый ответ", async () => {
+  await openReceipt();
+  fetcher.mockResolvedValueOnce(response(verification()));
+  fireEvent.click(screen.getByRole("button", {name: "Проверить текущее состояние"}));
+  await screen.findByText("Статус: Совпадает на момент сверки");
+  let resolve!: (value: Response) => void;
+  fetcher.mockReturnValueOnce(new Promise<Response>((done) => {resolve = done;}));
+  fireEvent.click(screen.getByRole("button", {name: "Проверить текущее состояние"}));
+  expect(screen.queryByText("Статус: Совпадает на момент сверки")).not.toBeInTheDocument();
+  resolve(response(verification("changed")));
+  await screen.findByText("Статус: Изменилось с момента квитанции");
+  expect(fetcher.mock.calls.filter(([path]) => String(path).endsWith("/verification"))).toHaveLength(2);
+  expect(fetcher.mock.calls.every(([, init]) => init?.method === "GET")).toBe(true);
+});
+
+it("не переносит запоздалую сверку к другой карточке", async () => {
+  const second = {...action, id: "second", tool: "files.write", request_digest: "c".repeat(64)};
+  let resolve!: (value: Response) => void;
+  fetcher.mockResolvedValueOnce(response({items: [action, second], next_offset: 2, work_order_status: "blocked"}))
+    .mockResolvedValueOnce(response({...detail, recipient_receipt: receipt}))
+    .mockReturnValueOnce(new Promise<Response>((done) => {resolve = done;}))
+    .mockResolvedValueOnce(response({...detail, ...second, request: {path: "second.txt"}, recipient_receipt: {...receipt, response: {id: "second-task"}}}));
+  render(<ActionJournal runId="run" />);
+  fireEvent.click(await screen.findByRole("button", {name: /email.send/}));
+  await screen.findByRole("button", {name: "Проверить текущее состояние"});
+  fireEvent.click(screen.getByRole("button", {name: "Проверить текущее состояние"}));
+  fireEvent.click(screen.getByRole("button", {name: /files.write/}));
+  await screen.findByText(/second.txt/);
+  resolve(response(verification()));
+  await waitFor(() => expect(screen.queryByText("Статус: Совпадает на момент сверки")).not.toBeInTheDocument());
+});
+
+it("очищает прошлый verdict при отказе доступа после успеха", async () => {
+  await openReceipt();
+  fetcher.mockResolvedValueOnce(response(verification()));
+  fireEvent.click(screen.getByRole("button", {name: "Проверить текущее состояние"}));
+  await screen.findByText("Статус: Совпадает на момент сверки");
+  fetcher.mockResolvedValueOnce(response({}, 403));
+  fireEvent.click(screen.getByRole("button", {name: "Проверить текущее состояние"}));
+  await screen.findByText("Текущий доступ администратора для сверки отсутствует.");
+  expect(screen.queryByText("Статус: Совпадает на момент сверки")).not.toBeInTheDocument();
+});
+
+it.each([
+  [409, "Квитанция или запись действия нарушает проверку целостности."],
+  [500, "Не удалось проверить текущее состояние: Error: HTTP 500"],
+])("не оставляет matched после HTTP %i", async (status, message) => {
+  await openReceipt();
+  fetcher.mockResolvedValueOnce(response(verification()));
+  fireEvent.click(screen.getByRole("button", {name: "Проверить текущее состояние"}));
+  await screen.findByText("Статус: Совпадает на момент сверки");
+  fetcher.mockResolvedValueOnce(response({}, status));
+  fireEvent.click(screen.getByRole("button", {name: "Проверить текущее состояние"}));
+  await screen.findByText(message);
+  expect(screen.queryByText("Статус: Совпадает на момент сверки")).not.toBeInTheDocument();
 });
 
 async function open(status = "outcome_unknown", workStatus = "blocked") {

@@ -323,7 +323,8 @@ scope/time/action и запреты replay/resume, но нельзя выдум�
 
 ### E01 — UI текущей сверки
 
-**Статус:** TODO. **После:** E00.
+**Статус:** REVIEWED; production-приёмка в отчёте
+`docs/agent-employee-delivery/E01-current-verification-ui.md`. **После:** E00.
 **Файлы:** `frontend/components/chat/action-journal.tsx`,
 `frontend/tests/unit/action-journal.test.tsx`, `frontend/tests/e2e/chat-action-journal.spec.ts`.
 

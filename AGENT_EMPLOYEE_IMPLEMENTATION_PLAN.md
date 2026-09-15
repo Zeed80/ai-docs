@@ -22,6 +22,13 @@
 E00: 110 целевых backend-тестов независимого прогона прошли, `make prod-build`
 завершён, `/health` → ok, backend/frontend/workers healthy; хеши совпали в backend
 и worker. Без авторизации verification → 401. Миграция и UI не изменялись.
+E01: UI текущей сверки реализован Terra и принят независимым review: отделены
+worker response, receipt и текущий read-only snapshot; GET-only, без resume/replay.
+Покрыты 403/409/500, late response и смена карточки. Отчёт и production-статус:
+`docs/agent-employee-delivery/E01-current-verification-ui.md`.
+Независимо проверены 72 frontend unit-теста, typecheck и 3 Chromium mock-API
+сценария. `make prod-build` завершён, `/health` → ok, frontend bundle содержит
+новый UI. Backend и миграции этим этапом не менялись.
 Push накопленной ветки был заблокирован автопроверкой из-за несвязанных CAD-коммитов;
 для публикации всей этой истории нужно отдельное разрешение. Не обходить запрет.
 

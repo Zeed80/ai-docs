@@ -9,11 +9,19 @@ type Page = { items: Action[]; next_offset: number; work_order_status: string };
 type Detail = { id: string; status: string; request: unknown; result: unknown; request_digest: string; result_digest: string | null;
   recipient_receipt?: { operation: string; response: unknown; response_digest: string; evidence_scope: string } | null };
 type Submission = { request_id: string; request_digest: string; outcome: string; note: string; evidence_reference: string };
+type Verification = { action_id: string; status: "matched" | "changed" | "missing" | "inconclusive"; observed_at: string; scope: string;
+  can_replay: false; can_resume: false; reason?: string };
 const labels: Record<string, string> = {
   planned: "Не начато", started: "Вызов начат", waiting_confirmation: "Ожидает подтверждения",
   result_recorded: "Ответ сохранён — эффект не проверен", outcome_unknown: "Исход неизвестен",
 };
 const outcomes: Record<string, string> = {observed: "Эффект обнаружен", not_observed: "Эффект не обнаружен", inconclusive: "Недостаточно данных"};
+const verificationLabels: Record<Verification["status"], string> = {
+  matched: "Совпадает на момент сверки",
+  changed: "Изменилось с момента квитанции",
+  missing: "Объект больше не найден",
+  inconclusive: "Недостаточно данных для вывода",
+};
 
 async function request<T>(path: string, signal: AbortSignal, body?: Submission): Promise<T> {
   const response = await mutFetch(path, {method: body ? "POST" : "GET", signal, cache: "no-store",
@@ -70,9 +78,23 @@ function ActionDetail({runId, action, stopped}: {runId: string; action: Action; 
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<Submission | null>(null);
   const [saved, setSaved] = useState<Observation | null>(action.latest_observation);
+  const [verification, setVerification] = useState<Verification | null>(null);
+  const [verificationError, setVerificationError] = useState("");
+  const [verifying, setVerifying] = useState(false);
   const controller = useRef<AbortController | null>(null);
+  const verificationController = useRef<AbortController | null>(null);
+  const verificationKey = useRef(0);
+  const mounted = useRef(true);
   const submitting = useRef(false);
   const path = `/api/agent/chat-runs/${encodeURIComponent(runId)}/actions/${encodeURIComponent(action.id)}`;
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      verificationKey.current += 1;
+      verificationController.current?.abort();
+    };
+  }, []);
   useEffect(() => {
     const current = new AbortController(); controller.current = current;
     request<Detail>(path, current.signal).then((data) => {
@@ -98,6 +120,27 @@ function ActionDetail({runId, action, stopped}: {runId: string; action: Action; 
       if (!signal.aborted) setBusy(false);
     }
   }
+  async function verifyCurrentState() {
+    verificationController.current?.abort();
+    const current = new AbortController();
+    verificationController.current = current;
+    const requestKey = verificationKey.current + 1;
+    verificationKey.current = requestKey;
+    setVerification(null); setVerificationError(""); setVerifying(true);
+    try {
+      const result = await request<Verification>(`${path}/verification`, current.signal);
+      if (current.signal.aborted || !mounted.current || verificationKey.current !== requestKey) return;
+      setVerification(result);
+    } catch (err) {
+      if (current.signal.aborted || !mounted.current || verificationKey.current !== requestKey) return;
+      const message = String(err);
+      if (message.includes("HTTP 403")) setVerificationError("Текущий доступ администратора для сверки отсутствует.");
+      else if (message.includes("HTTP 409")) setVerificationError("Квитанция или запись действия нарушает проверку целостности.");
+      else setVerificationError(`Не удалось проверить текущее состояние: ${message}`);
+    } finally {
+      if (!current.signal.aborted && mounted.current && verificationKey.current === requestKey) setVerifying(false);
+    }
+  }
   return <section aria-label="Сверка действия" className="space-y-3 rounded border p-4">
     <h2 className="font-semibold">Сверка действия</h2>
     {error && <p role="alert">{error}</p>}
@@ -106,13 +149,26 @@ function ActionDetail({runId, action, stopped}: {runId: string; action: Action; 
       <p>{labels[detail.status] ?? detail.status}</p>
       <p className="break-all text-xs">Хеш запроса: {detail.request_digest}</p>
       <h3>Точные аргументы</h3><pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(detail.request, null, 2)}</pre>
-      <h3>Сохранённый ответ</h3><pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all text-xs">{detail.result_digest ? JSON.stringify(detail.result, null, 2) : "Результат не сохранён"}</pre>
+      <h3>Ответ worker</h3><pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all text-xs">{detail.result_digest ? JSON.stringify(detail.result, null, 2) : "Результат не сохранён"}</pre>
       {detail.recipient_receipt && <section aria-label="Квитанция получателя" className="space-y-1">
         <h3>Квитанция получателя</h3>
         <p>Операция: {detail.recipient_receipt.operation}</p>
         <p>Подтверждена запись в БД в момент выполнения. Это не проверка текущего состояния объекта и не подтверждение внешней доставки. Повтор и продолжение не разрешены автоматически.</p>
         <p className="break-all text-xs">Хеш ответа: {detail.recipient_receipt.response_digest}</p>
         <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(detail.recipient_receipt.response, null, 2)}</pre>
+        <section aria-label="Текущая сверка" aria-live="polite" className="space-y-1 rounded border p-3">
+          <h4>Текущая сверка</h4>
+          <p>Сверка читает текущее состояние отдельно от квитанции прошлого commit и не выполняет действие.</p>
+          <button type="button" className="rounded border px-3 py-2" disabled={verifying} onClick={() => { void verifyCurrentState(); }}>{verifying ? "Проверка…" : "Проверить текущее состояние"}</button>
+          {verificationError && <p role="alert">{verificationError}</p>}
+          {verification && <>
+            <p>Статус: {verificationLabels[verification.status]}</p>
+            <p className="break-all">Время наблюдения: {verification.observed_at}</p>
+            <p className="break-all">Область сверки: {verification.scope}</p>
+            {verification.reason && <p>Причина: {verification.reason}</p>}
+            <p>Повтор и продолжение по результату сверки не разрешены.</p>
+          </>}
+        </section>
       </section>}
       {saved && <section aria-label="Последнее наблюдение" aria-live="polite" className="space-y-1">
         <h3>Последнее наблюдение — не проверено</h3>

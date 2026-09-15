@@ -55,6 +55,9 @@ E00 — read-only сверка текущего AgentTask — реализова
 проверена сеньором. Фактические проверки/выкладка в
 `docs/agent-employee-delivery/E00-receipt-verification.md`; далее E01 (UI).
 Режим передачи работы без ручного участия: `AGENT_EMPLOYEE_ORCHESTRATION.md`.
+E01 добавляет owner-facing UI текущей сверки: только GET, отдельный от квитанции
+и ответа worker; ошибки и late response не оставляют старый verdict. Отчёт:
+`docs/agent-employee-delivery/E01-current-verification-ui.md`. Далее E02.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя
 в WorkEvent, проверяет владельца/аргументы/попытку/lease. Детали журнала и UI
