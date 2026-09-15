@@ -46,6 +46,27 @@
       "keyways": [],
       "note": "Паз 12×6 на ступени Ø50 без размеров положения на листе — положение не эталонное; поперечное отверстие Ø10H7.",
       "sections_solid": null
+    },
+    {
+      "name": "part_04_planka_gost",
+      "kind": "plate",
+      "source": "test-drawings/part_04_planka_gost.png — учебный лист ЕСКД «Планка», 1:1, лист s3",
+      "thickness_mm": 3.0,
+      "contour": "Г-образный: полка 90 × 30 с концом R16, стойка 20 × 100 с R10 наверху, внутренний R25",
+      "holes": [
+        {"diameter_mm": 16.0, "x_from_left_mm": 16.0, "y_from_bottom_mm": 14.0},
+        {"diameter_mm": 10.0, "x_from_left_mm": 80.0, "y_from_bottom_mm": 14.0},
+        {"diameter_mm": 10.0, "x_from_left_mm": 80.0, "y_from_bottom_mm": 90.0}
+      ]
+    },
+    {
+      "name": "flange_detail",
+      "kind": "flange",
+      "source": "example-drawings/flange_detail.png — синтетический лист «Фланец», 1:1",
+      "outer_diameter_mm": 560.0,
+      "thickness_mm": 20.0,
+      "bore_diameter_mm": 80.0,
+      "bolt_circle": {"count": 4, "bolt_circle_diameter_mm": 200.0, "hole_diameter_mm": 18.0, "start_angle_deg": 0.0}
     }
   ]
 }

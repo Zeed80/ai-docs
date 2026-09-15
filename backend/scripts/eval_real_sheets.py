@@ -104,6 +104,77 @@ def score(result: dict, truth: dict) -> dict:
     }
 
 
+def score_flange(result: dict, truth: dict) -> dict:
+    """Фланец: наружный и центральный Ø, окружность болтов (фаза по модулю шага)."""
+    profile = (result["spec"].get("main_view") or {}).get("profile") or {}
+
+    def near(value, target, tolerance=0.05):
+        return isinstance(value, (int, float)) and abs(float(value) - float(target)) <= tolerance
+
+    bore = [float(h.get("diameter_mm") or 0) for h in profile.get("holes") or []]
+    patterns = [
+        p
+        for p in profile.get("hole_patterns") or []
+        if (p.get("kind") or "bolt_circle") == "bolt_circle"
+    ]
+    want = truth["bolt_circle"]
+    pattern_right = 0
+    for pattern in patterns:
+        count = int(pattern.get("count") or 0)
+        step = 360.0 / count if count else 360.0
+        phase = float(pattern.get("start_angle_deg") or 0.0)
+        gap = abs((phase - want["start_angle_deg"] + step / 2) % step - step / 2)
+        if (
+            count == want["count"]
+            and near(pattern.get("bolt_circle_diameter_mm"), want["bolt_circle_diameter_mm"])
+            and near(pattern.get("hole_diameter_mm"), want["hole_diameter_mm"])
+            and gap <= 0.5
+        ):
+            pattern_right = 1
+    return {
+        "outer_right": int(near(profile.get("diameter_mm"), truth["outer_diameter_mm"])),
+        "bore_right": int(any(near(d, truth["bore_diameter_mm"]) for d in bore)),
+        "pattern_right": pattern_right,
+        "patterns_extra": max(0, len(patterns) - pattern_right),
+    }
+
+
+def score_plate(result: dict, truth: dict) -> dict:
+    """Пластина: отверстия по Ø и центру от левой и нижней кромки (±0,5 мм).
+
+    Центры спека прямоугольника — от середины пластины; эталон — от кромок.
+    """
+    profile = (result["spec"].get("main_view") or {}).get("profile") or {}
+    width = float(profile.get("width_mm") or 0.0)
+    height = float(profile.get("height_mm") or 0.0)
+    got = [
+        (
+            float(h.get("diameter_mm") or 0.0),
+            float(h.get("center_x_mm") or 0.0) + width / 2.0,
+            float(h.get("center_y_mm") or 0.0) + height / 2.0,
+        )
+        for h in profile.get("holes") or []
+    ]
+    right = sum(
+        1
+        for h in truth["holes"]
+        if any(
+            abs(d - h["diameter_mm"]) <= 0.05
+            and abs(x - h["x_from_left_mm"]) <= 0.5
+            and abs(y - h["y_from_bottom_mm"]) <= 0.5
+            for d, x, y in got
+        )
+    )
+    return {
+        "holes": len(truth["holes"]),
+        "holes_right": right,
+        "holes_extra": max(0, len(got) - right),
+        "thickness_right": int(
+            abs(float(profile.get("thickness_mm") or 0.0) - truth["thickness_mm"]) <= 0.05
+        ),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--sheets", type=pathlib.Path, required=True)
@@ -113,12 +184,32 @@ def main() -> int:
     truth = json.loads(TRUTH.read_text())
     results = {}
     for sheet in truth["sheets"]:
+        kind = sheet.get("kind", "shaft")
+        if kind not in {"shaft", "flange", "plate"}:
+            print(f"{sheet['name']}: {kind} — оценка пока не написана, пропущен")
+            continue
         png_path = args.sheets / f"{sheet['name']}.png"
         spec_path = args.sheets / f"{sheet['name']}.spec.json"
         if not png_path.exists() or not spec_path.exists():
             print(f"{sheet['name']}: нет листа или чтения в {args.sheets} — пропущен")
             continue
         result = run_chain(png_path.read_bytes(), json.loads(spec_path.read_text()))
+        if kind == "plate":
+            results[sheet["name"]] = score_plate(result, sheet)
+            f = results[sheet["name"]]
+            print(
+                f"{sheet['name']:<18} отверстия {f['holes_right']}/{f['holes']} верно "
+                f"(лишних {f['holes_extra']}), толщина {f['thickness_right']}"
+            )
+            continue
+        if kind == "flange":
+            results[sheet["name"]] = score_flange(result, sheet)
+            f = results[sheet["name"]]
+            print(
+                f"{sheet['name']:<18} наружный Ø {f['outer_right']}, центральное {f['bore_right']}, "
+                f"окружность болтов {f['pattern_right']} (лишних {f['patterns_extra']})"
+            )
+            continue
         results[sheet["name"]] = score(result, sheet)
         s = results[sheet["name"]]
         print(
@@ -140,11 +231,20 @@ def main() -> int:
         was = base.get(name)
         if was is None:
             continue
-        for key in ("steps_right", "keyways_right"):
-            if got[key] < was[key]:
+        for key in (
+            "steps_right",
+            "keyways_right",
+            "outer_right",
+            "bore_right",
+            "pattern_right",
+            "holes_right",
+            "thickness_right",
+        ):
+            if key in got and got[key] < was.get(key, 0):
                 worse.append(f"{name}.{key}: {got[key]} < {was[key]}")
-        if got["keyways_extra"] > was["keyways_extra"]:
-            worse.append(f"{name}.keyways_extra: {got['keyways_extra']} > {was['keyways_extra']}")
+        for key in ("keyways_extra", "patterns_extra", "holes_extra"):
+            if key in got and got[key] > was.get(key, 0):
+                worse.append(f"{name}.{key}: {got[key]} > {was[key]}")
     for line in worse:
         print("ХУЖЕ:", line)
     print("гейт реальных листов", "не пройден" if worse else "пройден")

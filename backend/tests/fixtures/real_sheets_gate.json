@@ -1,4 +1,10 @@
 {
+ "flange_detail": {
+  "bore_right": 1,
+  "outer_right": 1,
+  "pattern_right": 1,
+  "patterns_extra": 0
+ },
  "part_02_val_gost": {
   "keyways": 0,
   "keyways_extra": 0,
@@ -7,6 +13,12 @@
   "steps": 3,
   "steps_confirmed": 0,
   "steps_right": 1
+ },
+ "part_04_planka_gost": {
+  "holes": 3,
+  "holes_extra": 2,
+  "holes_right": 0,
+  "thickness_right": 0
  },
  "shaft_detail": {
   "keyways": 0,
