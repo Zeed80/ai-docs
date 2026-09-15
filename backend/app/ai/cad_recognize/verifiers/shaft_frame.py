@@ -85,7 +85,9 @@ def locate_shaft_frame(sheet: Any, total_length_mm: float) -> tuple[ViewFrame, S
     return views[0] if views else None
 
 
-def locate_shaft_views(sheet: Any, total_length_mm: float) -> list[tuple[ViewFrame, ShaftProfile]]:
+def locate_shaft_views(
+    sheet: Any, total_length_mm: float, diameters_mm: list[float] | None = None
+) -> list[tuple[ViewFrame, ShaftProfile]]:
     """Все виды одного вала на листе — самый полный первым.
 
     У полого вала опорный вид — разрез, а паз лицом виден на виде `bottom`
@@ -136,11 +138,18 @@ def locate_shaft_views(sheet: Any, total_length_mm: float) -> list[tuple[ViewFra
         passing.append((axis_y, x0, x1, segment, float(np.nansum(segment))))
     if not passing:
         return []
-    # Главный вид — самый длинный из прошедших (при равной длине — первый по
-    # голосам). Живой part_02 (вал Ø6 на листе 600 px): длинные линии рамки и
-    # штампа набирали больше голосов, ось вала в 6 лучших не попадала, а
-    # первым проходил штамп — в 4 раза короче вала.
-    primary = max(passing, key=lambda item: item[2] - item[1])
+    # Главный вид — тот, чьи ступени совпадают с диаметрами листа (прочитанные
+    # Ø и надписи Ø), затем самый длинный, затем первый по голосам. Живые
+    # part_02 и part_01: длинные линии рамки и штампа набирают больше голосов,
+    # а проверку торцов проходят и рамка листа («Ø132»), и штамп, и таблица
+    # зацепления — по длине выигрывала рамка, по голосам — штамп.
+    primary = max(
+        passing,
+        key=lambda item: (
+            _diameter_matches(item, total_length_mm, diameters_mm),
+            item[2] - item[1],
+        ),
+    )
     reach = _SAME_VIEW_SHARE * (primary[2] - primary[1])
     same_shaft = [
         item
@@ -154,6 +163,27 @@ def locate_shaft_views(sheet: Any, total_length_mm: float) -> list[tuple[ViewFra
         _view(gray, ink, vertical, context, main_ref, total_length_mm, min_length, item)
         for item in same_shaft
     ]
+
+
+def _diameter_matches(item: tuple, total_length_mm: float, diameters_mm: list[float] | None) -> int:
+    """Сколько площадок вида совпадает (±6 %) с диаметрами листа при его масштабе."""
+    from types import SimpleNamespace
+
+    from app.ai.cad_recognize.verifiers.shaft_profile import _plateaus
+
+    if not diameters_mm:
+        return 0
+    _axis_y, x0, x1, segment, _area = item
+    scale = float(total_length_mm) / float(x1 - x0)
+    shortest = 0.03 * float(x1 - x0)
+    matches = 0
+    for start, end, level in _plateaus(SimpleNamespace(half_px=segment)):
+        if end - start + 1 < shortest:
+            continue
+        diameter = 2.0 * level * scale
+        if any(abs(diameter - d) <= 0.06 * d for d in diameters_mm if d > 0):
+            matches += 1
+    return matches
 
 
 def _view(

@@ -203,3 +203,26 @@ def test_a_shifted_shoulder_is_refuted_with_the_measured_lengths():
     assert verdict.measured["steps"][0]["length_mm"] is None or (
         abs(verdict.measured["steps"][0]["length_mm"] - 30.0) <= 0.5
     )
+
+
+def test_the_main_view_is_the_one_whose_steps_match_the_sheet_diameters():
+    """Живой part_01: проверку торцов прошла и рамка листа («Ø132»), и как
+    самый длинный вид она выигрывала у вала."""
+    from app.ai.cad_recognize.verifiers.shaft_frame import locate_shaft_views
+
+    image = Image.fromarray(_sheet()).copy()
+    draw = ImageDraw.Draw(image)
+    # Рамка листа основной линией, на всю ширину и высоту.
+    draw.rectangle([40, 60, 2760, 1940], outline=0, width=MAIN)
+    sheet = np.asarray(image)
+    total = sum(length for _d, length in STEPS)
+
+    views = locate_shaft_views(sheet, total, [d for d, _l in STEPS])
+
+    assert views, "вид не найден"
+    _frame, profile = views[0]
+    assert abs(profile.x0 - X0) <= 4 and abs(profile.axis_y - AXIS) <= 4, (
+        profile.x0,
+        profile.x1,
+        profile.axis_y,
+    )

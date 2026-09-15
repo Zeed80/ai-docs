@@ -248,7 +248,14 @@ def _shaft(
         return "нет полного наружного профиля (Ø и длина каждой ступени)"
     total = sum(float(step["length_mm"]) for _, step in steps)
     gray = _gray(image_bytes)
-    views = locate_shaft_views(gray, total)
+    # Диаметры листа — чтобы главным видом стал вал, а не рамка или штамп
+    # (живой part_01): прочитанные Ø ступеней и надписи Ø и резьб.
+    from app.ai.cad_recognize.verifiers.sheet_profile import sheet_labels
+
+    labels = sheet_labels(spec)
+    diameters = [float(step["diameter_mm"]) for _, step in steps]
+    diameters += [*labels.diameters, *(nominal for nominal, _pitch in labels.threads)]
+    views = locate_shaft_views(gray, total, diameters)
     if not views:
         reason = "главный вид вала на листе не найден"
         for index, step in steps:
