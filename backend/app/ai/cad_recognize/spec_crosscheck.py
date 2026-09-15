@@ -258,6 +258,8 @@ def check_spec_arithmetic(spec: dict) -> list[CrossCheckFinding]:
 
 
 def _check_profile(profile: dict, body_index: int) -> list[CrossCheckFinding]:
+    if profile.get("shape") == "sketch":
+        return _check_sketch_profile(profile, body_index)
     findings: list[CrossCheckFinding] = []
     diameter = _num(profile.get("diameter_mm"))
     width = _num(profile.get("width_mm"))
@@ -323,6 +325,42 @@ def _check_profile(profile: dict, body_index: int) -> list[CrossCheckFinding]:
                 )
             )
     return findings
+
+
+def _check_sketch_profile(profile: dict, body_index: int) -> list[CrossCheckFinding]:
+    """Отверстия эскизного профиля — от его начала (0, 0), внутри контура."""
+    from app.ai.cad_dimension_graph import circle_fits_polygon, sketch_outline
+
+    outline = sketch_outline(profile.get("sketch"))
+    if not outline:
+        return []
+    findings: list[CrossCheckFinding] = []
+    for position, hole in enumerate(profile.get("holes") or []):
+        if not isinstance(hole, dict):
+            continue
+        x, y = _num(hole.get("center_x_mm")), _num(hole.get("center_y_mm"))
+        hole_diameter = _num(hole.get("diameter_mm"))
+        if x is None or y is None or not hole_diameter:
+            continue
+        if not circle_fits_polygon(x, y, hole_diameter / 2.0, outline):
+            findings.append(
+                CrossCheckFinding(
+                    code="hole_outside_profile",
+                    message=(
+                        f"тело {body_index}: отверстие Ø{hole_diameter:g} в точке "
+                        f"({x:g}, {y:g}) выходит за контур"
+                    ),
+                    details={"body": body_index, "hole": position},
+                )
+            )
+    return findings
+
+
+def _profile_from_sheet(spec: dict) -> bool:
+    """Контур и отверстия приняты замером по листу (`apply_contour`)."""
+    provenance = spec.get("provenance")
+    entry = provenance.get("main_view.profile") if isinstance(provenance, dict) else None
+    return isinstance(entry, dict) and entry.get("origin") == "sheet_measurement"
 
 
 def _spec_circle_diameters(spec: dict) -> list[float]:
@@ -786,9 +824,14 @@ def cross_check_spec(
     findings = check_spec_arithmetic(spec)
     measured: list[float] = []
     dominant: float | None = None
+    from_sheet = _profile_from_sheet(spec)
     if ink is not None:
         measured = measure_circle_radii(ink)
-        findings.extend(check_spec_against_raster(spec, measured))
+        # Отверстия, найденные по листу окружностями радиуса надписи Ø, грубый
+        # подсчёт окружностей всего листа не перепроверяет (живая планка
+        # part_04: Ø16 и Ø10 по листу — «1,01 по изображению»).
+        if not from_sheet:
+            findings.extend(check_spec_against_raster(spec, measured))
         dominant = measure_dominant_circle_px(ink)
         findings.extend(check_outline_against_image(spec, dominant))
         findings.extend(
@@ -800,6 +843,8 @@ def cross_check_spec(
     raster_state = (
         "not_attempted"
         if ink is None
+        else "superseded_by_sheet_measurement"
+        if from_sheet
         else (
             "checked" if len(measured) >= 2 and stated_circles >= 2 else "insufficient_measurements"
         )

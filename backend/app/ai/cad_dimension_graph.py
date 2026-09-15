@@ -69,6 +69,67 @@ def _circle_fits_rounded_rectangle(
     return distance + feature_radius <= corner_radius + 0.05
 
 
+def sketch_outline(sketch: Any, step_deg: float = 5.0) -> list[tuple[float, float]] | None:
+    """Closed sketch profile as a polygon from its implicit (0, 0) start.
+
+    Arcs are sampled every ``step_deg``; holes on a sketch profile are given
+    relative to the same origin, so containment is checked in these
+    coordinates, not around a centre (live plate part_04: holes at (80, 14)
+    on a 90 × 100 sketch were «outside» by the centred-rectangle rule).
+    """
+    import math
+
+    if not isinstance(sketch, list) or not sketch:
+        return None
+    points = [(0.0, 0.0)]
+    for segment in sketch:
+        if not isinstance(segment, dict):
+            return None
+        to, kind = segment.get("to"), segment.get("kind")
+        if not (isinstance(to, (list, tuple)) and len(to) == 2):
+            return None
+        x0, y0 = points[-1]
+        x1, y1 = float(to[0]), float(to[1])
+        centre = segment.get("center")
+        if kind == "arc" and isinstance(centre, (list, tuple)) and len(centre) == 2:
+            cx, cy = float(centre[0]), float(centre[1])
+            radius = math.hypot(x0 - cx, y0 - cy)
+            a0 = math.atan2(y0 - cy, x0 - cx)
+            a1 = math.atan2(y1 - cy, x1 - cx)
+            if segment.get("clockwise"):
+                sweep = -((a0 - a1) % (2 * math.pi) or 2 * math.pi)
+            else:
+                sweep = (a1 - a0) % (2 * math.pi) or 2 * math.pi
+            count = max(2, int(abs(math.degrees(sweep)) / step_deg))
+            for index in range(1, count):
+                angle = a0 + sweep * index / count
+                points.append((cx + radius * math.cos(angle), cy + radius * math.sin(angle)))
+        elif kind != "line":
+            return None
+        points.append((x1, y1))
+    if points[-1] == points[0]:
+        points.pop()
+    return points if len(points) >= 3 else None
+
+
+def circle_fits_polygon(
+    x: float, y: float, feature_radius: float, polygon: list[tuple[float, float]]
+) -> bool:
+    """Circle inside a closed polygon: centre inside, every edge ≥ radius away."""
+    inside = False
+    count = len(polygon)
+    nearest = float("inf")
+    for index in range(count):
+        (ax, ay), (bx, by) = polygon[index], polygon[(index + 1) % count]
+        if (ay > y) != (by > y) and x < ax + (y - ay) * (bx - ax) / (by - ay):
+            inside = not inside
+        dx, dy = bx - ax, by - ay
+        length2 = dx * dx + dy * dy
+        t = 0.0 if length2 == 0 else max(0.0, min(1.0, ((x - ax) * dx + (y - ay) * dy) / length2))
+        nearest = min(nearest, ((x - ax - t * dx) ** 2 + (y - ay - t * dy) ** 2) ** 0.5)
+    return inside and nearest + 0.05 >= feature_radius
+
+
 def build_dimension_graph(spec: dict) -> dict[str, Any]:
     """Return nodes, constraints and blocking contradictions."""
     body = spec.get("main_view") or {}
@@ -456,6 +517,8 @@ def build_dimension_graph(spec: dict) -> dict[str, Any]:
             elif shape == "circle":
                 profile_radius = (_number(profile.get("diameter_mm")) or 0.0) / 2.0
                 fits = (x * x + y * y) ** 0.5 + radius <= profile_radius + 0.05
+            elif shape == "sketch" and (outline := sketch_outline(profile.get("sketch"))):
+                fits = circle_fits_polygon(x, y, radius, outline)
             else:
                 continue
             constraints.append(

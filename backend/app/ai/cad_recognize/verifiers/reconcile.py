@@ -656,7 +656,32 @@ def apply_contour(spec: dict[str, Any], decision: dict[str, Any]) -> dict[str, A
         "origin": "sheet_measurement",
         "detail": decision["reason"],
     }
+    # Замечания ридера о прежнем контуре, отверстиях и толщине устарели:
+    # живая планка part_04 держала «положение Ø10 не проставлено», «координаты
+    # относительно центра (45, 50)», «толщина не указана» при S3 на листе.
+    spec["unresolved"] = [
+        note
+        for note in spec.get("unresolved") or []
+        if not _stale_contour_note(str(note), bool(profile.get("thickness_mm")))
+    ]
     return spec
+
+
+_STALE_CONTOUR = (
+    "отверсти",
+    "выходит за контур",
+    "пропорции окружностей",
+    "контур",
+    "скруглени",
+    "радиус угл",
+)
+
+
+def _stale_contour_note(note: str, has_thickness: bool) -> bool:
+    lowered = note.lower()
+    if "толщин" in lowered:
+        return has_thickness
+    return any(marker in lowered for marker in _STALE_CONTOUR)
 
 
 def apply_profile(spec: dict[str, Any], decision: dict[str, Any]) -> dict[str, Any]:

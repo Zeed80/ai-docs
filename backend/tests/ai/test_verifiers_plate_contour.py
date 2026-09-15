@@ -169,6 +169,60 @@ def test_a_sheet_contour_replaces_a_plate_read_as_a_rectangle_and_builds():
     assert kinds.count("extrude") == 1 and kinds.count("hole") == 3, kinds
 
 
+def test_an_adopted_sheet_contour_passes_the_checks_that_blocked_the_live_plate():
+    """Живая планка part_04 (c675d01e): контур принят, но гейт и ядро отказали.
+
+    Отверстия эскиза считались от центра («(80, 14) выходит за контур»), габарит
+    эскиза сверялся с Ø 0, замечания ридера о прежнем контуре оставались.
+    """
+    from app.ai.cad_dimension_graph import build_dimension_graph
+    from app.ai.cad_recognize.spec_crosscheck import cross_check_spec
+    from app.ai.cad_recognize.verifiers.reconcile import apply_contour, contour_decision
+    from app.ai.cad_solid import _verify_prismatic
+
+    spec, report = _read_and_report(["unmeasurable", "unmeasurable"])
+    spec["main_view"]["profile"]["thickness_mm"] = 3.0
+    stale = [
+        "Координаты отверстий вычислены относительно центра профиля (45, 50)",
+        "Толщина пластины не указана на чертеже",
+        "отверстия Ø10: положение на листе не проставлено — не построены",
+    ]
+    spec["unresolved"] = [*stale, "шероховатость не прочитана"]
+
+    fixed = apply_contour(spec, contour_decision(spec, report))
+
+    assert fixed["unresolved"] == ["шероховатость не прочитана"]
+    findings = cross_check_spec(fixed)["findings"]
+    assert not [f for f in findings if f["code"] == "hole_outside_profile"], findings
+    assert build_dimension_graph(fixed)["errors"] == []
+    built = {
+        "bounds_mm": {"x": 90.0, "y": 100.0, "z": 3.0},
+        "brep_valid": True,
+        "manifold": True,
+        "solid_count": 1,
+        "volume_mm3": 11398.8,
+    }
+    checks = _verify_prismatic(fixed, built).checks
+    assert checks["ok"], checks
+
+
+def test_a_hole_outside_a_sketch_contour_is_still_reported():
+    from app.ai.cad_recognize.spec_crosscheck import cross_check_spec
+
+    proposal, why = propose_contour(_planka(), SPEC, read_holes=2)
+    assert proposal is not None, why
+    profile = {
+        **proposal.profile,
+        "holes": [{"center_x_mm": 40.0, "center_y_mm": 80.0, "diameter_mm": 10.0}],
+    }
+    findings = cross_check_spec({"main_view": {"profile": profile}})["findings"]
+
+    # (40, 80) — в вырезе Г-образной планки, вне материала.
+    assert [f["code"] for f in findings if f["code"] == "hole_outside_profile"] == [
+        "hole_outside_profile"
+    ]
+
+
 def test_a_plate_whose_holes_the_sheet_confirmed_keeps_its_reading():
     from app.ai.cad_recognize.verifiers.reconcile import contour_decision
 

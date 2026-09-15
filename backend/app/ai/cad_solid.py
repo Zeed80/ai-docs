@@ -1646,6 +1646,14 @@ def _verify_prismatic(
     if profile.get("shape") == "rectangle":
         stated_x = _num(profile.get("width_mm")) or 0.0
         stated_y = _num(profile.get("height_mm")) or 0.0
+    elif profile.get("shape") == "sketch":
+        # Габарит эскиза — по его вершинам и дугам (живая планка part_04:
+        # тело 90 × 100 × 3 верно, а сверялось с Ø 0 — «B-Rep отклонён»).
+        from app.ai.cad_dimension_graph import sketch_outline
+
+        outline = sketch_outline(profile.get("sketch")) or [(0.0, 0.0)]
+        stated_x = max(p[0] for p in outline) - min(p[0] for p in outline)
+        stated_y = max(p[1] for p in outline) - min(p[1] for p in outline)
     else:
         stated_x = stated_y = _num(profile.get("diameter_mm")) or 0.0
 
