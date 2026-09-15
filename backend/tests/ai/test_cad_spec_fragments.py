@@ -1825,3 +1825,19 @@ def test_a_cross_hole_diameter_is_the_number_after_the_diameter_mark():
 
     holes = [issue for issue in issues if "поперечное отверстие" in issue]
     assert holes == ["поперечное отверстие Ø21.7 указано, но не локализовано"]
+
+
+def test_a_tolerance_zone_diameter_is_not_a_cross_hole():
+    """Живые shaft_detail и part_01: «⌀0,02 A» из рамки допуска давало
+    «поперечное отверстие Ø0,02 указано, но не локализовано»."""
+    from app.ai.cad_recognize.spec_fragments import _feature_completeness_issues
+
+    issues = _feature_completeness_issues(
+        {"dimensions": [{"value": "⌀ 0.02 A"}, {"value": "Ø10H7"}]},
+        {},
+        [],
+        {"observations": []},
+    )
+
+    holes = [issue for issue in issues if "поперечное отверстие" in issue]
+    assert holes == ["поперечное отверстие Ø10 указано, но не локализовано"]

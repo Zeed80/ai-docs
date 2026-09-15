@@ -36,6 +36,9 @@ def test_the_factor_follows_the_line_and_keeps_the_output_bounded():
     # Большое фото с тонкими линиями — не больше MAX_SIDE_PX по длинной стороне.
     assert sheet_upscale.upscale_factor(2.0, (3000, 4000), 4.5) == 0
     assert sheet_upscale.upscale_factor(2.0, (1800, 2400), 4.5) == 3
+    # Лист 600 px с линией 0,77 px (живой part_02): ×4 давало 2,7 px, ×7 — 4,44.
+    assert sheet_upscale.upscale_factor(0.77, (425, 600), 4.5) == 8
+    assert sheet_upscale.upscale_factor(0.3, (425, 600), 4.5) == 8
 
 
 def test_an_honest_upscale_agrees_and_a_swapped_label_does_not():

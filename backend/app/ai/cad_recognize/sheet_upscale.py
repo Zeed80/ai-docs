@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import time
 import urllib.parse
 import urllib.request
@@ -34,6 +35,9 @@ logger = structlog.get_logger()
 # Выход не больше этого по длинной стороне: SeedVR2 7B идёт плитками, но
 # время и память растут с площадью (лист A4 при 300 dpi — 3508 px).
 MAX_SIDE_PX = 7200
+_MAX_FACTOR = 8
+# Толщина линии после SeedVR2 — доля простого увеличения (part_02: 4,44 / (7 × 0,77)).
+_SR_THINNING = 0.82
 # Свободная видеопамять, при которой SeedVR2 7B int8 помещается без выгрузки
 # моделей Ollama (замер: ~9 ГБ на лист A4).
 _VRAM_NEEDED = 11 * 1024**3
@@ -103,12 +107,15 @@ def main_line_px(gray: Any) -> float:
 def upscale_factor(line_px: float, shape: tuple[int, int], min_line_px: float) -> int:
     """Во сколько раз увеличить: 0 — не нужно или некуда.
 
-    Как в опыте: 75 dpi (линия ~1,5 px) — ×4, 100 dpi (~2 px) — ×3; выход не
-    больше `MAX_SIDE_PX`.
+    Столько, чтобы основная линия дошла до порога, но не меньше ×3 (опыт:
+    100 dpi — ×3) и не больше ×8; выход не больше `MAX_SIDE_PX`. SeedVR2
+    утончает линию до ~0,82 простого увеличения (живой part_02: лист 600 px,
+    линия 0,77 px; ×7 дало 4,44 px при пороге 4,5). Прежнее «не больше ×4»
+    давало там 2,7 px — все проверки «не измеримо».
     """
     if line_px <= 0.0 or line_px >= min_line_px:
         return 0
-    factor = 4 if line_px < 0.6 * min_line_px else 3
+    factor = min(_MAX_FACTOR, max(3, math.ceil(min_line_px / (_SR_THINNING * line_px))))
     while factor >= 2 and max(shape) * factor > MAX_SIDE_PX:
         factor -= 1
     return factor if factor >= 2 else 0

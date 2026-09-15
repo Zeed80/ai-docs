@@ -3085,6 +3085,11 @@ def _feature_completeness_issues(
         if not nominal:
             continue
         value = float(nominal.group().replace(",", "."))
+        # Ø меньше миллиметра — не отверстие, а поле допуска в рамке ГОСТ
+        # 2.308 («⌀0,02 A» цилиндричности, «⌀0,03» соосности): живые
+        # shaft_detail и part_01 давали «поперечное отверстие Ø0,02 / Ø0,03».
+        if value < 1.0:
+            continue
         if value <= 25 and not _matches_callout(value, profile_diameters):
             named_small_holes.add(value)
     # Once the main-view radial zone has spatial evidence, only labels actually
