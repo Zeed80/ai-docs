@@ -1096,3 +1096,19 @@ def test_plate_verification_checks_all_three_read_extents():
     assert verify_solid_against_spec(report, spec).ok
     report["bounds_mm"]["z"] = 12.0
     assert not verify_solid_against_spec(report, spec).ok
+
+
+def test_a_section_on_the_sheet_blocks_a_solid_build_unless_it_is_shown_solid():
+    """Живой z4-r4: сечения А-А и Б-Б через пазы — сплошные круги; «разрез не
+    прочитан» держал сборку сплошного вала. Сплошные сечения по листу его снимают."""
+    spec = _shaft_spec(views=[{"kind": "section", "label": "А-А"}])
+    candidate = feature_tree_from_spec(spec)
+    assert candidate is not None
+    assert any("разрез не прочитан" in item for item in candidate.missing_data)
+
+    assert solid_build_gate(spec, candidate)["allowed"] is False
+
+    shown = {**spec, "sections_solid": {"solid": True, "reason": "сплошных кругов 1"}}
+    gate = solid_build_gate(shown, candidate)
+    assert gate["allowed"] is True, gate
+    assert any("разрез не прочитан" in item for item in gate["warnings"])

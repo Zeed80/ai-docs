@@ -321,9 +321,47 @@ def _shaft(
                 f"Ø{_mm(measured['diameter_mm']) if 'diameter_mm' in measured else '—'} × "
                 f"{_mm(measured['length_mm']) if 'length_mm' in measured else '—'} — проверить"
             )
+    _sections(gray, frame, body, spec, report)
     if _sheet_profile(profile, total, body, spec, report):
         return None
     return verdict.reason if whole_unmeasurable else None
+
+
+_SECTION_KINDS = {"section", "cut", "разрез", "сечение"}
+
+
+def _sections(
+    gray: Any, frame: Any, body: dict[str, Any], spec: dict[str, Any], report: dict[str, Any]
+) -> None:
+    """Сечения вала на листе: сплошные ли они (`section_disk`).
+
+    Только когда на листе есть сечения, а полость не прочитана: гейт сборки
+    держит тогда «разрез не прочитан». Сплошными сечения признаются, если
+    найдено не меньше кругов, чем видов-сечений, все — сплошные, колец нет.
+    """
+    from app.ai.cad_recognize.verifiers.section_disk import section_disks
+
+    expected = sum(
+        1
+        for view in spec.get("views") or []
+        if isinstance(view, dict) and str(view.get("kind") or "").lower() in _SECTION_KINDS
+    )
+    if not expected or body.get("bore") or frame is None:
+        return
+    diameters = [
+        float(s["diameter_mm"])
+        for s in body.get("outer") or []
+        if isinstance(s, dict) and _is_number(s.get("diameter_mm"))
+    ]
+    disks = section_disks(gray, frame.bbox_px, frame.mm_per_px, diameters)
+    solid = sum(1 for disk in disks if disk["solid"])
+    rings = sum(1 for disk in disks if disk["ring"])
+    report["sections"] = {
+        "expected": expected,
+        "disks": disks,
+        "solid": bool(solid >= expected and not rings),
+        "reason": (f"сечений на листе {expected}, найдено сплошных кругов {solid}, колец {rings}"),
+    }
 
 
 def _sheet_profile(

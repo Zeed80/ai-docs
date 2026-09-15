@@ -3976,6 +3976,15 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                             f"Пазов найдено по листу: {len(additions)}",
                             {"additions": additions},
                         )
+                    # Сечения на листе — сплошные круги (живой z4-r4: А-А и Б-Б
+                    # через пазы): вал сплошной доказан, «разрез не прочитан»
+                    # становится предупреждением (`cad_solid.solid_build_gate`).
+                    sections = verification.get("sections") or {}
+                    if sections.get("solid"):
+                        spec = {
+                            **spec,
+                            "sections_solid": {"solid": True, "reason": sections.get("reason")},
+                        }
                     # Найденное проверкой на листе — со свидетельством места
                     # находки: иначе гейт держит паз и фаски «без evidence».
                     from app.ai.cad_recognize.verifiers.stage import attach_sheet_evidence

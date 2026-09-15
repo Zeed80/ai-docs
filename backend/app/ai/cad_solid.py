@@ -190,7 +190,9 @@ def solid_build_gate(
             )
         )
         if "разрез не прочитан" in lowered:
-            is_critical = has_section
+            # Сечения по листу — сплошные круги (живой z4-r4: А-А и Б-Б через
+            # пазы): вал сплошной доказан, замечание остаётся предупреждением.
+            is_critical = has_section and not (spec.get("sections_solid") or {}).get("solid")
         (blockers if is_critical else warnings).append(message)
     blockers = list(dict.fromkeys(blockers))
     warnings = [item for item in dict.fromkeys(warnings) if item not in blockers]
