@@ -26,6 +26,10 @@
 опасные изменения не включать до указанного независимого review.
 E01 также завершена: UI read-only сверки квитанции, с обработкой stale response
 и 403/409/500. Отчёт `docs/agent-employee-delivery/E01-current-verification-ui.md`.
+E02 завершена: owner-only GET истории наблюдений по `WorkEvent.sequence`, без
+мутаций, replay или загрузки ссылки; UI постранично показывает предыдущие записи.
+Отчёт `docs/agent-employee-delivery/E02-observation-history.md`. Следующая
+карточка — E03, инвентаризация effect/commit boundaries.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при
 сетевой ошибке/HTTP 5xx дают outcome_unknown и блокируют durable-цикл после

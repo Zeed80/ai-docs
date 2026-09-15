@@ -158,6 +158,62 @@ it("повторяет точное наблюдение после потери
   expect(screen.getByText("Состояние работы: blocked")).toBeInTheDocument();
 });
 
+it("загружает предыдущие наблюдения страницами, не дублирует sequence и не пишет", async () => {
+  const latest = {sequence: 40, request_id: "latest", actor: "owner", outcome: "observed", note: "Последнее", evidence_reference: "manual:latest", verified: false, can_replay: false};
+  const previous = Array.from({length: 20}, (_, index) => ({sequence: index === 19 ? 19 : index + 1, request_id: `old-${index}`, actor: "owner", outcome: "inconclusive", note: index === 0 ? "<img src=x onerror=alert(1)>" : `Ранее ${index}`, evidence_reference: `manual:${index}`, verified: false, can_replay: false}));
+  fetcher.mockResolvedValueOnce(response({items: [{...action, latest_observation: latest}], next_offset: 1, work_order_status: "blocked"}))
+    .mockResolvedValueOnce(response({...detail, latest_observation: latest}))
+    .mockResolvedValueOnce(response({items: previous, next_cursor: 19}))
+    .mockResolvedValueOnce(response({items: [{sequence: 40, request_id: "latest", actor: "owner", outcome: "observed", note: "Последнее", evidence_reference: "manual:latest", verified: false, can_replay: false}], next_cursor: 40}));
+  render(<ActionJournal runId="run" />);
+  fireEvent.click(await screen.findByRole("button", {name: /email.send/}));
+  await screen.findByText("Последнее наблюдение — не проверено");
+  fireEvent.click(screen.getByRole("button", {name: "Показать предыдущие наблюдения"}));
+  await screen.findByRole("region", {name: "Предыдущие наблюдения"});
+  expect(screen.getAllByText("Ранее 19")).toHaveLength(1);
+  expect(screen.getByText("<img src=x onerror=alert(1)>")).toBeInTheDocument();
+  expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", {name: "Показать ещё предыдущие наблюдения"}));
+  await waitFor(() => expect(fetcher.mock.calls.filter(([path]) => String(path).includes("/observations?"))).toHaveLength(2));
+  expect(screen.getAllByText("Последнее")).toHaveLength(1);
+  expect(fetcher.mock.calls.every(([, init]) => init?.method === "GET")).toBe(true);
+});
+
+it("игнорирует запоздалую страницу истории после смены действия и очищает её ошибку", async () => {
+  const latest = {sequence: 3, request_id: "latest", outcome: "observed", note: "Последнее", evidence_reference: "manual:latest", verified: false, can_replay: false};
+  const second = {...action, id: "second", tool: "files.write", latest_observation: latest};
+  let resolve!: (value: Response) => void;
+  fetcher.mockResolvedValueOnce(response({items: [{...action, latest_observation: latest}, second], next_offset: 2, work_order_status: "blocked"}))
+    .mockResolvedValueOnce(response({...detail, latest_observation: latest}))
+    .mockReturnValueOnce(new Promise<Response>((done) => {resolve = done;}))
+    .mockResolvedValueOnce(response({...detail, ...second, request: {path: "second.txt"}, latest_observation: latest}));
+  render(<ActionJournal runId="run" />);
+  fireEvent.click(await screen.findByRole("button", {name: /email.send/}));
+  await screen.findByRole("button", {name: "Показать предыдущие наблюдения"});
+  fireEvent.click(screen.getByRole("button", {name: "Показать предыдущие наблюдения"}));
+  fireEvent.click(screen.getByRole("button", {name: /files.write/}));
+  await screen.findByText(/second.txt/);
+  resolve(response({items: [{sequence: 1, request_id: "old", outcome: "observed", note: "Чужая запоздалая страница", evidence_reference: "manual:old", verified: false, can_replay: false}], next_cursor: 1}));
+  await waitFor(() => expect(screen.queryByText("Чужая запоздалая страница")).not.toBeInTheDocument());
+  expect(screen.queryByText(/Не удалось прочитать предыдущие наблюдения/)).not.toBeInTheDocument();
+});
+
+it("очищает ошибку истории при смене действия", async () => {
+  const latest = {sequence: 3, request_id: "latest", outcome: "observed", note: "Последнее", evidence_reference: "manual:latest", verified: false, can_replay: false};
+  const second = {...action, id: "second", tool: "files.write", latest_observation: latest};
+  fetcher.mockResolvedValueOnce(response({items: [{...action, latest_observation: latest}, second], next_offset: 2, work_order_status: "blocked"}))
+    .mockResolvedValueOnce(response({...detail, latest_observation: latest}))
+    .mockResolvedValueOnce(response({}, 500))
+    .mockResolvedValueOnce(response({...detail, ...second, request: {path: "second.txt"}, latest_observation: latest}));
+  render(<ActionJournal runId="run" />);
+  fireEvent.click(await screen.findByRole("button", {name: /email.send/}));
+  fireEvent.click(await screen.findByRole("button", {name: "Показать предыдущие наблюдения"}));
+  await screen.findByText(/Не удалось прочитать предыдущие наблюдения/);
+  fireEvent.click(screen.getByRole("button", {name: /files.write/}));
+  await screen.findByText(/second.txt/);
+  expect(screen.queryByText(/Не удалось прочитать предыдущие наблюдения/)).not.toBeInTheDocument();
+});
+
 it("при отказе доступа не показывает чужие данные или форму", async () => {
   fetcher.mockResolvedValueOnce(response({}, 404));
   render(<ActionJournal runId="foreign" />);

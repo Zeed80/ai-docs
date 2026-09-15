@@ -432,6 +432,58 @@ async def verify_chat_action(
         return await verify_proposal_receipt(db, action, user)
 
 
+@router.get("/{run_id}/actions/{action_id}/observations")
+async def get_chat_action_observations(
+    run_id: uuid.UUID,
+    action_id: uuid.UUID,
+    cursor: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+):
+    """Return only this owner's recorded observations, without changing their action."""
+    # This endpoint is deliberately a read-only view. In particular, an evidence
+    # reference is returned as data, never followed or interpreted by the server.
+    with db.no_autoflush:
+        run = await owned_run(db, run_id, user)
+        action = await db.get(ChatLogicalAction, action_id)
+        if action is None or action.work_order_id != run.work_order_id:
+            raise HTTPException(404, "Logical action not found")
+        observations = list(
+            await db.scalars(
+                select(WorkEvent)
+                .where(
+                    WorkEvent.work_order_id == run.work_order_id,
+                    WorkEvent.event_type == "chat.action_observation",
+                    WorkEvent.payload["action_id"].as_string() == str(action.id),
+                    WorkEvent.sequence > cursor,
+                )
+                .order_by(WorkEvent.sequence.asc())
+                .limit(limit)
+            )
+        )
+        # Do not expose the generic event payload: it can grow with internal
+        # fields, while this view has a deliberately small evidence contract.
+        items = [
+            {
+                "sequence": observation.sequence,
+                "request_id": observation.payload["request_id"],
+                "actor": observation.actor,
+                "created_at": observation.created_at.isoformat(),
+                "outcome": observation.payload["outcome"],
+                "note": observation.payload["note"],
+                "evidence_reference": observation.payload["evidence_reference"],
+                "verified": False,
+                "can_replay": False,
+            }
+            for observation in observations
+        ]
+    return {
+        "items": items,
+        "next_cursor": observations[-1].sequence if observations else cursor,
+    }
+
+
 @router.post("/{run_id}/actions/{action_id}/observations", status_code=201)
 async def observe_chat_action(
     run_id: uuid.UUID,

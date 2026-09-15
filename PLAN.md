@@ -57,7 +57,10 @@ E00 — read-only сверка текущего AgentTask — реализова
 Режим передачи работы без ручного участия: `AGENT_EMPLOYEE_ORCHESTRATION.md`.
 E01 добавляет owner-facing UI текущей сверки: только GET, отдельный от квитанции
 и ответа worker; ошибки и late response не оставляют старый verdict. Отчёт:
-`docs/agent-employee-delivery/E01-current-verification-ui.md`. Далее E02.
+`docs/agent-employee-delivery/E01-current-verification-ui.md`. E02 завершена:
+owner-only история наблюдений постранична по устойчивому `sequence`, отображается
+отдельно от последнего наблюдения, не следует ссылкам и не открывает replay.
+Отчёт: `docs/agent-employee-delivery/E02-observation-history.md`. Далее E03.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя
 в WorkEvent, проверяет владельца/аргументы/попытку/lease. Детали журнала и UI

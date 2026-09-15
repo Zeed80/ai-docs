@@ -13,6 +13,7 @@ from app.api.chat_runs import (
     ActionObservationRequest,
     ChatRunCreate,
     get_chat_action,
+    get_chat_action_observations,
     get_chat_actions,
     observe_chat_action,
     submit_chat_run,
@@ -21,7 +22,7 @@ from app.auth.jwt import _DEV_USER
 from app.db.agent_runtime_models import ChatLogicalAction
 from app.db.models import WorkEvent, WorkOrder, WorkStep, WorkStepAttempt
 from app.domain.chat_action_journal import action_state, record_boundary
-from app.domain.work_orders import claim_ready_step, fail_attempt
+from app.domain.work_orders import append_event, claim_ready_step, fail_attempt
 
 
 async def setup_action(factory):
@@ -290,6 +291,129 @@ async def test_action_detail_checks_owner_binding_and_integrity(test_engine):
         with pytest.raises(HTTPException) as tampered:
             await get_chat_action(run["id"], action_id, db, _DEV_USER)
         assert tampered.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_observation_history_is_owner_scoped_cursor_ordered_and_read_only(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    run, step_id, attempt_id, action_id, payload = await setup_action(factory)
+    other, _, _, other_action_id, _ = await setup_action(factory)
+    fixed_time = datetime(2026, 9, 15, 12, 0, tzinfo=UTC)
+    async with factory() as db:
+        order = await db.get(WorkOrder, run["work_order_id"])
+        action = await db.get(ChatLogicalAction, action_id)
+        step = await db.get(WorkStep, step_id)
+        attempt = await db.get(WorkStepAttempt, attempt_id)
+        before = {
+            "order": (order.status, order.version, order.plan_revision, order.blocker),
+            "action": (action.status, action.result, action.result_digest),
+            "step": (step.state, step.lease_owner, step.lease_expires_at),
+            "attempt": (attempt.status, attempt.checkpoint, attempt.heartbeat_at),
+        }
+        for index in range(3):
+            event = await append_event(
+                db,
+                order.id,
+                "chat.action_observation",
+                actor="alice",
+                payload={
+                    "action_id": str(action_id),
+                    "request_id": str(uuid.uuid4()),
+                    "outcome": "inconclusive",
+                    "note": f"<img src=x onerror=alert({index})>",
+                    "evidence_reference": f"manual:{index}",
+                    "verified": True,
+                    "can_replay": True,
+                    "internal_secret": "must-not-leak",
+                },
+            )
+            event.created_at = fixed_time
+        await append_event(
+            db,
+            order.id,
+            "chat.action_observation",
+            actor="alice",
+            payload={
+                "action_id": str(uuid.uuid4()),
+                "request_id": str(uuid.uuid4()),
+                "outcome": "observed",
+                "note": "unrelated action",
+                "evidence_reference": "manual:unrelated",
+            },
+        )
+        await db.commit()
+
+    async with factory() as db:
+        before_events = await db.scalar(
+            select(func.count())
+            .select_from(WorkEvent)
+            .where(WorkEvent.work_order_id == run["work_order_id"])
+        )
+        first = await get_chat_action_observations(run["id"], action_id, 0, 2, db, _DEV_USER)
+        second = await get_chat_action_observations(
+            run["id"], action_id, first["next_cursor"], 2, db, _DEV_USER
+        )
+        assert [item["sequence"] for item in first["items"]] == sorted(
+            item["sequence"] for item in first["items"]
+        )
+        assert {item["sequence"] for item in first["items"]}.isdisjoint(
+            item["sequence"] for item in second["items"]
+        )
+        assert len(first["items"] + second["items"]) == 3
+        assert all(item["created_at"] == fixed_time.isoformat() for item in first["items"])
+        assert all(
+            item["verified"] is False and item["can_replay"] is False for item in first["items"]
+        )
+        assert all(
+            "internal_secret" not in item and "action_id" not in item for item in first["items"]
+        )
+        assert first["items"][0]["note"].startswith("<img")
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(WorkEvent)
+                .where(WorkEvent.work_order_id == run["work_order_id"])
+            )
+            == before_events
+        )
+        order = await db.get(WorkOrder, run["work_order_id"])
+        action = await db.get(ChatLogicalAction, action_id)
+        step = await db.get(WorkStep, step_id)
+        attempt = await db.get(WorkStepAttempt, attempt_id)
+        assert (order.status, order.version, order.plan_revision, order.blocker) == before["order"]
+        assert (action.status, action.result, action.result_digest) == before["action"]
+        assert (step.state, step.lease_owner, step.lease_expires_at) == before["step"]
+        assert (attempt.status, attempt.checkpoint, attempt.heartbeat_at) == before["attempt"]
+        for user, target_run, target_action in [
+            (_DEV_USER.model_copy(update={"sub": "bob"}), run["id"], action_id),
+            (_DEV_USER, other["id"], action_id),
+            (_DEV_USER, run["id"], other_action_id),
+        ]:
+            with pytest.raises(HTTPException) as denied:
+                await get_chat_action_observations(target_run, target_action, 0, 20, db, user)
+            assert denied.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_observation_history_route_rejects_malformed_actions_and_limit_bounds(
+    client, test_engine
+):
+    from app.auth.jwt import get_current_user
+    from app.main import app
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    run, _, _, action_id, _ = await setup_action(factory)
+    original = app.dependency_overrides.copy()
+    app.dependency_overrides[get_current_user] = lambda: _DEV_USER
+    url = f"/api/agent/chat-runs/{run['id']}/actions/{action_id}/observations"
+    try:
+        assert (await client.get(f"{url}?limit=0")).status_code == 422
+        assert (await client.get(f"{url}?limit=101")).status_code == 422
+        malformed = f"/api/agent/chat-runs/{run['id']}/actions/not-a-uuid/observations"
+        assert (await client.get(malformed)).status_code == 422
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(original)
 
 
 @pytest.mark.asyncio

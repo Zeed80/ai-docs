@@ -3,9 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { mutFetch } from "@/lib/auth";
 
-type Observation = { request_id: string; actor?: string; outcome: string; note: string; evidence_reference: string };
+type Observation = { sequence?: number; request_id: string; actor?: string; created_at?: string; outcome: string; note: string; evidence_reference: string; verified?: false; can_replay?: false };
 type Action = { id: string; tool: string; status: string; request_digest: string; latest_observation: Observation | null };
 type Page = { items: Action[]; next_offset: number; work_order_status: string };
+type ObservationPage = { items: Observation[]; next_cursor: number };
 type Detail = { id: string; status: string; request: unknown; result: unknown; request_digest: string; result_digest: string | null;
   recipient_receipt?: { operation: string; response: unknown; response_digest: string; evidence_scope: string } | null };
 type Submission = { request_id: string; request_digest: string; outcome: string; note: string; evidence_reference: string };
@@ -78,12 +79,19 @@ function ActionDetail({runId, action, stopped}: {runId: string; action: Action; 
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<Submission | null>(null);
   const [saved, setSaved] = useState<Observation | null>(action.latest_observation);
+  const [history, setHistory] = useState<Observation[]>([]);
+  const [historyCursor, setHistoryCursor] = useState(0);
+  const [historyError, setHistoryError] = useState("");
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyMore, setHistoryMore] = useState(true);
   const [verification, setVerification] = useState<Verification | null>(null);
   const [verificationError, setVerificationError] = useState("");
   const [verifying, setVerifying] = useState(false);
   const controller = useRef<AbortController | null>(null);
   const verificationController = useRef<AbortController | null>(null);
   const verificationKey = useRef(0);
+  const historyController = useRef<AbortController | null>(null);
+  const historyKey = useRef(0);
   const mounted = useRef(true);
   const submitting = useRef(false);
   const path = `/api/agent/chat-runs/${encodeURIComponent(runId)}/actions/${encodeURIComponent(action.id)}`;
@@ -93,6 +101,8 @@ function ActionDetail({runId, action, stopped}: {runId: string; action: Action; 
       mounted.current = false;
       verificationKey.current += 1;
       verificationController.current?.abort();
+      historyKey.current += 1;
+      historyController.current?.abort();
     };
   }, []);
   useEffect(() => {
@@ -141,6 +151,34 @@ function ActionDetail({runId, action, stopped}: {runId: string; action: Action; 
       if (!current.signal.aborted && mounted.current && verificationKey.current === requestKey) setVerifying(false);
     }
   }
+  async function loadObservationHistory() {
+    if (historyLoading || !historyMore) return;
+    historyController.current?.abort();
+    const current = new AbortController();
+    historyController.current = current;
+    const requestKey = historyKey.current + 1;
+    historyKey.current = requestKey;
+    setHistoryError(""); setHistoryLoading(true);
+    try {
+      const result = await request<ObservationPage>(`${path}/observations?cursor=${historyCursor}&limit=20`, current.signal);
+      if (current.signal.aborted || !mounted.current || historyKey.current !== requestKey) return;
+      setHistory((previous) => {
+        const bySequence = new Map(previous.map((observation) => [observation.sequence, observation]));
+        for (const observation of result.items) {
+          if (observation.sequence !== saved?.sequence) bySequence.set(observation.sequence, observation);
+        }
+        return [...bySequence.values()].sort((left, right) => (left.sequence ?? 0) - (right.sequence ?? 0));
+      });
+      setHistoryCursor(result.next_cursor);
+      setHistoryMore(result.items.length === 20 && result.next_cursor !== historyCursor);
+    } catch (err) {
+      if (!current.signal.aborted && mounted.current && historyKey.current === requestKey) {
+        setHistoryError(`Не удалось прочитать предыдущие наблюдения: ${String(err)}`);
+      }
+    } finally {
+      if (!current.signal.aborted && mounted.current && historyKey.current === requestKey) setHistoryLoading(false);
+    }
+  }
   return <section aria-label="Сверка действия" className="space-y-3 rounded border p-4">
     <h2 className="font-semibold">Сверка действия</h2>
     {error && <p role="alert">{error}</p>}
@@ -175,6 +213,21 @@ function ActionDetail({runId, action, stopped}: {runId: string; action: Action; 
         <p>{outcomes[saved.outcome] ?? saved.outcome}</p><p className="whitespace-pre-wrap break-words">{saved.note}</p>
         <p className="break-all">Источник: {saved.evidence_reference}</p>
         {saved.actor && <p>Автор: {saved.actor}</p>}
+        {saved.created_at && <p>Время: {saved.created_at}</p>}
+        <button type="button" className="rounded border px-3 py-2" disabled={historyLoading || !historyMore} onClick={() => { void loadObservationHistory(); }}>
+          {historyLoading ? "Загрузка наблюдений…" : history.length ? "Показать ещё предыдущие наблюдения" : "Показать предыдущие наблюдения"}
+        </button>
+        {historyError && <p role="alert">{historyError}</p>}
+        {history.length > 0 && <section aria-label="Предыдущие наблюдения" className="space-y-2 rounded border p-3">
+          <h4>Предыдущие наблюдения — не проверены</h4>
+          {history.map((observation) => <article key={observation.sequence} className="space-y-1 border-b pb-2 last:border-0">
+            <p>{outcomes[observation.outcome] ?? observation.outcome}</p>
+            <p className="whitespace-pre-wrap break-words">{observation.note}</p>
+            <p className="break-all">Источник: {observation.evidence_reference}</p>
+            {observation.actor && <p>Автор: {observation.actor}</p>}
+            {observation.created_at && <p>Время: {observation.created_at}</p>}
+          </article>)}
+        </section>}
       </section>}
       {stopped && detail.status === "outcome_unknown" && <form className="space-y-3" onSubmit={(event) => {event.preventDefault(); void submit();}}>
         <label className="block">Наблюдаемый исход<select className="block w-full rounded border p-2" value={outcome} disabled={busy || !!pending} onChange={(event) => setOutcome(event.target.value)}>

@@ -344,7 +344,8 @@ scope/time/action и запреты replay/resume, но нельзя выдум�
 
 ### E02 — Полная история наблюдений
 
-**Статус:** TODO. **После:** E01.
+**Статус:** REVIEWED и DEPLOYED; отчёт
+`docs/agent-employee-delivery/E02-observation-history.md`. **После:** E01.
 **Файлы:** `api/chat_runs.py`, `domain/chat_action_journal.py`, UI журнала;
 тесты `test_chat_action_journal.py`, `action-journal.test.tsx`.
 

@@ -77,3 +77,34 @@ test("текущая сверка видна и делает только GET б
   expect(writes).toEqual([]);
   await expect(page.getByRole("button", {name: /Возобновить|Разрешить|Повторить действие/})).toHaveCount(0);
 });
+
+test("предыдущие наблюдения загружаются только для выбранного действия без записи или replay", async ({context, page}) => {
+  await context.addCookies([{name: "access_token", value: "mock-only", domain: "127.0.0.1", path: "/"}]);
+  const runId = "11111111-1111-4111-8111-111111111111";
+  const action = {id: "action", tool: "email.send", status: "outcome_unknown", request_digest: "a".repeat(64)};
+  const latest = {sequence: 4, request_id: "latest", actor: "test-user", outcome: "observed", note: "Последнее наблюдение", evidence_reference: "manual:latest", verified: false, can_replay: false};
+  const writes: string[] = [];
+  const observationReads: string[] = [];
+  await context.route("**/api/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (route.request().method() !== "GET") writes.push(path);
+    if (path === "/api/auth/me") return route.fulfill({json: {sub: "test-user", name: "Test", roles: ["admin"], groups: [], sections: []}});
+    if (path === "/api/chat/sessions") return route.fulfill({json: [{id: runId, title: "Журнал", created_at: "2026-09-15T00:00:00Z"}]});
+    if (path.endsWith("/messages")) return route.fulfill({json: []});
+    if (path === "/api/agent/chat-runs") return route.fulfill({json: {run: null, legacy: false}});
+    if (path.endsWith("/actions/action/observations")) {
+      observationReads.push(route.request().method());
+      return route.fulfill({json: {items: [{sequence: 2, request_id: "old", actor: "test-user", outcome: "not_observed", note: "Предыдущее наблюдение", evidence_reference: "manual:old", verified: false, can_replay: false}], next_cursor: 2}});
+    }
+    if (path.endsWith("/actions")) return route.fulfill({json: {items: [{...action, latest_observation: latest}], next_offset: 1, work_order_status: "blocked"}});
+    if (path.endsWith("/actions/action")) return route.fulfill({json: {...action, request: {draft_id: "draft-42"}, result: null, result_digest: null, latest_observation: latest}});
+    return route.fulfill({json: {}});
+  });
+  await page.goto(`/work-orders/chat-journal?run_id=${runId}`);
+  await page.getByRole("button", {name: /email.send/}).click();
+  await page.getByRole("button", {name: "Показать предыдущие наблюдения"}).click();
+  await expect(page.getByText("Предыдущее наблюдение")).toBeVisible();
+  expect(observationReads).toEqual(["GET"]);
+  expect(writes).toEqual([]);
+  await expect(page.getByRole("button", {name: /Возобновить|Разрешить|Повторить действие/})).toHaveCount(0);
+});
