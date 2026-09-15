@@ -9,14 +9,20 @@ import httpx
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException
-from sqlalchemy import func, select, update
+from sqlalchemy import event, func, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.agent_control_plane import AgentTaskPropose, propose_agent_task_tool
-from app.api.chat_runs import ChatRunCreate, get_chat_action, submit_chat_run
-from app.auth.jwt import _DEV_USER
+from app.api.chat_runs import (
+    ChatRunCreate,
+    get_chat_action,
+    submit_chat_run,
+)
+from app.auth.jwt import _DEV_USER, get_current_user
+from app.auth.models import UserRole
 from app.db.agent_runtime_models import ChatLogicalAction
-from app.db.models import AgentTask, WorkEvent, WorkOrder, WorkStep
+from app.db.models import AgentTask, AgentTeam, WorkEvent, WorkOrder, WorkStep, WorkStepAttempt
+from app.domain.action_receipts import verify_proposal_receipt
 from app.domain.chat_action_journal import digest, record_boundary
 from app.domain.work_orders import claim_ready_step
 
@@ -38,13 +44,13 @@ async def settle_receipt_test_orders(test_engine):
         await db.commit()
 
 
-async def proposal(factory):
+async def proposal(factory, user=_DEV_USER):
     payload = AgentTaskPropose(objective=f"Receipt test {uuid.uuid4()}")
     async with factory() as db:
         run = await submit_chat_run(
             ChatRunCreate(request_id=uuid.uuid4(), content=f"Receipt scenario {uuid.uuid4()}"),
             db,
-            _DEV_USER,
+            user,
         )
     async with factory() as db:
         order, step, attempt = await claim_ready_step(
@@ -271,3 +277,312 @@ async def test_gateway_forwards_key_to_real_recipient_route(
         detail = await get_chat_action(run["id"], action_id, db, _DEV_USER)
         assert detail["recipient_receipt"]["response"] == result
     assert result["status"] == "proposed"
+
+
+@pytest.mark.asyncio
+async def test_verification_matched_is_a_read_only_content_snapshot(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    payload, run, action_id, _, key = await proposal(factory)
+    committed = await deliver(factory, payload, key)
+
+    async with factory() as db:
+        before_events = await db.scalar(
+            select(func.count())
+            .select_from(WorkEvent)
+            .where(WorkEvent.work_order_id == run["work_order_id"])
+        )
+        before_task = await db.scalar(
+            select(AgentTask).where(AgentTask.objective == payload.objective)
+        )
+        before_values = {
+            "id": before_task.id,
+            "objective": before_task.objective,
+            "description": before_task.description,
+            "role": before_task.role,
+            "status": before_task.status,
+            "team_id": before_task.team_id,
+            "output": before_task.output,
+            "metadata_": before_task.metadata_,
+        }
+        result = await verify_proposal_receipt(
+            db, await db.get(ChatLogicalAction, action_id), _DEV_USER
+        )
+        after_events = await db.scalar(
+            select(func.count())
+            .select_from(WorkEvent)
+            .where(WorkEvent.work_order_id == run["work_order_id"])
+        )
+        after_task = await db.get(AgentTask, before_task.id, populate_existing=True)
+
+    assert result["status"] == "matched"
+    assert result["action_id"] == str(action_id)
+    assert result["artifact_id"] == committed["id"]
+    assert result["receipt_response_digest"] == digest(committed)
+    assert result["expected_content_digest"] == result["current_content_digest"]
+    assert result["checked_fields"] == [
+        "id",
+        "objective",
+        "description",
+        "role",
+        "status",
+        "team_id",
+        "output",
+        "metadata",
+    ]
+    assert result["can_replay"] is False
+    assert result["can_resume"] is False
+    assert after_events == before_events
+    assert {
+        "id": after_task.id,
+        "objective": after_task.objective,
+        "description": after_task.description,
+        "role": after_task.role,
+        "status": after_task.status,
+        "team_id": after_task.team_id,
+        "output": after_task.output,
+        "metadata_": after_task.metadata_,
+    } == before_values
+
+
+@pytest.mark.asyncio
+async def test_verification_changed_detects_each_mutable_content_field(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    payload, run, action_id, _, key = await proposal(factory)
+    committed = await deliver(factory, payload, key)
+    task_id = uuid.UUID(committed["id"])
+    async with factory() as db:
+        task = await db.get(AgentTask, task_id)
+        original = {
+            "objective": task.objective,
+            "description": task.description,
+            "role": task.role,
+            "status": task.status,
+            "team_id": task.team_id,
+            "output": task.output,
+            "metadata_": task.metadata_,
+        }
+        event_count = await db.scalar(
+            select(func.count())
+            .select_from(WorkEvent)
+            .where(WorkEvent.work_order_id == run["work_order_id"])
+        )
+        team = AgentTeam(name=f"Verification team {uuid.uuid4()}")
+        db.add(team)
+        await db.flush()
+        changed_values = {
+            "objective": "Changed objective",
+            "description": "Changed description",
+            "role": "changed-role",
+            "status": "changed-status",
+            "team_id": team.id,
+            "output": "Changed output",
+            "metadata_": {"changed": True},
+        }
+        await db.commit()
+
+    for field, changed_value in changed_values.items():
+        async with factory() as db:
+            task = await db.get(AgentTask, task_id)
+            setattr(task, field, changed_value)
+            await db.commit()
+
+        async with factory() as db:
+            action = await db.get(ChatLogicalAction, action_id)
+            result = await verify_proposal_receipt(db, action, _DEV_USER)
+            assert result["status"] == "changed", field
+            assert result["expected_content_digest"] != result["current_content_digest"]
+
+        async with factory() as db:
+            task = await db.get(AgentTask, task_id)
+            setattr(task, field, original[field])
+            await db.commit()
+
+    async with factory() as db:
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(WorkEvent)
+                .where(WorkEvent.work_order_id == run["work_order_id"])
+            )
+            == event_count
+        )
+
+
+@pytest.mark.asyncio
+async def test_verification_missing_task_and_receipt_are_inconclusive(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+
+    payload, run, action_id, _, _ = await proposal(factory)
+    async with factory() as db:
+        action = await db.get(ChatLogicalAction, action_id)
+        result = await verify_proposal_receipt(db, action, _DEV_USER)
+    assert result["status"] == "inconclusive"
+    assert result["reason"] == "recipient_receipt_missing"
+    assert result["can_replay"] is False
+    assert result["can_resume"] is False
+
+    payload, run, action_id, _, key = await proposal(factory)
+    committed = await deliver(factory, payload, key)
+    async with factory() as db:
+        await db.delete(await db.get(AgentTask, uuid.UUID(committed["id"])))
+        await db.commit()
+        action = await db.get(ChatLogicalAction, action_id)
+        result = await verify_proposal_receipt(db, action, _DEV_USER)
+    assert result["status"] == "missing"
+    assert result["artifact_id"] == committed["id"]
+    assert result["current_content_digest"] is None
+    assert result["can_replay"] is False
+    assert result["can_resume"] is False
+
+
+@pytest.mark.asyncio
+async def test_verification_rejects_corrupt_receipt_and_unknown_recipient(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    payload, run, action_id, _, key = await proposal(factory)
+    await deliver(factory, payload, key)
+    async with factory() as db:
+        event = await db.scalar(
+            select(WorkEvent).where(
+                WorkEvent.work_order_id == run["work_order_id"],
+                WorkEvent.event_type == "chat.recipient_committed",
+            )
+        )
+        event.payload = {**event.payload, "response": {"id": "corrupt"}}
+        await db.commit()
+        action = await db.get(ChatLogicalAction, action_id)
+        with pytest.raises(HTTPException, match="integrity mismatch"):
+            await verify_proposal_receipt(db, action, _DEV_USER)
+
+    payload, run, action_id, _, key = await proposal(factory)
+    await deliver(factory, payload, key)
+    async with factory() as db:
+        event = await db.scalar(
+            select(WorkEvent).where(
+                WorkEvent.work_order_id == run["work_order_id"],
+                WorkEvent.event_type == "chat.recipient_committed",
+            )
+        )
+        event.payload = {**event.payload, "operation": "other.recipient"}
+        await db.commit()
+        action = await db.get(ChatLogicalAction, action_id)
+        result = await verify_proposal_receipt(db, action, _DEV_USER)
+    assert result["status"] == "inconclusive"
+    assert result["reason"] == "unsupported_recipient"
+    assert "artifact_id" not in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("malformed_kind", ["invalid_uuid", "missing_id"])
+async def test_verification_rejects_malformed_artifact_binding(test_engine, malformed_kind):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    payload, run, action_id, _, key = await proposal(factory)
+    committed = await deliver(factory, payload, key)
+    async with factory() as db:
+        event_row = await db.scalar(
+            select(WorkEvent).where(
+                WorkEvent.work_order_id == run["work_order_id"],
+                WorkEvent.event_type == "chat.recipient_committed",
+            )
+        )
+        original = event_row.payload["response"]
+        if malformed_kind == "invalid_uuid":
+            malformed = {**original, "id": "not-a-uuid"}
+        else:
+            malformed = {name: value for name, value in original.items() if name != "id"}
+        event_row.payload = {
+            **event_row.payload,
+            "response": malformed,
+            "response_digest": digest(malformed),
+        }
+        await db.commit()
+        action = await db.get(ChatLogicalAction, action_id)
+        with pytest.raises(HTTPException, match="artifact binding is invalid"):
+            await verify_proposal_receipt(db, action, _DEV_USER)
+    assert committed["id"] == original["id"]
+
+
+@pytest.mark.asyncio
+async def test_verification_route_is_owner_scoped_and_requires_current_admin(
+    client, db_session, test_engine
+):
+    from app.main import app
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    alice = _DEV_USER.model_copy(update={"sub": "alice"})
+    payload, run, action_id, _, key = await proposal(factory, alice)
+    await deliver(factory, payload, key, alice)
+    url = f"/api/agent/chat-runs/{run['id']}/actions/{action_id}/verification"
+
+    async with factory() as db:
+        action = await db.get(ChatLogicalAction, action_id)
+        order = await db.get(WorkOrder, run["work_order_id"])
+        attempt = await db.get(WorkStepAttempt, action.attempt_id)
+        step = await db.get(WorkStep, attempt.step_id)
+        before_state = {
+            "order": (order.status, order.blocker, order.plan_revision, order.metadata_),
+            "action": (action.status, action.result, action.result_digest),
+            "attempt": (attempt.status, attempt.checkpoint, attempt.heartbeat_at),
+            "step": (step.state, step.lease_owner, step.lease_expires_at),
+        }
+        before_events = await db.scalar(
+            select(func.count())
+            .select_from(WorkEvent)
+            .where(WorkEvent.work_order_id == run["work_order_id"])
+        )
+
+    app.dependency_overrides[get_current_user] = lambda: alice
+    assert not db_session.dirty
+    assert not db_session.new
+    assert not db_session.deleted
+    statements = []
+
+    def capture_sql(_conn, _cursor, statement, _parameters, _context, _executemany):
+        verb = statement.lstrip().split(None, 1)[0].upper()
+        if verb in {"INSERT", "UPDATE", "DELETE"}:
+            statements.append(verb)
+
+    event.listen(test_engine.sync_engine, "before_cursor_execute", capture_sql)
+    try:
+        response = await client.get(url)
+    finally:
+        event.remove(test_engine.sync_engine, "before_cursor_execute", capture_sql)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "matched"
+    assert body["can_replay"] is False
+    assert body["can_resume"] is False
+    assert statements == []
+    assert not db_session.dirty
+    assert not db_session.new
+    assert not db_session.deleted
+
+    bob = alice.model_copy(update={"sub": "bob"})
+    app.dependency_overrides[get_current_user] = lambda: bob
+    assert (await client.get(url)).status_code == 404
+
+    viewer = alice.model_copy(update={"roles": [UserRole.viewer]})
+    app.dependency_overrides[get_current_user] = lambda: viewer
+    assert (await client.get(url)).status_code == 403
+
+    app.dependency_overrides[get_current_user] = lambda: alice
+    missing_action = f"/api/agent/chat-runs/{run['id']}/actions/{uuid.uuid4()}/verification"
+    assert (await client.get(missing_action)).status_code == 404
+
+    async with factory() as db:
+        action = await db.get(ChatLogicalAction, action_id)
+        order = await db.get(WorkOrder, run["work_order_id"])
+        attempt = await db.get(WorkStepAttempt, action.attempt_id)
+        step = await db.get(WorkStep, attempt.step_id)
+        after_state = {
+            "order": (order.status, order.blocker, order.plan_revision, order.metadata_),
+            "action": (action.status, action.result, action.result_digest),
+            "attempt": (attempt.status, attempt.checkpoint, attempt.heartbeat_at),
+            "step": (step.state, step.lease_owner, step.lease_expires_at),
+        }
+        after_events = await db.scalar(
+            select(func.count())
+            .select_from(WorkEvent)
+            .where(WorkEvent.work_order_id == run["work_order_id"])
+        )
+    assert after_state == before_state
+    assert after_events == before_events

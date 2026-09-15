@@ -413,6 +413,25 @@ async def get_chat_action(
     }
 
 
+@router.get("/{run_id}/actions/{action_id}/verification")
+async def verify_chat_action(
+    run_id: uuid.UUID,
+    action_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+):
+    from app.domain.action_receipts import verify_proposal_receipt
+
+    # Verification is a SELECT-only snapshot. Keep the complete owner/action/
+    # receipt/task read under one no-autoflush boundary, including helper calls.
+    with db.no_autoflush:
+        run = await owned_run(db, run_id, user)
+        action = await db.get(ChatLogicalAction, action_id)
+        if action is None or action.work_order_id != run.work_order_id:
+            raise HTTPException(404, "Logical action not found")
+        return await verify_proposal_receipt(db, action, user)
+
+
 @router.post("/{run_id}/actions/{action_id}/observations", status_code=201)
 async def observe_chat_action(
     run_id: uuid.UUID,

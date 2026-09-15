@@ -12,11 +12,25 @@ The target implementation structure is:
 
 ## Build, Test, and Development Commands
 
+### Делегирование разработки
+
+По прямому поручению пользователя выполнять агентский план в режиме
+`AGENT_EMPLOYEE_ORCHESTRATION.md`: главный агент — сеньор, ограниченную реализацию
+поручать более простой модели через штатных подагентов, затем независимо проверять.
+По умолчанию исполнитель `gpt-5.6-luna` с явным model и `fork_turns=none`;
+при недоступности модели не наследовать дорогую молча. Только главный агент
+делегирует, принимает изменения, выполняет deploy и commit. Подагенты не создают
+новых подагентов. Один пишущий исполнитель по умолчанию, максимум два цикла правок
+до разбора причины/эскалации. Этот режим не расширяет доступ и не отменяет запрет push.
+
+### Проверки
+
 Актуальный агентский срез: `AGENT_EMPLOYEE_IMPLEMENTATION_PLAN.md`.
 Подробный план передачи реализации: `AGENT_EMPLOYEE_EXECUTION_PLAYBOOK.md`.
 При поручении продолжить по нему брать одну карточку E00–E52, проверять зависимости,
 неизменяемые ограничения и Definition of Done. Не считать существующий WIP проверенным.
 Атомарная квитанция получателя (пилот task_propose): `python3 -m pytest backend/tests/test_action_receipts.py -q`.
+Read-only сверка AgentTask по квитанции (E00): тот же набор и `backend/tests/test_chat_action_journal.py`; отчёт в `docs/agent-employee-delivery/E00-receipt-verification.md`.
 Проверки границ и разрешений: `python3 -m pytest backend/tests/test_agent_execution_boundary.py backend/tests/test_agent_delegations.py -q`.
 Пилот долговечного чата: `python3 -m pytest backend/tests/test_durable_chat.py backend/tests/test_work_order_checkpoint.py -q`.
 Снимки исполнения и одноразовое продолжение после подтверждения владельца: `python3 -m pytest backend/tests/test_chat_checkpoints.py -q`.

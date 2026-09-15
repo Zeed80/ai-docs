@@ -51,8 +51,10 @@ isProject: false
 Подробная последовательность остатка для модели-исполнителя:
 [`AGENT_EMPLOYEE_EXECUTION_PLAYBOOK.md`](./AGENT_EMPLOYEE_EXECUTION_PLAYBOOK.md).
 Карточки E00–E52 выполняются по одной, с указанными зависимостями и review gates.
-E00 — непроверенная заготовка сверки текущего AgentTask; её нельзя считать готовой
-по результатам тестов предыдущего пилота.
+E00 — read-only сверка текущего AgentTask — реализована моделью-исполнителем и
+проверена сеньором. Фактические проверки/выкладка в
+`docs/agent-employee-delivery/E00-receipt-verification.md`; далее E01 (UI).
+Режим передачи работы без ручного участия: `AGENT_EMPLOYEE_ORCHESTRATION.md`.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя
 в WorkEvent, проверяет владельца/аргументы/попытку/lease. Детали журнала и UI

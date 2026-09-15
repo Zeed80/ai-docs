@@ -19,8 +19,10 @@
 Проверка UI: `cd frontend && PLAYWRIGHT_MOCK_API=1 npx playwright test tests/e2e/chat-action-journal.spec.ts --project=chromium`.
 Подробные задания для последовательной реализации другой моделью:
 [`AGENT_EMPLOYEE_EXECUTION_PLAYBOOK.md`](./AGENT_EMPLOYEE_EXECUTION_PLAYBOOK.md).
-Следующая карточка E00 завершает непроверенную заготовку read-only verification;
-дальше E01–E52. Один ограниченный diff и проверяемый отчёт на карточку;
+Карточка E00 завершена исполнителем и прошла независимый code review;
+отчёт `docs/agent-employee-delivery/E00-receipt-verification.md`. Дальше E01–E52.
+Режим делегирования: `AGENT_EMPLOYEE_ORCHESTRATION.md`.
+Один ограниченный diff и проверяемый отчёт на карточку;
 опасные изменения не включать до указанного независимого review.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при

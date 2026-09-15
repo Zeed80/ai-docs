@@ -7,12 +7,14 @@ These receipts prove a past commit, not external delivery or current state.
 
 import json
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import HTTPException
 from sqlalchemy import select
 
+from app.auth.models import UserRole
 from app.db.agent_runtime_models import ChatLogicalAction
-from app.db.models import WorkEvent, WorkOrder, WorkPlan, WorkStep, WorkStepAttempt
+from app.db.models import AgentTask, WorkEvent, WorkOrder, WorkPlan, WorkStep, WorkStepAttempt
 from app.domain.chat_action_journal import digest
 from app.domain.chat_continuation import validate_wall_budget
 from app.domain.work_orders import append_event, attempt_owns_lease
@@ -34,7 +36,8 @@ async def read_receipt(db, action):
         raise HTTPException(409, "Duplicate recipient receipt")
     receipt = rows[0].payload
     if (
-        receipt.get("request_digest") != action.request_digest
+        not isinstance(receipt, dict)
+        or receipt.get("request_digest") != action.request_digest
         or digest(action.request) != action.request_digest
         or digest(receipt.get("response")) != receipt.get("response_digest")
     ):
@@ -76,7 +79,10 @@ async def prepare_proposal_receipt(db, key, user, payload, schema):
             raise ValueError()
     except (ValueError, TypeError, KeyError, AttributeError):
         raise HTTPException(409, "Recipient request does not match logical action") from None
-    receipt = await read_receipt(db, action)
+    # Keep the verifier read-only even if a caller has unrelated pending ORM
+    # changes in the session: a SELECT must not trigger an autoflush.
+    with db.no_autoflush:
+        receipt = await read_receipt(db, action)
     if receipt is not None:
         if receipt.get("operation") != "agent_control.task_propose":
             raise HTTPException(409, "Recipient operation mismatch")
@@ -122,3 +128,59 @@ async def record_proposal_receipt(db, action, response):
             "can_replay": False,
         },
     )
+
+
+async def verify_proposal_receipt(db, action, user):
+    """Read current task content; never mutate, fetch a URL, or authorize replay.
+
+    Ownership of the action must be checked by the caller. Current access to
+    AgentTask is admin-only, just like its original control-plane API.
+    """
+    if UserRole.admin not in user.roles:
+        raise HTTPException(403, "Current task verification requires admin access")
+    receipt = await read_receipt(db, action)
+    result = {
+        "action_id": str(action.id),
+        "observed_at": datetime.now(UTC).isoformat(),
+        "scope": "agent_task_content_snapshot",
+        "can_replay": False,
+        "can_resume": False,
+    }
+    if receipt is None:
+        return {**result, "status": "inconclusive", "reason": "recipient_receipt_missing"}
+    if receipt.get("operation") != "agent_control.task_propose":
+        return {**result, "status": "inconclusive", "reason": "unsupported_recipient"}
+    response = receipt["response"]
+    fields = ("id", "objective", "description", "role", "status", "team_id", "output", "metadata")
+    try:
+        expected = {name: response[name] for name in fields}
+        artifact_id = uuid.UUID(expected["id"])
+    except (ValueError, TypeError, KeyError, AttributeError):
+        raise HTTPException(409, "Recipient artifact binding is invalid") from None
+    result.update(
+        {
+            "artifact_id": str(artifact_id),
+            "receipt_response_digest": receipt["response_digest"],
+            "expected_content_digest": digest(expected),
+            "checked_fields": list(fields),
+        }
+    )
+    task = await db.get(AgentTask, artifact_id, populate_existing=True)
+    if task is None:
+        return {**result, "status": "missing", "current_content_digest": None}
+    current = {
+        "id": str(task.id),
+        "objective": task.objective,
+        "description": task.description,
+        "role": task.role,
+        "status": task.status,
+        "team_id": str(task.team_id) if task.team_id else None,
+        "output": task.output,
+        "metadata": task.metadata_,
+    }
+    current_digest = digest(current)
+    return {
+        **result,
+        "status": "matched" if current_digest == result["expected_content_digest"] else "changed",
+        "current_content_digest": current_digest,
+    }
