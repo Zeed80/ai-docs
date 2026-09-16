@@ -807,10 +807,15 @@ async def execute_skill(
     idempotency_key: str | None = None,
 ) -> dict:
     from app.ai.tool_transport import (
+        one_db_commit_http_failure,
+        one_db_commit_operation,
+        one_db_commit_outcome_unknown,
+        one_db_commit_pre_dispatch_failure,
         read_http_failure,
         read_transport_failure,
         retry_safe,
         serialize_http_read_response,
+        serialize_one_db_commit_response,
         unknown_outcome,
     )
 
@@ -827,6 +832,7 @@ async def execute_skill(
 
     method = skill["method"].upper()
     path = skill["path"]
+    db_write = one_db_commit_operation(skill, args)
     base_url = config.backend_url.rstrip("/")
     timeout = config.backend_timeout_seconds
     # Web research/browse open many live pages (+ PDF OCR) and legitimately run
@@ -852,9 +858,10 @@ async def execute_skill(
 
     url = base_url + path
     safe_to_retry = retry_safe(skill, args)
-    max_retries = 3 if safe_to_retry else 1
+    max_retries = 1 if db_write is not None else (3 if safe_to_retry else 1)
     last_error: Exception | None = None
     for attempt in range(max_retries):
+        dispatch_attempted = False
         try:
             _hdrs = internal_headers()
             if idempotency_key is not None:
@@ -870,6 +877,7 @@ async def execute_skill(
                     query_args if method == "GET" else body_args
                 )
             async with httpx.AsyncClient(timeout=float(timeout)) as client:
+                dispatch_attempted = True
                 if method == "GET":
                     resp = await client.get(url, params=query_args, headers=_hdrs)
                 elif method == "POST":
@@ -881,16 +889,42 @@ async def execute_skill(
                 else:
                     return {"error": f"Unsupported method: {method}"}
 
-            if resp.status_code < 400:
+            if 200 <= resp.status_code < 300 or (db_write is None and resp.status_code < 400):
                 try:
                     payload = resp.json()
                 except Exception:
+                    if db_write is not None:
+                        return serialize_one_db_commit_response(resp.text, operation=db_write.name)
                     if safe_to_retry:
                         return serialize_http_read_response(resp.text)
                     return {"text": resp.text[:2000]}
+                if db_write is not None:
+                    return serialize_one_db_commit_response(payload, operation=db_write.name)
                 if safe_to_retry:
                     return serialize_http_read_response(payload)
                 return payload
+            elif 300 <= resp.status_code < 400 and db_write is not None:
+                try:
+                    body = resp.json()
+                except Exception:
+                    body = resp.text[:300]
+                return one_db_commit_outcome_unknown(
+                    operation=db_write.name,
+                    reason=f"http_{resp.status_code}",
+                    status_code=resp.status_code,
+                    payload=body,
+                )
+            elif resp.status_code >= 500 and db_write is not None:
+                try:
+                    body = resp.json()
+                except Exception:
+                    body = resp.text[:300]
+                return one_db_commit_outcome_unknown(
+                    operation=db_write.name,
+                    reason=f"http_{resp.status_code}",
+                    status_code=resp.status_code,
+                    payload=body,
+                )
             elif resp.status_code >= 500 and not safe_to_retry:
                 return unknown_outcome(f"HTTP {resp.status_code}; recipient outcome not confirmed")
             elif resp.status_code in {502, 503, 504} and attempt < max_retries - 1:
@@ -907,6 +941,12 @@ async def execute_skill(
                 except Exception:
                     body = resp.text[:300]
                     detail = None
+                if db_write is not None:
+                    return one_db_commit_http_failure(
+                        operation=db_write.name,
+                        status_code=resp.status_code,
+                        payload=body,
+                    )
                 if safe_to_retry:
                     return read_http_failure(resp.status_code, body)
                 if isinstance(detail, dict) and detail.get("error_code"):
@@ -914,6 +954,16 @@ async def execute_skill(
                 return {"error": f"HTTP {resp.status_code}", "detail": resp.text[:300]}
 
         except httpx.TransportError as e:
+            if db_write is not None and dispatch_attempted:
+                return one_db_commit_outcome_unknown(
+                    operation=db_write.name,
+                    reason=f"transport_{type(e).__name__}",
+                )
+            if db_write is not None:
+                return one_db_commit_pre_dispatch_failure(
+                    operation=db_write.name,
+                    reason=f"transport_{type(e).__name__}",
+                )
             if not safe_to_retry:
                 return unknown_outcome(f"Transport failed: {type(e).__name__}")
             last_error = e
@@ -926,6 +976,16 @@ async def execute_skill(
             if attempt < max_retries - 1:
                 await asyncio.sleep(2**attempt)
         except Exception as e:
+            if db_write is not None and dispatch_attempted:
+                return one_db_commit_outcome_unknown(
+                    operation=db_write.name,
+                    reason=f"exception_{type(e).__name__}",
+                )
+            if db_write is not None:
+                return one_db_commit_pre_dispatch_failure(
+                    operation=db_write.name,
+                    reason=f"exception_{type(e).__name__}",
+                )
             if not safe_to_retry:
                 return unknown_outcome(f"Transport outcome unavailable: {type(e).__name__}")
             return read_transport_failure(type(e).__name__)

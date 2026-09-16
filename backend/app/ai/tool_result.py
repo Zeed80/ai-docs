@@ -202,6 +202,103 @@ def normalize_http_read_response(payload: Any) -> ToolResult:
     )
 
 
+def normalize_http_one_db_commit_response(payload: Any, *, operation: str) -> ToolResult:
+    """Normalize a reviewed E03 one-DB-commit response at the agent boundary.
+
+    A 2xx response confirms the recipient invocation, but explicit domain error
+    markers still win over HTTP success. Recipient lifecycle words such as
+    ``proposed`` and ``approved`` are ordinary response data, not ToolResult
+    statuses. Versioned envelopes are revalidated and never wrapped twice.
+    """
+
+    if isinstance(payload, ToolResult) or (isinstance(payload, Mapping) and "version" in payload):
+        normalized = normalize_tool_result(payload)
+        if normalized.status != "succeeded":
+            return normalized
+        failure = _domain_failure(normalized.data)
+        if failure is None:
+            return normalized
+        return ToolResult(
+            status="failed",
+            data=(
+                payload.model_dump(mode="json")
+                if isinstance(payload, ToolResult)
+                else dict(payload)
+            ),
+            error_code=failure,
+            evidence={
+                "adapter_contract": "http_one_db_commit_response_v1",
+                "operation": operation,
+            },
+        )
+
+    nonterminal = _normalize_one_db_commit_nonterminal(payload, operation=operation)
+    if nonterminal is not None:
+        return nonterminal
+
+    failure = _domain_failure(payload)
+    if failure is not None:
+        return ToolResult(
+            status="failed",
+            data=payload,
+            error_code=failure,
+            evidence={
+                "adapter_contract": "http_one_db_commit_response_v1",
+                "operation": operation,
+            },
+        )
+    return ToolResult(
+        status="succeeded",
+        data=payload,
+        evidence={
+            "adapter_contract": "http_one_db_commit_response_v1",
+            "operation": operation,
+        },
+    )
+
+
+def _normalize_one_db_commit_nonterminal(payload: Any, *, operation: str) -> ToolResult | None:
+    """Preserve reviewed legacy nonterminal outcomes without calling them failed."""
+
+    if not isinstance(payload, Mapping):
+        return None
+    status = payload.get("status")
+    if status not in {"partial", "waiting_approval", "outcome_unknown"}:
+        return None
+
+    raw = dict(payload)
+    explicit_error_code = raw.get("error_code")
+    error_code = (
+        explicit_error_code
+        if isinstance(explicit_error_code, str) and explicit_error_code
+        else f"domain_{status}"
+    )
+    evidence: dict[str, Any] = {
+        "adapter_contract": "http_one_db_commit_response_v1",
+        "operation": operation,
+        "legacy_status": status,
+    }
+    recipient_evidence = raw.get("evidence")
+    if isinstance(recipient_evidence, Mapping):
+        evidence["recipient_evidence"] = dict(recipient_evidence)
+    reason = raw.get("reason")
+    if not isinstance(reason, str) or not reason:
+        error = raw.get("error")
+        reason = error if isinstance(error, str) and error else None
+    if reason is not None:
+        evidence["reason"] = reason
+
+    checkpoint = raw.get("checkpoint")
+    return ToolResult(
+        status=status,
+        data=raw,
+        error_code=error_code,
+        retryable=False,
+        evidence=evidence,
+        checkpoint=dict(checkpoint) if isinstance(checkpoint, Mapping) else None,
+    )
+
+
 def result_failed(result: Any) -> bool:
     """Compatibility predicate for the legacy work-order consumer.
 

@@ -416,8 +416,10 @@ scope/time/action и запреты replay/resume, но нельзя выдум�
 
 ### E05 — Перевод адаптеров на ToolResult по одной группе
 
-**Статус:** IN PROGRESS: E05.1 REVIEWED; E05.2–E05.4 TODO. Отчёт E05.1:
-`docs/agent-employee-delivery/E05-1-read-adapters.md`. **После:** E04.
+**Статус:** IN PROGRESS: E05.1 REVIEWED; E05.2.1 REVIEWED как первый узкий
+срез; E05.2 в целом и E05.3–E05.4 не завершены. Отчёты:
+`docs/agent-employee-delivery/E05-1-read-adapters.md`,
+`docs/agent-employee-delivery/E05-2-1-db-write-adapters.md`. **После:** E04.
 **Файлы:** `ai/agent_loop.py::execute_skill`, `api/capability_router.py`,
 `ai/tool_transport.py`, адаптеры из E03, тесты транспорта/gateway.
 
@@ -431,9 +433,19 @@ scope/time/action и запреты replay/resume, но нельзя выдум�
 5. Убедиться, что проверки каталога и approval получают исходные аргументы,
    а не новый envelope или автоматически «исправленную» моделью копию.
 
+E05.2.1 охватывает только `analytics.collection_create`,
+`analytics.calendar_create_reminder`, `analytics.table_create_view` и
+`warehouse.create_item`. Их успешный 2xx domain response нормализуется в
+ToolResult v1 с raw payload в `data`; явная domain-ошибка и 4xx — `failed`;
+неоднозначность после dispatch — `outcome_unknown`; ошибка до dispatch —
+`failed`. Автоматический retry отсутствует. Остальные строки E03 с классом
+`one-db-commit` сохраняют прежний контракт до отдельных срезов E05.2.
+
 **Негативные тесты:** 200 + error, job SUCCESS + built=false, read timeout,
 write timeout после commit, MCP exception, double wrapping. **Готово:** каждая
 переведённая группа отмечена в E03; непереведённые не скрыты за «всё готово».
+Следующая карточка — ещё один отдельно выбранный срез E05.2, а не объявление
+всех простых DB writes готовыми.
 
 ### E06 — Consumers не принимают незавершённый результат за успех
 

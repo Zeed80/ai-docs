@@ -349,6 +349,14 @@
 - E05.1 REVIEWED: операции, для которых `retry_safe()` подтверждает catalog
   `effect=read`, получают ToolResult v1 на HTTP agent boundary. Исходный ответ
   сохраняется в `data`; публичные business API не менялись.
-- E05.2–E05.4 TODO: DB writes, async jobs, external/MCP handlers продолжают
-  прежний контракт до отдельных карточек. Наличие строки в этой матрице не
-  означает её миграцию.
+- E05.2 IN PROGRESS, E05.2.1 REVIEWED: только четыре операции класса
+  `one-db-commit` — `analytics.collection_create`,
+  `analytics.calendar_create_reminder`, `analytics.table_create_view` и
+  `warehouse.create_item` — получили ToolResult v1 на агентской HTTP-границе.
+  Успешный 2xx domain response сохраняет raw payload в `data`; явная domain-ошибка
+  и 4xx дают `failed`; неоднозначность после dispatch даёт `outcome_unknown`;
+  ошибка до dispatch даёт `failed`; automatic retry отсутствует. См.
+  `docs/agent-employee-delivery/E05-2-1-db-write-adapters.md`.
+- Остальные `one-db-commit` строки не мигрированы и продолжают прежний контракт
+  до отдельных срезов E05.2. E05.3 async jobs и E05.4 external/MCP handlers
+  также TODO. Наличие строки в этой матрице не означает её миграцию.

@@ -39,7 +39,15 @@ E04 завершена: строгий ToolResult v1 и матрица нега�
 прогон 110 тестов. Отчёт: `docs/agent-employee-delivery/E04-tool-result-contract.md`.
 E05.1 завершена: catalog-proven HTTP reads возвращают ToolResult v1 с raw data;
 ошибки и retry budget явны, write/MCP ещё не мигрированы. Отчёт:
-`docs/agent-employee-delivery/E05-1-read-adapters.md`. Далее E05.2.
+`docs/agent-employee-delivery/E05-1-read-adapters.md`.
+E05.2.1 завершена как первый узкий срез простых DB writes: ToolResult v1 добавлен
+только для `analytics.collection_create`, `analytics.calendar_create_reminder`,
+`analytics.table_create_view` и `warehouse.create_item`. 2xx domain success
+сохраняет raw payload; domain error/4xx — `failed`, неоднозначность после dispatch
+— `outcome_unknown`, ошибка до dispatch — `failed`; automatic retry нет. Отчёт:
+`docs/agent-employee-delivery/E05-2-1-db-write-adapters.md`.
+Вся E05.2 не завершена: остальные `one-db-commit` строки продолжают legacy
+контракт до следующих отдельных срезов E05.2.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при
 сетевой ошибке/HTTP 5xx дают outcome_unknown и блокируют durable-цикл после

@@ -48,7 +48,16 @@ E05.1: catalog-proven read-only HTTP-вызовы переведены на Tool
 агентской границе. Raw payload сохраняется в data; bounded retry, HTTP/domain
 errors и double wrapping покрыты тестами. Read status `queued/running` остаётся
 данными успешного чтения; command acceptance будет классифицироваться в E05.3.
-Отчёт: `docs/agent-employee-delivery/E05-1-read-adapters.md`. Далее E05.2.
+Отчёт: `docs/agent-employee-delivery/E05-1-read-adapters.md`.
+E05.2.1 REVIEWED: первый узкий срез простых DB writes —
+`analytics.collection_create`, `analytics.calendar_create_reminder`,
+`analytics.table_create_view` и `warehouse.create_item` — возвращает ToolResult
+v1 на агентской HTTP-границе. Успешный 2xx domain response сохраняет raw payload
+в `data`; явная domain-ошибка или 4xx даёт `failed`; неоднозначность после dispatch
+даёт `outcome_unknown`; ошибка до dispatch — `failed`. Автоматических retry нет.
+Отчёт: `docs/agent-employee-delivery/E05-2-1-db-write-adapters.md`.
+E05.2 остаётся IN PROGRESS: остальные `one-db-commit` операции не мигрированы.
+Следующий шаг — отдельный ограниченный срез оставшихся простых DB writes, не E05.3.
 Push накопленной ветки был заблокирован автопроверкой из-за несвязанных CAD-коммитов;
 для публикации всей этой истории нужно отдельное разрешение. Не обходить запрет.
 

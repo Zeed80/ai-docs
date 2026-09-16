@@ -7,6 +7,7 @@ from app.ai.tool_result import (
     LegacyToolResultContract,
     ToolResult,
     classify_tool_result,
+    normalize_http_one_db_commit_response,
     normalize_tool_result,
     result_failed,
 )
@@ -313,3 +314,59 @@ def test_result_failed_preserves_legacy_consumer_compatibility_without_false_suc
     payload, failed
 ):
     assert result_failed(payload) is failed
+
+
+@pytest.mark.parametrize("recipient_status", ["proposed", "approved"])
+def test_one_db_commit_recipient_status_is_raw_data(recipient_status):
+    payload = {"id": "record-1", "status": recipient_status}
+
+    normalized = normalize_http_one_db_commit_response(payload, operation="warehouse.create_item")
+
+    assert normalized.status == "succeeded"
+    assert normalized.data == payload
+
+
+def test_one_db_commit_invalid_v1_is_failed_without_double_wrapping():
+    payload = {"version": 1, "status": "succeeded", "unexpected": True}
+
+    normalized = normalize_http_one_db_commit_response(payload, operation="warehouse.create_item")
+
+    assert normalized.status == "failed"
+    assert normalized.error_code == "invalid_tool_result_contract"
+    assert normalized.data == payload
+
+
+@pytest.mark.parametrize("status", ["partial", "waiting_approval", "outcome_unknown"])
+def test_one_db_commit_legacy_nonterminal_status_is_preserved(status):
+    payload = {
+        "status": status,
+        "error_code": f"recipient_{status}",
+        "reason": "recipient needs reconciliation",
+        "retryable": True,
+        "checkpoint": {"cursor": "next"},
+        "evidence": {"recipient_revision": 7},
+    }
+
+    normalized = normalize_http_one_db_commit_response(payload, operation="warehouse.create_item")
+
+    assert normalized.status == status
+    assert normalized.data == payload
+    assert normalized.error_code == f"recipient_{status}"
+    assert normalized.retryable is False
+    assert normalized.checkpoint == {"cursor": "next"}
+    assert normalized.evidence["reason"] == "recipient needs reconciliation"
+    assert normalized.evidence["recipient_evidence"] == {"recipient_revision": 7}
+    assert result_failed(payload) is True
+
+
+def test_one_db_commit_legacy_nonterminal_without_code_keeps_reason_and_status():
+    payload = {"status": "partial", "error": "only some rows committed"}
+
+    normalized = normalize_http_one_db_commit_response(
+        payload, operation="analytics.table_create_view"
+    )
+
+    assert normalized.status == "partial"
+    assert normalized.error_code == "domain_partial"
+    assert normalized.evidence["reason"] == "only some rows committed"
+    assert normalized.data == payload

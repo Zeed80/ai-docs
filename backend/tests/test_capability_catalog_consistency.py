@@ -143,3 +143,45 @@ def test_every_active_catalog_operation_has_a_fail_closed_effect_classification(
         for match in classifications.values()
         if match["classification"] == "unknown"
     ), "unknown classifications must prohibit automatic retry"
+
+
+def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_1_subset():
+    """E05.2.1 includes exactly four independently reviewed E03 rows."""
+
+    from app.ai.tool_catalog import TOOLS
+    from app.ai.tool_transport import ONE_DB_COMMIT_OPERATIONS
+
+    inventory = (
+        Path(__file__).resolve().parents[2]
+        / "docs/agent-employee-delivery/tool-effect-inventory.md"
+    ).read_text(encoding="utf-8")
+    row_pattern = re.compile(
+        r"^\| `(?P<operation>[^`]+)` \|.*\| "
+        r"`(?P<classification>read-only|one-db-commit|db-async-enqueue|"
+        r"external-dispatch|browser-script-mcp|unknown)`; auto-retry "
+        r"(?P<retry>[^|]+) \|$",
+        re.MULTILINE,
+    )
+    classifications = {
+        match["operation"]: match["classification"] for match in row_pattern.finditer(inventory)
+    }
+    expected = frozenset(
+        {
+            "analytics.calendar_create_reminder",
+            "analytics.collection_create",
+            "analytics.table_create_view",
+            "warehouse.create_item",
+        }
+    )
+
+    assert ONE_DB_COMMIT_OPERATIONS == expected
+    assert {classifications[name] for name in ONE_DB_COMMIT_OPERATIONS} == {"one-db-commit"}
+    assert {TOOLS[name].effect for name in ONE_DB_COMMIT_OPERATIONS} == {"write"}
+    excluded = {
+        "documents.ingest": "db-async-enqueue",
+        "email.send": "external-dispatch",
+        "warehouse.bulk_confirm": "unknown",
+        "warehouse.update_item": "one-db-commit",
+    }
+    assert not (ONE_DB_COMMIT_OPERATIONS & excluded.keys())
+    assert {name: classifications[name] for name in excluded} == excluded

@@ -71,7 +71,16 @@ E04 завершена: строгий ToolResult v1, отдельные реш�
 Отчёт: `docs/agent-employee-delivery/E04-tool-result-contract.md`. Далее E05.1.
 E05.1 завершена: доказанные catalog-read ответы нормализуются в ToolResult v1
 на агентской границе с сохранением исходного payload. Отчёт:
-`docs/agent-employee-delivery/E05-1-read-adapters.md`. Далее E05.2.
+`docs/agent-employee-delivery/E05-1-read-adapters.md`.
+E05.2.1 завершена как первый узкий срез DB writes: только
+`analytics.collection_create`, `analytics.calendar_create_reminder`,
+`analytics.table_create_view` и `warehouse.create_item` получают ToolResult v1.
+2xx domain success сохраняет raw payload; domain error/4xx — `failed`,
+неоднозначность после dispatch — `outcome_unknown`, ошибка до dispatch —
+`failed`; automatic retry нет. Отчёт:
+`docs/agent-employee-delivery/E05-2-1-db-write-adapters.md`.
+E05.2 в целом остаётся IN PROGRESS: прочие `one-db-commit` операции не
+мигрированы. Далее — отдельный следующий срез E05.2.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя
 в WorkEvent, проверяет владельца/аргументы/попытку/lease. Детали журнала и UI
