@@ -429,3 +429,26 @@ def test_additional_bodies_survive_consensus():
     assert len(merged["parts"]) == 1
     assert merged["parts"][0]["name"] == "Втулка"
     assert merged["parts"][0]["outer"] == second["outer"]
+
+
+def test_every_body_list_survives_consensus_of_agreeing_passes():
+    """Семейство молчаливых потерь: список тела, который другие слои знают, а
+    консенсус не голосует, пропадает при любых ≥ 2 проходах (фланцы втулки)."""
+    from app.ai.cad_recognize.spec_consensus import consensus_spec
+    from app.ai.cad_recognize.spec_vectorize import _BODY_FEATURE_FIELDS
+
+    item = {"axial_start_mm": 10.0, "thickness_mm": 2.0, "diameter_mm": 3.0, "count": 3}
+    body = {
+        "type": "тело вращения",
+        "outer": [
+            {"diameter_mm": 15.0, "length_mm": 4.0},
+            {"diameter_mm": 13.0, "length_mm": 20.0},
+        ],
+        **{field: [dict(item)] for field in _BODY_FEATURE_FIELDS},
+    }
+    read = {"main_view": body, "dimensions": [], "unresolved": []}
+
+    merged = consensus_spec([read, read, read])
+
+    lost = [field for field in _BODY_FEATURE_FIELDS if not (merged["main_view"].get(field))]
+    assert not lost, f"консенсус потерял: {lost}"

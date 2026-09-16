@@ -315,15 +315,11 @@ def _body_consensus(
             disagreements.append(f"{label} (контур): {profile_problem}")
         notes.extend(f"{label}: {note}" for note in profile_notes)
 
-    for field in (
-        "chamfers",
-        "fillets",
-        "grooves",
-        "keyways",
-        "cross_holes",
-        "axial_holes",
-        "circular_hole_patterns",
-    ):
+    # The same list every other layer carries: a hand-kept copy here dropped
+    # each newly added body list at consensus (flanges, 2026-09-16).
+    from app.ai.cad_recognize.spec_vectorize import _BODY_FEATURE_FIELDS
+
+    for field in _BODY_FEATURE_FIELDS:
         feature_reads = [body.get(field) or [] for body in bodies]
         accepted, dropped = _vote_feature_list(feature_reads, minimum=minimum)
         if accepted:
