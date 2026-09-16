@@ -597,9 +597,23 @@ def test_features_confirmed_on_the_sheet_are_shown_on_their_view():
     assert [v["view_id"] for v in with_end["views"]] == ["A-A", "sheet-verified-end"]
     _nodes, edges, _assertions = native_feature_graph_additions(with_end)
     same = [edge for edge in edges if edge.type == "same_object_across_views"]
-    assert [(e.source_id, e.target_id, e.extension["feature_id"]) for e in same] == [
-        ("view:A-A", "view:sheet-verified-end", "feature:0:flanges:0")
+    assert [(e.id, e.source_id, e.target_id) for e in same] == [
+        (
+            "same:feature:0:flanges:0:A-A:sheet-verified-end",
+            "view:A-A",
+            "view:sheet-verified-end",
+        )
     ]
+    # Граф целиком проходит валидацию (живая втулка fac0e881: ребро с
+    # незарегистрированным extension роняло весь прогон).
+    from app.ai.cad_emg_compat import spec_feature_tree_as_graph
+    from app.ai.cad_ir.feature_tree import FeatureTreeCandidate
+
+    graph = spec_feature_tree_as_graph(
+        with_end, FeatureTreeCandidate(features=[], score=0.5, label="t"), graph_id="g"
+    )
+    _state, issues = verify_graph(graph)
+    assert "cross_view_not_available" not in [issue["code"] for issue in issues]
 
     # Не подтверждённое — без вида.
     doubtful = {"items": [{"kind": "shaft_step", "feature_id": "0:outer:0", "status": "refuted"}]}

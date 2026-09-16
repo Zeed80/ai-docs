@@ -733,7 +733,9 @@ def native_feature_graph_additions(
                         type="same_object_across_views",
                         source_id=f"view:{first}",
                         target_id=f"view:{second}",
-                        extension={"feature_id": node_id, "source": "features_shown"},
+                        # Элемент — в id ребра: `extension` требует
+                        # зарегистрированного пространства имён, без него граф
+                        # не проходит валидацию и падает весь прогон.
                     )
                 )
     return nodes, edges, assertions
