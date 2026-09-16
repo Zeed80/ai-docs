@@ -416,13 +416,14 @@ scope/time/action и запреты replay/resume, но нельзя выдум�
 
 ### E05 — Перевод адаптеров на ToolResult по одной группе
 
-**Статус:** IN PROGRESS: E05.1 REVIEWED; E05.2.1–E05.2.4 REVIEWED как
-четыре узких среза; E05.2 в целом и E05.3–E05.4 не завершены. Отчёты:
+**Статус:** IN PROGRESS: E05.1 REVIEWED; E05.2.1–E05.2.5 REVIEWED как
+пять узких срезов; E05.2 в целом и E05.3–E05.4 не завершены. Отчёты:
 `docs/agent-employee-delivery/E05-1-read-adapters.md`,
 `docs/agent-employee-delivery/E05-2-1-db-write-adapters.md`,
 `docs/agent-employee-delivery/E05-2-2-db-write-adapters.md`,
 `docs/agent-employee-delivery/E05-2-3-db-write-adapters.md`,
-`docs/agent-employee-delivery/E05-2-4-db-write-adapters.md`. **После:** E04.
+`docs/agent-employee-delivery/E05-2-4-db-write-adapters.md`,
+`docs/agent-employee-delivery/E05-2-5-db-write-adapters.md`. **После:** E04.
 **Файлы:** `ai/agent_loop.py::execute_skill`, `api/capability_router.py`,
 `ai/tool_transport.py`, адаптеры из E03, тесты транспорта/gateway.
 
@@ -475,6 +476,22 @@ path; select/flush-помощники не добавляют commit, external d
 path-параметра `{entity_id}` и `{reminder_id}`. Render/delete/status и gated
 actions остаются fail-closed. Контракт E05.2.1 сохранён; production E05.2.4 не
 заявляется. Отчёт: `docs/agent-employee-delivery/E05-2-4-db-write-adapters.md`.
+
+E05.2.5 добавляет только `procurement.create_request`: точный уникальный
+`POST /api/purchase-requests`; cumulative allowlist содержит 16 операций.
+`create_purchase_request` имеет один прямой безусловный `db.commit()` на success
+path, без helper commit, external dispatch или enqueue; операция `admin_only=false`
+и не approval-gated. `procurement.update_request` и
+`procurement.update_contract` исключены, поскольку принимают `status`;
+`procurement.create_contract` остаётся fail-closed из-за route alias
+`POST /api/compare`; `procurement.send_rfq` — из-за external effect.
+Safety correction: catalog GET `suppliers.trust_score` условно коммитит
+`profile.trust_score`, поэтому
+`READ_CATALOG_OPERATIONS_WITH_PERSISTENT_EFFECTS` запрещает read retry как по
+прямому маршруту, так и через capability route. Это не write adapter: граница
+commit условна (0/1). Контракт E05.2.1 сохранён; независимый набор — 207 passed
+с известным предупреждением `asyncio_loop_scope`; production E05.2.5 не
+заявляется. Отчёт: `docs/agent-employee-delivery/E05-2-5-db-write-adapters.md`.
 
 **Негативные тесты:** 200 + error, job SUCCESS + built=false, read timeout,
 write timeout после commit, MCP exception, double wrapping. **Готово:** каждая

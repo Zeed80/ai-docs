@@ -111,7 +111,21 @@ path-параметра `{entity_id}`/`{reminder_id}`; render/delete/status и g
 actions fail-closed. Контракт E05.2.1, public API, RBAC и approval policy не
 менялись. Независимая проверка: 205 passed с известным предупреждением
 `asyncio_loop_scope`; production пока не заявлен. Отчёт:
-`docs/agent-employee-delivery/E05-2-4-db-write-adapters.md`. E05.2 целиком
+`docs/agent-employee-delivery/E05-2-4-db-write-adapters.md`.
+E05.2.5 REVIEWED добавляет только `procurement.create_request` через точный
+уникальный `POST /api/purchase-requests`: cumulative allowlist равен 16
+операциям. `create_purchase_request` имеет один прямой безусловный commit на
+success path без helper commit, external dispatch или enqueue; операция
+`admin_only=false` и не approval-gated. `procurement.update_request` и
+`procurement.update_contract` исключены, поскольку принимают `status`;
+`procurement.create_contract` — из-за route alias, `procurement.send_rfq` —
+из-за external effect. Safety correction: `suppliers.trust_score` является
+catalog GET, но handler условно коммитит `profile.trust_score`; поэтому
+`READ_CATALOG_OPERATIONS_WITH_PERSISTENT_EFFECTS` запрещает read retry для
+прямого и capability route. Операция не входит в write adapter из-за conditional
+0/1 commit. Контракт не менялся; независимая проверка: 207 passed с известным
+предупреждением `asyncio_loop_scope`; production пока не заявлен. Отчёт:
+`docs/agent-employee-delivery/E05-2-5-db-write-adapters.md`. E05.2 целиком
 остаётся IN PROGRESS; дальше нужен новый отдельно проверенный срез E05.2.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя

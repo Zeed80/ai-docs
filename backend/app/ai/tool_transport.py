@@ -26,6 +26,7 @@ ONE_DB_COMMIT_OPERATIONS = frozenset(
         "analytics.table_inline_edit",
         "email.templates.create",
         "email.templates.update",
+        "procurement.create_request",
         "suppliers.update",
         "warehouse.adjust_stock",
         "warehouse.create_item",
@@ -33,6 +34,12 @@ ONE_DB_COMMIT_OPERATIONS = frozenset(
         "warehouse.update_item",
     }
 )
+
+# E03 documents this catalog GET as a persistent write: the handler refreshes
+# and commits the calculated trust score. It is deliberately outside E05.2's
+# reviewed ToolResult subset, but must still never receive the read retry
+# policy merely because the legacy catalog method/effect says GET/read.
+READ_CATALOG_OPERATIONS_WITH_PERSISTENT_EFFECTS = frozenset({"suppliers.trust_score"})
 
 
 def resolve_catalog_operation(skill: dict, args: dict) -> ToolDefinition | None:
@@ -78,11 +85,22 @@ def retry_safe(skill: dict, args: dict) -> bool:
         if not isinstance(action, str):
             return False
         tool = get_tool(capability, action)
-        return tool is not None and tool.effect == "read"
+        return (
+            tool is not None
+            and tool.effect == "read"
+            and tool.name not in READ_CATALOG_OPERATIONS_WITH_PERSISTENT_EFFECTS
+        )
     # Shared POST endpoints can dispatch a different operation from body fields.
     # Only exact reviewed GET templates are safe outside the capability router.
     matches = [tool for tool in TOOLS.values() if tool.method == method and tool.path == path]
-    return method == "GET" and bool(matches) and all(tool.effect == "read" for tool in matches)
+    return (
+        method == "GET"
+        and bool(matches)
+        and all(tool.effect == "read" for tool in matches)
+        and not any(
+            tool.name in READ_CATALOG_OPERATIONS_WITH_PERSISTENT_EFFECTS for tool in matches
+        )
+    )
 
 
 def unknown_outcome(reason: str) -> dict:

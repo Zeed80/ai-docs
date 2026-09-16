@@ -349,16 +349,18 @@
 - E05.1 REVIEWED: операции, для которых `retry_safe()` подтверждает catalog
   `effect=read`, получают ToolResult v1 на HTTP agent boundary. Исходный ответ
   сохраняется в `data`; публичные business API не менялись.
-- E05.2 IN PROGRESS; E05.2.1–E05.2.4 REVIEWED: cumulative allowlist класса
-  `one-db-commit` содержит ровно 15 операций —
+- E05.2 IN PROGRESS; E05.2.1–E05.2.5 REVIEWED: cumulative allowlist класса
+  `one-db-commit` содержит ровно 16 операций —
   `analytics.calendar_create_reminder`, `analytics.collection_add_item`,
   `analytics.collection_close`, `analytics.collection_create`,
   `analytics.compare_align`, `analytics.compare_create`,
   `analytics.table_create_view`, `analytics.table_inline_edit`,
-  `email.templates.create`, `email.templates.update`, `suppliers.update` и
-  `warehouse.adjust_stock`, `warehouse.create_item`,
+  `email.templates.create`, `email.templates.update`,
+  `procurement.create_request`, `suppliers.update` и `warehouse.adjust_stock`,
+  `warehouse.create_item`,
   `warehouse.create_receipt` и `warehouse.update_item`. E05.2.3 добавила три
-  новые `warehouse.*` операции; E05.2.4 добавила три операции email/suppliers.
+  новые `warehouse.*` операции; E05.2.4 добавила три операции email/suppliers;
+  E05.2.5 — одну `procurement.create_request`.
   контракт E05.2.1 сохранён: успешный 2xx domain response хранит raw payload в
   `data`, явная domain-ошибка и 4xx дают `failed`, неоднозначность после dispatch
   — `outcome_unknown`, ошибка до dispatch — `failed`, automatic retry отсутствует.
@@ -381,11 +383,23 @@
   `analytics.calendar_generate_followup` не доказана identity path-пара из-за
   `{entity_id}` в catalog и `{reminder_id}` в recipient. Render/delete/status и
   gated actions остаются fail-closed. Public API, RBAC и approval policy не
-  менялись; production E05.2.4 пока не заявлен. См.
+  менялись; production E05.2.5 пока не заявлен. E05.2.5 использует точный
+  уникальный `POST /api/purchase-requests`: у `create_purchase_request` один
+  прямой безусловный commit, без helper commit, external dispatch или enqueue;
+  `admin_only=false` и approval gate отсутствует. `procurement.update_request`
+  и `procurement.update_contract` исключены из-за принимаемого `status`,
+  `procurement.create_contract` — из-за route alias, `procurement.send_rfq` —
+  из-за external effect. Safety correction: `suppliers.trust_score` остаётся
+  catalog GET, но handler условно коммитит `profile.trust_score`; поэтому
+  `READ_CATALOG_OPERATIONS_WITH_PERSISTENT_EFFECTS` запрещает read retry как
+  direct, так и capability route. Операция не включена в write adapter из-за
+  conditional 0/1 commit. Независимый набор: 207 passed с известным
+  предупреждением `asyncio_loop_scope`. См.
   `docs/agent-employee-delivery/E05-2-1-db-write-adapters.md` и
   `docs/agent-employee-delivery/E05-2-2-db-write-adapters.md`,
   `docs/agent-employee-delivery/E05-2-3-db-write-adapters.md`,
-  `docs/agent-employee-delivery/E05-2-4-db-write-adapters.md`.
+  `docs/agent-employee-delivery/E05-2-4-db-write-adapters.md`,
+  `docs/agent-employee-delivery/E05-2-5-db-write-adapters.md`.
 - Остальные `one-db-commit` строки не мигрированы и продолжают прежний контракт
   до отдельных срезов E05.2. E05.3 async jobs и E05.4 external/MCP handlers
   также TODO. Наличие строки в этой матрице не означает её миграцию.

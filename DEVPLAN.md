@@ -77,7 +77,22 @@ approval-gated. `email.templates.from_message` исключён из-за воз
 render/delete/status и gated actions fail-closed. Контракт E05.2.1, public API,
 RBAC и approval policy не менялись. Независимый набор: 205 passed с известным
 предупреждением `asyncio_loop_scope`; production ещё не заявлен. Отчёт:
-`docs/agent-employee-delivery/E05-2-4-db-write-adapters.md`. E05.2 остаётся
+`docs/agent-employee-delivery/E05-2-4-db-write-adapters.md`.
+E05.2.5 REVIEWED добавляет только `procurement.create_request` через точный
+уникальный `POST /api/purchase-requests`; cumulative allowlist содержит 16
+операций. У `create_purchase_request` один прямой безусловный commit на success
+path, без helper commit, external dispatch или enqueue; операция
+`admin_only=false` и не approval-gated. `procurement.update_request` и
+`procurement.update_contract` исключены, поскольку принимают `status`;
+`procurement.create_contract` остаётся fail-closed из-за route alias,
+`procurement.send_rfq` — из-за external effect. Safety correction:
+`suppliers.trust_score` — catalog GET, но handler условно коммитит
+`profile.trust_score`; `READ_CATALOG_OPERATIONS_WITH_PERSISTENT_EFFECTS`
+запрещает read retry для прямого и capability route. Операция не включена в
+write adapter из-за conditional 0/1 commit. Контракт E05.2.1, public API, RBAC
+и approval policy не менялись. Независимый набор: 207 passed с известным
+предупреждением `asyncio_loop_scope`; production ещё не заявлен. Отчёт:
+`docs/agent-employee-delivery/E05-2-5-db-write-adapters.md`. E05.2 остаётся
 IN PROGRESS; далее нужен новый отдельно проверенный срез E05.2.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при

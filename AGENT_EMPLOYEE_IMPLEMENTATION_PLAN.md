@@ -89,6 +89,23 @@ Render/delete/status и gated actions остаются fail-closed. Контра
 public API, RBAC и approval policy не менялись. Независимый набор: 205 passed с
 известным предупреждением `asyncio_loop_scope`; production ещё не заявлен.
 Отчёт: `docs/agent-employee-delivery/E05-2-4-db-write-adapters.md`.
+E05.2.5 REVIEWED: пятый узкий DB write-срез добавляет только
+`procurement.create_request` через точный уникальный
+`POST /api/purchase-requests`; cumulative allowlist содержит 16 операций.
+`create_purchase_request` имеет один прямой безусловный commit на success path,
+без helper commit, external dispatch или enqueue; операция `admin_only=false` и
+не approval-gated. `procurement.update_request` и
+`procurement.update_contract` исключены, поскольку принимают `status`;
+`procurement.create_contract` остаётся fail-closed из-за route alias, а
+`procurement.send_rfq` — из-за external effect. Safety correction:
+`suppliers.trust_score` — catalog GET, однако handler условно коммитит
+`profile.trust_score`; поэтому
+`READ_CATALOG_OPERATIONS_WITH_PERSISTENT_EFFECTS` запрещает read retry для
+прямого и capability route. Операция не включена в write adapter из-за
+conditional 0/1 commit. Контракт E05.2.1, public API, RBAC и approval policy не
+менялись. Независимый набор: 207 passed с известным предупреждением
+`asyncio_loop_scope`; production ещё не заявлен. Отчёт:
+`docs/agent-employee-delivery/E05-2-5-db-write-adapters.md`.
 E05.2 остаётся IN PROGRESS: остальные `one-db-commit` операции не мигрированы.
 Следующий шаг — новый отдельно выбранный и независимо проверенный срез E05.2,
 не E05.3.

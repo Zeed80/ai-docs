@@ -475,6 +475,20 @@ def test_e05_2_4_direct_routes_resolve_to_exact_catalog_operations(skill, args, 
     assert operation.name == expected
 
 
+def test_e05_2_5_direct_route_resolves_to_procurement_create_request():
+    operation = one_db_commit_operation(
+        {"method": "POST", "path": "/api/purchase-requests"},
+        {
+            "title": "Fasteners M8",
+            "items": [{"name": "Bolt M8", "qty": 100, "unit": "pcs"}],
+            "notes": "Original recipient payload",
+        },
+    )
+
+    assert operation is not None
+    assert operation.name == "procurement.create_request"
+
+
 def test_one_db_commit_resolution_fails_closed_for_other_operations_and_routes():
     assert (
         one_db_commit_operation(
@@ -512,6 +526,37 @@ def test_one_db_commit_resolution_fails_closed_for_other_operations_and_routes()
             {},
         )
         is None
+    )
+    # Both updates accept a status field, so they can make a status decision
+    # and remain outside this narrow create-only slice.
+    assert (
+        one_db_commit_operation(
+            {"method": "PATCH", "path": "/api/purchase-requests/{request_id}"},
+            {"request_id": "request-1", "status": "approved"},
+        )
+        is None
+    )
+    assert (
+        one_db_commit_operation(
+            {"method": "PATCH", "path": "/api/supplier-contracts/{contract_id}"},
+            {"contract_id": "contract-1", "status": "active"},
+        )
+        is None
+    )
+    # This catalog GET writes a calculated trust score (E03); it is neither a
+    # reviewed write adapter nor retry-safe.
+    trust_score = {
+        "method": "GET",
+        "path": "/api/suppliers/{supplier_id}/trust-score",
+    }
+    assert one_db_commit_operation(trust_score, {"supplier_id": "supplier-1"}) is None
+    assert retry_safe(trust_score, {"supplier_id": "supplier-1"}) is False
+    assert (
+        retry_safe(
+            {"method": "POST", "path": "/api/agent/cap/suppliers"},
+            {"action": "trust_score", "supplier_id": "supplier-1"},
+        )
+        is False
     )
 
 
@@ -642,6 +687,39 @@ async def test_e05_2_4_operations_preserve_raw_success_payload(
     assert getattr(client, method).call_args.kwargs["json"] == {
         key: value for key, value in args.items() if not key.endswith("_id")
     }
+
+
+@pytest.mark.asyncio
+async def test_e05_2_5_create_request_preserves_raw_success_and_body_without_path_params(
+    monkeypatch,
+):
+    from app.ai import agent_loop
+
+    args = {
+        "title": "Fasteners M8",
+        "items": [{"name": "Bolt M8", "qty": 100, "unit": "pcs"}],
+        "deadline": "2026-10-01T12:00:00Z",
+        "notes": "Original recipient payload",
+        "requested_by": "buyer",
+    }
+    payload = {"id": "request-1", "status": "draft", **args}
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.post.return_value = httpx.Response(201, json=payload)
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", MagicMock(return_value=client))
+    monkeypatch.setattr(agent_loop, "internal_headers", lambda: {})
+
+    result = await execute_skill(
+        {"method": "POST", "path": "/api/purchase-requests"},
+        args,
+        BuiltinAgentConfig(),
+    )
+
+    assert result["status"] == "succeeded"
+    assert result["data"] == payload
+    assert result["evidence"]["operation"] == "procurement.create_request"
+    client.post.assert_awaited_once()
+    assert client.post.call_args.kwargs["json"] == args
 
 
 @pytest.mark.asyncio
