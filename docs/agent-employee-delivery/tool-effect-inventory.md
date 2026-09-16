@@ -343,3 +343,12 @@
 ## Кандидат E08
 
 Выбран единственный кандидат: `agent_control.task_propose` → `POST /api/agent/tasks/propose` → `AgentTask`. У варианта с валидным idempotency key уже есть order lock, receipt и единый финальный commit без внешнего dispatch. Он не включён массово: сначала E07/common receipt contract, отдельное решение catalog/admin divergence и сохранение legacy пути без ключа. E03 не реализует E08.
+
+## Статус миграции ToolResult
+
+- E05.1 REVIEWED: операции, для которых `retry_safe()` подтверждает catalog
+  `effect=read`, получают ToolResult v1 на HTTP agent boundary. Исходный ответ
+  сохраняется в `data`; публичные business API не менялись.
+- E05.2–E05.4 TODO: DB writes, async jobs, external/MCP handlers продолжают
+  прежний контракт до отдельных карточек. Наличие строки в этой матрице не
+  означает её миграцию.

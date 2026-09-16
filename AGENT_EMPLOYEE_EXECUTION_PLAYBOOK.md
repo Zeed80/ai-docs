@@ -416,7 +416,8 @@ scope/time/action и запреты replay/resume, но нельзя выдум�
 
 ### E05 — Перевод адаптеров на ToolResult по одной группе
 
-**Статус:** TODO. **После:** E04.
+**Статус:** IN PROGRESS: E05.1 REVIEWED; E05.2–E05.4 TODO. Отчёт E05.1:
+`docs/agent-employee-delivery/E05-1-read-adapters.md`. **После:** E04.
 **Файлы:** `ai/agent_loop.py::execute_skill`, `api/capability_router.py`,
 `ai/tool_transport.py`, адаптеры из E03, тесты транспорта/gateway.
 

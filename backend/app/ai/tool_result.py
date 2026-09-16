@@ -157,6 +157,51 @@ def normalize_tool_result(
     return _unrecognized(payload, "unknown_legacy_contract")
 
 
+def normalize_http_read_response(payload: Any) -> ToolResult:
+    """Normalize a reviewed HTTP read response at the agent boundary.
+
+    This is deliberately an adapter-specific contract rather than a general
+    legacy normalizer. A successful HTTP response is a successful invocation
+    when it does not carry an explicit domain failure. Domain progress such as
+    ``queued`` or ``running`` remains raw read data; command-acceptance semantics
+    belong to the concrete async adapter. Versioned payloads keep their existing
+    envelope, which avoids wrapping a valid ``ToolResult`` inside another
+    result's ``data``.
+    """
+
+    if isinstance(payload, ToolResult) or (isinstance(payload, Mapping) and "version" in payload):
+        normalized = normalize_tool_result(payload)
+        if normalized.status != "succeeded":
+            return normalized
+        failure = _domain_failure(normalized.data)
+        if failure is None:
+            return normalized
+        return ToolResult(
+            status="failed",
+            data=(
+                payload.model_dump(mode="json")
+                if isinstance(payload, ToolResult)
+                else dict(payload)
+            ),
+            error_code=failure,
+            evidence={"adapter_contract": "http_read_response_v1"},
+        )
+
+    failure = _domain_failure(payload)
+    if failure is not None:
+        return ToolResult(
+            status="failed",
+            data=payload,
+            error_code=failure,
+            evidence={"adapter_contract": "http_read_response_v1"},
+        )
+    return ToolResult(
+        status="succeeded",
+        data=payload,
+        evidence={"adapter_contract": "http_read_response_v1"},
+    )
+
+
 def result_failed(result: Any) -> bool:
     """Compatibility predicate for the legacy work-order consumer.
 
@@ -264,27 +309,28 @@ def _direct_domain_failure(value: Mapping[str, Any]) -> str | None:
             return "domain_error"
         if status in {"partial", "waiting_approval", "outcome_unknown"}:
             return f"domain_{status}"
-        if status in {"queued", "running"}:
-            return "domain_work_incomplete"
     return None
 
 
 def _domain_failure(value: Any) -> str | None:
-    """Find explicit domain failure markers, including nested adapter wrappers."""
+    """Find markers only in an explicit response-envelope chain.
+
+    Read payloads often contain records with historical ``error`` fields or a
+    current ``status``. Those records are data, not a response contract. Only
+    the top-level response and reviewed ``result``/``domain`` wrappers may
+    therefore influence invocation success.
+    """
 
     if isinstance(value, Mapping):
         direct = _direct_domain_failure(value)
         if direct is not None:
             return direct
-        for nested in value.values():
-            failure = _domain_failure(nested)
-            if failure is not None:
-                return failure
-    elif isinstance(value, list):
-        for item in value:
-            failure = _domain_failure(item)
-            if failure is not None:
-                return failure
+        for wrapper_key in ("result", "domain"):
+            nested = value.get(wrapper_key)
+            if isinstance(nested, Mapping):
+                failure = _domain_failure(nested)
+                if failure is not None:
+                    return failure
     return None
 
 

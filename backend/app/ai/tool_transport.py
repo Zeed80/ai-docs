@@ -1,6 +1,9 @@
-"""Retry policy from reviewed effects, never from HTTP verb or tool-name guesses."""
+"""Retry policy and read-result adapters from reviewed effects."""
+
+from typing import Any
 
 from app.ai.tool_catalog import TOOLS, get_tool
+from app.ai.tool_result import ToolResult, normalize_http_read_response
 
 
 def retry_safe(skill: dict, args: dict) -> bool:
@@ -28,3 +31,37 @@ def unknown_outcome(reason: str) -> dict:
         "retryable": False,
         "hint": "Do not repeat this action; verify the result with the recipient.",
     }
+
+
+def serialize_http_read_response(payload: Any) -> dict[str, Any]:
+    """Return the concrete v1 envelope for a catalog-proven HTTP read."""
+
+    return normalize_http_read_response(payload).model_dump(mode="json")
+
+
+def read_transport_failure(reason: str) -> dict[str, Any]:
+    """A bounded read failure is explicit and cannot trigger an outer replay."""
+
+    return ToolResult(
+        status="failed",
+        data={"reason": reason},
+        error_code="read_transport_failed",
+        retryable=False,
+        evidence={
+            "adapter_contract": "http_read_response_v1",
+            "effect": "read",
+            "effect_ambiguity": "no_side_effect_expected",
+            "retry_policy": "internal_retry_budget_exhausted",
+        },
+    ).model_dump(mode="json")
+
+
+def read_http_failure(status_code: int, payload: Any) -> dict[str, Any]:
+    """Serialize an HTTP failure for a catalog-proven read without guessing success."""
+
+    return ToolResult(
+        status="failed",
+        data=payload,
+        error_code=f"http_{status_code}",
+        evidence={"adapter_contract": "http_read_response_v1", "effect": "read"},
+    ).model_dump(mode="json")

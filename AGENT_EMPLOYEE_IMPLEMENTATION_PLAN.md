@@ -43,7 +43,12 @@ catalog/backend расхождение `task_propose` по admin; endpoint не 
 карточка E04 завершена: строгий ToolResult v1 разделяет успешность вызова,
 приёмку работы и допустимость повтора. Sol выполнил реализацию, сеньор провёл
 два цикла review и независимый прогон 110 тестов. Отчёт:
-`docs/agent-employee-delivery/E04-tool-result-contract.md`. Далее E05.1.
+`docs/agent-employee-delivery/E04-tool-result-contract.md`.
+E05.1: catalog-proven read-only HTTP-вызовы переведены на ToolResult v1 на
+агентской границе. Raw payload сохраняется в data; bounded retry, HTTP/domain
+errors и double wrapping покрыты тестами. Read status `queued/running` остаётся
+данными успешного чтения; command acceptance будет классифицироваться в E05.3.
+Отчёт: `docs/agent-employee-delivery/E05-1-read-adapters.md`. Далее E05.2.
 Push накопленной ветки был заблокирован автопроверкой из-за несвязанных CAD-коммитов;
 для публикации всей этой истории нужно отдельное разрешение. Не обходить запрет.
 

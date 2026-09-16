@@ -37,7 +37,9 @@ effect/commit boundaries и fail-closed проверкой; 47 ambiguous boundar
 `docs/agent-employee-delivery/E03-tool-effect-inventory.md`.
 E04 завершена: строгий ToolResult v1 и матрица негативных проверок, независимый
 прогон 110 тестов. Отчёт: `docs/agent-employee-delivery/E04-tool-result-contract.md`.
-Далее E05.1 — перевод адаптеров чтения на контракт.
+E05.1 завершена: catalog-proven HTTP reads возвращают ToolResult v1 с raw data;
+ошибки и retry budget явны, write/MCP ещё не мигрированы. Отчёт:
+`docs/agent-employee-delivery/E05-1-read-adapters.md`. Далее E05.2.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при
 сетевой ошибке/HTTP 5xx дают outcome_unknown и блокируют durable-цикл после

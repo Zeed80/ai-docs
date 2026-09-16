@@ -76,6 +76,46 @@ def test_succeeded_with_nested_domain_error_is_never_success():
     assert normalized.data == payload
 
 
+def test_succeeded_with_list_data_markers_is_not_misclassified_as_domain_failure():
+    payload = {
+        "version": 1,
+        "status": "succeeded",
+        "data": [{"status": "running", "error": "historical", "built": False}],
+    }
+
+    normalized = normalize_tool_result(payload)
+
+    assert normalized.status == "succeeded"
+    assert normalized.data == payload["data"]
+
+
+def test_succeeded_with_metadata_status_is_not_misclassified_as_domain_failure():
+    payload = {
+        "version": 1,
+        "status": "succeeded",
+        "data": {"metadata": {"status": "running", "error": "historical", "built": False}},
+    }
+
+    normalized = normalize_tool_result(payload)
+
+    assert normalized.status == "succeeded"
+    assert normalized.data == payload["data"]
+
+
+@pytest.mark.parametrize("status", ["queued", "running"])
+def test_succeeded_with_domain_progress_status_remains_successful_read_data(status):
+    payload = {
+        "version": 1,
+        "status": "succeeded",
+        "data": {"result": {"job_id": "job-1", "status": status}},
+    }
+
+    normalized = normalize_tool_result(payload)
+
+    assert normalized.status == "succeeded"
+    assert normalized.data == payload["data"]
+
+
 @pytest.mark.parametrize(
     "nested_status,expected_code",
     [
@@ -84,8 +124,6 @@ def test_succeeded_with_nested_domain_error_is_never_success():
         ("partial", "domain_partial"),
         ("waiting_approval", "domain_waiting_approval"),
         ("outcome_unknown", "domain_outcome_unknown"),
-        ("queued", "domain_work_incomplete"),
-        ("running", "domain_work_incomplete"),
     ],
 )
 def test_succeeded_with_nested_non_success_status_is_never_complete(nested_status, expected_code):

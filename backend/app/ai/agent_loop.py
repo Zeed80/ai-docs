@@ -806,7 +806,13 @@ async def execute_skill(
     approval_granted: bool = False,
     idempotency_key: str | None = None,
 ) -> dict:
-    from app.ai.tool_transport import retry_safe, unknown_outcome
+    from app.ai.tool_transport import (
+        read_http_failure,
+        read_transport_failure,
+        retry_safe,
+        serialize_http_read_response,
+        unknown_outcome,
+    )
 
     # MCP-derived skill entries (built-in or external-server tools loaded by
     # _init_mcp/load_mcp_tools) carry a direct async handler instead of an
@@ -877,9 +883,14 @@ async def execute_skill(
 
             if resp.status_code < 400:
                 try:
-                    return resp.json()
+                    payload = resp.json()
                 except Exception:
+                    if safe_to_retry:
+                        return serialize_http_read_response(resp.text)
                     return {"text": resp.text[:2000]}
+                if safe_to_retry:
+                    return serialize_http_read_response(payload)
+                return payload
             elif resp.status_code >= 500 and not safe_to_retry:
                 return unknown_outcome(f"HTTP {resp.status_code}; recipient outcome not confirmed")
             elif resp.status_code in {502, 503, 504} and attempt < max_retries - 1:
@@ -894,7 +905,10 @@ async def execute_skill(
                     body = resp.json()
                     detail = body.get("detail") if isinstance(body, dict) else None
                 except Exception:
+                    body = resp.text[:300]
                     detail = None
+                if safe_to_retry:
+                    return read_http_failure(resp.status_code, body)
                 if isinstance(detail, dict) and detail.get("error_code"):
                     return {"status": f"HTTP {resp.status_code}", **detail}
                 return {"error": f"HTTP {resp.status_code}", "detail": resp.text[:300]}
@@ -914,8 +928,10 @@ async def execute_skill(
         except Exception as e:
             if not safe_to_retry:
                 return unknown_outcome(f"Transport outcome unavailable: {type(e).__name__}")
-            return {"error": str(e)}
+            return read_transport_failure(type(e).__name__)
 
+    if safe_to_retry:
+        return read_transport_failure(type(last_error).__name__ if last_error else "unknown")
     return {"error": f"Skill execution failed after {max_retries} attempts: {last_error}"}
 
 

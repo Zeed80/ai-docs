@@ -69,6 +69,9 @@ commit boundaries защищён fail-closed тестом; 47 недоказан
 E04 завершена: строгий ToolResult v1, отдельные решения об успехе вызова,
 приёмке работы и повторе; неизвестный legacy-ответ не нормализуется в успех.
 Отчёт: `docs/agent-employee-delivery/E04-tool-result-contract.md`. Далее E05.1.
+E05.1 завершена: доказанные catalog-read ответы нормализуются в ToolResult v1
+на агентской границе с сохранением исходного payload. Отчёт:
+`docs/agent-employee-delivery/E05-1-read-adapters.md`. Далее E05.2.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя
 в WorkEvent, проверяет владельца/аргументы/попытку/lease. Детали журнала и UI
