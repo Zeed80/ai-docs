@@ -88,7 +88,18 @@ E05.2.2 REVIEWED добавляет `analytics.collection_add_item`,
 fail-closed, `analytics.calendar_extract_dates` исключён из-за runtime 0/1
 commit-границы. Независимая проверка: 190 passed с известным предупреждением
 `asyncio_loop_scope`. Отчёт:
-`docs/agent-employee-delivery/E05-2-2-db-write-adapters.md`. E05.2 целиком
+`docs/agent-employee-delivery/E05-2-2-db-write-adapters.md`.
+E05.2.3 REVIEWED добавляет только `warehouse.update_item`,
+`warehouse.adjust_stock` и `warehouse.create_receipt`: cumulative allowlist
+равен 12 операциям. У трёх handler-ов уникальные route/action-пары и один
+прямой безусловный commit на success path; `log_action`/`add_timeline_event`
+flush-only, external dispatch/enqueue нет. Три action отсутствуют в
+`warehouse.gate_actions`; public API, RBAC и approval policy не менялись.
+Исключены `warehouse.confirm_receipt`, `warehouse.issue_stock`,
+`warehouse.delete_item`, `warehouse.update_status` и `warehouse.bulk_confirm`.
+Независимая проверка: 199 passed с известным предупреждением
+`asyncio_loop_scope`; production пока не заявлен. Отчёт:
+`docs/agent-employee-delivery/E05-2-3-db-write-adapters.md`. E05.2 целиком
 остаётся IN PROGRESS; дальше нужен новый отдельно проверенный срез E05.2.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя

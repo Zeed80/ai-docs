@@ -24,7 +24,10 @@ ONE_DB_COMMIT_OPERATIONS = frozenset(
         "analytics.compare_create",
         "analytics.table_create_view",
         "analytics.table_inline_edit",
+        "warehouse.adjust_stock",
         "warehouse.create_item",
+        "warehouse.create_receipt",
+        "warehouse.update_item",
     }
 )
 

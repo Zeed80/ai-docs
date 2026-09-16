@@ -423,6 +423,32 @@ def test_one_db_commit_resolution_uses_route_and_original_action_only(capability
     assert operation.name == expected
 
 
+@pytest.mark.parametrize(
+    "skill,args,expected",
+    [
+        (
+            {"method": "POST", "path": "/api/warehouse/inventory/{item_id}/adjust"},
+            {"item_id": "item-1", "quantity": 2},
+            "warehouse.adjust_stock",
+        ),
+        (
+            {"method": "POST", "path": "/api/warehouse/receipts"},
+            {"invoice_id": "invoice-1"},
+            "warehouse.create_receipt",
+        ),
+        (
+            {"method": "PATCH", "path": "/api/warehouse/inventory/{item_id}"},
+            {"item_id": "item-1", "name": "Updated item"},
+            "warehouse.update_item",
+        ),
+    ],
+)
+def test_e05_2_3_direct_routes_resolve_to_exact_catalog_operations(skill, args, expected):
+    operation = one_db_commit_operation(skill, args)
+    assert operation is not None
+    assert operation.name == expected
+
+
 def test_one_db_commit_resolution_fails_closed_for_other_operations_and_routes():
     assert (
         one_db_commit_operation(
@@ -500,6 +526,49 @@ async def test_e05_2_2_operations_preserve_raw_success_payload(monkeypatch, acti
     assert result["data"] == payload
     assert result["evidence"]["operation"] == operation
     assert client.post.call_args.kwargs["json"] == args
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "skill,args,operation,method",
+    [
+        (
+            {"method": "POST", "path": "/api/warehouse/inventory/{item_id}/adjust"},
+            {"item_id": "item-1", "quantity": 2, "reason": "count correction"},
+            "warehouse.adjust_stock",
+            "post",
+        ),
+        (
+            {"method": "POST", "path": "/api/warehouse/receipts"},
+            {"invoice_id": "invoice-1", "notes": "raw recipient payload"},
+            "warehouse.create_receipt",
+            "post",
+        ),
+        (
+            {"method": "PATCH", "path": "/api/warehouse/inventory/{item_id}"},
+            {"item_id": "item-1", "name": "Updated item"},
+            "warehouse.update_item",
+            "patch",
+        ),
+    ],
+)
+async def test_e05_2_3_operations_preserve_raw_success_payload(
+    monkeypatch, skill, args, operation, method
+):
+    from app.ai import agent_loop
+
+    payload = {"record_id": f"{operation}-1", "status": "accepted"}
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    getattr(client, method).return_value = httpx.Response(200, json=payload)
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", MagicMock(return_value=client))
+    monkeypatch.setattr(agent_loop, "internal_headers", lambda: {})
+
+    result = await execute_skill(skill, args, BuiltinAgentConfig())
+
+    assert result["status"] == "succeeded"
+    assert result["data"] == payload
+    assert result["evidence"]["operation"] == operation
 
 
 @pytest.mark.asyncio
@@ -737,7 +806,7 @@ async def test_one_db_commit_2xx_legacy_nonterminal_status_is_preserved(monkeypa
         "ingest",  # E03 db-async-enqueue
         "send",  # E03 external-dispatch
         "bulk_confirm",  # E03 unknown
-        "update_item",  # E03 one-db-commit, not yet reviewed for E05.2.1
+        "confirm_receipt",  # approval-gated write outside this reviewed slice
     ],
 )
 async def test_non_one_commit_groups_keep_legacy_success_contract(monkeypatch, action):
@@ -805,3 +874,66 @@ async def test_one_db_commit_checks_headers_and_dispatch_keep_original_args(monk
     assert sent["headers"]["Authorization"] == "test-context"
     assert sent["headers"]["X-Agent-Approval"] == "granted"
     assert sent["headers"]["X-Agent-Approval-Digest"] == capability_args_digest(original_args)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "skill,args,expected_body,method",
+    [
+        (
+            {"method": "POST", "path": "/api/warehouse/inventory/{item_id}/adjust"},
+            {"item_id": "item-1", "quantity": 2, "reason": "count correction"},
+            {"quantity": 2, "reason": "count correction"},
+            "post",
+        ),
+        (
+            {"method": "POST", "path": "/api/warehouse/receipts"},
+            {"invoice_id": "invoice-1", "notes": "original payload"},
+            {"invoice_id": "invoice-1", "notes": "original payload"},
+            "post",
+        ),
+        (
+            {"method": "PATCH", "path": "/api/warehouse/inventory/{item_id}"},
+            {"item_id": "item-1", "name": "Updated item"},
+            {"name": "Updated item"},
+            "patch",
+        ),
+    ],
+)
+async def test_e05_2_3_uses_original_args_without_approval_envelope(
+    monkeypatch, skill, args, expected_body, method
+):
+    from app.ai import agent_loop, tool_transport
+
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    getattr(client, method).return_value = httpx.Response(200, json={"record_id": "record-1"})
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", MagicMock(return_value=client))
+    monkeypatch.setattr(agent_loop, "internal_headers", lambda: {"Authorization": "test-context"})
+    seen_args = []
+    real_resolver = tool_transport.one_db_commit_operation
+    real_retry_safe = tool_transport.retry_safe
+
+    def resolver_with_identity(received_skill, received_args):
+        seen_args.append(("resolver", received_args))
+        return real_resolver(received_skill, received_args)
+
+    def retry_safe_with_identity(received_skill, received_args):
+        seen_args.append(("retry", received_args))
+        return real_retry_safe(received_skill, received_args)
+
+    monkeypatch.setattr(tool_transport, "one_db_commit_operation", resolver_with_identity)
+    monkeypatch.setattr(tool_transport, "retry_safe", retry_safe_with_identity)
+    original_args = args.copy()
+
+    await execute_skill(skill, args, BuiltinAgentConfig(), idempotency_key="logical-action:attempt")
+
+    sent = getattr(client, method).call_args.kwargs
+    assert seen_args == [("resolver", args), ("retry", args)]
+    assert seen_args[0][1] is args
+    assert seen_args[1][1] is args
+    assert args == original_args
+    assert sent["json"] == expected_body
+    assert sent["headers"]["X-Agent-Idempotency-Key"] == "logical-action:attempt"
+    assert sent["headers"]["Authorization"] == "test-context"
+    assert "X-Agent-Approval" not in sent["headers"]

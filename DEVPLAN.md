@@ -54,7 +54,18 @@ E05.2.2 REVIEWED добавляет только `analytics.collection_add_item`
 flush-only. Route alias `compare_create` обрабатывается fail-closed, а
 `analytics.calendar_extract_dates` исключён из-за runtime 0/1 commit-границы.
 Независимый набор: 190 passed с известным предупреждением `asyncio_loop_scope`.
-Отчёт: `docs/agent-employee-delivery/E05-2-2-db-write-adapters.md`. Вся E05.2
+Отчёт: `docs/agent-employee-delivery/E05-2-2-db-write-adapters.md`.
+E05.2.3 REVIEWED добавляет только `warehouse.update_item`,
+`warehouse.adjust_stock` и `warehouse.create_receipt`; cumulative allowlist
+содержит 12 операций. У трёх handler-ов уникальные route/action-пары и один
+прямой безусловный commit на success path; `log_action`/`add_timeline_event`
+flush-only, external dispatch/enqueue нет. Три action отсутствуют в
+`warehouse.gate_actions`; public API, RBAC и approval policy не менялись.
+Исключены `warehouse.confirm_receipt`, `warehouse.issue_stock`,
+`warehouse.delete_item`, `warehouse.update_status` и `warehouse.bulk_confirm`.
+Независимый набор: 199 passed с известным предупреждением `asyncio_loop_scope`;
+production ещё не заявлен. Отчёт:
+`docs/agent-employee-delivery/E05-2-3-db-write-adapters.md`. Вся E05.2
 остаётся IN PROGRESS; далее нужен новый отдельно проверенный срез E05.2.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при

@@ -145,8 +145,8 @@ def test_every_active_catalog_operation_has_a_fail_closed_effect_classification(
     ), "unknown classifications must prohibit automatic retry"
 
 
-def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_2_subset():
-    """E05.2.2 adds exactly five independently reviewed E03 rows."""
+def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_3_subset():
+    """E05.2.3 adds exactly three independently reviewed E03 rows."""
 
     from app.ai.tool_catalog import TOOLS
     from app.ai.tool_transport import ONE_DB_COMMIT_OPERATIONS
@@ -175,7 +175,10 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_2_subset():
             "analytics.compare_create",
             "analytics.table_create_view",
             "analytics.table_inline_edit",
+            "warehouse.adjust_stock",
             "warehouse.create_item",
+            "warehouse.create_receipt",
+            "warehouse.update_item",
         }
     )
 
@@ -186,7 +189,7 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_2_subset():
         "documents.ingest": "db-async-enqueue",
         "email.send": "external-dispatch",
         "warehouse.bulk_confirm": "unknown",
-        "warehouse.update_item": "one-db-commit",
+        "warehouse.confirm_receipt": "unknown",
     }
     assert not (ONE_DB_COMMIT_OPERATIONS & excluded.keys())
     assert {name: classifications[name] for name in excluded} == excluded
@@ -210,4 +213,16 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_2_subset():
             "procurement.create_contract",
         },
         "analytics.table_inline_edit": {"analytics.table_inline_edit"},
+        "warehouse.adjust_stock": {"warehouse.adjust_stock"},
+        "warehouse.create_receipt": {"warehouse.create_receipt"},
+        "warehouse.update_item": {"warehouse.update_item"},
     }
+
+    from app.ai.capability_manifest import load_capability_manifest
+
+    warehouse = load_capability_manifest().by_name["warehouse"]
+    assert not {
+        "adjust_stock",
+        "create_receipt",
+        "update_item",
+    } & set(warehouse.gate_actions)

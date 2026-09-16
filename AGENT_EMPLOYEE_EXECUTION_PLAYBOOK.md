@@ -416,11 +416,12 @@ scope/time/action и запреты replay/resume, но нельзя выдум�
 
 ### E05 — Перевод адаптеров на ToolResult по одной группе
 
-**Статус:** IN PROGRESS: E05.1 REVIEWED; E05.2.1 и E05.2.2 REVIEWED как два
-узких среза; E05.2 в целом и E05.3–E05.4 не завершены. Отчёты:
+**Статус:** IN PROGRESS: E05.1 REVIEWED; E05.2.1, E05.2.2 и E05.2.3 REVIEWED как
+три узких среза; E05.2 в целом и E05.3–E05.4 не завершены. Отчёты:
 `docs/agent-employee-delivery/E05-1-read-adapters.md`,
 `docs/agent-employee-delivery/E05-2-1-db-write-adapters.md`,
-`docs/agent-employee-delivery/E05-2-2-db-write-adapters.md`. **После:** E04.
+`docs/agent-employee-delivery/E05-2-2-db-write-adapters.md`,
+`docs/agent-employee-delivery/E05-2-3-db-write-adapters.md`. **После:** E04.
 **Файлы:** `ai/agent_loop.py::execute_skill`, `api/capability_router.py`,
 `ai/tool_transport.py`, адаптеры из E03, тесты транспорта/gateway.
 
@@ -451,6 +452,17 @@ E05.2.2 добавляет только `analytics.collection_add_item`,
 fail-closed; `analytics.calendar_extract_dates` исключён из-за runtime 0/1
 commit-границы. Отчёт:
 `docs/agent-employee-delivery/E05-2-2-db-write-adapters.md`.
+
+E05.2.3 добавляет только `warehouse.update_item`, `warehouse.adjust_stock` и
+`warehouse.create_receipt`; cumulative allowlist содержит 12 операций. Для
+каждого выбраны уникальная route/action-пара и один прямой безусловный
+`db.commit()` на success path; вызванные `log_action`/`add_timeline_event` —
+flush-only, external dispatch/enqueue нет. Три action отсутствуют в
+`warehouse.gate_actions`; это не меняет RBAC или approval policy.
+`warehouse.confirm_receipt`, `warehouse.issue_stock`, `warehouse.delete_item`,
+`warehouse.update_status` и `warehouse.bulk_confirm` исключены и fail-closed.
+Контракт E05.2.1 сохранён; production пока не заявлен. Отчёт:
+`docs/agent-employee-delivery/E05-2-3-db-write-adapters.md`.
 
 **Негативные тесты:** 200 + error, job SUCCESS + built=false, read timeout,
 write timeout после commit, MCP exception, double wrapping. **Готово:** каждая
