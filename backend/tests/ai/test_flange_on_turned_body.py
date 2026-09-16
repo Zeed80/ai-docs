@@ -134,3 +134,46 @@ def test_the_built_sleeve_with_a_flange_matches_the_spec():
     # Расточка не вырезана — объём больше, чем профиль + фланец: отказ остаётся.
     solid = verify_solid_against_spec(_kernel_report(2075.78 + 900.0), spec, candidate)
     assert not solid.checks["ok"]
+
+
+def _gear(end: str = "left", outer: float = 38.0) -> dict:
+    return {
+        "part_class": "rotation",
+        "main_view": {
+            "type": "тело вращения",
+            "outer": [
+                {"diameter_mm": 46.0, "length_mm": 6.0},
+                {"diameter_mm": 14.0, "length_mm": 9.0},
+            ],
+            "bore": [{"diameter_mm": 7.0, "length_mm": 15.0}],
+            "face_grooves": [
+                {"end": end, "depth_mm": 2.0, "outer_diameter_mm": outer, "inner_diameter_mm": 16.0}
+            ],
+        },
+    }
+
+
+def test_a_face_groove_of_a_gear_wheel_is_a_ring_pocket_from_its_end():
+    """Колесо part_06: выточка между Ø16 и Ø38 на 2 мм с левого торца."""
+    spec = EngineeringDrawingSpec.model_validate(_gear()).model_dump(mode="json")
+    assert len(spec["main_view"]["face_grooves"]) == 1, "выточка потеряна схемой"
+
+    candidate = feature_tree_from_spec(spec)
+
+    assert candidate is not None
+    (pocket,) = [f for f in candidate.features if f.kind == "pocket"]
+    assert pocket.params["inner_diameter_mm"] == 16.0 and pocket.params["diameter_mm"] == 38.0
+    assert pocket.params["axial_start_mm"] == 0.0 and pocket.params["depth_mm"] == 2.0
+    assert not set(pocket.params) - set(pocket.param_provenance)
+    assert all(p.origin != "guessed" for p in pocket.param_provenance.values())
+
+    right = feature_tree_from_spec(
+        EngineeringDrawingSpec.model_validate(_gear(end="right")).model_dump(mode="json")
+    )
+    (pocket,) = [f for f in right.features if f.kind == "pocket"]
+    assert pocket.params["axial_start_mm"] == 13.0
+
+
+def test_a_face_groove_wider_than_the_part_is_a_misread():
+    with pytest.raises(ValueError, match="face groove 0 is wider"):
+        EngineeringDrawingSpec.model_validate(_gear(outer=50.0))

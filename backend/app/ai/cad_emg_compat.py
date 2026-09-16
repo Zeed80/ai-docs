@@ -469,6 +469,9 @@ _FEATURE_PARAM_FIELDS = (
     "center_y_mm",
     # Толщина фланца на теле вращения (part_03).
     "thickness_mm",
+    # Кольцевая выточка на торце (part_06).
+    "outer_diameter_mm",
+    "inner_diameter_mm",
 )
 
 # feature.kind value per spec list name — the spec's own vocabulary, not a
@@ -482,6 +485,7 @@ _FEATURE_LIST_KIND = {
     "axial_holes": "axial_hole_pattern",
     "circular_hole_patterns": "circular_hole_pattern",
     "flanges": "flange",
+    "face_grooves": "face_groove",
     "outer": "section_outer",
     "bore": "section_bore",
     "holes": "hole",

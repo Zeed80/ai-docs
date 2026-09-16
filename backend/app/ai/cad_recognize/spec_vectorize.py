@@ -472,6 +472,27 @@ class SpecPrismaticProfile(BaseModel):
         return self
 
 
+class SpecFaceGroove(BaseModel):
+    """Кольцевая выточка на торце тела вращения: кольцо от ``inner_diameter_mm``
+    до ``outer_diameter_mm`` глубиной ``depth_mm`` от левого или правого торца.
+
+    Колесо part_06: между ступицей Ø16 и ободом Ø38 на 2 мм — ни наружный
+    профиль, ни расточка такой вырез не описывают.
+    """
+
+    end: Literal["left", "right"] = "left"
+    depth_mm: float = Field(gt=0)
+    outer_diameter_mm: float = Field(gt=0)
+    inner_diameter_mm: float = Field(ge=0)
+    evidence: list[SpecEvidence] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _ring(self) -> SpecFaceGroove:
+        if self.inner_diameter_mm >= self.outer_diameter_mm:
+            raise ValueError("face groove inner diameter must be below the outer one")
+        return self
+
+
 class SpecFlange(BaseModel):
     """A flange on a turned body: a plate of any outline across the axis.
 
@@ -513,6 +534,7 @@ class SpecBody(BaseModel):
     axial_holes: list[SpecAxialHolePattern] = Field(default_factory=list)
     circular_hole_patterns: list[SpecCircularHolePattern] = Field(default_factory=list)
     flanges: list[SpecFlange] = Field(default_factory=list)
+    face_grooves: list[SpecFaceGroove] = Field(default_factory=list)
     # Accepted only for compatibility with already stored prototype responses.
     # The deterministic drafter still requires explicit, complete outer[] data.
     features: list[dict[str, Any]] = Field(default_factory=list)
@@ -569,6 +591,11 @@ class SpecBody(BaseModel):
         for index, flange in enumerate(self.flanges):
             if flange.axial_start_mm + flange.thickness_mm > total_length + 1e-6:
                 raise ValueError(f"flange {index} runs past the end of the part")
+        for index, groove in enumerate(self.face_grooves):
+            if groove.depth_mm >= total_length:
+                raise ValueError(f"face groove {index} is deeper than the part")
+            if max_radius and groove.outer_diameter_mm / 2.0 > max_radius + 1e-6:
+                raise ValueError(f"face groove {index} is wider than the part")
         return self
 
 
@@ -2097,6 +2124,7 @@ _BODY_FEATURE_FIELDS = (
     # rides along for the same reason: without it _rotation_body built the
     # sleeve of part_03 with its three-lug flange silently gone.
     "flanges",
+    "face_grooves",
 )
 
 # The prismatic-profile equivalent of _BODY_FEATURE_FIELDS — holes/patterns/

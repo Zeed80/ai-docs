@@ -859,6 +859,14 @@ def _one_rotation_body_features(body: dict) -> tuple[list[Feature3D], list[str]]
     for cut in _cut_features(body, outer, missing):
         cut.body_index = body_index
         features.append(cut)
+    total = sum(float(section.get("l") or 0.0) for section in outer)
+    for index, groove in enumerate(body.get("face_grooves") or []):
+        feature = _face_groove_feature(groove, total) if isinstance(groove, dict) else None
+        if feature is None:
+            missing.append(f"выточка на торце {index + 1}: размеры не прочитаны — не построена")
+            continue
+        feature.body_index = body_index
+        features.append(feature)
     for index, flange in enumerate(body.get("flanges") or []):
         flange_features = _flange_features(flange) if isinstance(flange, dict) else None
         if flange_features is None:
@@ -868,6 +876,42 @@ def _one_rotation_body_features(body: dict) -> tuple[list[Feature3D], list[str]]
             feature.body_index = body_index
             features.append(feature)
     return features, missing
+
+
+def _face_groove_feature(groove: dict, total_length: float) -> Feature3D | None:
+    """Кольцевая выточка на торце: карман-кольцо на станции от торца."""
+    depth = _num(groove.get("depth_mm"))
+    outer = _num(groove.get("outer_diameter_mm"))
+    inner = _num(groove.get("inner_diameter_mm"))
+    if not depth or not outer or inner is None or inner >= outer or total_length <= depth:
+        return None
+    station = 0.0 if groove.get("end", "left") == "left" else total_length - depth
+    stated = ParamProvenance(origin="stated", detail="выточка на торце с чертежа")
+    return Feature3D(
+        kind="pocket",
+        source_feature_ids=_source_feature_ids(groove),
+        params={
+            "profile": "circle",
+            "diameter_mm": outer,
+            "inner_diameter_mm": inner,
+            "center_x_mm": 0.0,
+            "center_y_mm": 0.0,
+            "depth_mm": depth,
+            "axial_start_mm": station,
+        },
+        param_provenance={
+            "profile": ParamProvenance(origin="standard", detail="кольцевая выточка"),
+            "diameter_mm": stated,
+            "inner_diameter_mm": stated,
+            "depth_mm": stated,
+            "center_x_mm": ParamProvenance(origin="standard", detail="на оси детали"),
+            "center_y_mm": ParamProvenance(origin="standard", detail="на оси детали"),
+            "axial_start_mm": ParamProvenance(
+                origin="propagated", detail="от торца: 0 или длина минус глубина"
+            ),
+        },
+        confidence=0.85,
+    )
 
 
 def _flange_features(flange: dict) -> list[Feature3D] | None:
