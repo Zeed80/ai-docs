@@ -411,6 +411,9 @@ async def test_logical_key_is_transport_metadata_not_model_arguments(monkeypatch
         ("analytics", "compare_create", "analytics.compare_create"),
         ("analytics", "table_create_view", "analytics.table_create_view"),
         ("analytics", "table_inline_edit", "analytics.table_inline_edit"),
+        ("documents", "link", "documents.link"),
+        ("email", "draft", "email.draft"),
+        ("payments", "create_schedule", "payments.create_schedule"),
         ("warehouse", "create_item", "warehouse.create_item"),
     ],
 )
@@ -489,6 +492,41 @@ def test_e05_2_5_direct_route_resolves_to_procurement_create_request():
     assert operation.name == "procurement.create_request"
 
 
+@pytest.mark.parametrize(
+    "skill,args,expected",
+    [
+        (
+            {"method": "POST", "path": "/api/documents/{document_id}/links"},
+            {
+                "document_id": "document-1",
+                "linked_entity_type": "invoice",
+                "linked_entity_id": "invoice-1",
+                "link_type": "source",
+            },
+            "documents.link",
+        ),
+        (
+            {"method": "POST", "path": "/api/email/drafts"},
+            {"to_addresses": ["supplier@example.test"], "subject": "Draft"},
+            "email.draft",
+        ),
+        (
+            {"method": "POST", "path": "/api/payment-schedules"},
+            {
+                "invoice_id": "invoice-1",
+                "due_date": "2026-10-01T00:00:00Z",
+                "amount": 1000,
+            },
+            "payments.create_schedule",
+        ),
+    ],
+)
+def test_e05_2_6_direct_routes_resolve_to_exact_catalog_operations(skill, args, expected):
+    operation = one_db_commit_operation(skill, args)
+    assert operation is not None
+    assert operation.name == expected
+
+
 def test_one_db_commit_resolution_fails_closed_for_other_operations_and_routes():
     assert (
         one_db_commit_operation(
@@ -524,6 +562,31 @@ def test_one_db_commit_resolution_fails_closed_for_other_operations_and_routes()
         one_db_commit_operation(
             {"method": "POST", "path": "/api/compare"},
             {},
+        )
+        is None
+    )
+    # Creating a draft is reviewed, but generation/reply actions may invoke AI
+    # or carry thread content and remain fail-closed.
+    assert (
+        one_db_commit_operation(
+            {"method": "POST", "path": "/api/email/compose/generate"},
+            {"intent": "Write a reply"},
+        )
+        is None
+    )
+    assert (
+        one_db_commit_operation(
+            {"method": "POST", "path": "/api/email/threads/{thread_id}/reply-draft"},
+            {"thread_id": "thread-1", "intent": "Reply"},
+        )
+        is None
+    )
+    # Workspace sheet creation publishes on the chat bus after the DB commit,
+    # so it is not a DB-only E05.2 adapter.
+    assert (
+        one_db_commit_operation(
+            {"method": "POST", "path": "/api/workspace/sheets/create"},
+            {"title": "Scratch"},
         )
         is None
     )
@@ -786,6 +849,69 @@ async def test_one_db_commit_success_preserves_raw_ids_and_recipient_status(
     assert result["status"] == "succeeded"
     assert result["data"] == payload
     assert result["evidence"]["operation"] == "warehouse.create_item"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "skill,args,expected_body,raw_response,operation",
+    [
+        (
+            {"method": "POST", "path": "/api/documents/{document_id}/links"},
+            {
+                "document_id": "document-1",
+                "linked_entity_type": "invoice",
+                "linked_entity_id": "invoice-1",
+                "link_type": "source",
+            },
+            {
+                "linked_entity_type": "invoice",
+                "linked_entity_id": "invoice-1",
+                "link_type": "source",
+            },
+            {"id": "link-1", "linked_entity_id": "invoice-1"},
+            "documents.link",
+        ),
+        (
+            {"method": "POST", "path": "/api/email/drafts"},
+            {"to_addresses": ["supplier@example.test"], "subject": "Draft"},
+            {"to_addresses": ["supplier@example.test"], "subject": "Draft"},
+            {"draft_id": "draft-1", "status": "draft"},
+            "email.draft",
+        ),
+        (
+            {"method": "POST", "path": "/api/payment-schedules"},
+            {
+                "invoice_id": "invoice-1",
+                "due_date": "2026-10-01T00:00:00Z",
+                "amount": 1000,
+            },
+            {
+                "invoice_id": "invoice-1",
+                "due_date": "2026-10-01T00:00:00Z",
+                "amount": 1000,
+            },
+            {"id": "schedule-1", "status": "scheduled"},
+            "payments.create_schedule",
+        ),
+    ],
+)
+async def test_e05_2_6_preserves_raw_success_response_and_original_body(
+    monkeypatch, skill, args, expected_body, raw_response, operation
+):
+    from app.ai import agent_loop
+
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.post.return_value = httpx.Response(201, json=raw_response)
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", MagicMock(return_value=client))
+    monkeypatch.setattr(agent_loop, "internal_headers", lambda: {})
+
+    result = await execute_skill(skill, args, BuiltinAgentConfig())
+
+    assert result["status"] == "succeeded"
+    assert result["data"] == raw_response
+    assert result["evidence"]["operation"] == operation
+    assert client.post.call_args.kwargs["json"] == expected_body
 
 
 @pytest.mark.asyncio

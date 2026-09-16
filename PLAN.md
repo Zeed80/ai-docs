@@ -125,7 +125,19 @@ catalog GET, но handler условно коммитит `profile.trust_score`;
 прямого и capability route. Операция не входит в write adapter из-за conditional
 0/1 commit. Контракт не менялся; независимая проверка: 207 passed с известным
 предупреждением `asyncio_loop_scope`; production пока не заявлен. Отчёт:
-`docs/agent-employee-delivery/E05-2-5-db-write-adapters.md`. E05.2 целиком
+`docs/agent-employee-delivery/E05-2-5-db-write-adapters.md`.
+E05.2.6 REVIEWED добавляет только `documents.link`, `email.draft` и
+`payments.create_schedule` через точные уникальные маршруты
+`POST /api/documents/{document_id}/links`, `POST /api/email/drafts` и
+`POST /api/payment-schedules`: cumulative allowlist равен 19 операциям. У
+каждого handler-а один прямой безусловный commit; `log_action` и
+`create_reply_draft` только flush/select как применимо, AI/network/enqueue нет;
+все три `admin_only=false` и не approval-gated. AI paths
+`email.compose`/`email.reply`/`email.templates.from_message`, `sheets.create` с
+`chat_bus` publish после commit, send/external, delete/status/gated actions
+fail-closed. Контракт не менялся; независимая проверка: 216 passed с известным
+предупреждением `asyncio_loop_scope`; production не заявлен. Отчёт:
+`docs/agent-employee-delivery/E05-2-6-db-write-adapters.md`. E05.2 целиком
 остаётся IN PROGRESS; дальше нужен новый отдельно проверенный срез E05.2.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя

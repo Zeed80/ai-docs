@@ -106,6 +106,19 @@ conditional 0/1 commit. Контракт E05.2.1, public API, RBAC и approval p
 менялись. Независимый набор: 207 passed с известным предупреждением
 `asyncio_loop_scope`; production ещё не заявлен. Отчёт:
 `docs/agent-employee-delivery/E05-2-5-db-write-adapters.md`.
+E05.2.6 REVIEWED: шестой узкий DB write-срез добавляет только
+`documents.link`, `email.draft` и `payments.create_schedule` через точные
+уникальные соответственно `POST /api/documents/{document_id}/links`,
+`POST /api/email/drafts` и `POST /api/payment-schedules`; cumulative allowlist
+содержит 19 операций. У каждого handler-а один прямой безусловный commit на
+success path; `log_action` и `create_reply_draft` только flush/select как
+применимо, AI/network/enqueue нет. Все три `admin_only=false` и не
+approval-gated. AI paths `email.compose`/`email.reply`/
+`email.templates.from_message`, `sheets.create` с `chat_bus` publish после
+commit, send/external, delete/status/gated actions fail-closed. Контракт E05.2.1,
+public API, RBAC и approval policy не менялись. Независимый набор: 216 passed с
+известным предупреждением `asyncio_loop_scope`; production не заявлен. Отчёт:
+`docs/agent-employee-delivery/E05-2-6-db-write-adapters.md`.
 E05.2 остаётся IN PROGRESS: остальные `one-db-commit` операции не мигрированы.
 Следующий шаг — новый отдельно выбранный и независимо проверенный срез E05.2,
 не E05.3.

@@ -145,8 +145,8 @@ def test_every_active_catalog_operation_has_a_fail_closed_effect_classification(
     ), "unknown classifications must prohibit automatic retry"
 
 
-def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_5_subset():
-    """E05.2.5 adds one independently reviewed E03 row to the cumulative set."""
+def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_6_subset():
+    """E05.2.6 adds three DB-only, non-gated E03 rows to the reviewed set."""
 
     from app.ai.tool_catalog import TOOLS
     from app.ai.tool_transport import ONE_DB_COMMIT_OPERATIONS
@@ -175,8 +175,11 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_5_subset():
             "analytics.compare_create",
             "analytics.table_create_view",
             "analytics.table_inline_edit",
+            "documents.link",
+            "email.draft",
             "email.templates.create",
             "email.templates.update",
+            "payments.create_schedule",
             "procurement.create_request",
             "suppliers.update",
             "warehouse.adjust_stock",
@@ -197,6 +200,8 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_5_subset():
     assert all(not TOOLS[name].admin_only for name in e05_2_4_slice)
     e05_2_5_slice = {"procurement.create_request"}
     assert all(not TOOLS[name].admin_only for name in e05_2_5_slice)
+    e05_2_6_slice = {"documents.link", "email.draft", "payments.create_schedule"}
+    assert all(not TOOLS[name].admin_only for name in e05_2_6_slice)
     excluded = {
         "documents.ingest": "db-async-enqueue",
         "email.send": "external-dispatch",
@@ -204,11 +209,14 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_5_subset():
         "warehouse.confirm_receipt": "unknown",
         "email.templates.from_message": "one-db-commit",
         "email.templates.render": "one-db-commit",
+        "email.compose": "one-db-commit",
+        "email.reply": "one-db-commit",
         "procurement.create_contract": "one-db-commit",
         "procurement.update_contract": "one-db-commit",
         "procurement.update_request": "one-db-commit",
         "procurement.send_rfq": "external-dispatch",
         "suppliers.trust_score": "one-db-commit",
+        "sheets.create": "one-db-commit",
     }
     assert not (ONE_DB_COMMIT_OPERATIONS & excluded.keys())
     assert {name: classifications[name] for name in excluded} == excluded
@@ -239,6 +247,9 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_5_subset():
         "warehouse.adjust_stock": {"warehouse.adjust_stock"},
         "warehouse.create_receipt": {"warehouse.create_receipt"},
         "warehouse.update_item": {"warehouse.update_item"},
+        "documents.link": {"documents.link"},
+        "email.draft": {"email.draft"},
+        "payments.create_schedule": {"payments.create_schedule"},
     }
 
     from app.ai.capability_manifest import load_capability_manifest
@@ -251,8 +262,15 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_5_subset():
     } & set(warehouse.gate_actions)
     procurement = load_capability_manifest().by_name["procurement"]
     assert "create_request" not in procurement.gate_actions
+    documents = load_capability_manifest().by_name["documents"]
+    assert "link" not in documents.gate_actions
+    email = load_capability_manifest().by_name["email"]
+    assert "draft" not in email.gate_actions
+    payments = load_capability_manifest().by_name["payments"]
+    assert "create_schedule" not in payments.gate_actions
 
     from app.ai.gateway_config import gateway_config
 
     assert not (e05_2_4_slice & gateway_config.approval_gates)
     assert not (e05_2_5_slice & gateway_config.approval_gates)
+    assert not (e05_2_6_slice & gateway_config.approval_gates)
