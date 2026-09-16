@@ -376,6 +376,130 @@ def _check_full_application_pipeline() -> None:
     )
 
 
+def _lug_flange_sketch(pcd_r: float, lug_r: float) -> tuple[list[dict], tuple[float, float], list]:
+    """Three lugs on a circle joined by outer tangents, as a boss sketch."""
+    import math
+
+    centres = [
+        (pcd_r * math.cos(math.radians(90 + 120 * k)), pcd_r * math.sin(math.radians(90 + 120 * k)))
+        for k in range(3)
+    ]
+    tangents = []
+    for k in range(3):
+        (x1, y1), (x2, y2) = centres[k], centres[(k + 1) % 3]
+        length = math.hypot(x2 - x1, y2 - y1)
+        nx, ny = (y2 - y1) / length, -(x2 - x1) / length
+        if nx * (x1 + x2) + ny * (y1 + y2) < 0:
+            nx, ny = -nx, -ny
+        tangents.append(((x1 + lug_r * nx, y1 + lug_r * ny), (x2 + lug_r * nx, y2 + lug_r * ny)))
+    ox, oy = tangents[-1][1]
+    sketch = []
+    for k, (start, end) in enumerate(tangents):
+        cx, cy = centres[k]
+        sketch.append(
+            {
+                "kind": "arc",
+                "to": [start[0] - ox, start[1] - oy],
+                "center": [cx - ox, cy - oy],
+                "clockwise": False,
+            }
+        )
+        sketch.append({"kind": "line", "to": [end[0] - ox, end[1] - oy]})
+    return sketch, (ox, oy), centres
+
+
+def _check_flange_on_axial_station() -> None:
+    """A sleeve with a three-lug flange midway along its axis (test-drawings
+    part_03): the boss starts at an axial station, reaches past the turned
+    radius, and adds only the ring outside the body — a solid footprint would
+    fill the bore (probe 2026-09-16: 157 mm3 inside a Ø11 bore)."""
+    import math
+
+    profile = [
+        {"r": 7.5, "z": 0.0},
+        {"r": 7.5, "z": 4.0},
+        {"r": 6.5, "z": 4.0},
+        {"r": 6.5, "z": 18.0},
+        {"r": 7.5, "z": 18.0},
+        {"r": 7.5, "z": 24.0},
+    ]
+    sleeve = _feature(
+        "revolve", profile_points=profile, bore_points=[{"r": 5.5, "z": 0.0}, {"r": 5.5, "z": 24.0}]
+    )
+    pcd_r, lug_r, station, thickness = 12.5, 4.0, 10.0, 2.0
+    sketch, (ox, oy), centres = _lug_flange_sketch(pcd_r, lug_r)
+    flange = _feature(
+        "boss",
+        profile="sketch",
+        sketch_profile=sketch,
+        center_x_mm=ox,
+        center_y_mm=oy,
+        depth_mm=thickness,
+        axial_start_mm=station,
+    )
+    holes = [
+        _feature(
+            "pocket",
+            profile="circle",
+            diameter_mm=2.5,
+            center_x_mm=cx,
+            center_y_mm=cy,
+            depth_mm=thickness,
+            axial_start_mm=station,
+        )
+        for cx, cy in centres
+    ]
+    status, payload = _compile(_candidate(sleeve, flange, *holes, label="sleeve+flange"))
+    if status != 200:
+        check("flange on an axial station builds", False, f"HTTP {status}: {str(payload)[:300]}")
+        return
+    report = _report_from_zip(payload)
+    body = math.pi * (7.5**2 * 10 + 6.5**2 * 14 - 5.5**2 * 24)
+    side = pcd_r * math.sqrt(3)
+    footprint = math.sqrt(3) / 4 * side**2 + 3 * side * lug_r + math.pi * lug_r**2
+    ring = (footprint - math.pi * 6.5**2) * thickness
+    expected = body + ring - 3 * math.pi * 1.25**2 * thickness
+    volume = float(report["volume_mm3"])
+    check(
+        "flange on an axial station builds as a ring, bore clear, holes cut",
+        report["brep_valid"]
+        and report["solid_count"] == 1
+        and abs(volume - expected) < 1.0
+        and abs(float(report["bounds_mm"]["z"]) - 24.0) < 1e-6,
+        f"V={volume:.2f} expected {expected:.2f}",
+    )
+    status, payload = _compile(
+        _candidate(
+            _feature("extrude", width_mm=40.0, height_mm=40.0, depth_mm=5.0),
+            _feature(
+                "boss",
+                profile="circle",
+                diameter_mm=5.0,
+                center_x_mm=10.0,
+                center_y_mm=10.0,
+                depth_mm=2.0,
+                axial_start_mm=1.0,
+            ),
+        )
+    )
+    check("axial station on a box base is refused", status == 422, f"HTTP {status}")
+    status, payload = _compile(
+        _candidate(
+            sleeve,
+            _feature(
+                "boss",
+                profile="sketch",
+                sketch_profile=sketch,
+                center_x_mm=ox,
+                center_y_mm=oy,
+                depth_mm=2.0,
+                axial_start_mm=23.0,
+            ),
+        )
+    )
+    check("axial station past the part length is refused", status == 422, f"HTTP {status}")
+
+
 def main() -> int:
     status, health = _post("/health", {}) if False else (200, None)
     with urllib.request.urlopen(f"{KERNEL}/health", timeout=30) as response:
@@ -911,6 +1035,7 @@ def main() -> int:
     # normalized reading -> feature tree -> B-Rep -> sectioned sheet -> CadIR
     # -> geometry-only DXF -> independent semantic reopen.
     _check_full_application_pipeline()
+    _check_flange_on_axial_station()
 
     failed = [name for ok, name, _detail in _results if not ok]
     print(f"\n{len(_results) - len(failed)}/{len(_results)} passed")

@@ -1542,6 +1542,23 @@ def _build_one_body(
             raise HTTPException(422, "Pocket depth exceeds base depth")
         z = top_z if adds_material else top_z - operation_depth
         solid_height = operation_depth if adds_material else operation_depth + 1.0
+        # A flange on a turned part (a sleeve with a three-lug flange midway
+        # along its axis): the boss starts at an axial STATION rather than on
+        # the end face, and it is meant to reach past the turned radius. A
+        # pocket at the same station is a hole through that flange.
+        on_station = feature.params.get("axial_start_mm") is not None
+        if on_station:
+            if base.kind != "revolve":
+                raise HTTPException(
+                    422, f"{feature.kind} axial_start_mm needs a turned (revolve) base"
+                )
+            station = _coordinate(feature.params, "axial_start_mm")
+            if station < -1e-6 or station + operation_depth > material_depth + 1e-6:
+                raise HTTPException(
+                    422, f"{feature.kind} at axial station {station:g} lies outside the part length"
+                )
+            z = shape.BoundBox.ZMin + station
+            solid_height = operation_depth
         draft_deg = feature.params.get("draft_deg")
         if draft_deg is not None:
             if (
@@ -1552,11 +1569,12 @@ def _build_one_body(
         if profile == "circle":
             diameter = _number(feature.params, "diameter_mm", maximum=min(width, height) * 2)
             radius = diameter / 2
-            _check_footprint(
-                feature.kind, x, y, radius,
-                axis_centred=footprint_axis_centred, outer_radius=outer_radius,
-                width=width, height=height,
-            )
+            if not on_station:
+                _check_footprint(
+                    feature.kind, x, y, radius,
+                    axis_centred=footprint_axis_centred, outer_radius=outer_radius,
+                    width=width, height=height,
+                )
             if draft_deg is None:
                 tool = Part.makeCylinder(radius, solid_height, App.Vector(x, y, z))
             else:
@@ -1586,7 +1604,7 @@ def _build_one_body(
             profile_height = _number(feature.params, "height_mm", maximum=height)
             x0 = x - profile_width / 2
             y0 = y - profile_height / 2
-            if x0 < -1e-6 or y0 < -1e-6 or x0 + profile_width > width + 1e-6 or y0 + profile_height > height + 1e-6:
+            if not on_station and (x0 < -1e-6 or y0 < -1e-6 or x0 + profile_width > width + 1e-6 or y0 + profile_height > height + 1e-6):
                 raise HTTPException(422, f"{feature.kind} lies outside the base footprint")
             tool = Part.makeBox(profile_width, profile_height, solid_height, App.Vector(x0, y0, z))
         elif profile == "sketch":
@@ -1610,10 +1628,23 @@ def _build_one_body(
                     bounds.XMin >= -1e-6 and bounds.YMin >= -1e-6
                     and bounds.XMax <= width + 1e-6 and bounds.YMax <= height + 1e-6
                 )
-            if not within:
+            if not within and not on_station:
                 raise HTTPException(422, f"{feature.kind} lies outside the base footprint")
         else:
             raise HTTPException(422, f"Unsupported {feature.kind} profile")
+        if on_station and adds_material:
+            # Only the ring outside the turned body is added: a solid flange
+            # footprint would fill the bore it sits over (probe 2026-09-16:
+            # 157 mm³ of material inside a Ø11 bore).
+            filled = _revolve_solid(
+                _revolve_points(base.params.get("profile_points"), "revolve profile_points"),
+                "revolve profile",
+            )
+            tool = tool.cut(filled)
+            if tool.isNull() or tool.Volume <= 1e-6:
+                raise HTTPException(
+                    422, f"{feature.kind} at axial station lies entirely inside the turned body"
+                )
         previous = shape
         shape = shape.fuse(tool) if adds_material else shape.cut(tool)
         operation_audit.append({
