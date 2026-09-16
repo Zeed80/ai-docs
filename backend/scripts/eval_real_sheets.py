@@ -241,7 +241,26 @@ def score_sleeve(result: dict, truth: dict) -> dict:
     from app.ai.cad_recognize.spec_vectorize import _expanded_profile_holes
 
     main = result["spec"].get("main_view") or {}
-    want = truth["flange"]
+    scores = {
+        "steps": len(truth["outer"]),
+        "steps_right": _steps_right(main.get("outer") or [], truth["outer"]),
+        "bore_right": _steps_right(main.get("bore") or [], truth["bore"]),
+    }
+    groove = truth.get("face_groove")
+    if groove:
+        scores["face_groove_right"] = int(
+            any(
+                g.get("end", "left") == groove["end"]
+                and all(
+                    abs(float(g.get(key) or 0) - groove[key]) <= 0.05
+                    for key in ("depth_mm", "outer_diameter_mm", "inner_diameter_mm")
+                )
+                for g in main.get("face_grooves") or []
+            )
+        )
+    want = truth.get("flange")
+    if not want:
+        return scores
     flange_right = holes_right = 0
     for flange in main.get("flanges") or []:
         profile = flange.get("profile") or {}
@@ -286,13 +305,7 @@ def score_sleeve(result: dict, truth: dict) -> dict:
                 )
             ),
         )
-    return {
-        "steps": len(truth["outer"]),
-        "steps_right": _steps_right(main.get("outer") or [], truth["outer"]),
-        "bore_right": _steps_right(main.get("bore") or [], truth["bore"]),
-        "flange_right": flange_right,
-        "flange_holes_right": holes_right,
-    }
+    return {**scores, "flange_right": flange_right, "flange_holes_right": holes_right}
 
 
 def main() -> int:
@@ -325,10 +338,15 @@ def main() -> int:
         if kind == "sleeve_flange":
             results[sheet["name"]] = score_sleeve(result, sheet)
             f = results[sheet["name"]]
+            extra = (
+                f", фланец {f['flange_right']}, отверстия фланца "
+                f"{f['flange_holes_right']}/{sheet['flange']['holes']['count']}"
+                if "flange" in sheet
+                else ""
+            ) + (f", выточка на торце {f['face_groove_right']}" if "face_groove" in sheet else "")
             print(
                 f"{sheet['name']:<18} ступени {f['steps_right']}/{f['steps']}, расточка "
-                f"{f['bore_right']}/{len(sheet['bore'])}, фланец {f['flange_right']}, "
-                f"отверстия фланца {f['flange_holes_right']}/{sheet['flange']['holes']['count']}"
+                f"{f['bore_right']}/{len(sheet['bore'])}{extra}"
             )
             continue
         if kind == "flange":
@@ -370,6 +388,7 @@ def main() -> int:
             "thickness_right",
             "flange_right",
             "flange_holes_right",
+            "face_groove_right",
         ):
             if key in got and got[key] < was.get(key, 0):
                 worse.append(f"{name}.{key}: {got[key]} < {was[key]}")

@@ -27,6 +27,12 @@
   "holes_right": 3,
   "thickness_right": 1
  },
+ "part_06_gear_gost": {
+  "bore_right": 0,
+  "face_groove_right": 0,
+  "steps": 2,
+  "steps_right": 0
+ },
  "shaft_detail": {
   "keyways": 0,
   "keyways_extra": 1,

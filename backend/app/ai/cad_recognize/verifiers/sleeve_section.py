@@ -27,10 +27,14 @@ _MAIN_MASS_SHARE = 0.75
 _GAP_SHARE = 0.12
 # Расточка обязана быть у обоих торцов в пределах этой доли длины.
 _END_SHARE = 0.04
-_AXIS_CANDIDATES = 12
+_AXIS_CANDIDATES = 30
 # Несимметрия пары относительно оси в долях радиуса: ось кандидата сама
 # округлена до 0,5 px, и 1,5 % убивали расточку Ø13 втулки при оси 1294,5.
 _PAIR_SHARE = 0.025
+# Горизонталь длиннее этой доли ширины листа — рамка, а не деталь.
+_MAX_RUN_SHARE = 0.4
+_SECTIONS_KEPT = 40
+_FACES_KEPT = 16
 
 
 @dataclass(frozen=True)
@@ -62,11 +66,21 @@ class SleeveSection:
 def locate_sleeve_section(
     sheet: Any, diameters_mm: list[float] | tuple[float, ...] = ()
 ) -> SleeveSection | None:
-    """Разрез втулки на листе или ``None``.
+    """Лучший кандидат разреза втулки (см. `locate_sleeve_sections`) или ``None``."""
+    found = locate_sleeve_sections(sheet, diameters_mm)
+    return found[0] if found else None
 
-    Из найденных — тот, у которого больше площадок наружного профиля и
-    расточки совпадает с надписями Ø при одном масштабе, затем самый длинный:
-    горизонтали штампа тоже дают «стенку у обоих торцов» и длиннее разреза.
+
+def locate_sleeve_sections(
+    sheet: Any, diameters_mm: list[float] | tuple[float, ...] = ()
+) -> list[SleeveSection]:
+    """Кандидаты разреза втулки: ось × пара торцов-кандидатов.
+
+    Порядок — больше площадок наружного профиля и расточки совпадает с
+    надписями Ø при одном масштабе, затем длиннее: горизонтали штампа тоже
+    дают «стенку у обоих торцов». Какой кандидат настоящий, решают надписи
+    (`propose_sleeve`): на увеличенном листе размерные линии толщиной с
+    основные и тоже «торцы» (колесо part_06: Ø46 и Ø38 левее детали).
     """
     import numpy as np
 
@@ -78,7 +92,7 @@ def locate_sleeve_section(
     min_length = max(6, int(round(0.006 * min(gray.shape))))
     lines = sf._segments(ink, min_length)
     if len(lines) < 4:
-        return None
+        return []
     long_lines = [line for line in lines if line.end - line.start >= 4 * min_length]
     weights = [
         _stroke(gray, ink, line, (line.start, line.end), axis=0, quantile=0.25)
@@ -87,17 +101,33 @@ def locate_sleeve_section(
     main_ref = float(np.percentile(weights, 90))
     dark = (255.0 - gray.astype(np.float32)) / 255.0
     runs = [run for line in lines for run in _main_runs(dark, line, main_ref, min_length)]
+    # Линии рамки и графы штампа — не деталь: у портретного листа колеса они
+    # вытесняли ось детали из кандидатов.
+    from app.ai.cad_recognize.verifiers.sheet_scale import locate_title_block
+
+    block = locate_title_block(gray)
+    width = gray.shape[1]
+
+    def of_part(run: Any) -> bool:
+        if run.end - run.start > _MAX_RUN_SHARE * width:
+            return False
+        if block is not None:
+            left, top, _right, bottom = block.bbox_px
+            if top - 5 <= run.position <= bottom + 5 and run.start >= left - 5:
+                return False
+        return True
+
+    runs = [run for run in runs if of_part(run)]
     if len(runs) < 4:
-        return None
+        return []
     vertical = _lines(ink, min_length, axis=1)
-    found = []
+    found: list[SleeveSection] = []
     for axis_y in _axis_candidates(runs, min_length, main_ref):
-        section = _section(runs, axis_y, gray.shape[1], main_ref, dark, vertical)
-        if section is not None:
-            found.append(section)
-    if not found:
-        return None
-    return max(found, key=lambda s: (_diameter_support(s, diameters_mm), s.outer.x1 - s.outer.x0))
+        found.extend(_sections(runs, axis_y, gray.shape[1], main_ref, dark, vertical))
+    found.sort(
+        key=lambda s: (_diameter_support(s, diameters_mm), s.outer.x1 - s.outer.x0), reverse=True
+    )
+    return found[:_SECTIONS_KEPT]
 
 
 def _diameter_support(section: SleeveSection, diameters_mm) -> int:
@@ -184,12 +214,13 @@ def _axis_candidates(runs: list[Any], min_length: int, main_ref: float) -> list[
     return result
 
 
-def _section(
+def _sections(
     runs: list[Any], axis_y: float, width: int, main_ref: float, dark: Any, vertical: list[Any]
-) -> SleeveSection | None:
+) -> list[SleeveSection]:
     import numpy as np
 
     tolerance = max(2.0, 0.5 * main_ref)
+    pairs: list[tuple[float, int, int]] = []
     outer = np.full(width, np.nan)
     inner = np.full(width, np.nan)
     above = [run for run in runs if run.position < axis_y - 2 * main_ref]
@@ -206,6 +237,7 @@ def _section(
             if end - start < 3 * main_ref:
                 continue
             level = (bottom.position - top.position) / 2.0
+            pairs.append((level, start, end))
             window = slice(start, end + 1)
             outer[window] = np.where(
                 np.isnan(outer[window]), level, np.maximum(outer[window], level)
@@ -217,23 +249,51 @@ def _section(
     inner[inner >= outer - 2 * main_ref] = np.nan
     columns = np.nonzero(~np.isnan(outer))[0]
     if columns.size < 2:
-        return None
-    span = float(columns[-1] - columns[0])
-    gap = max(3.0, _GAP_SHARE * span)
-    pieces: list[list[int]] = [[int(columns[0]), int(columns[0])]]
-    for x in columns[1:]:
-        if x - pieces[-1][1] <= gap:
-            pieces[-1][1] = int(x)
-        else:
-            pieces.append([int(x), int(x)])
-    x0, x1 = max(pieces, key=lambda piece: piece[1] - piece[0])
+        return []
+    faces = _end_face_candidates(
+        vertical, axis_y, int(columns[0]), int(columns[-1]), outer, inner, main_ref
+    )
+    result = []
+    for i, left in enumerate(faces):
+        for right in faces[i + 1 :]:
+            section = _window(
+                pairs, width, axis_y, int(round(left)), int(round(right)), main_ref, dark, vertical
+            )
+            if section is not None:
+                result.append(section)
+    return result
+
+
+def _window(pairs, width, axis_y, x0, x1, main_ref, dark, vertical) -> SleeveSection | None:
+    """Вид между двумя торцами-кандидатами; ``None`` — не втулка или разрыв."""
+    import numpy as np
+
     length = x1 - x0
     if length < 20 * main_ref:
+        return None
+    outer = np.full(width, np.nan)
+    inner = np.full(width, np.nan)
+    for level, start, end in pairs:
+        if end < x0 or start > x1:
+            continue
+        window = slice(max(start, x0), min(end, x1) + 1)
+        outer[window] = np.where(np.isnan(outer[window]), level, np.maximum(outer[window], level))
+        inner[window] = np.where(np.isnan(inner[window]), level, np.minimum(inner[window], level))
+    inner[inner >= outer - 2 * main_ref] = np.nan
+    outer_half = outer[x0 : x1 + 1].copy()
+    # Профиль без больших разрывов: торцы разных изображений не соединяются.
+    defined = np.nonzero(~np.isnan(outer_half))[0]
+    if (
+        defined.size < 2
+        or defined[0] > _END_SHARE * length
+        or len(outer_half) - 1 - defined[-1] > _END_SHARE * length
+    ):
+        return None
+    if np.max(np.diff(defined)) > _GAP_SHARE * length:
         return None
     end = max(3, int(_END_SHARE * length))
     if np.all(np.isnan(inner[x0 : x0 + end + 1])) or np.all(np.isnan(inner[x1 - end : x1 + 1])):
         return None  # не втулка: у торца нет расточки
-    outer_half = outer[x0 : x1 + 1].copy()
     bore_half = inner[x0 : x1 + 1].copy()
     extent = float(np.nanmax(outer_half))
     faces = _faces(dark, vertical, axis_y, x0, x1, extent, main_ref)
@@ -254,6 +314,40 @@ def _section(
         flange_px=flange,
         flange_reach_px=reach,
     )
+
+
+def _end_face_candidates(vertical, axis_y, x0, x1, outer, inner, main_ref) -> list[float]:
+    """Торцы-кандидаты: вертикаль стенки между расточкой и наружной линией над
+    осью и под ней. Какие из них настоящие торцы, решают надписи."""
+    import numpy as np
+
+    def wall_at(x: float) -> bool:
+        column = int(round(x))
+        window = slice(max(0, column - 12), column + 13)
+        outer_near = outer[window]
+        inner_near = inner[window]
+        if np.all(np.isnan(outer_near)) or np.all(np.isnan(inner_near)):
+            return False
+        top = (axis_y - float(np.nanmax(outer_near)), axis_y - float(np.nanmin(inner_near)))
+        bottom = (axis_y + float(np.nanmin(inner_near)), axis_y + float(np.nanmax(outer_near)))
+        need = 0.6 * (top[1] - top[0])
+        above = any(
+            abs(v.position - x) <= 2 * main_ref and v.overlap(*top) >= need for v in vertical
+        )
+        below = any(
+            abs(v.position - x) <= 2 * main_ref and v.overlap(*bottom) >= need for v in vertical
+        )
+        return above and below
+
+    faces: list[float] = []
+    for position in sorted(
+        v.position
+        for v in vertical
+        if x0 - 3 * main_ref <= v.position <= x1 + 3 * main_ref and wall_at(v.position)
+    ):
+        if not faces or position - faces[-1] > 2 * main_ref:
+            faces.append(position)
+    return faces[:_FACES_KEPT]
 
 
 def _vertical_mass(dark: Any, line: Any, rows: tuple[float, float], main_ref: float) -> float:
@@ -384,17 +478,30 @@ def propose_sleeve(gray: Any, spec: dict[str, Any]) -> tuple[SleeveProposal | No
 
     gray = np.asarray(gray)
     labels = sheet_labels(spec)
-    section = locate_sleeve_section(gray, labels.diameters)
-    if section is None:
+    candidates = locate_sleeve_sections(gray, labels.diameters)
+    if not candidates:
         return None, "разреза втулки (расточка у обоих торцов) на листе нет"
-    outer, why = propose_profile(section.outer, labels, None, allow_threads=False)
-    if outer is None:
-        return None, f"наружный профиль разреза: {why}"
-    bore, why = propose_profile(section.bore, labels, outer.total_mm, allow_threads=False)
-    if bore is None:
-        return None, f"расточка разреза: {why}"
-    if abs(bore.total_mm - outer.total_mm) > 1e-6:
-        return None, "расточка и наружный профиль разреза дали разные габариты"
+    # Первый кандидат, у которого и наружный профиль, и расточка строго
+    # объясняются надписями; иначе — причина лучшего кандидата.
+    first_reason = None
+    chosen = None
+    for section in candidates:
+        outer, why = propose_profile(section.outer, labels, None, allow_threads=False)
+        if outer is None:
+            first_reason = first_reason or f"наружный профиль разреза: {why}"
+            continue
+        bore, why = propose_profile(section.bore, labels, outer.total_mm, allow_threads=False)
+        if bore is None:
+            first_reason = first_reason or f"расточка разреза: {why}"
+            continue
+        if abs(bore.total_mm - outer.total_mm) > 1e-6:
+            first_reason = first_reason or "расточка и наружный профиль дали разные габариты"
+            continue
+        chosen = section
+        break
+    if chosen is None:
+        return None, first_reason or "разрез втулки надписями не объясняется"
+    section = chosen
     notes: list[str] = []
     flange = None
     end_view = None
