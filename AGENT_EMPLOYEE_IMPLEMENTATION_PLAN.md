@@ -56,8 +56,19 @@ v1 на агентской HTTP-границе. Успешный 2xx domain resp
 в `data`; явная domain-ошибка или 4xx даёт `failed`; неоднозначность после dispatch
 даёт `outcome_unknown`; ошибка до dispatch — `failed`. Автоматических retry нет.
 Отчёт: `docs/agent-employee-delivery/E05-2-1-db-write-adapters.md`.
+E05.2.2 REVIEWED: второй узкий DB write-срез добавляет
+`analytics.collection_add_item`, `analytics.collection_close`,
+`analytics.compare_create`, `analytics.compare_align` и
+`analytics.table_inline_edit`. Cumulative allowlist теперь содержит девять
+операций; контракт E05.2.1, public API и RBAC не менялись. Каждый handler
+доказывает один прямой commit, а `add_timeline_event`/`log_action` — flush-only;
+неоднозначный route alias `compare_create` остаётся fail-closed.
+`analytics.calendar_extract_dates` исключён из-за runtime 0/1 commit. Независимый
+набор: 190 passed с известным предупреждением `asyncio_loop_scope`. Отчёт:
+`docs/agent-employee-delivery/E05-2-2-db-write-adapters.md`.
 E05.2 остаётся IN PROGRESS: остальные `one-db-commit` операции не мигрированы.
-Следующий шаг — отдельный ограниченный срез оставшихся простых DB writes, не E05.3.
+Следующий шаг — новый отдельно выбранный и независимо проверенный срез E05.2,
+не E05.3.
 Push накопленной ветки был заблокирован автопроверкой из-за несвязанных CAD-коммитов;
 для публикации всей этой истории нужно отдельное разрешение. Не обходить запрет.
 

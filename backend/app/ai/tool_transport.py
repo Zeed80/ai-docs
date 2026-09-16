@@ -9,7 +9,7 @@ from app.ai.tool_result import (
     normalize_http_read_response,
 )
 
-# E05.2.1's independently reviewed subset of E03 ``one-db-commit`` rows from
+# E05.2's independently reviewed subset of E03 ``one-db-commit`` rows from
 # docs/agent-employee-delivery/tool-effect-inventory.md. Each recipient handler
 # has exactly one direct db.commit and no enqueue or external dispatch. This set
 # is deliberately independent from catalog ``effect=write``: that broader value
@@ -17,8 +17,13 @@ from app.ai.tool_result import (
 ONE_DB_COMMIT_OPERATIONS = frozenset(
     {
         "analytics.calendar_create_reminder",
+        "analytics.collection_add_item",
+        "analytics.collection_close",
         "analytics.collection_create",
+        "analytics.compare_align",
+        "analytics.compare_create",
         "analytics.table_create_view",
+        "analytics.table_inline_edit",
         "warehouse.create_item",
     }
 )
@@ -49,7 +54,7 @@ def resolve_catalog_operation(skill: dict, args: dict) -> ToolDefinition | None:
 
 
 def one_db_commit_operation(skill: dict, args: dict) -> ToolDefinition | None:
-    """Return an exact E05.2.1 reviewed one-commit operation, else fail closed."""
+    """Return an exact E05.2 reviewed one-commit operation, else fail closed."""
 
     operation = resolve_catalog_operation(skill, args)
     if operation is None or operation.name not in ONE_DB_COMMIT_OPERATIONS:

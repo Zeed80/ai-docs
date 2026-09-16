@@ -404,8 +404,13 @@ async def test_logical_key_is_transport_metadata_not_model_arguments(monkeypatch
     "capability,action,expected",
     [
         ("analytics", "calendar_create_reminder", "analytics.calendar_create_reminder"),
+        ("analytics", "collection_add_item", "analytics.collection_add_item"),
+        ("analytics", "collection_close", "analytics.collection_close"),
         ("analytics", "collection_create", "analytics.collection_create"),
+        ("analytics", "compare_align", "analytics.compare_align"),
+        ("analytics", "compare_create", "analytics.compare_create"),
         ("analytics", "table_create_view", "analytics.table_create_view"),
+        ("analytics", "table_inline_edit", "analytics.table_inline_edit"),
         ("warehouse", "create_item", "warehouse.create_item"),
     ],
 )
@@ -446,6 +451,55 @@ def test_one_db_commit_resolution_fails_closed_for_other_operations_and_routes()
         )
         is None
     )
+    # analytics.compare_create is selected, but this direct route also belongs
+    # to procurement.create_contract. Without the capability/action identity,
+    # transport must not guess which operation the caller intended.
+    assert (
+        one_db_commit_operation(
+            {"method": "POST", "path": "/api/compare"},
+            {},
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "action,operation",
+    [
+        ("collection_add_item", "analytics.collection_add_item"),
+        ("collection_close", "analytics.collection_close"),
+        ("compare_create", "analytics.compare_create"),
+        ("compare_align", "analytics.compare_align"),
+        ("table_inline_edit", "analytics.table_inline_edit"),
+    ],
+)
+async def test_e05_2_2_operations_preserve_raw_success_payload(monkeypatch, action, operation):
+    from app.ai import agent_loop
+
+    payload = {
+        "record_id": f"{action}-1",
+        "status": "accepted",
+        "details": {"source": "recipient"},
+    }
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.post.return_value = httpx.Response(200, json=payload)
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", MagicMock(return_value=client))
+    monkeypatch.setattr(agent_loop, "internal_headers", lambda: {})
+
+    args = {"action": action, "entity_id": "entity-1", "value": "unchanged"}
+    result = await execute_skill(
+        {"method": "POST", "path": "/api/agent/cap/analytics"},
+        args,
+        BuiltinAgentConfig(),
+    )
+
+    assert result["version"] == 1
+    assert result["status"] == "succeeded"
+    assert result["data"] == payload
+    assert result["evidence"]["operation"] == operation
+    assert client.post.call_args.kwargs["json"] == args
 
 
 @pytest.mark.asyncio

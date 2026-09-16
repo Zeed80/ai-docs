@@ -46,8 +46,16 @@ E05.2.1 завершена как первый узкий срез просты�
 сохраняет raw payload; domain error/4xx — `failed`, неоднозначность после dispatch
 — `outcome_unknown`, ошибка до dispatch — `failed`; automatic retry нет. Отчёт:
 `docs/agent-employee-delivery/E05-2-1-db-write-adapters.md`.
-Вся E05.2 не завершена: остальные `one-db-commit` строки продолжают legacy
-контракт до следующих отдельных срезов E05.2.
+E05.2.2 REVIEWED добавляет только `analytics.collection_add_item`,
+`analytics.collection_close`, `analytics.compare_create`,
+`analytics.compare_align` и `analytics.table_inline_edit`; cumulative allowlist
+содержит девять операций. Контракт E05.2.1, public API и RBAC не менялись.
+Выбранные handlers имеют один прямой commit; `add_timeline_event` и `log_action`
+flush-only. Route alias `compare_create` обрабатывается fail-closed, а
+`analytics.calendar_extract_dates` исключён из-за runtime 0/1 commit-границы.
+Независимый набор: 190 passed с известным предупреждением `asyncio_loop_scope`.
+Отчёт: `docs/agent-employee-delivery/E05-2-2-db-write-adapters.md`. Вся E05.2
+остаётся IN PROGRESS; далее нужен новый отдельно проверенный срез E05.2.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при
 сетевой ошибке/HTTP 5xx дают outcome_unknown и блокируют durable-цикл после

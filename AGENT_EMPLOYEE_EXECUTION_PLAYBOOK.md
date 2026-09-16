@@ -416,10 +416,11 @@ scope/time/action и запреты replay/resume, но нельзя выдум�
 
 ### E05 — Перевод адаптеров на ToolResult по одной группе
 
-**Статус:** IN PROGRESS: E05.1 REVIEWED; E05.2.1 REVIEWED как первый узкий
-срез; E05.2 в целом и E05.3–E05.4 не завершены. Отчёты:
+**Статус:** IN PROGRESS: E05.1 REVIEWED; E05.2.1 и E05.2.2 REVIEWED как два
+узких среза; E05.2 в целом и E05.3–E05.4 не завершены. Отчёты:
 `docs/agent-employee-delivery/E05-1-read-adapters.md`,
-`docs/agent-employee-delivery/E05-2-1-db-write-adapters.md`. **После:** E04.
+`docs/agent-employee-delivery/E05-2-1-db-write-adapters.md`,
+`docs/agent-employee-delivery/E05-2-2-db-write-adapters.md`. **После:** E04.
 **Файлы:** `ai/agent_loop.py::execute_skill`, `api/capability_router.py`,
 `ai/tool_transport.py`, адаптеры из E03, тесты транспорта/gateway.
 
@@ -441,11 +442,21 @@ ToolResult v1 с raw payload в `data`; явная domain-ошибка и 4xx �
 `failed`. Автоматический retry отсутствует. Остальные строки E03 с классом
 `one-db-commit` сохраняют прежний контракт до отдельных срезов E05.2.
 
+E05.2.2 добавляет только `analytics.collection_add_item`,
+`analytics.collection_close`, `analytics.compare_create`,
+`analytics.compare_align` и `analytics.table_inline_edit`; cumulative allowlist
+содержит девять операций. Контракт E05.2.1 не менялся. Каждый выбранный handler
+доказывает один прямой `db.commit`; `add_timeline_event`/`log_action` — только
+`flush()`. Route alias `POST /api/compare` без точной capability/action-пары
+fail-closed; `analytics.calendar_extract_dates` исключён из-за runtime 0/1
+commit-границы. Отчёт:
+`docs/agent-employee-delivery/E05-2-2-db-write-adapters.md`.
+
 **Негативные тесты:** 200 + error, job SUCCESS + built=false, read timeout,
 write timeout после commit, MCP exception, double wrapping. **Готово:** каждая
 переведённая группа отмечена в E03; непереведённые не скрыты за «всё готово».
-Следующая карточка — ещё один отдельно выбранный срез E05.2, а не объявление
-всех простых DB writes готовыми.
+Следующая карточка — новый отдельно выбранный и независимо проверенный срез
+E05.2, а не объявление всех простых DB writes готовыми.
 
 ### E06 — Consumers не принимают незавершённый результат за успех
 

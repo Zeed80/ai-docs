@@ -79,8 +79,17 @@ E05.2.1 завершена как первый узкий срез DB writes: т
 неоднозначность после dispatch — `outcome_unknown`, ошибка до dispatch —
 `failed`; automatic retry нет. Отчёт:
 `docs/agent-employee-delivery/E05-2-1-db-write-adapters.md`.
-E05.2 в целом остаётся IN PROGRESS: прочие `one-db-commit` операции не
-мигрированы. Далее — отдельный следующий срез E05.2.
+E05.2.2 REVIEWED добавляет `analytics.collection_add_item`,
+`analytics.collection_close`, `analytics.compare_create`,
+`analytics.compare_align` и `analytics.table_inline_edit`: cumulative allowlist
+равен девяти операциям. Контракт E05.2.1, public API и RBAC не менялись;
+выбранные handlers имеют один прямой commit, а
+`add_timeline_event`/`log_action` flush-only. Route alias `compare_create`
+fail-closed, `analytics.calendar_extract_dates` исключён из-за runtime 0/1
+commit-границы. Независимая проверка: 190 passed с известным предупреждением
+`asyncio_loop_scope`. Отчёт:
+`docs/agent-employee-delivery/E05-2-2-db-write-adapters.md`. E05.2 целиком
+остаётся IN PROGRESS; дальше нужен новый отдельно проверенный срез E05.2.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя
 в WorkEvent, проверяет владельца/аргументы/попытку/lease. Детали журнала и UI

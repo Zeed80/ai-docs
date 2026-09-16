@@ -349,14 +349,23 @@
 - E05.1 REVIEWED: операции, для которых `retry_safe()` подтверждает catalog
   `effect=read`, получают ToolResult v1 на HTTP agent boundary. Исходный ответ
   сохраняется в `data`; публичные business API не менялись.
-- E05.2 IN PROGRESS, E05.2.1 REVIEWED: только четыре операции класса
-  `one-db-commit` — `analytics.collection_create`,
-  `analytics.calendar_create_reminder`, `analytics.table_create_view` и
-  `warehouse.create_item` — получили ToolResult v1 на агентской HTTP-границе.
-  Успешный 2xx domain response сохраняет raw payload в `data`; явная domain-ошибка
-  и 4xx дают `failed`; неоднозначность после dispatch даёт `outcome_unknown`;
-  ошибка до dispatch даёт `failed`; automatic retry отсутствует. См.
-  `docs/agent-employee-delivery/E05-2-1-db-write-adapters.md`.
+- E05.2 IN PROGRESS; E05.2.1 и E05.2.2 REVIEWED: cumulative allowlist класса
+  `one-db-commit` содержит ровно девять операций —
+  `analytics.calendar_create_reminder`, `analytics.collection_add_item`,
+  `analytics.collection_close`, `analytics.collection_create`,
+  `analytics.compare_align`, `analytics.compare_create`,
+  `analytics.table_create_view`, `analytics.table_inline_edit` и
+  `warehouse.create_item`. E05.2.2 добавила пять новых `analytics.*` операций;
+  контракт E05.2.1 сохранён: успешный 2xx domain response хранит raw payload в
+  `data`, явная domain-ошибка и 4xx дают `failed`, неоднозначность после dispatch
+  — `outcome_unknown`, ошибка до dispatch — `failed`, automatic retry отсутствует.
+  Каждый выбранный handler имеет один прямой commit;
+  `add_timeline_event`/`log_action` flush-only. Route alias
+  `analytics.compare_create` direct fail-closed без точной capability/action-пары.
+  `analytics.calendar_extract_dates` исключён из-за runtime 0/1 commit-границы.
+  Public API и RBAC не менялись. См.
+  `docs/agent-employee-delivery/E05-2-1-db-write-adapters.md` и
+  `docs/agent-employee-delivery/E05-2-2-db-write-adapters.md`.
 - Остальные `one-db-commit` строки не мигрированы и продолжают прежний контракт
   до отдельных срезов E05.2. E05.3 async jobs и E05.4 external/MCP handlers
   также TODO. Наличие строки в этой матрице не означает её миграцию.

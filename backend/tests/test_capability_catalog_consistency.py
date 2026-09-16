@@ -145,8 +145,8 @@ def test_every_active_catalog_operation_has_a_fail_closed_effect_classification(
     ), "unknown classifications must prohibit automatic retry"
 
 
-def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_1_subset():
-    """E05.2.1 includes exactly four independently reviewed E03 rows."""
+def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_2_subset():
+    """E05.2.2 adds exactly five independently reviewed E03 rows."""
 
     from app.ai.tool_catalog import TOOLS
     from app.ai.tool_transport import ONE_DB_COMMIT_OPERATIONS
@@ -168,8 +168,13 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_1_subset():
     expected = frozenset(
         {
             "analytics.calendar_create_reminder",
+            "analytics.collection_add_item",
+            "analytics.collection_close",
             "analytics.collection_create",
+            "analytics.compare_align",
+            "analytics.compare_create",
             "analytics.table_create_view",
+            "analytics.table_inline_edit",
             "warehouse.create_item",
         }
     )
@@ -185,3 +190,24 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_1_subset():
     }
     assert not (ONE_DB_COMMIT_OPERATIONS & excluded.keys())
     assert {name: classifications[name] for name in excluded} == excluded
+
+    by_route: dict[tuple[str, str], set[str]] = {}
+    for name, tool in TOOLS.items():
+        by_route.setdefault((tool.method, tool.path), set()).add(name)
+    new_slice = expected - {
+        "analytics.calendar_create_reminder",
+        "analytics.collection_create",
+        "analytics.table_create_view",
+        "warehouse.create_item",
+    }
+    route_owners = {name: by_route[(TOOLS[name].method, TOOLS[name].path)] for name in new_slice}
+    assert route_owners == {
+        "analytics.collection_add_item": {"analytics.collection_add_item"},
+        "analytics.collection_close": {"analytics.collection_close"},
+        "analytics.compare_align": {"analytics.compare_align"},
+        "analytics.compare_create": {
+            "analytics.compare_create",
+            "procurement.create_contract",
+        },
+        "analytics.table_inline_edit": {"analytics.table_inline_edit"},
+    }
