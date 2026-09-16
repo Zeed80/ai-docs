@@ -1127,8 +1127,15 @@ def test_unreadable_tolerance_frames_do_not_block_the_body():
     assert any(item.startswith("PMI:") for item in gate["warnings"])
 
 
-def test_a_reader_evidence_doubt_blocks_unless_the_sheet_confirmed_the_geometry():
-    doubt = "малые элементы: evidence: не удалось отделить геометрию от аннотаций (пробовали: цвет)"
+@pytest.mark.parametrize(
+    "doubt",
+    [
+        "малые элементы: evidence: не удалось отделить геометрию от аннотаций (пробовали: цвет)",
+        # Живая втулка part_03: станции собраны разрезом и надписями листа.
+        "размерная цепочка: осевые позиции не подтверждены локализованными размерными линиями: 8",
+    ],
+)
+def test_a_reader_evidence_doubt_blocks_unless_the_sheet_confirmed_the_geometry(doubt):
     spec = _shaft_spec(unresolved=[doubt])
     candidate = feature_tree_from_spec(spec)
     assert candidate is not None

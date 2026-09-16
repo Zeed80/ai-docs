@@ -108,6 +108,16 @@ class SolidVerification:
         return dict(self.checks)
 
 
+# Сомнения ридера в СВОИХ свидетельствах, а не в геометрии: когда каждую
+# ступень подтвердил сам лист, они не блокируют (живая втулка part_03: станции
+# собраны разрезом и надписями, а осевой локализатор ридера размерных линий не
+# нашёл — «осевые позиции не подтверждены»).
+_READER_EVIDENCE_DOUBTS = (
+    "не удалось отделить геометрию от аннотаций",
+    "осевые позиции не подтверждены локализованными размерными линиями",
+)
+
+
 def solid_build_gate(
     spec: dict,
     candidate: FeatureTreeCandidate,
@@ -152,7 +162,7 @@ def solid_build_gate(
         if item not in non_geometric
         and (
             item.startswith("PMI:")
-            or (sheet_verified and "не удалось отделить геометрию от аннотаций" in item)
+            or (sheet_verified and any(doubt in item for doubt in _READER_EVIDENCE_DOUBTS))
         )
     ]
     blockers = [item for item in unresolved if item not in non_geometric and item not in advisory]
