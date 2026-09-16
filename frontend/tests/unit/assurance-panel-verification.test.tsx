@@ -227,6 +227,40 @@ describe("AssurancePanel — проверка прочитанного по ли
     expect(screen.getByText(/по листу не подтвердились/)).toBeTruthy();
   });
 
+  it("shows a sleeve assembled from its section and end view", () => {
+    const verification: SpecVerification = {
+      items: [
+        {
+          kind: "shaft_step",
+          path: "main_view.outer[0]",
+          read: { diameter_mm: 15, length_mm: 12 },
+          status: "confirmed",
+          measured: {},
+          reason: "",
+        },
+      ],
+      summary: { checked: 1, confirmed: 1, refuted: 0, unmeasurable: 0 },
+      sleeve_adoption: {
+        reason: "разрез и надписи дают втулку; прочитанный Ø16×4 по листу не подтвердился",
+        value: {
+          outer: [
+            { diameter_mm: 15, length_mm: 12 },
+            { diameter_mm: 16, length_mm: 6 },
+          ],
+          bore: [{ diameter_mm: 11, length_mm: 18 }],
+          total_mm: 18,
+          flange: null,
+        },
+      },
+    };
+    render(<AssurancePanel verification={verification} t={t} />);
+
+    expect(
+      screen.getByText("Втулка собрана по листу: Ø15×12 · Ø16×6, расточка Ø11×18"),
+    ).toBeTruthy();
+    expect(screen.getByText(/по листу не подтвердился/)).toBeTruthy();
+  });
+
   it("renders nothing when there is nothing checked at all", () => {
     const { container } = render(<AssurancePanel t={t} />);
     expect(container.innerHTML).toBe("");

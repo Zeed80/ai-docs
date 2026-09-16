@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -504,3 +505,102 @@ def _refined(covered: Any, item, axial: list[float], offset_px: float) -> Flange
             3,
         ),
     )
+
+
+_COUNT = re.compile(r"(\d+)\s*отв")
+# Доля окружности отверстия, покрытая основными чернилами, — у каждого из массива.
+_MIN_HOLE_COVERAGE = 0.8
+
+
+def hole_counts(spec: dict[str, Any]) -> list[int]:
+    """Числа «N отв.» из надписей листа."""
+    counts = set()
+    for item in spec.get("dimensions") or []:
+        text = str((item.get("value") if isinstance(item, dict) else item) or "")
+        for match in _COUNT.finditer(text):
+            if 2 <= int(match.group(1)) <= 36:
+                counts.add(int(match.group(1)))
+    return sorted(counts)
+
+
+def propose_hole_pattern(
+    gray: Any, spec: dict[str, Any], outline: FlangeOutline
+) -> tuple[dict[str, Any] | None, str]:
+    """Массив отверстий фланца по окружности: Ø отверстия, Ø окружности и число —
+    надписями, фаза — по листу (каждая окружность массива покрыта основными
+    чернилами). Координаты — от оси, y вверх, угол от +x против часовой.
+    """
+    from app.ai.cad_recognize.sheet_upscale import main_line_px
+
+    labels = plate_labels(spec)
+    counts = hole_counts(spec)
+    if not counts:
+        return None, "на листе нет надписи «N отв.»"
+    line_px = main_line_px(gray)
+    covered = _covered_mask(_main_lines(gray, line_px), line_px)
+    radius = outline.diameter_mm / 2.0
+    diameters = sorted({d for d in labels["diameters"] if d > 0})
+    best: tuple[float, float, dict[str, Any]] | None = None
+    for hole in diameters:
+        if hole * outline.px_per_mm < 4 * line_px:
+            continue  # отверстие мельче нескольких толщин линии не отличить от пятна
+        for circle in diameters:
+            pitch_radius = circle / 2.0
+            if not hole < circle < outline.diameter_mm or pitch_radius + hole / 2.0 > radius:
+                continue
+            for count in counts:
+                for phase in range(0, 360 // count):
+                    scores = [
+                        _hole_coverage(
+                            covered, outline, pitch_radius, phase + k * 360.0 / count, hole
+                        )
+                        for k in range(count)
+                    ]
+                    worst = min(scores)
+                    if worst >= _MIN_HOLE_COVERAGE and (best is None or worst > best[0]):
+                        best = (
+                            worst,
+                            sum(scores) / count,
+                            {
+                                "kind": "bolt_circle",
+                                "count": count,
+                                "bolt_circle_diameter_mm": circle,
+                                "hole_diameter_mm": hole,
+                                "start_angle_deg": float(phase),
+                            },
+                        )
+    if best is None:
+        return None, "массив отверстий по надписям на листе не найден"
+    # Фаза точнее градуса.
+    pattern = best[2]
+    phase = max(
+        (pattern["start_angle_deg"] + dp for dp in (-0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75)),
+        key=lambda p: min(
+            _hole_coverage(
+                covered,
+                outline,
+                pattern["bolt_circle_diameter_mm"] / 2.0,
+                p + k * 360.0 / pattern["count"],
+                pattern["hole_diameter_mm"],
+            )
+            for k in range(pattern["count"])
+        ),
+    )
+    pattern["start_angle_deg"] = round(phase % (360.0 / pattern["count"]), 2)
+    return pattern, ""
+
+
+def _hole_coverage(covered, outline: FlangeOutline, pitch_radius, angle_deg, hole) -> float:
+    import numpy as np
+
+    angle = math.radians(angle_deg)
+    cx = outline.centre_px[0] + pitch_radius * outline.px_per_mm * math.cos(angle)
+    cy = outline.centre_px[1] - pitch_radius * outline.px_per_mm * math.sin(angle)
+    theta = np.linspace(0, 2 * np.pi, 180, endpoint=False)
+    r = hole / 2.0 * outline.px_per_mm
+    xs = (cx + r * np.cos(theta)).round().astype(int)
+    ys = (cy + r * np.sin(theta)).round().astype(int)
+    height, width = covered.shape
+    if xs.min() < 0 or ys.min() < 0 or xs.max() >= width or ys.max() >= height:
+        return 0.0
+    return float(covered[ys, xs].mean())

@@ -582,6 +582,128 @@ def profile_decision(spec: dict[str, Any], report: dict[str, Any]) -> dict[str, 
     }
 
 
+def sleeve_decision(spec: dict[str, Any], report: dict[str, Any]) -> dict[str, Any] | None:
+    """Принять втулку по листу (`sleeve_section`) вместо прочитанного.
+
+    Предложение строгое: каждый уступ наружного профиля и расточки — надписью,
+    грани фланца — надписями цепочки, контур фланца — гипотезой по надписям с
+    покрытием линии, отверстия — надписями Ø и «N отв.»; масштаб вида с торца
+    обязан совпасть с разрезом. Принимается, если прочитанный профиль по листу
+    не подтвердился (живая втулка part_03: Ø16×4 · Ø15×2 · Ø29×6 — «не тот вид»).
+    """
+    proposal = report.get("sleeve_proposal") or {}
+    if not proposal.get("outer"):
+        return None
+    items = [item for item in report.get("items") or [] if item.get("kind") == "shaft_step"]
+    if items and all(item.get("status") == "confirmed" for item in items):
+        return None
+    main = spec.get("main_view") or {}
+    flange = proposal.get("flange")
+    flange_text = ""
+    if isinstance(flange, dict):
+        outline = flange.get("outline") or {}
+        patterns = (flange.get("profile") or {}).get("hole_patterns") or []
+        flange_text = (
+            f"; фланец {flange['thickness_mm']:g} мм на {flange['axial_start_mm']:g}: "
+            f"Ø{outline.get('diameter_mm', 0):g}"
+            + (
+                f" с {outline['flats']} лысками на {outline['flat_distance_mm']:g}"
+                if outline.get("flats")
+                else ""
+            )
+            + "".join(
+                f", {p['count']} отв. Ø{p['hole_diameter_mm']:g} на Ø{p['bolt_circle_diameter_mm']:g}"
+                for p in patterns
+            )
+        )
+    return {
+        "kind": "sleeve",
+        "path": "main_view",
+        "field": "outer+bore+flanges",
+        "action": "adopt",
+        "read": {
+            "outer": [[s.get("diameter_mm"), s.get("length_mm")] for s in main.get("outer") or []],
+            "bore": [[s.get("diameter_mm"), s.get("length_mm")] for s in main.get("bore") or []],
+        },
+        "value": proposal,
+        "reason": (
+            f"разрез и надписи дают втулку {_profile_text(proposal['outer'])}, расточка "
+            f"{_profile_text(proposal['bore'])}{flange_text}; прочитанный "
+            f"{_profile_text(main.get('outer') or [])} по листу не подтвердился"
+        ),
+    }
+
+
+def apply_sleeve(spec: dict[str, Any], decision: dict[str, Any]) -> dict[str, Any]:
+    """Втулка по листу — в копию спека: профиль (как `apply_profile`), расточка
+    от левого торца насквозь, фланец; происхождение каждой величины."""
+    value = decision["value"]
+    spec = apply_profile(spec, {"value": value["outer"], "reason": decision["reason"]})
+    main = spec.setdefault("main_view", {})
+    bore = []
+    for index, step in enumerate(value["bore"]):
+        bore.append(
+            {
+                "id": f"0:bore:{index}",
+                "diameter_mm": float(step["diameter_mm"]),
+                "length_mm": float(step["length_mm"]),
+                "note": None,
+                "evidence": (
+                    [
+                        {
+                            "image_index": 0,
+                            "bbox": list(step["bbox_px"]),
+                            "raw_text": "расточка разреза и надписи листа",
+                        }
+                    ]
+                    if isinstance(step.get("bbox_px"), (list, tuple)) and len(step["bbox_px"]) == 4
+                    else []
+                ),
+                "review_required": False,
+            }
+        )
+    main["bore"] = bore
+    main["bore_start_mm"] = 0.0
+    main["bore_from_end"] = "left"
+    main["bore_blind"] = False
+    provenance = spec.setdefault("provenance", {})
+    for index, entry in enumerate(bore):
+        for field in ("diameter_mm", "length_mm"):
+            provenance[f"main_view.bore[{index}].{field}"] = {
+                "origin": "sheet_measurement",
+                "detail": decision["reason"],
+                "value_mm": entry[field],
+            }
+    flange = value.get("flange")
+    if isinstance(flange, dict):
+        main["flanges"] = [
+            {
+                "id": "0:flanges:0",
+                "axial_start_mm": float(flange["axial_start_mm"]),
+                "thickness_mm": float(flange["thickness_mm"]),
+                "sketch_origin_mm": list(flange.get("sketch_origin_mm") or (0.0, 0.0)),
+                "profile": copy.deepcopy(flange["profile"]),
+                "evidence": [],
+            }
+        ]
+        provenance["main_view.flanges[0]"] = {
+            "origin": "sheet_measurement",
+            "detail": decision["reason"],
+        }
+    main["type"] = main.get("type") or "тело вращения"
+    # Замечания ридера о расточке и «поперечных отверстиях» с Ø листа устарели:
+    # расточка и отверстия фланца теперь из разреза и вида с торца.
+    spec["unresolved"] = [
+        note
+        for note in spec.get("unresolved") or []
+        if not any(marker in str(note).lower() for marker in _STALE_SLEEVE)
+    ]
+    return spec
+
+
+_STALE_SLEEVE = ("расточк", "поперечное отверстие", "профиль короче листа", "ступен")
+
+
 def contour_decision(spec: dict[str, Any], report: dict[str, Any]) -> dict[str, Any] | None:
     """Принять контур пластины по листу (`plate_contour`) вместо прочитанного.
 

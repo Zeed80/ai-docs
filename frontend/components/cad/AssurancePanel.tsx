@@ -224,6 +224,20 @@ export default function AssurancePanel({
                 detail={verification.contour_adoption.reason}
               />
             ) : null}
+            {verification.sleeve_adoption ? (
+              <Row
+                ok
+                label={t("vector.assurance_sleeve_adopted", {
+                  outer: verification.sleeve_adoption.value.outer
+                    .map((step) => `Ø${step.diameter_mm}×${step.length_mm}`)
+                    .join(" · "),
+                  bore: verification.sleeve_adoption.value.bore
+                    .map((step) => `Ø${step.diameter_mm}×${step.length_mm}`)
+                    .join(" · "),
+                })}
+                detail={verification.sleeve_adoption.reason}
+              />
+            ) : null}
             {/* Пазы, найденные на листе и не выписанные ридером. */}
             {(verification.keyway_additions ?? []).map((addition) => (
               <Row

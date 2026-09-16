@@ -47,11 +47,60 @@ def verify_spec_against_sheet(image_bytes: bytes, spec: dict[str, Any]) -> dict[
         reason = _circular(image_bytes, profile, report)
     elif ((spec or {}).get("main_view") or {}).get("outer"):
         reason = _shaft(image_bytes, (spec or {}).get("main_view") or {}, report, spec or {})
+        _sleeve(image_bytes, spec or {}, report)
+        if report.get("sleeve_confirmed"):
+            reason = None
     else:
         reason = "нет проверяемых элементов (пластина, круглая деталь, тело вращения)"
     if shape in {"rectangle", "sketch"}:
         _plate_contour(image_bytes, spec or {}, profile, report)
     return _finish(report, started, reason)
+
+
+def _sleeve(image_bytes: bytes, spec: dict[str, Any], report: dict[str, Any]) -> None:
+    """Втулка по листу (`sleeve_section`): разрез + вид с торца + надписи.
+
+    Только когда прочитанный профиль вала листом не подтвердился и профиль
+    вала по листу не собрался: у разреза втулки через ось не идёт ничего, и
+    поиск вала вставал на штамп (живая втулка part_03). Совпало с прочитанным
+    — предложения нет.
+    """
+    from app.ai.cad_recognize.verifiers.sleeve_section import propose_sleeve
+
+    steps = [item for item in report["items"] if item["kind"] == "shaft_step"]
+    if steps and all(item["status"] == "confirmed" for item in steps):
+        return
+    if (report.get("profile_proposal") or {}).get("steps"):
+        return
+    proposal, why = propose_sleeve(_gray(image_bytes), spec)
+    if proposal is None:
+        report["sleeve_proposal"] = {"outer": None, "reason": why}
+        return
+    main = spec.get("main_view") or {}
+
+    def sections(items: list[Any]) -> list[tuple[float, float]]:
+        return [
+            (round(float(i.get("diameter_mm") or 0), 3), round(float(i.get("length_mm") or 0), 3))
+            for i in items
+            if isinstance(i, dict)
+        ]
+
+    same = (
+        sections(main.get("outer") or []) == sections(list(proposal.outer))
+        and sections(main.get("bore") or []) == sections(list(proposal.bore))
+        and bool(main.get("flanges")) == bool(proposal.flange)
+    )
+    if not same:
+        report["sleeve_proposal"] = proposal.as_payload()
+        return
+    # Совпало с прочитанным — ступени подтверждены по разрезу и надписям, как у
+    # профиля вала по листу; вид вала здесь «не тот» по устройству.
+    reason = "разрез втулки и надписи листа дают тот же профиль, расточку и фланец"
+    for item in steps:
+        if item["status"] != "confirmed":
+            item["status"], item["reason"], item["measured"] = "confirmed", reason, {}
+    report["notes"] = [note for note in report["notes"] if not note.startswith("ступень ")]
+    report["sleeve_confirmed"] = True
 
 
 def _plate_contour(

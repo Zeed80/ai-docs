@@ -1096,6 +1096,16 @@ export interface SpecVerification {
       holes?: Array<{ diameter_mm: number; center_x_mm: number; center_y_mm: number }>;
     };
   };
+  /** Втулка по листу (разрез + вид с торца) принята вместо прочитанного. */
+  sleeve_adoption?: {
+    reason: string;
+    value: {
+      outer: ShaftProfileStep[];
+      bore: ShaftProfileStep[];
+      total_mm: number;
+      flange: Record<string, unknown> | null;
+    };
+  };
   /** Профиль по листу принят вместо прочитанного целиком. */
   profile_adoption?: {
     reason: string;

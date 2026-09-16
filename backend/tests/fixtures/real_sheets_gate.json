@@ -15,11 +15,11 @@
   "steps_right": 1
  },
  "part_03_vtulka_gost": {
-  "bore_right": 0,
-  "flange_holes_right": 0,
-  "flange_right": 0,
+  "bore_right": 3,
+  "flange_holes_right": 3,
+  "flange_right": 1,
   "steps": 3,
-  "steps_right": 0
+  "steps_right": 3
  },
  "part_04_planka_gost": {
   "holes": 3,

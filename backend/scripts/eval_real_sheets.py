@@ -36,10 +36,12 @@ def run_chain(png: bytes, spec: dict) -> dict:
         apply_keyway_additions,
         apply_profile,
         apply_reconciliation,
+        apply_sleeve,
         contour_decision,
         keyway_additions,
         profile_decision,
         reconcile,
+        sleeve_decision,
     )
     from app.ai.cad_recognize.verifiers.stage import verify_spec_against_sheet
 
@@ -49,6 +51,11 @@ def run_chain(png: bytes, spec: dict) -> dict:
         spec = apply_profile(spec, adoption)
         report = verify_spec_against_sheet(png, spec)
         report["profile_adoption"] = adoption
+    sleeve = sleeve_decision(spec, report)
+    if sleeve:
+        spec = apply_sleeve(spec, sleeve)
+        report = verify_spec_against_sheet(png, spec)
+        report["sleeve_adoption"] = sleeve
     contour = contour_decision(spec, report)
     if contour:
         spec = apply_contour(spec, contour)

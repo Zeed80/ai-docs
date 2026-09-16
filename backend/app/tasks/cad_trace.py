@@ -3869,8 +3869,43 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 # планка part_04: Г-образная деталь прочитана прямоугольником).
                 from app.ai.cad_recognize.verifiers.reconcile import (
                     apply_contour,
+                    apply_sleeve,
                     contour_decision,
+                    sleeve_decision,
                 )
+
+                # Втулка по листу: разрез (профиль, расточка, грани фланца), вид
+                # с торца (контур фланца, отверстия) и надписи — принимается
+                # целиком, если прочитанный профиль не подтвердился (живая
+                # втулка part_03: вид вала вставал на штамп).
+                sleeve = sleeve_decision(spec, verification) if verification else None
+                if sleeve:
+                    spec = _revalidated_spec(apply_sleeve(spec, sleeve))
+                    crosscheck = cross_check_spec(spec, check_ink)
+                    blocking_checks = [
+                        finding["message"]
+                        for finding in crosscheck["findings"]
+                        if finding["severity"] == "error"
+                    ]
+                    dimension_graph = build_dimension_graph(spec)
+                    blocking_checks.extend(dimension_graph["errors"])
+                    await _record(
+                        "reconcile.sleeve",
+                        "completed",
+                        "Втулка собрана по разрезу и виду с торца",
+                        {"decision": sleeve},
+                    )
+                    try:
+                        verification = verify_spec_against_sheet(content, spec)
+                    except Exception as exc:  # noqa: BLE001 — a check must not break the run
+                        logger.warning(
+                            "cad_verify_failed",
+                            generation_id=generation_id,
+                            error=str(exc)[:200],
+                        )
+                        verification = None
+                    if verification is not None:
+                        verification["sleeve_adoption"] = sleeve
 
                 contour = contour_decision(spec, verification) if verification else None
                 if contour:
