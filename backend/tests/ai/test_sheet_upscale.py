@@ -165,3 +165,42 @@ def test_a_hollow_stroke_from_a_large_upscale_is_filled_and_text_keeps_its_holes
     assert (filled[20:28, 20:180] < 128).all()  # штрих сплошной
     assert (filled[45:51, 157:163] > 128).all()  # просвет буквы цел
     assert (sheet_upscale.fill_hollow_strokes(image, 3) == image).all()  # ×3 — не трогаем
+
+
+def test_a_comfyui_refusal_keeps_its_reason_and_a_one_off_failure_is_retried(monkeypatch):
+    """Живая втулка part_03: «HTTP Error 400: Bad Request» без тела — причину не
+    узнать; тот же лист минутой позже увеличился ×8 — разовый отказ стоил листу
+    всей проверки («не измеримо» при линии 0,8 px)."""
+    import urllib.error
+
+    monkeypatch.setattr(sheet_upscale, "_vram_free", lambda comfy: None)
+    monkeypatch.setattr(sheet_upscale, "_RETRY_PAUSE_S", 0.0)
+    monkeypatch.setattr("app.ai.gpu_lock.unload_comfyui", lambda: None)
+    monkeypatch.setattr("app.ai.gpu_lock.unload_ollama", lambda: 0)
+
+    def refuse(request, timeout=None):
+        raise urllib.error.HTTPError(
+            request.full_url, 400, "Bad Request", {}, io.BytesIO(b'{"node_errors": {"1": "x"}}')
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", refuse)
+    source = _png(_sheet(2))
+    refused = sheet_upscale.upscale_sheet(source, comfy_url="http://comfy", timeout_s=5)
+
+    assert refused.applied is False
+    assert "HTTP 400 /upload/image" in refused.reason and "node_errors" in refused.reason
+
+    calls = []
+
+    def flaky(comfy, png, scale, *, timeout_s=600):
+        calls.append(scale)
+        if len(calls) == 1:
+            raise RuntimeError("HTTP 400 /prompt: busy")
+        image = Image.open(io.BytesIO(png)).convert("L")
+        return _png(np.asarray(image.resize((image.width * scale, image.height * scale))))
+
+    monkeypatch.setattr(sheet_upscale, "run_comfy_upscale", flaky)
+    retried = sheet_upscale.upscale_sheet(source, comfy_url="http://comfy", timeout_s=5)
+
+    assert len(calls) == 2
+    assert retried.applied is True, retried.reason

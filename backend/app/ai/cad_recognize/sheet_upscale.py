@@ -22,6 +22,7 @@ import io
 import json
 import math
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
@@ -35,6 +36,8 @@ logger = structlog.get_logger()
 # Выход не больше этого по длинной стороне: SeedVR2 7B идёт плитками, но
 # время и память растут с площадью (лист A4 при 300 dpi — 3508 px).
 MAX_SIDE_PX = 7200
+_ATTEMPTS = 2
+_RETRY_PAUSE_S = 5.0
 _MAX_FACTOR = 8
 # Толщина линии после SeedVR2 — доля простого увеличения (part_02: 4,44 / (7 × 0,77)).
 _SR_THINNING = 0.82
@@ -297,8 +300,16 @@ def _request(
     url: str, *, data: bytes | None = None, headers: dict | None = None, timeout: float = 60
 ):
     request = urllib.request.Request(url, data=data, headers=headers or {})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read()
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.read()
+    except urllib.error.HTTPError as exc:
+        # Тело ответа ComfyUI и есть причина (node_errors, неверный файл):
+        # живая втулка part_03 — «HTTP Error 400: Bad Request» и больше ничего,
+        # повторить и понять отказ было нечем.
+        body = exc.read().decode("utf-8", "replace").strip()
+        path = urllib.parse.urlsplit(url).path
+        raise RuntimeError(f"HTTP {exc.code} {path}: {body[:300]}") from exc
 
 
 def _upload(comfy: str, png: bytes) -> str:
@@ -403,28 +414,39 @@ def upscale_sheet(
     started = time.monotonic()
     from app.ai import gpu_lock
 
+    buffer = io.BytesIO()
+    Image.fromarray(gray).save(buffer, format="PNG")
+    raw = None
+    failures: list[str] = []
     try:
-        free = _vram_free(comfy)
-        if free is not None and free < _VRAM_NEEDED:
-            # Как перед каждым запуском диффузии в Студии: карта одна, модель
-            # ридера занимает её почти целиком (OOM подтверждён 2026-07-05).
-            gpu_lock.unload_ollama()
-        buffer = io.BytesIO()
-        Image.fromarray(gray).save(buffer, format="PNG")
-        raw = run_comfy_upscale(comfy, buffer.getvalue(), factor, timeout_s=timeout_s)
-    except Exception as exc:  # noqa: BLE001 — апскейл не должен ронять оцифровку
-        logger.warning("cad_upscale_failed", error=str(exc)[:200])
+        # Разовый отказ не должен стоить листу увеличения: живая втулка part_03
+        # получила 400, а тот же лист минутой позже увеличился ×8 без ошибок.
+        for attempt in range(_ATTEMPTS):
+            try:
+                free = _vram_free(comfy)
+                if free is not None and free < _VRAM_NEEDED:
+                    # Как перед каждым запуском диффузии в Студии: карта одна,
+                    # модель ридера занимает её почти целиком (OOM 2026-07-05).
+                    gpu_lock.unload_ollama()
+                raw = run_comfy_upscale(comfy, buffer.getvalue(), factor, timeout_s=timeout_s)
+                break
+            except Exception as exc:  # noqa: BLE001 — апскейл не должен ронять оцифровку
+                failures.append(str(exc))
+                logger.warning("cad_upscale_failed", attempt=attempt + 1, error=str(exc)[:300])
+                if attempt + 1 < _ATTEMPTS:
+                    time.sleep(_RETRY_PAUSE_S)
+    finally:
+        # Ридер идёт следом на той же карте.
+        gpu_lock.unload_comfyui()
+    if raw is None:
         return UpscaleResult(
             content,
             False,
-            f"апскейл недоступен: {str(exc)[:160]}",
+            f"апскейл недоступен ({len(failures)} попытки): {failures[-1][:240]}",
             line_px=line_px,
             factor=factor,
             seconds=time.monotonic() - started,
         )
-    finally:
-        # Ридер идёт следом на той же карте.
-        gpu_lock.unload_comfyui()
     upscaled = fill_hollow_strokes(np.asarray(Image.open(io.BytesIO(raw)).convert("L")), factor)
     seconds = time.monotonic() - started
     scores = agreement(gray, upscaled)
