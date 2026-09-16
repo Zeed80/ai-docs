@@ -85,7 +85,11 @@ def verdict_patch(
             value=ExactValue(kind="exact", value=measured),
             unit=current.unit,
             coordinate_system=current.coordinate_system,
-            origin="traced",
+            # Замер по листу там, где модель заявила элемент, — наблюдение
+            # источника. `traced` граф требует подтвердить visual_verification
+            # (уровень 8): это правило для трассы, которую предложил трассировщик,
+            # а здесь направление обратное — предложила модель, лист проверил.
+            origin="observed",
             assurance="observed",
             evidence_ids=[evidence.id],
             confidence=0.0,

@@ -356,6 +356,7 @@ class SleeveProposal:
     total_mm: float
     flange: dict[str, Any] | None
     notes: tuple[str, ...] = ()
+    frame: ViewFrame | None = None
 
     def as_payload(self) -> dict[str, Any]:
         return {
@@ -446,6 +447,7 @@ def propose_sleeve(gray: Any, spec: dict[str, Any]) -> tuple[SleeveProposal | No
             total_mm=outer.total_mm,
             flange=flange,
             notes=tuple(notes),
+            frame=section.frame(outer.total_mm),
         ),
         "",
     )

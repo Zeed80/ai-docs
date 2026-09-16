@@ -419,7 +419,11 @@ def test_a_flange_bolt_circle_is_checked_and_only_the_phase_is_refuted_in_the_gr
         if item.predicate == PREDICATE.SCALE_MM_PER_PX and item.state == "active"
     ]
     assert abs(scale.value.value - 1 / 6.0) <= 0.002
-    assert scale.origin == "traced" and scale.evidence_ids
+    assert scale.origin == "observed" and scale.evidence_ids
+    from app.services.engineering_model_graph import verify_graph
+
+    _state, issues = verify_graph(graph)
+    assert not [i for i in issues if i["code"] == "trace_verification_incomplete"]
 
 
 def test_a_keyway_read_with_width_and_depth_swapped_is_still_found():
@@ -532,3 +536,57 @@ def test_no_keyway_is_proposed_where_the_sheet_has_none():
     report = verify_spec_against_sheet(_shaft_png(), spec)
 
     assert "keyway_proposals" not in report
+
+
+def _sleeve_like_spec(views):
+    return {
+        "main_view": {
+            "outer": [
+                {"id": "0:outer:0", "diameter_mm": 15.0, "length_mm": 12.0},
+                {"id": "0:outer:1", "diameter_mm": 16.0, "length_mm": 6.0},
+            ],
+            "bore": [{"id": "0:bore:0", "diameter_mm": 11.0, "length_mm": 18.0}],
+            "flanges": [{"id": "0:flanges:0", "axial_start_mm": 4.0, "thickness_mm": 2.0}],
+        },
+        "views": views,
+    }
+
+
+def test_features_confirmed_on_the_sheet_are_shown_on_their_view():
+    """Все механические сборки — `mechanical_feature_without_view`: рёбра
+    represented_by строятся из features_shown вида, а его никто не заполнял."""
+    from app.ai.cad_emg_compat import native_feature_graph_additions
+    from app.ai.cad_recognize.verifiers.stage import attach_verified_views
+
+    report = {
+        "items": [
+            {"kind": "shaft_step", "feature_id": "0:outer:0", "status": "confirmed"},
+            {"kind": "shaft_step", "feature_id": "0:outer:1", "status": "confirmed"},
+        ],
+        "sleeve_confirmed": True,
+        "frame": {"bbox_px": [10.0, 20.0, 300.0, 200.0]},
+    }
+    section = {"kind": "section", "view_id": "A-A", "label": "A-A", "body_index": 0}
+
+    spec = attach_verified_views(_sleeve_like_spec([section]), report)
+
+    (view,) = spec["views"]
+    assert view["features_shown"] == ["0:outer:0", "0:outer:1", "0:bore:0", "0:flanges:0"]
+    _nodes, edges, _assertions = native_feature_graph_additions(spec)
+    linked = {edge.source_id for edge in edges if edge.type == "represented_by"}
+    assert linked == {
+        "feature:0:outer:0",
+        "feature:0:outer:1",
+        "feature:0:bore:0",
+        "feature:0:flanges:0",
+    }
+
+    # Ридер видов не выписал — вид с рамкой проверки.
+    created = attach_verified_views(_sleeve_like_spec([]), report)
+    (view,) = created["views"]
+    assert view["evidence"][0]["bbox"] == [10.0, 20.0, 300.0, 200.0]
+    assert len(view["features_shown"]) == 4
+
+    # Не подтверждённое — без вида.
+    doubtful = {"items": [{"kind": "shaft_step", "feature_id": "0:outer:0", "status": "refuted"}]}
+    assert attach_verified_views(_sleeve_like_spec([section]), doubtful)["views"] == [section]

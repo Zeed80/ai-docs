@@ -70,7 +70,12 @@ def test_a_refuted_value_becomes_a_hypothesis_set_without_a_choice():
     read = active["a-length@trace:p1"]
     measured = active["a-length@measured:p1"]
     assert read.assurance == "contradicted" and read.value.value == 50.0
-    assert measured.origin == "traced" and measured.value.value == 65.0
+    assert measured.origin == "observed" and measured.value.value == 65.0
+    # Замер по листу — не трасса: уровень 8 графа не требует для него visual_verification.
+    from app.services.engineering_model_graph import verify_graph
+
+    _state, issues = verify_graph(graph)
+    assert not [i for i in issues if i["code"] == "trace_verification_incomplete"]
     (hypotheses,) = graph.hypothesis_sets
     assert len(hypotheses.option_ids) == 2 and hypotheses.selected_option_id is None
 

@@ -101,6 +101,10 @@ def _sleeve(image_bytes: bytes, spec: dict[str, Any], report: dict[str, Any]) ->
             item["status"], item["reason"], item["measured"] = "confirmed", reason, {}
     report["notes"] = [note for note in report["notes"] if not note.startswith("ступень ")]
     report["sleeve_confirmed"] = True
+    # Система координат — разреза втулки: вид вала здесь стоял на штампе
+    # (живая втулка: масштаб вида в графе 0,0324 мм/px вместо 0,0218).
+    if proposal.frame is not None:
+        report["frame"] = _frame_payload(proposal.frame)
 
 
 def _plate_contour(
@@ -942,6 +946,71 @@ def attach_sheet_evidence(spec: dict[str, Any], report: dict[str, Any]) -> dict[
     return spec
 
 
+def attach_verified_views(spec: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
+    """Элементы, подтверждённые листом, — в ``features_shown`` вида, где их мерили.
+
+    Рёбра графа `represented_by` строятся только из ``features_shown`` вида,
+    а ридер его не заполняет: у каждой механической сборки все элементы были
+    «без вида» (`mechanical_feature_without_view`). Проверка знает, на каком
+    виде элемент измерен и подтверждён, — это и есть свидетельство. Вид —
+    главный вид тела 0 из спека; если ридер видов не выписал, добавляется
+    вид с рамкой, найденной проверкой. Не подтверждённое — не добавляется.
+    """
+    import copy
+
+    shown = [
+        str(item["feature_id"])
+        for item in report.get("items") or []
+        if item.get("status") == "confirmed" and item.get("feature_id")
+    ]
+    main = spec.get("main_view") or {}
+    if report.get("sleeve_confirmed"):
+        for group in ("bore", "flanges"):
+            shown.extend(
+                str(entry["id"])
+                for entry in main.get(group) or []
+                if isinstance(entry, dict) and entry.get("id")
+            )
+    if not shown:
+        return spec
+    spec = copy.deepcopy(spec)
+    views = spec.setdefault("views", [])
+    primary = next(
+        (
+            view
+            for view in views
+            if isinstance(view, dict)
+            and int(view.get("body_index") or 0) == 0
+            and view.get("kind") in {"front", "section"}
+        ),
+        None,
+    )
+    if primary is None:
+        frame = report.get("frame") or {}
+        if not frame.get("bbox_px"):
+            return spec
+        primary = {
+            "kind": "front",
+            "view_id": "sheet-verified",
+            "label": "вид, проверенный по листу",
+            "relation": "primary",
+            "body_index": 0,
+            "features_shown": [],
+            "evidence": [
+                {
+                    "image_index": 0,
+                    "bbox": list(frame["bbox_px"]),
+                    "raw_text": "вид найден проверкой по листу",
+                }
+            ],
+        }
+        views.append(primary)
+    primary["features_shown"] = list(
+        dict.fromkeys([*(primary.get("features_shown") or []), *shown])
+    )
+    return spec
+
+
 def _first_measured(hypothesis: Hypothesis, frames: list[Any], sheet: Any) -> tuple[Any, Any]:
     """Первый вид, на котором гипотеза измерима; иначе — отказ первого вида."""
     if not frames:
@@ -1063,7 +1132,10 @@ def _view_scale_patch(graph: Any, report: dict[str, Any], *, pass_id: str) -> An
         predicate=PREDICATE.SCALE_MM_PER_PX,
         value=ExactValue(kind="exact", value=frame["mm_per_px"]),
         unit="mm",
-        origin="traced",
+        # Не `traced`: каждое такое утверждение граф помечал ошибкой уровня 8
+        # «trace_verification_incomplete» (нет visual_verification) — замер
+        # вида по листу — наблюдение, см. `graph.verdict_patch`.
+        origin="observed",
         assurance="observed",
         evidence_ids=[evidence.id],
         confidence=0.8,
