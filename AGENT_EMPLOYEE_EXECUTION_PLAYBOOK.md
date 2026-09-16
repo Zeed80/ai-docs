@@ -416,15 +416,16 @@ scope/time/action и запреты replay/resume, но нельзя выдум�
 
 ### E05 — Перевод адаптеров на ToolResult по одной группе
 
-**Статус:** IN PROGRESS: E05.1 REVIEWED; E05.2.1–E05.2.6 REVIEWED как
-шесть узких срезов; E05.2 в целом и E05.3–E05.4 не завершены. Отчёты:
+**Статус:** IN PROGRESS: E05.1 REVIEWED; E05.2.1–E05.2.7 REVIEWED как
+семь узких срезов; E05.2 в целом и E05.3–E05.4 не завершены. Отчёты:
 `docs/agent-employee-delivery/E05-1-read-adapters.md`,
 `docs/agent-employee-delivery/E05-2-1-db-write-adapters.md`,
 `docs/agent-employee-delivery/E05-2-2-db-write-adapters.md`,
 `docs/agent-employee-delivery/E05-2-3-db-write-adapters.md`,
 `docs/agent-employee-delivery/E05-2-4-db-write-adapters.md`,
 `docs/agent-employee-delivery/E05-2-5-db-write-adapters.md`,
-`docs/agent-employee-delivery/E05-2-6-db-write-adapters.md`. **После:** E04.
+`docs/agent-employee-delivery/E05-2-6-db-write-adapters.md`,
+`docs/agent-employee-delivery/E05-2-7-db-write-adapters.md`. **После:** E04.
 **Файлы:** `ai/agent_loop.py::execute_skill`, `api/capability_router.py`,
 `ai/tool_transport.py`, адаптеры из E03, тесты транспорта/gateway.
 
@@ -508,6 +509,21 @@ approval-gated. `email.compose`, `email.reply` и
 approval policy не менялись. Независимый набор: 216 passed с известным
 предупреждением `asyncio_loop_scope`; production не заявлен. Отчёт:
 `docs/agent-employee-delivery/E05-2-6-db-write-adapters.md`.
+
+E05.2.7 добавляет только `normalization.create_norm_card`,
+`normalization.update_norm_card` и `normalization.update_canonical_item` через
+точные уникальные соответственно `POST /api/normalization/norm-cards`, `PATCH
+/api/normalization/norm-cards/{card_id}` и `PATCH
+/api/normalization/canonical-items/{item_id}`; cumulative allowlist содержит 22
+операции. У каждого handler-а один прямой безусловный `db.commit()` на success
+path; `log_action` — flush-only, AI/network/enqueue нет. Все три
+`admin_only=false` и не approval-gated. `analytics.auto_approval_create`
+исключён как admin-only, `analytics.auto_approval_check` — из-за conditional 0/1
+commit, `payments.mark_paid` — как approval-gated; notification/settings не
+входят в активный catalog, sheets publish остаётся вне среза. Контракт E05.2.1,
+public API, RBAC и approval policy не менялись. Независимый полный набор из
+корня: 225 passed с известным предупреждением `asyncio_loop_scope`; production
+не заявлен. Отчёт: `docs/agent-employee-delivery/E05-2-7-db-write-adapters.md`.
 
 **Негативные тесты:** 200 + error, job SUCCESS + built=false, read timeout,
 write timeout после commit, MCP exception, double wrapping. **Готово:** каждая

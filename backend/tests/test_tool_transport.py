@@ -413,6 +413,9 @@ async def test_logical_key_is_transport_metadata_not_model_arguments(monkeypatch
         ("analytics", "table_inline_edit", "analytics.table_inline_edit"),
         ("documents", "link", "documents.link"),
         ("email", "draft", "email.draft"),
+        ("normalization", "create_norm_card", "normalization.create_norm_card"),
+        ("normalization", "update_canonical_item", "normalization.update_canonical_item"),
+        ("normalization", "update_norm_card", "normalization.update_norm_card"),
         ("payments", "create_schedule", "payments.create_schedule"),
         ("warehouse", "create_item", "warehouse.create_item"),
     ],
@@ -527,6 +530,35 @@ def test_e05_2_6_direct_routes_resolve_to_exact_catalog_operations(skill, args, 
     assert operation.name == expected
 
 
+@pytest.mark.parametrize(
+    "skill,args,expected",
+    [
+        (
+            {"method": "POST", "path": "/api/normalization/norm-cards"},
+            {"canonical_item_id": "item-1", "name": "Bolt M8"},
+            "normalization.create_norm_card",
+        ),
+        (
+            {"method": "PATCH", "path": "/api/normalization/norm-cards/{card_id}"},
+            {"card_id": "card-1", "name": "Updated Bolt M8"},
+            "normalization.update_norm_card",
+        ),
+        (
+            {
+                "method": "PATCH",
+                "path": "/api/normalization/canonical-items/{item_id}",
+            },
+            {"item_id": "item-1", "okpd2_code": "25.94.11"},
+            "normalization.update_canonical_item",
+        ),
+    ],
+)
+def test_e05_2_7_direct_routes_resolve_to_exact_catalog_operations(skill, args, expected):
+    operation = one_db_commit_operation(skill, args)
+    assert operation is not None
+    assert operation.name == expected
+
+
 def test_one_db_commit_resolution_fails_closed_for_other_operations_and_routes():
     assert (
         one_db_commit_operation(
@@ -587,6 +619,45 @@ def test_one_db_commit_resolution_fails_closed_for_other_operations_and_routes()
         one_db_commit_operation(
             {"method": "POST", "path": "/api/workspace/sheets/create"},
             {"title": "Scratch"},
+        )
+        is None
+    )
+    # Auto-approval rule creation is admin-only, checking a rule has a runtime
+    # 0/1 commit boundary, and marking a payment paid requires approval.
+    assert (
+        one_db_commit_operation(
+            {"method": "POST", "path": "/api/agent/cap/analytics"},
+            {"action": "auto_approval_create", "name": "Small invoices"},
+        )
+        is None
+    )
+    assert (
+        one_db_commit_operation(
+            {"method": "POST", "path": "/api/agent/cap/analytics"},
+            {"action": "auto_approval_check", "invoice_id": "invoice-1"},
+        )
+        is None
+    )
+    assert (
+        one_db_commit_operation(
+            {"method": "POST", "path": "/api/agent/cap/payments"},
+            {"action": "mark_paid", "schedule_id": "schedule-1"},
+        )
+        is None
+    )
+    # Notification delivery preferences and AI settings are not active
+    # catalog operations. Direct local settings routes stay legacy by default.
+    assert (
+        one_db_commit_operation(
+            {"method": "PUT", "path": "/api/notifications/delivery"},
+            {"timezone": "Europe/Moscow"},
+        )
+        is None
+    )
+    assert (
+        one_db_commit_operation(
+            {"method": "PATCH", "path": "/api/ai/config"},
+            {"exposed_skills": ["payments"], "actor": "admin"},
         )
         is None
     )
@@ -912,6 +983,67 @@ async def test_e05_2_6_preserves_raw_success_response_and_original_body(
     assert result["data"] == raw_response
     assert result["evidence"]["operation"] == operation
     assert client.post.call_args.kwargs["json"] == expected_body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "skill,args,expected_body,raw_response,operation,method",
+    [
+        (
+            {"method": "POST", "path": "/api/normalization/norm-cards"},
+            {
+                "canonical_item_id": "item-1",
+                "name": "Bolt M8",
+                "specification": {"diameter": 8},
+            },
+            {
+                "canonical_item_id": "item-1",
+                "name": "Bolt M8",
+                "specification": {"diameter": 8},
+            },
+            {"id": "card-1", "name": "Bolt M8"},
+            "normalization.create_norm_card",
+            "post",
+        ),
+        (
+            {"method": "PATCH", "path": "/api/normalization/norm-cards/{card_id}"},
+            {"card_id": "card-1", "name": "Updated Bolt M8"},
+            {"name": "Updated Bolt M8"},
+            {"id": "card-1", "name": "Updated Bolt M8"},
+            "normalization.update_norm_card",
+            "patch",
+        ),
+        (
+            {
+                "method": "PATCH",
+                "path": "/api/normalization/canonical-items/{item_id}",
+            },
+            {"item_id": "item-1", "okpd2_code": "25.94.11", "gost_code": "7798-70"},
+            {"okpd2_code": "25.94.11", "gost_code": "7798-70"},
+            {"id": "item-1", "okpd2_code": "25.94.11", "gost_code": "7798-70"},
+            "normalization.update_canonical_item",
+            "patch",
+        ),
+    ],
+)
+async def test_e05_2_7_preserves_raw_success_response_and_original_body(
+    monkeypatch, skill, args, expected_body, raw_response, operation, method
+):
+    from app.ai import agent_loop
+
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    getattr(client, method).return_value = httpx.Response(200, json=raw_response)
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", MagicMock(return_value=client))
+    monkeypatch.setattr(agent_loop, "internal_headers", lambda: {})
+
+    result = await execute_skill(skill, args, BuiltinAgentConfig())
+
+    assert result["status"] == "succeeded"
+    assert result["data"] == raw_response
+    assert result["evidence"]["operation"] == operation
+    getattr(client, method).assert_awaited_once()
+    assert getattr(client, method).call_args.kwargs["json"] == expected_body
 
 
 @pytest.mark.asyncio

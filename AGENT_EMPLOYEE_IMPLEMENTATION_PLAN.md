@@ -119,6 +119,21 @@ commit, send/external, delete/status/gated actions fail-closed. Контракт
 public API, RBAC и approval policy не менялись. Независимый набор: 216 passed с
 известным предупреждением `asyncio_loop_scope`; production не заявлен. Отчёт:
 `docs/agent-employee-delivery/E05-2-6-db-write-adapters.md`.
+E05.2.7 REVIEWED: седьмой узкий DB write-срез добавляет только
+`normalization.create_norm_card`, `normalization.update_norm_card` и
+`normalization.update_canonical_item` через точные уникальные соответственно
+`POST /api/normalization/norm-cards`, `PATCH /api/normalization/norm-cards/{card_id}`
+и `PATCH /api/normalization/canonical-items/{item_id}`. Cumulative allowlist
+содержит 22 операции. У каждого handler-а один прямой безусловный commit на
+success path; `log_action` flush-only, AI/network/enqueue нет. Все три
+`admin_only=false` и не approval-gated. `analytics.auto_approval_create`
+исключён как admin-only, `analytics.auto_approval_check` — из-за conditional 0/1
+commit, `payments.mark_paid` — как approval-gated; notification/settings не
+являются active catalog operations, sheets publish остаётся fail-closed.
+Контракт E05.2.1, public API, RBAC и approval policy не менялись. Независимый
+полный набор из корня: 225 passed с известным предупреждением
+`asyncio_loop_scope`; production не заявлен. Отчёт:
+`docs/agent-employee-delivery/E05-2-7-db-write-adapters.md`.
 E05.2 остаётся IN PROGRESS: остальные `one-db-commit` операции не мигрированы.
 Следующий шаг — новый отдельно выбранный и независимо проверенный срез E05.2,
 не E05.3.

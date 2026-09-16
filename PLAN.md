@@ -139,6 +139,21 @@ fail-closed. Контракт не менялся; независимая про
 предупреждением `asyncio_loop_scope`; production не заявлен. Отчёт:
 `docs/agent-employee-delivery/E05-2-6-db-write-adapters.md`. E05.2 целиком
 остаётся IN PROGRESS; дальше нужен новый отдельно проверенный срез E05.2.
+E05.2.7 REVIEWED добавляет только `normalization.create_norm_card`,
+`normalization.update_norm_card` и `normalization.update_canonical_item` через
+точные уникальные маршруты `POST /api/normalization/norm-cards`, `PATCH
+/api/normalization/norm-cards/{card_id}` и `PATCH
+/api/normalization/canonical-items/{item_id}`: cumulative allowlist равен 22
+операциям. У каждого handler-а один прямой безусловный commit на success path;
+`log_action` flush-only, AI/network/enqueue нет; все три `admin_only=false` и
+не approval-gated. `analytics.auto_approval_create` исключён как admin-only,
+`analytics.auto_approval_check` — из-за conditional 0/1 commit,
+`payments.mark_paid` — как approval-gated; notification/settings не активны в
+catalog, sheets publish fail-closed. Контракт не менялся; независимый полный
+набор из корня: 225 passed с известным предупреждением `asyncio_loop_scope`;
+production не заявлен. Отчёт:
+`docs/agent-employee-delivery/E05-2-7-db-write-adapters.md`. E05.2 остаётся
+IN PROGRESS; далее нужен новый отдельно проверенный срез E05.2.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя
 в WorkEvent, проверяет владельца/аргументы/попытку/lease. Детали журнала и UI

@@ -349,16 +349,18 @@
 - E05.1 REVIEWED: операции, для которых `retry_safe()` подтверждает catalog
   `effect=read`, получают ToolResult v1 на HTTP agent boundary. Исходный ответ
   сохраняется в `data`; публичные business API не менялись.
-- E05.2 IN PROGRESS; E05.2.1–E05.2.6 REVIEWED: cumulative allowlist класса
-  `one-db-commit` содержит ровно 19 операций —
+- E05.2 IN PROGRESS; E05.2.1–E05.2.7 REVIEWED: cumulative allowlist класса
+  `one-db-commit` содержит ровно 22 операции —
   `analytics.calendar_create_reminder`, `analytics.collection_add_item`,
   `analytics.collection_close`, `analytics.collection_create`,
   `analytics.compare_align`, `analytics.compare_create`,
   `analytics.table_create_view`, `analytics.table_inline_edit`, `documents.link`,
   `email.draft`, `email.templates.create`, `email.templates.update`,
-  `payments.create_schedule`, `procurement.create_request`, `suppliers.update`
-  и `warehouse.adjust_stock`, `warehouse.create_item`,
-  `warehouse.create_receipt` и `warehouse.update_item`. E05.2.3 добавила три
+  `normalization.create_norm_card`, `normalization.update_canonical_item`,
+  `normalization.update_norm_card`, `payments.create_schedule`,
+  `procurement.create_request`, `suppliers.update` и `warehouse.adjust_stock`,
+  `warehouse.create_item`, `warehouse.create_receipt` и `warehouse.update_item`.
+  E05.2.3 добавила три
   новые `warehouse.*` операции; E05.2.4 добавила три операции email/suppliers;
   E05.2.5 — одну `procurement.create_request`; E05.2.6 — `documents.link`,
   `email.draft` и `payments.create_schedule`.
@@ -401,7 +403,20 @@
   `docs/agent-employee-delivery/E05-2-3-db-write-adapters.md`,
   `docs/agent-employee-delivery/E05-2-4-db-write-adapters.md`,
   `docs/agent-employee-delivery/E05-2-5-db-write-adapters.md`,
-  `docs/agent-employee-delivery/E05-2-6-db-write-adapters.md`.
+  `docs/agent-employee-delivery/E05-2-6-db-write-adapters.md` и
+  `docs/agent-employee-delivery/E05-2-7-db-write-adapters.md`. E05.2.7
+  добавила `normalization.create_norm_card`, `normalization.update_norm_card` и
+  `normalization.update_canonical_item`: точные уникальные соответственно
+  `POST /api/normalization/norm-cards`, `PATCH
+  /api/normalization/norm-cards/{card_id}` и `PATCH
+  /api/normalization/canonical-items/{item_id}`; у каждого handler-а один
+  прямой безусловный commit, `log_action` flush-only, AI/network/enqueue нет,
+  `admin_only=false` и approval gate отсутствует. `analytics.auto_approval_create`
+  остаётся вне среза как admin-only, `analytics.auto_approval_check` — из-за
+  conditional 0/1 commit, `payments.mark_paid` — как approval-gated;
+  notification/settings не являются active catalog operations, sheets publish
+  fail-closed. Контракт не менялся; независимый полный набор из корня: 225
+  passed с известным предупреждением `asyncio_loop_scope`; production не заявлен.
 - Остальные `one-db-commit` строки не мигрированы и продолжают прежний контракт
   до отдельных срезов E05.2. E05.3 async jobs и E05.4 external/MCP handlers
   также TODO. Наличие строки в этой матрице не означает её миграцию.

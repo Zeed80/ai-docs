@@ -145,8 +145,8 @@ def test_every_active_catalog_operation_has_a_fail_closed_effect_classification(
     ), "unknown classifications must prohibit automatic retry"
 
 
-def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_6_subset():
-    """E05.2.6 adds three DB-only, non-gated E03 rows to the reviewed set."""
+def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_7_subset():
+    """E05.2.7 adds three DB-only, non-gated normalization CRUD operations."""
 
     from app.ai.tool_catalog import TOOLS
     from app.ai.tool_transport import ONE_DB_COMMIT_OPERATIONS
@@ -179,6 +179,9 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_6_subset():
             "email.draft",
             "email.templates.create",
             "email.templates.update",
+            "normalization.create_norm_card",
+            "normalization.update_canonical_item",
+            "normalization.update_norm_card",
             "payments.create_schedule",
             "procurement.create_request",
             "suppliers.update",
@@ -202,6 +205,12 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_6_subset():
     assert all(not TOOLS[name].admin_only for name in e05_2_5_slice)
     e05_2_6_slice = {"documents.link", "email.draft", "payments.create_schedule"}
     assert all(not TOOLS[name].admin_only for name in e05_2_6_slice)
+    e05_2_7_slice = {
+        "normalization.create_norm_card",
+        "normalization.update_canonical_item",
+        "normalization.update_norm_card",
+    }
+    assert all(not TOOLS[name].admin_only for name in e05_2_7_slice)
     excluded = {
         "documents.ingest": "db-async-enqueue",
         "email.send": "external-dispatch",
@@ -217,6 +226,9 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_6_subset():
         "procurement.send_rfq": "external-dispatch",
         "suppliers.trust_score": "one-db-commit",
         "sheets.create": "one-db-commit",
+        "analytics.auto_approval_check": "one-db-commit",
+        "analytics.auto_approval_create": "one-db-commit",
+        "payments.mark_paid": "one-db-commit",
     }
     assert not (ONE_DB_COMMIT_OPERATIONS & excluded.keys())
     assert {name: classifications[name] for name in excluded} == excluded
@@ -250,6 +262,9 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_6_subset():
         "documents.link": {"documents.link"},
         "email.draft": {"email.draft"},
         "payments.create_schedule": {"payments.create_schedule"},
+        "normalization.create_norm_card": {"normalization.create_norm_card"},
+        "normalization.update_canonical_item": {"normalization.update_canonical_item"},
+        "normalization.update_norm_card": {"normalization.update_norm_card"},
     }
 
     from app.ai.capability_manifest import load_capability_manifest
@@ -268,9 +283,16 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_6_subset():
     assert "draft" not in email.gate_actions
     payments = load_capability_manifest().by_name["payments"]
     assert "create_schedule" not in payments.gate_actions
+    normalization = load_capability_manifest().by_name["normalization"]
+    assert not {
+        "create_norm_card",
+        "update_canonical_item",
+        "update_norm_card",
+    } & set(normalization.gate_actions)
 
     from app.ai.gateway_config import gateway_config
 
     assert not (e05_2_4_slice & gateway_config.approval_gates)
     assert not (e05_2_5_slice & gateway_config.approval_gates)
     assert not (e05_2_6_slice & gateway_config.approval_gates)
+    assert not (e05_2_7_slice & gateway_config.approval_gates)
