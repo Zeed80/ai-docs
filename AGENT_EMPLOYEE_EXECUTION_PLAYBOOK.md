@@ -416,12 +416,13 @@ scope/time/action и запреты replay/resume, но нельзя выдум�
 
 ### E05 — Перевод адаптеров на ToolResult по одной группе
 
-**Статус:** IN PROGRESS: E05.1 REVIEWED; E05.2.1, E05.2.2 и E05.2.3 REVIEWED как
-три узких среза; E05.2 в целом и E05.3–E05.4 не завершены. Отчёты:
+**Статус:** IN PROGRESS: E05.1 REVIEWED; E05.2.1–E05.2.4 REVIEWED как
+четыре узких среза; E05.2 в целом и E05.3–E05.4 не завершены. Отчёты:
 `docs/agent-employee-delivery/E05-1-read-adapters.md`,
 `docs/agent-employee-delivery/E05-2-1-db-write-adapters.md`,
 `docs/agent-employee-delivery/E05-2-2-db-write-adapters.md`,
-`docs/agent-employee-delivery/E05-2-3-db-write-adapters.md`. **После:** E04.
+`docs/agent-employee-delivery/E05-2-3-db-write-adapters.md`,
+`docs/agent-employee-delivery/E05-2-4-db-write-adapters.md`. **После:** E04.
 **Файлы:** `ai/agent_loop.py::execute_skill`, `api/capability_router.py`,
 `ai/tool_transport.py`, адаптеры из E03, тесты транспорта/gateway.
 
@@ -463,6 +464,17 @@ flush-only, external dispatch/enqueue нет. Три action отсутствую
 `warehouse.update_status` и `warehouse.bulk_confirm` исключены и fail-closed.
 Контракт E05.2.1 сохранён; production пока не заявлен. Отчёт:
 `docs/agent-employee-delivery/E05-2-3-db-write-adapters.md`.
+
+E05.2.4 добавляет только `email.templates.create`, `email.templates.update` и
+`suppliers.update`; cumulative allowlist содержит 15 операций. У каждой точная
+уникальная route/action-пара и один прямой безусловный `db.commit()` на success
+path; select/flush-помощники не добавляют commit, external dispatch/enqueue нет.
+Все три catalog operations имеют `admin_only=false` и не approval-gated.
+`email.templates.from_message` исключён из-за возможного `ai_router.complete`,
+`analytics.calendar_generate_followup` — из-за несоответствия identity
+path-параметра `{entity_id}` и `{reminder_id}`. Render/delete/status и gated
+actions остаются fail-closed. Контракт E05.2.1 сохранён; production E05.2.4 не
+заявляется. Отчёт: `docs/agent-employee-delivery/E05-2-4-db-write-adapters.md`.
 
 **Негативные тесты:** 200 + error, job SUCCESS + built=false, read timeout,
 write timeout после commit, MCP exception, double wrapping. **Готово:** каждая

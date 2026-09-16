@@ -99,7 +99,19 @@ flush-only, external dispatch/enqueue нет. Три action отсутствую
 `warehouse.delete_item`, `warehouse.update_status` и `warehouse.bulk_confirm`.
 Независимая проверка: 199 passed с известным предупреждением
 `asyncio_loop_scope`; production пока не заявлен. Отчёт:
-`docs/agent-employee-delivery/E05-2-3-db-write-adapters.md`. E05.2 целиком
+`docs/agent-employee-delivery/E05-2-3-db-write-adapters.md`.
+E05.2.4 REVIEWED добавляет только `email.templates.create`,
+`email.templates.update` и `suppliers.update`: cumulative allowlist равен 15
+операциям. У трёх точные уникальные route/action-пары, по одному прямому
+безусловному commit на success path, select/flush-помощники не добавляют commit,
+external dispatch/enqueue нет; все три `admin_only=false` и не approval-gated.
+`email.templates.from_message` исключён из-за возможного `ai_router.complete`,
+`analytics.calendar_generate_followup` — из-за несовпадения identity
+path-параметра `{entity_id}`/`{reminder_id}`; render/delete/status и gated
+actions fail-closed. Контракт E05.2.1, public API, RBAC и approval policy не
+менялись. Независимая проверка: 205 passed с известным предупреждением
+`asyncio_loop_scope`; production пока не заявлен. Отчёт:
+`docs/agent-employee-delivery/E05-2-4-db-write-adapters.md`. E05.2 целиком
 остаётся IN PROGRESS; дальше нужен новый отдельно проверенный срез E05.2.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя

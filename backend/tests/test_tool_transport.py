@@ -449,6 +449,32 @@ def test_e05_2_3_direct_routes_resolve_to_exact_catalog_operations(skill, args, 
     assert operation.name == expected
 
 
+@pytest.mark.parametrize(
+    "skill,args,expected",
+    [
+        (
+            {"method": "PATCH", "path": "/api/suppliers/{supplier_id}"},
+            {"supplier_id": "supplier-1", "user_notes": "Updated by operator"},
+            "suppliers.update",
+        ),
+        (
+            {"method": "POST", "path": "/api/email-templates/"},
+            {"name": "Payment reminder", "subject": "Reminder", "body_html": "<p>Pay</p>"},
+            "email.templates.create",
+        ),
+        (
+            {"method": "PATCH", "path": "/api/email-templates/{template_id}"},
+            {"template_id": "template-1", "subject": "Updated reminder"},
+            "email.templates.update",
+        ),
+    ],
+)
+def test_e05_2_4_direct_routes_resolve_to_exact_catalog_operations(skill, args, expected):
+    operation = one_db_commit_operation(skill, args)
+    assert operation is not None
+    assert operation.name == expected
+
+
 def test_one_db_commit_resolution_fails_closed_for_other_operations_and_routes():
     assert (
         one_db_commit_operation(
@@ -569,6 +595,53 @@ async def test_e05_2_3_operations_preserve_raw_success_payload(
     assert result["status"] == "succeeded"
     assert result["data"] == payload
     assert result["evidence"]["operation"] == operation
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "skill,args,operation,method",
+    [
+        (
+            {"method": "PATCH", "path": "/api/suppliers/{supplier_id}"},
+            {"supplier_id": "supplier-1", "user_notes": "Updated by operator"},
+            "suppliers.update",
+            "patch",
+        ),
+        (
+            {"method": "POST", "path": "/api/email-templates/"},
+            {"name": "Payment reminder", "subject": "Reminder", "body_html": "<p>Pay</p>"},
+            "email.templates.create",
+            "post",
+        ),
+        (
+            {"method": "PATCH", "path": "/api/email-templates/{template_id}"},
+            {"template_id": "template-1", "subject": "Updated reminder"},
+            "email.templates.update",
+            "patch",
+        ),
+    ],
+)
+async def test_e05_2_4_operations_preserve_raw_success_payload(
+    monkeypatch, skill, args, operation, method
+):
+    from app.ai import agent_loop
+
+    payload = {"record_id": f"{operation}-1", "status": "draft"}
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    getattr(client, method).return_value = httpx.Response(200, json=payload)
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", MagicMock(return_value=client))
+    monkeypatch.setattr(agent_loop, "internal_headers", lambda: {})
+
+    result = await execute_skill(skill, args, BuiltinAgentConfig())
+
+    assert result["status"] == "succeeded"
+    assert result["data"] == payload
+    assert result["evidence"]["operation"] == operation
+    getattr(client, method).assert_awaited_once()
+    assert getattr(client, method).call_args.kwargs["json"] == {
+        key: value for key, value in args.items() if not key.endswith("_id")
+    }
 
 
 @pytest.mark.asyncio

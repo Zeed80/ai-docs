@@ -145,8 +145,8 @@ def test_every_active_catalog_operation_has_a_fail_closed_effect_classification(
     ), "unknown classifications must prohibit automatic retry"
 
 
-def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_3_subset():
-    """E05.2.3 adds exactly three independently reviewed E03 rows."""
+def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_4_subset():
+    """E05.2.4 adds exactly three independently reviewed E03 rows."""
 
     from app.ai.tool_catalog import TOOLS
     from app.ai.tool_transport import ONE_DB_COMMIT_OPERATIONS
@@ -175,6 +175,9 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_3_subset():
             "analytics.compare_create",
             "analytics.table_create_view",
             "analytics.table_inline_edit",
+            "email.templates.create",
+            "email.templates.update",
+            "suppliers.update",
             "warehouse.adjust_stock",
             "warehouse.create_item",
             "warehouse.create_receipt",
@@ -185,11 +188,19 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_3_subset():
     assert ONE_DB_COMMIT_OPERATIONS == expected
     assert {classifications[name] for name in ONE_DB_COMMIT_OPERATIONS} == {"one-db-commit"}
     assert {TOOLS[name].effect for name in ONE_DB_COMMIT_OPERATIONS} == {"write"}
+    e05_2_4_slice = {
+        "email.templates.create",
+        "email.templates.update",
+        "suppliers.update",
+    }
+    assert all(not TOOLS[name].admin_only for name in e05_2_4_slice)
     excluded = {
         "documents.ingest": "db-async-enqueue",
         "email.send": "external-dispatch",
         "warehouse.bulk_confirm": "unknown",
         "warehouse.confirm_receipt": "unknown",
+        "email.templates.from_message": "one-db-commit",
+        "email.templates.render": "one-db-commit",
     }
     assert not (ONE_DB_COMMIT_OPERATIONS & excluded.keys())
     assert {name: classifications[name] for name in excluded} == excluded
@@ -213,6 +224,9 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_3_subset():
             "procurement.create_contract",
         },
         "analytics.table_inline_edit": {"analytics.table_inline_edit"},
+        "email.templates.create": {"email.templates.create"},
+        "email.templates.update": {"email.templates.update"},
+        "suppliers.update": {"suppliers.update"},
         "warehouse.adjust_stock": {"warehouse.adjust_stock"},
         "warehouse.create_receipt": {"warehouse.create_receipt"},
         "warehouse.update_item": {"warehouse.update_item"},
@@ -226,3 +240,7 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_3_subset():
         "create_receipt",
         "update_item",
     } & set(warehouse.gate_actions)
+
+    from app.ai.gateway_config import gateway_config
+
+    assert not (e05_2_4_slice & gateway_config.approval_gates)

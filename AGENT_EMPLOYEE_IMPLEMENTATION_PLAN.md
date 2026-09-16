@@ -77,6 +77,18 @@ policy не менялись. Исключены `warehouse.confirm_receipt`,
 `warehouse.bulk_confirm`. Независимый набор: 199 passed с известным
 предупреждением `asyncio_loop_scope`; production ещё не заявлен. Отчёт:
 `docs/agent-employee-delivery/E05-2-3-db-write-adapters.md`.
+E05.2.4 REVIEWED: четвёртый узкий DB write-срез добавляет только
+`email.templates.create`, `email.templates.update` и `suppliers.update`;
+cumulative allowlist содержит 15 операций. У трёх операций точные уникальные
+route/action-пары и один прямой безусловный commit на success path;
+select/flush-помощники не создают второй commit, external dispatch/enqueue нет.
+Все три `admin_only=false` и не approval-gated. `email.templates.from_message`
+исключён из-за возможного `ai_router.complete`; `analytics.calendar_generate_followup`
+— из-за несоответствия identity path-параметра `{entity_id}` и `{reminder_id}`.
+Render/delete/status и gated actions остаются fail-closed. Контракт E05.2.1,
+public API, RBAC и approval policy не менялись. Независимый набор: 205 passed с
+известным предупреждением `asyncio_loop_scope`; production ещё не заявлен.
+Отчёт: `docs/agent-employee-delivery/E05-2-4-db-write-adapters.md`.
 E05.2 остаётся IN PROGRESS: остальные `one-db-commit` операции не мигрированы.
 Следующий шаг — новый отдельно выбранный и независимо проверенный срез E05.2,
 не E05.3.

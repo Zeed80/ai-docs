@@ -65,8 +65,20 @@ flush-only, external dispatch/enqueue нет. Три action отсутствую
 `warehouse.delete_item`, `warehouse.update_status` и `warehouse.bulk_confirm`.
 Независимый набор: 199 passed с известным предупреждением `asyncio_loop_scope`;
 production ещё не заявлен. Отчёт:
-`docs/agent-employee-delivery/E05-2-3-db-write-adapters.md`. Вся E05.2
-остаётся IN PROGRESS; далее нужен новый отдельно проверенный срез E05.2.
+`docs/agent-employee-delivery/E05-2-3-db-write-adapters.md`.
+E05.2.4 REVIEWED добавляет только `email.templates.create`,
+`email.templates.update` и `suppliers.update`; cumulative allowlist содержит
+15 операций. У каждой точная уникальная route/action-пара и один прямой
+безусловный commit на success path; select/flush-помощники не создают второй
+commit, external dispatch/enqueue нет. Все три `admin_only=false` и не
+approval-gated. `email.templates.from_message` исключён из-за возможного
+`ai_router.complete`, а `analytics.calendar_generate_followup` — из-за
+несовпадения identity path-параметра `{entity_id}`/`{reminder_id}`;
+render/delete/status и gated actions fail-closed. Контракт E05.2.1, public API,
+RBAC и approval policy не менялись. Независимый набор: 205 passed с известным
+предупреждением `asyncio_loop_scope`; production ещё не заявлен. Отчёт:
+`docs/agent-employee-delivery/E05-2-4-db-write-adapters.md`. E05.2 остаётся
+IN PROGRESS; далее нужен новый отдельно проверенный срез E05.2.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при
 сетевой ошибке/HTTP 5xx дают outcome_unknown и блокируют durable-цикл после

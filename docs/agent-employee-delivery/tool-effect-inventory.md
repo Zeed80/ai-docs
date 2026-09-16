@@ -349,15 +349,16 @@
 - E05.1 REVIEWED: операции, для которых `retry_safe()` подтверждает catalog
   `effect=read`, получают ToolResult v1 на HTTP agent boundary. Исходный ответ
   сохраняется в `data`; публичные business API не менялись.
-- E05.2 IN PROGRESS; E05.2.1, E05.2.2 и E05.2.3 REVIEWED: cumulative allowlist
-  класса `one-db-commit` содержит ровно 12 операций —
+- E05.2 IN PROGRESS; E05.2.1–E05.2.4 REVIEWED: cumulative allowlist класса
+  `one-db-commit` содержит ровно 15 операций —
   `analytics.calendar_create_reminder`, `analytics.collection_add_item`,
   `analytics.collection_close`, `analytics.collection_create`,
   `analytics.compare_align`, `analytics.compare_create`,
-  `analytics.table_create_view`, `analytics.table_inline_edit` и
+  `analytics.table_create_view`, `analytics.table_inline_edit`,
+  `email.templates.create`, `email.templates.update`, `suppliers.update` и
   `warehouse.adjust_stock`, `warehouse.create_item`,
   `warehouse.create_receipt` и `warehouse.update_item`. E05.2.3 добавила три
-  новые `warehouse.*` операции;
+  новые `warehouse.*` операции; E05.2.4 добавила три операции email/suppliers.
   контракт E05.2.1 сохранён: успешный 2xx domain response хранит raw payload в
   `data`, явная domain-ошибка и 4xx дают `failed`, неоднозначность после dispatch
   — `outcome_unknown`, ошибка до dispatch — `failed`, automatic retry отсутствует.
@@ -370,11 +371,21 @@
   `log_action`/`add_timeline_event` flush-only. Три action отсутствуют в
   `warehouse.gate_actions`. Исключены `warehouse.confirm_receipt`,
   `warehouse.issue_stock`, `warehouse.delete_item`, `warehouse.update_status`
-  и `warehouse.bulk_confirm`. Public API, RBAC и approval policy не менялись;
-  production E05.2.3 пока не заявлен. См.
+  и `warehouse.bulk_confirm`. E05.2.4 добавила `POST /api/email-templates/`,
+  `PATCH /api/email-templates/{template_id}` и
+  `PATCH /api/suppliers/{supplier_id}`: у каждой точная уникальная
+  capability/action-пара, один прямой безусловный commit, select/flush-помощники
+  не добавляют второй commit, external dispatch/enqueue нет. Все три
+  `admin_only=false` и не approval-gated. `email.templates.from_message`
+  исключён из-за возможного `ai_router.complete`; для
+  `analytics.calendar_generate_followup` не доказана identity path-пара из-за
+  `{entity_id}` в catalog и `{reminder_id}` в recipient. Render/delete/status и
+  gated actions остаются fail-closed. Public API, RBAC и approval policy не
+  менялись; production E05.2.4 пока не заявлен. См.
   `docs/agent-employee-delivery/E05-2-1-db-write-adapters.md` и
   `docs/agent-employee-delivery/E05-2-2-db-write-adapters.md`,
-  `docs/agent-employee-delivery/E05-2-3-db-write-adapters.md`.
+  `docs/agent-employee-delivery/E05-2-3-db-write-adapters.md`,
+  `docs/agent-employee-delivery/E05-2-4-db-write-adapters.md`.
 - Остальные `one-db-commit` строки не мигрированы и продолжают прежний контракт
   до отдельных срезов E05.2. E05.3 async jobs и E05.4 external/MCP handlers
   также TODO. Наличие строки в этой матрице не означает её миграцию.
