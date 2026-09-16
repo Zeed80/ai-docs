@@ -67,6 +67,31 @@
       "thickness_mm": 20.0,
       "bore_diameter_mm": 80.0,
       "bolt_circle": {"count": 4, "bolt_circle_diameter_mm": 200.0, "hole_diameter_mm": 18.0, "start_angle_deg": 0.0}
+    },
+    {
+      "name": "part_03_vtulka_gost",
+      "kind": "sleeve_flange",
+      "source": "test-drawings/part_03_vtulka_gost.png — учебный лист ЕСКД «Втулка подшипниковая», 600 px, 4:1; лист увеличен продуктом ×8 (8aba0bbf), чтение того же прогона (согласование ничего не приняло)",
+      "outer": [
+        {"diameter_mm": 15.0, "length_mm": 12.0},
+        {"diameter_mm": 16.0, "length_mm": 6.0},
+        {"diameter_mm": 15.0, "length_mm": 6.0}
+      ],
+      "bore": [
+        {"diameter_mm": 13.0, "length_mm": 4.0},
+        {"diameter_mm": 11.0, "length_mm": 16.0},
+        {"diameter_mm": 13.0, "length_mm": 4.0}
+      ],
+      "flange": {
+        "axial_start_mm": 16.0,
+        "thickness_mm": 2.0,
+        "diameter_mm": 29.0,
+        "flats": 3,
+        "flat_distance_mm": 9.5,
+        "phase_deg": 90.0,
+        "holes": {"count": 3, "hole_diameter_mm": 2.5, "bolt_circle_diameter_mm": 22.0, "start_angle_deg": 30.0}
+      },
+      "note": "Разрез А-А: Ø15 × 12, уступ Ø16 (12…18), фланец 2 мм на 16…18 (цепочка 4 · 2 · 6 от уступа), Ø15 × 6; расточка Ø13H7 × 4 с обеих сторон, Ø11. Вид с торца: круг Ø29 с тремя лысками (24 — лыска → противоположная точка круга), 3 отв. Ø2,5 на Ø22±0,1; 2 отв. Ø1 под 20°±1° не оцениваются."
     }
   ]
 }

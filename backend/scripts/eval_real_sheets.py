@@ -185,6 +185,109 @@ def score_plate(result: dict, truth: dict) -> dict:
     }
 
 
+def _steps_right(got_sections: list[dict], real: list[dict]) -> int:
+    got = [(float(s.get("diameter_mm") or 0), float(s.get("length_mm") or 0)) for s in got_sections]
+    want = [(float(s["diameter_mm"]), float(s["length_mm"])) for s in real]
+    if len(got) != len(want):
+        return 0
+    return sum(
+        1 for a, b in zip(got, want) if abs(a[0] - b[0]) <= 0.05 and abs(a[1] - b[1]) <= 0.05
+    )
+
+
+def _outline_iou(sketch: list, origin: tuple[float, float], truth: dict) -> float:
+    """IoU контура фланца спека и эталона — растром 0,05 мм в системе оси."""
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    from app.ai.cad_dimension_graph import sketch_outline
+    from app.ai.cad_recognize.verifiers.flange_outline import outline_sketch
+
+    want_sketch, want_origin = outline_sketch(
+        truth["diameter_mm"] / 2.0, truth["flats"], truth["flat_distance_mm"], truth["phase_deg"]
+    )
+
+    def mask(segments, start):
+        polygon = sketch_outline(segments, step_deg=1.0)
+        if not polygon:
+            return None
+        size, cell = 800, 0.05
+        image = Image.new("1", (size, size), 0)
+        ImageDraw.Draw(image).polygon(
+            [
+                (size / 2 + (x + start[0]) / cell, size / 2 - (y + start[1]) / cell)
+                for x, y in polygon
+            ],
+            fill=1,
+        )
+        return np.asarray(image)
+
+    got, want = mask(sketch, origin), mask(want_sketch, want_origin)
+    if got is None or want is None:
+        return 0.0
+    return float((got & want).sum() / max(1, (got | want).sum()))
+
+
+def score_sleeve(result: dict, truth: dict) -> dict:
+    """Втулка с фланцем: ступени, расточка, фланец (станция, толщина, контур) и
+    отверстия фланца (положения ±0,2 мм)."""
+    from app.ai.cad_recognize.spec_vectorize import _expanded_profile_holes
+
+    main = result["spec"].get("main_view") or {}
+    want = truth["flange"]
+    flange_right = holes_right = 0
+    for flange in main.get("flanges") or []:
+        profile = flange.get("profile") or {}
+        if not (
+            abs(float(flange.get("axial_start_mm") or -1) - want["axial_start_mm"]) <= 0.05
+            and abs(float(flange.get("thickness_mm") or 0) - want["thickness_mm"]) <= 0.05
+        ):
+            continue
+        origin = tuple(flange.get("sketch_origin_mm") or (0.0, 0.0))
+        if (
+            profile.get("shape") == "sketch"
+            and _outline_iou(profile.get("sketch") or [], origin, want) >= 0.98
+        ):
+            flange_right = 1
+        import math
+
+        pattern = want["holes"]
+        holes = _expanded_profile_holes(profile) or []
+        targets = [
+            (
+                pattern["bolt_circle_diameter_mm"]
+                / 2
+                * math.cos(math.radians(pattern["start_angle_deg"] + k * 360 / pattern["count"])),
+                pattern["bolt_circle_diameter_mm"]
+                / 2
+                * math.sin(math.radians(pattern["start_angle_deg"] + k * 360 / pattern["count"])),
+            )
+            for k in range(pattern["count"])
+        ]
+        holes_right = max(
+            holes_right,
+            sum(
+                1
+                for tx, ty in targets
+                if any(
+                    abs(float(h.get("diameter_mm") or 0) - pattern["hole_diameter_mm"]) <= 0.05
+                    and math.hypot(
+                        float(h.get("center_x_mm") or 0) - tx, float(h.get("center_y_mm") or 0) - ty
+                    )
+                    <= 0.2
+                    for h in holes
+                )
+            ),
+        )
+    return {
+        "steps": len(truth["outer"]),
+        "steps_right": _steps_right(main.get("outer") or [], truth["outer"]),
+        "bore_right": _steps_right(main.get("bore") or [], truth["bore"]),
+        "flange_right": flange_right,
+        "flange_holes_right": holes_right,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--sheets", type=pathlib.Path, required=True)
@@ -195,7 +298,7 @@ def main() -> int:
     results = {}
     for sheet in truth["sheets"]:
         kind = sheet.get("kind", "shaft")
-        if kind not in {"shaft", "flange", "plate"}:
+        if kind not in {"shaft", "flange", "plate", "sleeve_flange"}:
             print(f"{sheet['name']}: {kind} — оценка пока не написана, пропущен")
             continue
         png_path = args.sheets / f"{sheet['name']}.png"
@@ -210,6 +313,15 @@ def main() -> int:
             print(
                 f"{sheet['name']:<18} отверстия {f['holes_right']}/{f['holes']} верно "
                 f"(лишних {f['holes_extra']}), толщина {f['thickness_right']}"
+            )
+            continue
+        if kind == "sleeve_flange":
+            results[sheet["name"]] = score_sleeve(result, sheet)
+            f = results[sheet["name"]]
+            print(
+                f"{sheet['name']:<18} ступени {f['steps_right']}/{f['steps']}, расточка "
+                f"{f['bore_right']}/{len(sheet['bore'])}, фланец {f['flange_right']}, "
+                f"отверстия фланца {f['flange_holes_right']}/{sheet['flange']['holes']['count']}"
             )
             continue
         if kind == "flange":
@@ -249,6 +361,8 @@ def main() -> int:
             "pattern_right",
             "holes_right",
             "thickness_right",
+            "flange_right",
+            "flange_holes_right",
         ):
             if key in got and got[key] < was.get(key, 0):
                 worse.append(f"{name}.{key}: {got[key]} < {was[key]}")
