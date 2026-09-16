@@ -54,7 +54,67 @@ def verify_spec_against_sheet(image_bytes: bytes, spec: dict[str, Any]) -> dict[
         reason = "нет проверяемых элементов (пластина, круглая деталь, тело вращения)"
     if shape in {"rectangle", "sketch"}:
         _plate_contour(image_bytes, spec or {}, profile, report)
+    _sheet_scale(image_bytes, spec or {}, report)
     return _finish(report, started, reason)
+
+
+def _sheet_scale(image_bytes: bytes, spec: dict[str, Any], report: dict[str, Any]) -> None:
+    """Масштаб чертежа по листу (`sheet_scale`): штамп ЕСКД — линейка бумаги,
+    проверенный вид — линейка детали. Только когда вид проверкой найден."""
+    from app.ai.cad_recognize.verifiers.sheet_scale import (
+        drawing_scale,
+        locate_title_block,
+        same_scale,
+    )
+
+    frame = report.get("frame") or {}
+    if not frame.get("mm_per_px"):
+        return
+    block = locate_title_block(_gray(image_bytes))
+    if block is None:
+        return
+    measured = drawing_scale(float(frame["mm_per_px"]), block)
+    stated = (spec.get("title_block") or {}).get("scale")
+    measured["stated"] = stated
+    measured["agrees"] = bool(stated) and same_scale(stated, measured["label"])
+    report["sheet_scale"] = measured
+    if stated and measured["label"] and not measured["agrees"]:
+        report["notes"].append(
+            f"масштаб в штампе {stated}, по листу {measured['label']} "
+            f"(вид {measured['view_px_per_mm']:g} px/мм, бумага "
+            f"{measured['paper_px_per_mm']:g} px/мм) — проверить"
+        )
+
+
+def attach_scale_evidence(spec: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
+    """Масштаб штампа, подтверждённый листом, — со свидетельством: рамкой штампа.
+
+    Граф помечал масштаб «без свидетельства» у каждой механической сборки
+    (`drawing_scale_evidence_missing`). Свидетельство даётся, только если
+    масштаб, измеренный отношением вида к штампу, совпал с масштабом в штампе.
+    """
+    import copy
+
+    measured = report.get("sheet_scale") or {}
+    if not measured.get("agrees"):
+        return spec
+    spec = copy.deepcopy(spec)
+    provenance = spec.setdefault("value_provenance", {})
+    if not isinstance(provenance, dict):
+        return spec
+    entry = provenance.setdefault("title_block/scale", {})
+    entry["evidence"] = [
+        {
+            "source_bbox": list(measured["stamp_bbox_px"]),
+            "image_index": 0,
+            "pass": "sheet_scale",
+            "raw_text": (
+                f"основная надпись 185 × 55 мм: {measured['paper_px_per_mm']:g} px/мм бумаги; "
+                f"вид {measured['view_px_per_mm']:g} px/мм детали → {measured['label']}"
+            ),
+        }
+    ]
+    return spec
 
 
 def _sleeve(image_bytes: bytes, spec: dict[str, Any], report: dict[str, Any]) -> None:

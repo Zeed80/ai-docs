@@ -4085,6 +4085,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     # Найденное проверкой на листе — со свидетельством места
                     # находки: иначе гейт держит паз и фаски «без evidence».
                     from app.ai.cad_recognize.verifiers.stage import (
+                        attach_scale_evidence,
                         attach_sheet_evidence,
                         attach_verified_views,
                     )
@@ -4093,6 +4094,8 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     # Подтверждённое листом — на своём виде: рёбра графа
                     # `represented_by` строятся только из features_shown.
                     spec = attach_verified_views(spec, verification)
+                    # Масштаб штампа, подтверждённый отношением вида к штампу.
+                    spec = attach_scale_evidence(spec, verification)
                     if verification["notes"]:
                         spec = {
                             **spec,
