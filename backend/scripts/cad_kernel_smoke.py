@@ -500,6 +500,46 @@ def _check_flange_on_axial_station() -> None:
     check("axial station past the part length is refused", status == 422, f"HTTP {status}")
 
 
+def _check_face_groove() -> None:
+    """Кольцевая выточка на торце колеса (test-drawings part_06): обод Ø46 × 6,
+    ступица Ø14 × 9, расточка Ø7, выточка Ø16…Ø38 глубиной 2 с левого торца."""
+    import math
+
+    gear = _feature(
+        "revolve",
+        profile_points=[
+            {"r": 23.0, "z": 0.0},
+            {"r": 23.0, "z": 6.0},
+            {"r": 7.0, "z": 6.0},
+            {"r": 7.0, "z": 15.0},
+        ],
+        bore_points=[{"r": 3.5, "z": 0.0}, {"r": 3.5, "z": 15.0}],
+    )
+    groove = _feature(
+        "pocket",
+        profile="circle",
+        diameter_mm=38.0,
+        inner_diameter_mm=16.0,
+        center_x_mm=0.0,
+        center_y_mm=0.0,
+        depth_mm=2.0,
+        axial_start_mm=0.0,
+    )
+    status, payload = _compile(_candidate(gear, groove, label="gear+face groove"))
+    if status != 200:
+        check("face groove builds", False, f"HTTP {status}: {str(payload)[:300]}")
+        return
+    report = _report_from_zip(payload)
+    body = math.pi * (23.0**2 * 6 + 7.0**2 * 9 - 3.5**2 * 15)
+    expected = body - math.pi * (19.0**2 - 8.0**2) * 2
+    volume = float(report["volume_mm3"])
+    check(
+        "face groove cuts a ring from the end face",
+        report["brep_valid"] and report["solid_count"] == 1 and abs(volume - expected) < 1.0,
+        f"V={volume:.2f} expected {expected:.2f}",
+    )
+
+
 def main() -> int:
     status, health = _post("/health", {}) if False else (200, None)
     with urllib.request.urlopen(f"{KERNEL}/health", timeout=30) as response:
@@ -1036,6 +1076,7 @@ def main() -> int:
     # -> geometry-only DXF -> independent semantic reopen.
     _check_full_application_pipeline()
     _check_flange_on_axial_station()
+    _check_face_groove()
 
     failed = [name for ok, name, _detail in _results if not ok]
     print(f"\n{len(_results) - len(failed)}/{len(_results)} passed")

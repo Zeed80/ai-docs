@@ -1559,6 +1559,14 @@ def _build_one_body(
                 )
             z = shape.BoundBox.ZMin + station
             solid_height = operation_depth
+            if not adds_material:
+                # Выточка от торца: инструмент выходит за торец, иначе грань
+                # инструмента совпадает с гранью тела и вырез не открывается.
+                if station <= 1e-6:
+                    z -= 1.0
+                    solid_height += 1.0
+                if station + operation_depth >= material_depth - 1e-6:
+                    solid_height += 1.0
         draft_deg = feature.params.get("draft_deg")
         if draft_deg is not None:
             if (
@@ -1577,6 +1585,22 @@ def _build_one_body(
                 )
             if draft_deg is None:
                 tool = Part.makeCylinder(radius, solid_height, App.Vector(x, y, z))
+                inner = feature.params.get("inner_diameter_mm")
+                if inner is not None:
+                    # Кольцевая выточка на торце (колесо part_06: между Ø16 и Ø38
+                    # на 2 мм) — кольцо на станции, только у тела вращения.
+                    if not on_station or adds_material:
+                        raise HTTPException(
+                            422, "inner_diameter_mm is only for a pocket at an axial station"
+                        )
+                    inner_radius = _number(feature.params, "inner_diameter_mm") / 2
+                    if inner_radius >= radius:
+                        raise HTTPException(422, "inner_diameter_mm must be below diameter_mm")
+                    tool = tool.cut(
+                        Part.makeCylinder(
+                            inner_radius, solid_height + 2.0, App.Vector(x, y, z - 1.0)
+                        )
+                    )
             else:
                 # A mold-release taper: a boss narrows toward its tip (the
                 # wide base is at z, the local-frame bottom); a pocket's
