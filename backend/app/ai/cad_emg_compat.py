@@ -467,6 +467,8 @@ _FEATURE_PARAM_FIELDS = (
     # проверяльщик отверстий (plate-1: y переставлены — Ø при этом верны).
     "center_x_mm",
     "center_y_mm",
+    # Толщина фланца на теле вращения (part_03).
+    "thickness_mm",
 )
 
 # feature.kind value per spec list name — the spec's own vocabulary, not a
@@ -479,6 +481,7 @@ _FEATURE_LIST_KIND = {
     "cross_holes": "cross_hole",
     "axial_holes": "axial_hole_pattern",
     "circular_hole_patterns": "circular_hole_pattern",
+    "flanges": "flange",
     "outer": "section_outer",
     "bore": "section_bore",
     "holes": "hole",

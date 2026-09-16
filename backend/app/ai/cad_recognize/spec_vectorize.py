@@ -472,6 +472,24 @@ class SpecPrismaticProfile(BaseModel):
         return self
 
 
+class SpecFlange(BaseModel):
+    """A flange on a turned body: a plate of any outline across the axis.
+
+    A sleeve with a three-lug flange midway along it (test-drawings part_03)
+    is neither a stepped silhouette nor a plate. The outline is given in the
+    plane across the axis: a circle or rectangle centred on the axis, or a
+    sketch whose implicit start (0, 0) sits at ``sketch_origin_mm`` from the
+    axis. Holes and hole patterns are ALWAYS measured from the axis — the
+    frame the flange view itself is dimensioned in.
+    """
+
+    axial_start_mm: float = Field(ge=0)
+    thickness_mm: float = Field(gt=0)
+    profile: SpecPrismaticProfile
+    sketch_origin_mm: tuple[float, float] = (0.0, 0.0)
+    evidence: list[SpecEvidence] = Field(default_factory=list)
+
+
 class SpecBody(BaseModel):
     name: str | None = None
     type: str = "unknown"
@@ -494,6 +512,7 @@ class SpecBody(BaseModel):
     cross_holes: list[SpecCrossHole] = Field(default_factory=list)
     axial_holes: list[SpecAxialHolePattern] = Field(default_factory=list)
     circular_hole_patterns: list[SpecCircularHolePattern] = Field(default_factory=list)
+    flanges: list[SpecFlange] = Field(default_factory=list)
     # Accepted only for compatibility with already stored prototype responses.
     # The deterministic drafter still requires explicit, complete outer[] data.
     features: list[dict[str, Any]] = Field(default_factory=list)
@@ -547,6 +566,9 @@ class SpecBody(BaseModel):
         for index, hole in enumerate(self.cross_holes):
             if not (0.0 <= hole.axial_position_mm <= total_length):
                 raise ValueError(f"cross hole {index} sits outside the {total_length} mm part")
+        for index, flange in enumerate(self.flanges):
+            if flange.axial_start_mm + flange.thickness_mm > total_length + 1e-6:
+                raise ValueError(f"flange {index} runs past the end of the part")
         return self
 
 
@@ -2071,6 +2093,10 @@ _BODY_FEATURE_FIELDS = (
     "cross_holes",
     "axial_holes",
     "circular_hole_patterns",
+    # A flange across the axis adds material rather than cutting it, but it
+    # rides along for the same reason: without it _rotation_body built the
+    # sleeve of part_03 with its three-lug flange silently gone.
+    "flanges",
 )
 
 # The prismatic-profile equivalent of _BODY_FEATURE_FIELDS — holes/patterns/

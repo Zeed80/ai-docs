@@ -849,7 +849,108 @@ def _one_rotation_body_features(body: dict) -> tuple[list[Feature3D], list[str]]
     for cut in _cut_features(body, outer, missing):
         cut.body_index = body_index
         features.append(cut)
+    for index, flange in enumerate(body.get("flanges") or []):
+        flange_features = _flange_features(flange) if isinstance(flange, dict) else None
+        if flange_features is None:
+            missing.append(f"фланец {index + 1}: контур или отверстия не прочитаны — не построен")
+            continue
+        for feature in flange_features:
+            feature.body_index = body_index
+            features.append(feature)
     return features, missing
+
+
+def _flange_features(flange: dict) -> list[Feature3D] | None:
+    """A flange across a turned body: a boss at its axial station, then its
+    holes as pockets through the flange thickness at the same station.
+
+    Coordinates are from the axis (the kernel's frame for a revolve base);
+    a sketch outline is placed by ``sketch_origin_mm``. Every parameter has
+    a source — an unsourced one reads as guessed and makes the part a draft.
+    """
+    station = _num(flange.get("axial_start_mm"))
+    thickness = _num(flange.get("thickness_mm"))
+    profile = flange.get("profile")
+    if station is None or not thickness or not isinstance(profile, dict):
+        return None
+    common = {
+        "depth_mm": ParamProvenance(origin="stated", detail="толщина фланца с чертежа"),
+        "axial_start_mm": ParamProvenance(
+            origin="stated", detail="положение фланца по оси с чертежа"
+        ),
+    }
+    shape = profile.get("shape")
+    params: dict[str, Any] = {"depth_mm": thickness, "axial_start_mm": station}
+    provenance = dict(common)
+    if shape == "circle":
+        diameter = _num(profile.get("diameter_mm"))
+        if not diameter:
+            return None
+        params.update(profile="circle", diameter_mm=diameter, center_x_mm=0.0, center_y_mm=0.0)
+        provenance["diameter_mm"] = ParamProvenance(origin="stated", detail="Ø фланца с чертежа")
+    elif shape == "rectangle":
+        width, height = _num(profile.get("width_mm")), _num(profile.get("height_mm"))
+        if not width or not height:
+            return None
+        params.update(
+            profile="rectangle", width_mm=width, height_mm=height, center_x_mm=0.0, center_y_mm=0.0
+        )
+        provenance["width_mm"] = ParamProvenance(origin="stated", detail="габарит фланца")
+        provenance["height_mm"] = ParamProvenance(origin="stated", detail="габарит фланца")
+    elif shape == "sketch":
+        sketch = profile.get("sketch")
+        closure = _sketch_closure_error(sketch) if sketch else None
+        origin = flange.get("sketch_origin_mm") or (0.0, 0.0)
+        if closure is None or closure > _SKETCH_CLOSURE_TOLERANCE_MM:
+            return None
+        params.update(
+            profile="sketch",
+            sketch_profile=sketch,
+            center_x_mm=float(origin[0]),
+            center_y_mm=float(origin[1]),
+        )
+        provenance["sketch_profile"] = ParamProvenance(
+            origin="stated", detail="контур фланца — линии и дуги с чертежа"
+        )
+    else:
+        return None
+    provenance.setdefault(
+        "profile", ParamProvenance(origin="standard", detail="форма контура фланца")
+    )
+    for axis in ("center_x_mm", "center_y_mm"):
+        provenance.setdefault(axis, ParamProvenance(origin="stated", detail="от оси детали"))
+    features = [Feature3D(kind="boss", params=params, param_provenance=provenance, confidence=0.85)]
+    holes = _expanded_profile_holes(profile)
+    if holes is None:
+        return None
+    for hole in holes:
+        diameter = _num(hole.get("diameter_mm"))
+        x, y = _num(hole.get("center_x_mm")), _num(hole.get("center_y_mm"))
+        if not diameter or x is None or y is None:
+            return None
+        features.append(
+            Feature3D(
+                kind="pocket",
+                source_feature_ids=_source_feature_ids(hole),
+                params={
+                    "profile": "circle",
+                    "diameter_mm": diameter,
+                    "center_x_mm": x,
+                    "center_y_mm": y,
+                    "depth_mm": thickness,
+                    "axial_start_mm": station,
+                },
+                param_provenance={
+                    **common,
+                    "profile": ParamProvenance(origin="standard", detail="отверстие фланца"),
+                    "diameter_mm": ParamProvenance(origin="stated", detail="Ø отверстия с чертежа"),
+                    "center_x_mm": ParamProvenance(origin="stated", detail="от оси детали"),
+                    "center_y_mm": ParamProvenance(origin="stated", detail="от оси детали"),
+                },
+                confidence=0.85,
+            )
+        )
+    return features
 
 
 def _rotation_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
