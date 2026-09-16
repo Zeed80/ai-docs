@@ -102,3 +102,35 @@ def test_a_sleeve_with_a_lug_flange_is_expressed_and_every_parameter_has_a_sourc
 def test_a_flange_past_the_end_of_the_part_is_a_misread():
     with pytest.raises(ValueError, match="flange 0 runs past the end"):
         EngineeringDrawingSpec.model_validate(_sleeve(flange_start=23.0))
+
+
+def _kernel_report(volume: float) -> dict:
+    """Отчёт живого ядра по этой втулке (33af4ce6): одно тело, всё построено."""
+    kinds = ["revolve", "boss", "pocket", "pocket", "pocket"]
+    return {
+        "brep_valid": True,
+        "manifold": True,
+        "solid_count": 1,
+        "volume_mm3": volume,
+        "bounds_mm": {"x": 29.648148550617492, "y": 26.75, "z": 24.0},
+        "feature_results": [
+            {"kind": kind, "feature_index": i, "status": "built", "localization_ok": True}
+            for i, kind in enumerate(kinds)
+        ],
+    }
+
+
+def test_the_built_sleeve_with_a_flange_matches_the_spec():
+    """Живая втулка part_03 (17d9ac5f): тело верное, но «размеры не совпали» —
+    габарит поперёк оси сверялся только с Ø профиля, объём — без фланца."""
+    from app.ai.cad_solid import verify_solid_against_spec
+
+    spec = EngineeringDrawingSpec.model_validate(_sleeve()).model_dump(mode="json")
+    candidate = feature_tree_from_spec(spec)
+
+    good = verify_solid_against_spec(_kernel_report(2075.78), spec, candidate)
+    assert good.checks["ok"], good.checks
+
+    # Расточка не вырезана — объём больше, чем профиль + фланец: отказ остаётся.
+    solid = verify_solid_against_spec(_kernel_report(2075.78 + 900.0), spec, candidate)
+    assert not solid.checks["ok"]

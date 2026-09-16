@@ -1669,6 +1669,11 @@ def verify_solid_against_spec(
         else sum(float(section["l"]) for section in outer if section.get("l"))
     )
     stated_diameter = max((float(section["d"]) for section in outer), default=0.0)
+    # Фланец поперёк оси (бобышка на станции) выходит за Ø профиля и добавляет
+    # объём: без него верная втулка part_03 (27,4 × 24 поперёк оси при Ø16)
+    # отклонялась как «размеры не совпали».
+    flange_extent, flange_volume = _flange_envelope(candidate, profile_points)
+    stated_diameter = max(stated_diameter, flange_extent)
     # A2: candidate is the only trustworthy source once it exists — its
     # bore_points is correctly empty when an unguessable bore was omitted
     # (a real production case), whereas the raw spec's bore[] still has that
@@ -1722,7 +1727,7 @@ def verify_solid_against_spec(
         if profile_points
         else _profile_volume_mm3(outer)
     )
-    expected_base_volume = outer_volume - bore_volume
+    expected_base_volume = outer_volume - bore_volume + flange_volume
     built_volume = float(report.get("volume_mm3") or 0.0)
     # Every post-base rotation feature is subtractive or cosmetic. Therefore a
     # volume ABOVE the read outer-minus-bore profile proves that a cavity/cut
@@ -1764,6 +1769,53 @@ def verify_solid_against_spec(
         "feature_results": feature_results,
     }
     return SolidVerification(checks)
+
+
+def _flange_envelope(
+    candidate: FeatureTreeCandidate | None, profile_points: list[dict]
+) -> tuple[float, float]:
+    """Размах контура фланцев поперёк оси (мм) и их добавленный объём —
+    по заявленным параметрам бобышек на станции, не по отчёту ядра."""
+    from app.ai.cad_dimension_graph import sketch_outline
+
+    extent = 0.0
+    volume = 0.0
+    for feature in candidate.features if candidate else []:
+        params = feature.params
+        if feature.kind != "boss" or params.get("axial_start_mm") is None:
+            continue
+        depth = float(params.get("depth_mm") or 0.0)
+        cx, cy = float(params.get("center_x_mm") or 0.0), float(params.get("center_y_mm") or 0.0)
+        profile = params.get("profile")
+        if profile == "circle":
+            diameter = float(params.get("diameter_mm") or 0.0)
+            span, area = diameter, math.pi * diameter**2 / 4.0
+        elif profile == "rectangle":
+            width, height = (
+                float(params.get("width_mm") or 0.0),
+                float(params.get("height_mm") or 0.0),
+            )
+            span, area = max(width, height), width * height
+        else:
+            polygon = sketch_outline(params.get("sketch_profile"), step_deg=1.0) or []
+            if not polygon:
+                continue
+            xs = [x + cx for x, _y in polygon]
+            ys = [y + cy for _x, y in polygon]
+            span = max(max(xs) - min(xs), max(ys) - min(ys))
+            area = 0.5 * abs(
+                sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(polygon, polygon[1:] + polygon[:1]))
+            )
+        start = float(params["axial_start_mm"])
+        radii = [
+            float(point["r"])
+            for point in profile_points
+            if start - 1e-6 <= float(point["z"]) <= start + depth + 1e-6
+        ]
+        body = math.pi * min(radii) ** 2 if radii else 0.0
+        extent = max(extent, span)
+        volume += max(0.0, area - body) * depth
+    return extent, volume
 
 
 def _verify_prismatic(
