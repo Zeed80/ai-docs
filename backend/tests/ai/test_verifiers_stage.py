@@ -587,6 +587,20 @@ def test_features_confirmed_on_the_sheet_are_shown_on_their_view():
     assert view["evidence"][0]["bbox"] == [10.0, 20.0, 300.0, 200.0]
     assert len(view["features_shown"]) == 4
 
+    # Фланец измерен и на виде с торца — тот же объект на двух видах (уровень 6).
+    from app.services.engineering_model_graph import verify_graph  # noqa: F401
+
+    with_end = attach_verified_views(
+        _sleeve_like_spec([section]),
+        {**report, "sleeve_end_view": {"bbox_px": [400.0, 20.0, 700.0, 320.0]}},
+    )
+    assert [v["view_id"] for v in with_end["views"]] == ["A-A", "sheet-verified-end"]
+    _nodes, edges, _assertions = native_feature_graph_additions(with_end)
+    same = [edge for edge in edges if edge.type == "same_object_across_views"]
+    assert [(e.source_id, e.target_id, e.extension["feature_id"]) for e in same] == [
+        ("view:A-A", "view:sheet-verified-end", "feature:0:flanges:0")
+    ]
+
     # Не подтверждённое — без вида.
     doubtful = {"items": [{"kind": "shaft_step", "feature_id": "0:outer:0", "status": "refuted"}]}
     assert attach_verified_views(_sleeve_like_spec([section]), doubtful)["views"] == [section]

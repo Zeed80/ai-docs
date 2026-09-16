@@ -357,6 +357,8 @@ class SleeveProposal:
     flange: dict[str, Any] | None
     notes: tuple[str, ...] = ()
     frame: ViewFrame | None = None
+    # Рамка вида с торца, где найден контур фланца.
+    end_view_bbox_px: tuple[float, float, float, float] | None = None
 
     def as_payload(self) -> dict[str, Any]:
         return {
@@ -395,6 +397,7 @@ def propose_sleeve(gray: Any, spec: dict[str, Any]) -> tuple[SleeveProposal | No
         return None, "расточка и наружный профиль разреза дали разные габариты"
     notes: list[str] = []
     flange = None
+    end_view = None
     if section.flange_px is not None:
         flange, why = _flange_on_section(section, outer, labels)
         if flange is None:
@@ -416,6 +419,13 @@ def propose_sleeve(gray: Any, spec: dict[str, Any]) -> tuple[SleeveProposal | No
                 notes.append(f"контур с торца Ø{outline.diameter_mm:g} не больше тела")
                 flange = None
             else:
+                reach = outline.diameter_mm / 2.0 * outline.px_per_mm
+                end_view = (
+                    round(outline.centre_px[0] - reach, 1),
+                    round(outline.centre_px[1] - reach, 1),
+                    round(outline.centre_px[0] + reach, 1),
+                    round(outline.centre_px[1] + reach, 1),
+                )
                 sketch, origin = outline_sketch(
                     outline.diameter_mm / 2.0,
                     outline.flats,
@@ -448,6 +458,7 @@ def propose_sleeve(gray: Any, spec: dict[str, Any]) -> tuple[SleeveProposal | No
             flange=flange,
             notes=tuple(notes),
             frame=section.frame(outer.total_mm),
+            end_view_bbox_px=end_view if flange else None,
         ),
         "",
     )

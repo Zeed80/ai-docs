@@ -712,6 +712,30 @@ def native_feature_graph_additions(
                         features_shown_by_view=features_shown_by_view,
                         evidence_ids=evidence_ids,
                     )
+    # Один элемент, явно названный в features_shown двух видов, — один и тот же
+    # объект на обоих: единственный источник `same_object_across_views` (уровень
+    # 6 графа), без близости и догадок. Втулка part_03: фланец измерен на разрезе
+    # (станция, толщина) и на виде с торца (контур, отверстия).
+    feature_nodes = {node.id for node in nodes if node.type == "Feature"}
+    view_ids = list(features_shown_by_view)
+    for index, first in enumerate(view_ids):
+        for second in view_ids[index + 1 :]:
+            shared = sorted(
+                set(features_shown_by_view[first]) & set(features_shown_by_view[second])
+            )
+            for feature_id in shared:
+                node_id = f"feature:{feature_id}"
+                if node_id not in feature_nodes:
+                    continue
+                edges.append(
+                    GraphEdge(
+                        id=f"same:{node_id}:{first}:{second}",
+                        type="same_object_across_views",
+                        source_id=f"view:{first}",
+                        target_id=f"view:{second}",
+                        extension={"feature_id": node_id, "source": "features_shown"},
+                    )
+                )
     return nodes, edges, assertions
 
 

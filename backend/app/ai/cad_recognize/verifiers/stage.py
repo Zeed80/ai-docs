@@ -165,6 +165,8 @@ def _sleeve(image_bytes: bytes, spec: dict[str, Any], report: dict[str, Any]) ->
     # (живая втулка: масштаб вида в графе 0,0324 мм/px вместо 0,0218).
     if proposal.frame is not None:
         report["frame"] = _frame_payload(proposal.frame)
+    if proposal.end_view_bbox_px is not None:
+        report["sleeve_end_view"] = {"bbox_px": list(proposal.end_view_bbox_px)}
 
 
 def _plate_contour(
@@ -1068,6 +1070,32 @@ def attach_verified_views(spec: dict[str, Any], report: dict[str, Any]) -> dict[
     primary["features_shown"] = list(
         dict.fromkeys([*(primary.get("features_shown") or []), *shown])
     )
+    # Вид с торца втулки: там измерены контур фланца и его отверстия — фланец
+    # показан и на нём (разрез дал станцию и толщину).
+    end = report.get("sleeve_end_view") or {}
+    flanges = [
+        str(entry["id"])
+        for entry in main.get("flanges") or []
+        if isinstance(entry, dict) and entry.get("id")
+    ]
+    if report.get("sleeve_confirmed") and end.get("bbox_px") and flanges:
+        views.append(
+            {
+                "kind": "side",
+                "view_id": "sheet-verified-end",
+                "label": "вид с торца, проверенный по листу",
+                "relation": "orthographic",
+                "body_index": 0,
+                "features_shown": flanges,
+                "evidence": [
+                    {
+                        "image_index": 0,
+                        "bbox": list(end["bbox_px"]),
+                        "raw_text": "контур фланца найден проверкой по листу",
+                    }
+                ],
+            }
+        )
     return spec
 
 
