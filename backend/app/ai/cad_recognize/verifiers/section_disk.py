@@ -118,6 +118,7 @@ def section_disks(
         found.append(
             {
                 "center_px": [round(cx, 1), round(cy, 1)],
+                "radius_px": round(r, 1),
                 "diameter_mm": round(diameter, 2),
                 "step_diameter_mm": step,
                 "coverage": round(cover, 2),

@@ -4119,6 +4119,42 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     # Подтверждённое листом — на своём виде: рёбра графа
                     # `represented_by` строятся только из features_shown.
                     spec = attach_verified_views(spec, verification)
+                    # Сечение на листе ↔ паз ↔ вид спека: круг — к пазу по Ø ступени,
+                    # к виду — по обозначению, которое модель читает над кругом.
+                    # Паз на двух видах — ребро same_object_across_views (z4-r4).
+                    from app.ai.cad_recognize.verifiers.section_link import (
+                        attach_section_views,
+                        label_links,
+                        link_disks_to_keyways,
+                    )
+
+                    section_links = link_disks_to_keyways(
+                        spec, (verification.get("sections") or {}).get("disks") or []
+                    )
+                    if section_links:
+                        try:
+                            section_links, link_log = await label_links(
+                                content, spec, section_links
+                            )
+                        except Exception as exc:  # noqa: BLE001 — связь не ломает прогон
+                            logger.warning(
+                                "cad_section_link_failed",
+                                generation_id=generation_id,
+                                error=str(exc)[:200],
+                            )
+                            section_links, link_log = [], []
+                        spec = attach_section_views(spec, section_links)
+                        verification["section_links"] = section_links
+                        await _record(
+                            "verify.section_link",
+                            "completed",
+                            (
+                                "Сечения связаны с пазами: "
+                                f"{sum(1 for link in section_links if link.get('view_id'))}"
+                                f" из {len(section_links)}"
+                            ),
+                            {"links": section_links, "questions": link_log},
+                        )
                     # Масштаб штампа, подтверждённый отношением вида к штампу.
                     spec = attach_scale_evidence(spec, verification)
                     if verification["notes"]:
