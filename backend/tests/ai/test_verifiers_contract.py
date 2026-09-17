@@ -57,5 +57,39 @@ def test_the_dimension_line_verifier_confirms_and_refutes_by_scale():
     assert right.as_payload()["anchors_px"]  # готово к свидетельству в графе
 
 
+def test_a_vertical_dimension_line_is_measured_along_its_own_axis():
+    """Высота плана пластины, вертикальные цепочки: проверяльщик сканировал
+    строки и вертикальную линию не мерил по устройству. Лист — тот же размер,
+    транспонированный; масштаб вида по вертикали свой (выпрямленное фото)."""
+    from PIL import Image
+
+    from app.ai.cad_recognize.axial_dimensions import _ink_rows
+
+    horizontal = np.asarray(_dimension_sheet(), dtype=np.uint8) * 255
+    sheet = _ink_rows(Image.fromarray(255 - horizontal.T))
+    frame = ViewFrame(
+        bbox_px=(0, 0, 500, 800), mm_per_px=0.2, origin_px=(400.0, 0.0), mm_per_px_v=0.25
+    )
+    # Повёрнутая подпись слева от линии: рамка выше, чем шире.
+    label = (150.0, 250.0, 181.0, 300.0)
+
+    right = verify(Hypothesis("dimension_line", "dims/1", {"value_mm": 62.5}, label), frame, sheet)
+    wrong = verify(Hypothesis("dimension_line", "dims/1", {"value_mm": 50.0}, label), frame, sheet)
+    named = verify(
+        Hypothesis(
+            "dimension_line",
+            "dims/1",
+            {"value_mm": 62.5, "orientation": "vertical"},
+            (150.0, 262.0, 181.0, 288.0),
+        ),
+        frame,
+        sheet,
+    )
+
+    assert right.status == "confirmed" and abs(right.measured["span_px"] - 250.0) <= 3.0
+    assert wrong.status == "refuted"
+    assert named.status == "confirmed"
+
+
 def test_the_registry_knows_its_built_in_verifiers():
     assert "dimension_line" in registered_kinds()

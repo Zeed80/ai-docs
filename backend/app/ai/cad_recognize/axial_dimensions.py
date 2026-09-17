@@ -262,6 +262,19 @@ def _ink_rows(image: Any) -> Any:
     return dark | (contrast - level > step)
 
 
+def _vertical_span_from_ink(ink: Any, bbox: list[float], unit: float) -> list[float] | None:
+    """Вертикальная размерная линия рядом с подписью: `_span_from_ink` на
+    транспонированном листе. Подпись вертикального размера стоит слева от
+    линии и повёрнута (ГОСТ 2.307) — после транспонирования она над линией, как
+    у горизонтального. Возвращает ``[x, y_начала, x, y_конца]``."""
+    x0, y0, x1, y1 = (float(value) for value in bbox)
+    line = _span_from_ink(ink.T, [y0, x0, y1, x1], unit)
+    if line is None:
+        return None
+    start, column, end, _column = line
+    return [column, start, column, end]
+
+
 def _span_from_ink(ink: Any, bbox: list[float], unit: float) -> list[float] | None:
     """Измерить размерную линию РЯДОМ С ПОДПИСЬЮ, а не искать её на листе.
 

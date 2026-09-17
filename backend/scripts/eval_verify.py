@@ -78,10 +78,31 @@ def _horizontal_dimensions(truth: dict) -> list[dict[str, Any]]:
     return result
 
 
+def _vertical_dimensions(truth: dict) -> list[dict[str, Any]]:
+    """Линейные размеры с вертикальной размерной линией и подписью."""
+    result = []
+    for item in truth.get("labels") or []:
+        if item.get("kind") != "dimension" or item.get("dimension_kind") != "linear":
+            continue
+        label = item.get("label") or {}
+        anchors = item.get("anchors_px") or []
+        if not label.get("bbox_px") or len(anchors) != 2:
+            continue
+        (x1, y1), (x2, y2) = anchors
+        if abs(x2 - x1) >= abs(y2 - y1):
+            continue
+        result.append({"label_bbox": label["bbox_px"], "span_px": abs(y2 - y1)})
+    return result
+
+
 def eval_dimension_line(png: bytes, truth: dict) -> list[dict[str, Any]]:
     from PIL import Image
 
-    from app.ai.cad_recognize.axial_dimensions import _ink_rows, _span_from_ink
+    from app.ai.cad_recognize.axial_dimensions import (
+        _ink_rows,
+        _span_from_ink,
+        _vertical_span_from_ink,
+    )
 
     image = Image.open(io.BytesIO(png)).convert("RGB")
     ink = _ink_rows(image)
@@ -106,6 +127,26 @@ def eval_dimension_line(png: bytes, truth: dict) -> list[dict[str, Any]]:
                 "error_px": error,
                 "error_rel": error / expected if expected else None,
                 "unit_px": unit,
+            }
+        )
+    # Вертикальные — отдельным случаем: счётчики горизонтальных в базе гейта
+    # не сдвигаются.
+    for dim in _vertical_dimensions(truth):
+        x0, y0, x1, y1 = dim["label_bbox"]
+        unit = max(4.0, x1 - x0)
+        line = _vertical_span_from_ink(ink, [x0, y0, x1, y1], unit)
+        expected = float(dim["span_px"])
+        if line is None:
+            outcomes.append({"case": "vertical", "found": False, "expected_px": expected})
+            continue
+        error = abs(float(line[3] - line[1]) - expected)
+        outcomes.append(
+            {
+                "case": "vertical",
+                "found": True,
+                "correct": error <= max(2.0, 0.02 * expected),
+                "expected_px": expected,
+                "error_px": error,
             }
         )
     return outcomes
