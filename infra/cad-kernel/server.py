@@ -143,6 +143,43 @@ def _coordinate(params: dict[str, Any], name: str, *, limit: float = 100_000) ->
     return result
 
 
+# X2 (корпуса): рабочая плоскость — грань призматического основания. Элемент
+# строится в системе этой грани (её плоскость — местный «верх», местный +Z
+# смотрит наружу детали, местные x/y — от угла грани, как у верхней) и
+# переносится на место матрицей. Без этого бобышка, карман и ребро возможны
+# только по +Z, а у корпуса приливы и карманы есть на каждой стороне.
+_WORK_PLANES = ("top", "bottom", "front", "back", "left", "right")
+
+
+def _work_plane_frame(name: str, width: float, height: float, depth: float):
+    """(ширина, высота, толщина под гранью, матрица местная → мировая)."""
+    if name == "top":
+        u, v, n, origin = (1, 0, 0), (0, 1, 0), (0, 0, 1), (0.0, 0.0, 0.0)
+        extents = (width, height, depth)
+    elif name == "bottom":
+        u, v, n, origin = (1, 0, 0), (0, -1, 0), (0, 0, -1), (0.0, height, depth)
+        extents = (width, height, depth)
+    elif name == "front":
+        u, v, n, origin = (1, 0, 0), (0, 0, 1), (0, -1, 0), (0.0, height, 0.0)
+        extents = (width, depth, height)
+    elif name == "back":
+        u, v, n, origin = (0, 0, 1), (1, 0, 0), (0, 1, 0), (0.0, 0.0, 0.0)
+        extents = (depth, width, height)
+    elif name == "left":
+        u, v, n, origin = (0, 0, 1), (0, 1, 0), (-1, 0, 0), (width, 0.0, 0.0)
+        extents = (depth, height, width)
+    else:  # right
+        u, v, n, origin = (0, 1, 0), (0, 0, 1), (1, 0, 0), (0.0, 0.0, 0.0)
+        extents = (height, depth, width)
+    matrix = App.Matrix(
+        u[0], v[0], n[0], origin[0],
+        u[1], v[1], n[1], origin[1],
+        u[2], v[2], n[2], origin[2],
+        0.0, 0.0, 0.0, 1.0,
+    )
+    return extents[0], extents[1], extents[2], matrix
+
+
 def _check_footprint(
     kind: str, x: float, y: float, radius: float,
     *, axis_centred: bool, outer_radius: float, width: float, height: float,
@@ -1567,6 +1604,31 @@ def _build_one_body(
                     solid_height += 1.0
                 if station + operation_depth >= material_depth - 1e-6:
                     solid_height += 1.0
+        # Рабочая плоскость (X2): элемент строится в системе грани основания.
+        face_width, face_height = width, height
+        plane_matrix = None
+        on_plane = feature.params.get("on_plane")
+        if on_plane is not None:
+            if on_station:
+                raise HTTPException(422, "on_plane and axial_start_mm exclude each other")
+            if base.kind != "extrude":
+                raise HTTPException(
+                    422, f"{feature.kind} on_plane needs a prismatic (extrude) base"
+                )
+            if on_plane not in _WORK_PLANES:
+                raise HTTPException(
+                    422, f"unknown work plane {on_plane}: one of {', '.join(_WORK_PLANES)}"
+                )
+            face_width, face_height, plane_depth, plane_matrix = _work_plane_frame(
+                str(on_plane), width, height, depth
+            )
+            if feature.kind == "pocket" and operation_depth > plane_depth + 1e-6:
+                raise HTTPException(
+                    422, f"Pocket depth exceeds the material under the {on_plane} face"
+                )
+            top_z = plane_depth
+            z = top_z if adds_material else top_z - operation_depth
+            solid_height = operation_depth if adds_material else operation_depth + 1.0
         draft_deg = feature.params.get("draft_deg")
         if draft_deg is not None:
             if (
@@ -1580,8 +1642,9 @@ def _build_one_body(
             if not on_station:
                 _check_footprint(
                     feature.kind, x, y, radius,
-                    axis_centred=footprint_axis_centred, outer_radius=outer_radius,
-                    width=width, height=height,
+                    axis_centred=footprint_axis_centred and plane_matrix is None,
+                    outer_radius=outer_radius,
+                    width=face_width, height=face_height,
                 )
             if draft_deg is None:
                 tool = Part.makeCylinder(radius, solid_height, App.Vector(x, y, z))
@@ -1624,11 +1687,11 @@ def _build_one_body(
                     )
                 tool = Part.makeCone(base_radius, tip_radius, solid_height, App.Vector(x, y, z))
         elif profile == "rectangle":
-            profile_width = _number(feature.params, "width_mm", maximum=width)
-            profile_height = _number(feature.params, "height_mm", maximum=height)
+            profile_width = _number(feature.params, "width_mm", maximum=face_width)
+            profile_height = _number(feature.params, "height_mm", maximum=face_height)
             x0 = x - profile_width / 2
             y0 = y - profile_height / 2
-            if not on_station and (x0 < -1e-6 or y0 < -1e-6 or x0 + profile_width > width + 1e-6 or y0 + profile_height > height + 1e-6):
+            if not on_station and (x0 < -1e-6 or y0 < -1e-6 or x0 + profile_width > face_width + 1e-6 or y0 + profile_height > face_height + 1e-6):
                 raise HTTPException(422, f"{feature.kind} lies outside the base footprint")
             tool = Part.makeBox(profile_width, profile_height, solid_height, App.Vector(x0, y0, z))
         elif profile == "sketch":
@@ -1650,7 +1713,7 @@ def _build_one_body(
             else:
                 within = (
                     bounds.XMin >= -1e-6 and bounds.YMin >= -1e-6
-                    and bounds.XMax <= width + 1e-6 and bounds.YMax <= height + 1e-6
+                    and bounds.XMax <= face_width + 1e-6 and bounds.YMax <= face_height + 1e-6
                 )
             if not within and not on_station:
                 raise HTTPException(422, f"{feature.kind} lies outside the base footprint")
@@ -1669,6 +1732,8 @@ def _build_one_body(
                 raise HTTPException(
                     422, f"{feature.kind} at axial station lies entirely inside the turned body"
                 )
+        if plane_matrix is not None:
+            tool = tool.transformShape(plane_matrix, True)
         previous = shape
         shape = shape.fuse(tool) if adds_material else shape.cut(tool)
         operation_audit.append({

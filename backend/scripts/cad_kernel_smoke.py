@@ -408,6 +408,109 @@ def _lug_flange_sketch(pcd_r: float, lug_r: float) -> tuple[list[dict], tuple[fl
     return sketch, (ox, oy), centres
 
 
+def _check_work_plane_features() -> None:
+    """X2 (корпуса): бобышка, карман и отверстие на боковой грани основания.
+
+    До этого бобышка и карман строились только от верхней грани (+Z), и корпус
+    с приливом на стенке выразить было нечем. Объём проверяется формулой:
+    коробка + цилиндр прилива − карман на другой стенке.
+    """
+    import math
+
+    width, height, depth = 60.0, 40.0, 30.0
+    boss_d, boss_h = 12.0, 8.0
+    pocket_w, pocket_h, pocket_d = 20.0, 10.0, 5.0
+    box = _feature("extrude", width_mm=width, height_mm=height, depth_mm=depth)
+    boss = _feature(
+        "boss",
+        profile="circle",
+        diameter_mm=boss_d,
+        depth_mm=boss_h,
+        center_x_mm=width / 2,
+        center_y_mm=depth / 2,
+        on_plane="front",
+    )
+    pocket = _feature(
+        "pocket",
+        profile="rectangle",
+        width_mm=pocket_w,
+        height_mm=pocket_h,
+        depth_mm=pocket_d,
+        center_x_mm=depth / 2,
+        center_y_mm=height / 2,
+        on_plane="left",
+    )
+    status, body = _compile(_candidate(box, boss, pocket, label="work-plane"))
+    check("work plane: боковые элементы собираются", status == 200, str(body)[:160])
+    if status != 200:
+        return
+    report = _report_from_zip(body)
+    expected = (
+        width * height * depth
+        + math.pi * (boss_d / 2) ** 2 * boss_h
+        - pocket_w * pocket_h * pocket_d
+    )
+    volume = float(report["volume_mm3"])
+    check(
+        "work plane: объём = коробка + прилив на стенке − карман на стенке",
+        abs(volume - expected) <= 0.5,
+        f"{volume:.2f} против {expected:.2f}",
+    )
+    bounds = report["bounds_mm"]
+    # Прилив выходит наружу грани Y=0, карман идёт внутрь — габарит по Y растёт.
+    check(
+        "work plane: прилив вышел наружу той грани, на которой стоит",
+        abs(float(bounds["y"]) - (height + boss_h)) <= 0.01,
+        str(bounds),
+    )
+    check(
+        "work plane: B-Rep валиден и одно тело",
+        bool(report.get("brep_valid")) and report.get("solid_count") == 1,
+        f"valid={report.get('brep_valid')} solids={report.get('solid_count')}",
+    )
+    reopen = report.get("reopen") or {}
+    check(
+        "work plane: STEP переоткрывается тем же объёмом",
+        bool(reopen.get("valid")) and abs(float(reopen.get("volume_mm3") or 0) - volume) <= 0.5,
+        str(reopen)[:160],
+    )
+    deep = _feature(
+        "pocket",
+        profile="circle",
+        diameter_mm=10.0,
+        depth_mm=depth + 5.0,
+        center_x_mm=depth / 2,
+        center_y_mm=height / 2,
+        on_plane="left",
+    )
+    status, body = _compile(_candidate(box, deep, label="work-plane-deep"))
+    check(
+        "work plane: карман глубже материала под гранью отвергнут",
+        status == 422,
+        str(body)[:160],
+    )
+    status, body = _compile(
+        _candidate(
+            _feature("revolve", profile_points=[{"r": 5.0, "z": 0.0}, {"r": 5.0, "z": 20.0}]),
+            _feature(
+                "boss",
+                profile="circle",
+                diameter_mm=4.0,
+                depth_mm=2.0,
+                center_x_mm=0.0,
+                center_y_mm=0.0,
+                on_plane="left",
+            ),
+            label="work-plane-revolve",
+        )
+    )
+    check(
+        "work plane: на теле вращения рабочая плоскость отвергнута",
+        status == 422,
+        str(body)[:160],
+    )
+
+
 def _check_flange_on_axial_station() -> None:
     """A sleeve with a three-lug flange midway along its axis (test-drawings
     part_03): the boss starts at an axial station, reaches past the turned
@@ -1133,6 +1236,7 @@ def main() -> int:
     _check_flange_on_axial_station()
     _check_face_groove()
     _check_axial_cross_section()
+    _check_work_plane_features()
 
     failed = [name for ok, name, _detail in _results if not ok]
     print(f"\n{len(_results) - len(failed)}/{len(_results)} passed")
