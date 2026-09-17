@@ -137,7 +137,9 @@ def eval_dimension_line(png: bytes, truth: dict) -> list[dict[str, Any]]:
         line = _vertical_span_from_ink(ink, [x0, y0, x1, y1], unit)
         expected = float(dim["span_px"])
         if line is None:
-            outcomes.append({"case": "vertical", "found": False, "expected_px": expected})
+            outcomes.append(
+                {"case": "vertical", "found": False, "expected_px": expected, "unit_px": unit}
+            )
             continue
         error = abs(float(line[3] - line[1]) - expected)
         outcomes.append(
@@ -147,6 +149,7 @@ def eval_dimension_line(png: bytes, truth: dict) -> list[dict[str, Any]]:
                 "correct": error <= max(2.0, 0.02 * expected),
                 "expected_px": expected,
                 "error_px": error,
+                "unit_px": unit,
             }
         )
     return outcomes

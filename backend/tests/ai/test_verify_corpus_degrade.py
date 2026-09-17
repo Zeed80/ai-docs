@@ -119,3 +119,27 @@ def test_the_truth_follows_the_mark_through_the_product_dewarp():
     found = _darkest_blob_centre(straight)
     assert abs(found[0] - expected[0]) <= 3.0 and abs(found[1] - expected[1]) <= 3.0
     assert list(Image.open(io.BytesIO(straight)).size) == straight_truth["image_size_px"]
+
+
+def test_dimension_line_outcomes_all_carry_the_text_unit_for_the_summary():
+    """Сводка харнесса берёт unit_px у каждого исхода. Вертикальные размеры его
+    не несли — на валах с сечениями (b, t1 вертикально) харнесс падал KeyError."""
+    from scripts.eval_verify import eval_dimension_line
+
+    image = Image.new("RGB", (400, 400), "white")
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    truth = {
+        "labels": [
+            {
+                "kind": "dimension",
+                "dimension_kind": "linear",
+                "label": {"bbox_px": [100, 150, 112, 180]},
+                "anchors_px": [[120, 100], [120, 300]],
+            }
+        ]
+    }
+
+    outcomes = eval_dimension_line(buffer.getvalue(), truth)
+
+    assert outcomes and all("unit_px" in item for item in outcomes)

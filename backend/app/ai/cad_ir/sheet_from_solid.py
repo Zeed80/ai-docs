@@ -261,12 +261,26 @@ def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
                     "kind": "section",
                     "presentation_kind": "removed_section",
                     "section_normal": "axis",
-                    "section_station_mm": round(float(start) + float(length) / 2.0, 3),
+                    "section_station_mm": _keyway_section_station(keyway),
                     "label": f"{letter}-{letter}",
                     "section_symbol": letter,
                 }
             )
     return views
+
+
+def _keyway_section_station(keyway: dict) -> float:
+    """Станция сечения через паз — на трети его длины, а не на середине.
+
+    На середине паза обычно и середина ступени, где стоит размерная линия Ø: след
+    секущей плоскости ложился на неё (shaft-4, Ø25). Сечение обязано пройти по
+    полной ширине паза — не ближе b/2 к скруглённому концу; короткий паз — по
+    середине.
+    """
+    start, length = float(keyway["axial_start_mm"]), float(keyway["length_mm"])
+    width = float(keyway.get("width_mm") or 0.0)
+    offset = max(length / 3.0, width / 2.0 + 0.5)
+    return round(start + min(offset, length / 2.0), 3)
 
 
 def _view_reasons(views: list[dict[str, Any]], part_class: str, spec: dict) -> list[dict[str, Any]]:
@@ -1910,6 +1924,7 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
         px_per_mm=PAPER_PX_PER_MM,
     )
     entities += _view_label_entities(views, placements)
+    entities += _cutting_plane_entities(views, placements, plan)
     if plan.geometry_only:
         entities += _annotation_entities(
             spec,
@@ -1978,6 +1993,110 @@ def _view_label_entities(
             )
         )
     return entities
+
+
+def _cutting_plane_entities(
+    views: list[dict[str, Any]], placements: list[dict[str, float] | None], plan: SheetPlan
+) -> list[Any]:
+    """След секущей плоскости вынесенного сечения на главном виде (ГОСТ 2.305).
+
+    Разомкнутая линия — два основных штриха за контуром на станции сечения,
+    стрелки направления взгляда у внешних концов, буква у стрелок. Без неё
+    сечение «Б-Б» над кругом нечем связать с местом на валу: ни человеку, ни
+    межвидовому соответствию (z4-r4 cross_view).
+
+    Сечение ядра строится в системе вида ``side`` (u = x, v = y) — это взгляд к
+    началу оси, поэтому стрелки смотрят к левому торцу.
+    """
+    from app.ai.cad_ir.schema import Point, Segment, TextEntity
+    from app.ai.cad_projection import _ORIGIN, DIM_TEXT_MM
+
+    ratio = plan.ratio or 1.0
+    main = next(
+        (
+            index
+            for kind in ("bottom", "front")
+            for index, view in enumerate(views)
+            if (view or {}).get("kind") == kind
+            and index not in plan.scaffold_views
+            and index < len(placements)
+            and placements[index]
+            and isinstance(view.get("bounds_mm"), dict)
+        ),
+        None,
+    )
+    if main is None:
+        return []
+    placement, box = placements[main], views[main]["bounds_mm"]
+    px = PAPER_PX_PER_MM
+
+    def point(u: float, y: float) -> Point:
+        return Point(x=u * px, y=y * px)
+
+    entities: list[Any] = []
+    for view in views:
+        station = (view or {}).get("section_station_mm")
+        label = str((view or {}).get("label") or "")
+        # Ядро отдаёт осевое сечение видом removed_section со станцией, без
+        # section_normal запроса.
+        if station is None or "-" not in label:
+            continue
+        letter = label.split("-")[0].strip()
+        u = placement["offset_u"] + float(box["u_min"]) + float(station) * ratio
+        top = placement["offset_v"] - float(box["v_max"])
+        bottom = placement["offset_v"] - float(box["v_min"])
+        for inner, outer in (
+            (top - _CUT_GAP_MM, top - _CUT_GAP_MM - _CUT_STROKE_MM),
+            (bottom + _CUT_GAP_MM, bottom + _CUT_GAP_MM + _CUT_STROKE_MM),
+        ):
+            entities.append(
+                Segment(p1=point(u, inner), p2=point(u, outer), line_class="contour", **_ORIGIN)
+            )
+            tip = u - _CUT_ARROW_MM
+            entities.append(
+                Segment(
+                    p1=point(u, outer),
+                    p2=point(tip, outer),
+                    line_class="dim",
+                    width_class="thin",
+                    **_ORIGIN,
+                )
+            )
+            for side in (-1.0, 1.0):
+                entities.append(
+                    Segment(
+                        p1=point(tip, outer),
+                        p2=point(tip + _CUT_HEAD_MM, outer + side * _CUT_HEAD_MM / 3.0),
+                        line_class="dim",
+                        width_class="thin",
+                        **_ORIGIN,
+                    )
+                )
+            # Буква — у середины штриха со стороны стрелки: за концом штриха
+            # начинаются ряды размеров (цепочка, габарит).
+            entities.append(
+                TextEntity(
+                    position=point(tip - 1.0, (inner + outer) / 2.0),
+                    text=letter,
+                    height=DIM_TEXT_MM * px,
+                    rotation=0.0,
+                    anchor="middle",
+                    line_class="dim",
+                    width_class="thin",
+                    **_ORIGIN,
+                )
+            )
+    return entities
+
+
+# Разомкнутая линия, стрелка и буква умещаются между контуром и первым рядом
+# размеров (DIM_OFFSET_MM = 8): штрих 8 мм по ГОСТ 2.303 пересекал цепочку, и
+# буквы ложились на её стрелки (shaft-4, 1:4). Штрих короче минимума ГОСТ —
+# уступка плотному листу, читаемость важнее.
+_CUT_GAP_MM = 1.5
+_CUT_STROKE_MM = 5.0
+_CUT_ARROW_MM = 5.0
+_CUT_HEAD_MM = 2.5
 
 
 # Надпись вида — над рядом размеров над контуром (отступ размера 8 мм + число

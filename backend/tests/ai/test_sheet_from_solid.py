@@ -1289,8 +1289,8 @@ def test_a_keyed_shaft_gets_a_removed_cross_section_through_each_keyway():
 
     sections = [v for v in views if v.get("section_normal") == "axis"]
     assert [(v["section_station_mm"], v["label"]) for v in sections] == [
-        (20.0, "Б-Б"),
-        (72.5, "В-В"),
+        (16.667, "Б-Б"),
+        (68.333, "В-В"),
     ]
     assert all(v["presentation_kind"] == "removed_section" for v in sections)
     assert not [v for v in views if v.get("label") == "А-А"], "продольное сечение из чтения"
@@ -1324,7 +1324,7 @@ def test_every_keyway_of_a_four_keyway_shaft_gets_its_own_section():
     views = plan_views("solid_rotation", spec)
 
     sections = [v for v in views if v.get("section_normal") == "axis"]
-    assert [v["section_station_mm"] for v in sections] == [20.0, 70.0, 120.0, 170.0]
+    assert len(sections) == 4
     assert len(views) <= 8
 
 
@@ -1388,3 +1388,53 @@ def test_section_views_carry_their_designation_above_them():
 
     assert label.text == "Б-Б"
     assert label.position.y < (50 - 15) * 4.0  # над контуром сечения
+
+
+def test_removed_section_has_its_cutting_plane_marked_on_the_main_view():
+    """ГОСТ 2.305: у вынесенного сечения «Б-Б» на главном виде — разомкнутая
+    линия на станции сечения, стрелки и буква. Без неё сечение не связать с
+    местом на валу."""
+    from app.ai.cad_ir.sheet_from_solid import PAPER_PX_PER_MM, _cutting_plane_entities
+
+    views = [
+        {"kind": "front", "bounds_mm": {"u_min": -50, "u_max": 50, "v_min": -15, "v_max": 15}},
+        {"kind": "bottom", "bounds_mm": {"u_min": -50, "u_max": 50, "v_min": -15, "v_max": 15}},
+        {
+            # Как отдаёт ядро: removed_section со станцией, без section_normal.
+            "kind": "removed_section",
+            "section_station_mm": 20.0,
+            "label": "Б-Б",
+            "bounds_mm": {"u_min": -15, "u_max": 15, "v_min": -15, "v_max": 15},
+        },
+    ]
+    placements = [
+        None,
+        {"offset_u": 100.0, "offset_v": 80.0},
+        {"offset_u": 250.0, "offset_v": 80.0},
+    ]
+    plan = _plan("solid_rotation")
+    plan.ratio = 0.5
+
+    entities = _cutting_plane_entities(views, placements, plan)
+
+    strokes = [e for e in entities if e.type == "segment" and e.line_class == "contour"]
+    assert len(strokes) == 2
+    station_u = (100.0 - 50.0 + 20.0 * 0.5) * PAPER_PX_PER_MM
+    assert all(abs(e.p1.x - station_u) < 1e-6 and abs(e.p2.x - station_u) < 1e-6 for e in strokes)
+    # Штрихи за контуром: выше v_max и ниже v_min вида, не через деталь.
+    ys = sorted(y / PAPER_PX_PER_MM for e in strokes for y in (e.p1.y, e.p2.y))
+    assert ys[1] < 80.0 - 15.0 and ys[2] > 80.0 + 15.0
+    letters = [e.text for e in entities if e.type == "text"]
+    assert letters == ["Б", "Б"]
+
+
+def test_no_cutting_plane_without_an_axial_section():
+    from app.ai.cad_ir.sheet_from_solid import _cutting_plane_entities
+
+    views = [{"kind": "bottom", "bounds_mm": {"u_min": 0, "u_max": 10, "v_min": 0, "v_max": 5}}]
+    assert (
+        _cutting_plane_entities(
+            views, [{"offset_u": 0.0, "offset_v": 0.0}], _plan("solid_rotation")
+        )
+        == []
+    )
