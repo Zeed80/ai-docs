@@ -745,6 +745,49 @@ def native_feature_graph_additions(
     return nodes, edges, assertions
 
 
+def kernel_reopen_patch(
+    graph: EngineeringModelGraph, kernel_report: dict[str, Any], *, pass_id: str
+) -> GraphPatch | None:
+    """Свидетельство уровня 10: STEP, переоткрытый ядром, совпал с построенным телом.
+
+    Ядро переоткрывает STEP в отдельном процессе (падение импортёра — отказ) и
+    отдаёт валидность, число тел, объём и хэш. Свидетельство даётся, только если
+    переоткрытое валидно и его объём совпал с объёмом построенного тела (0,1 %):
+    без этого у каждой механической сборки стояло brep_ifc_reopen_not_available,
+    хотя переоткрытие выполнялось и его результат терялся по дороге.
+    """
+    reopen = kernel_report.get("reopen") or {}
+    built = kernel_report.get("volume_mm3")
+    reopened = reopen.get("volume_mm3")
+    if not reopen.get("valid") or not isinstance(built, (int, float)):
+        return None
+    if not isinstance(reopened, (int, float)) or abs(reopened - built) > max(0.5, 0.001 * built):
+        return None
+    evidence = Evidence(
+        id=f"evidence:kernel:{pass_id}:step-reopen",
+        kind="kernel_topology",
+        payload={
+            "check": "step_reopen",
+            "brep_valid": bool(reopen.get("brep_valid")),
+            "solid_count": reopen.get("solid_count"),
+            "face_count": reopen.get("face_count"),
+            "volume_mm3": reopened,
+            "built_volume_mm3": built,
+            "step_sha256": reopen.get("step_sha256"),
+        },
+        sha256=reopen.get("step_sha256"),
+    )
+    return GraphPatch(
+        patch_id=f"patch:kernel:{pass_id}:step-reopen",
+        base_revision=graph.revision,
+        base_sha256=graph.canonical_sha256,
+        producer="system",
+        pass_id=pass_id,
+        idempotency_key=f"kernel:{pass_id}:step-reopen",
+        add_evidence=[evidence],
+    )
+
+
 def spec_feature_tree_as_graph(
     spec: Any,
     candidate: FeatureTreeCandidate,

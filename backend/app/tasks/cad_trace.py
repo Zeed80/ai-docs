@@ -2554,6 +2554,9 @@ async def _build_spec_solid(
             "bounds_mm": report.get("bounds_mm"),
             "volume_mm3": report.get("volume_mm3"),
             "surface_area_mm2": report.get("surface_area_mm2"),
+            # STEP переоткрыт ядром в отдельном процессе (валидность, число тел,
+            # объём, хэш) — свидетельство уровня 10 графа (`kernel_reopen_patch`).
+            "reopen": report.get("reopen") or {},
             "feature_operations": report.get("feature_operations") or [],
             "warnings": report.get("warnings") or [],
             # Ф3 нового CAD-редактора: edge_key candidates for a
@@ -4235,6 +4238,28 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     except Exception as exc:  # noqa: BLE001 — the graph without verdicts still stands
                         logger.warning(
                             "cad_verify_graph_failed",
+                            generation_id=generation_id,
+                            error=str(exc)[:200],
+                        )
+                if engineering_graph is not None and (solid_result.get("verification") or {}).get(
+                    "ok"
+                ):
+                    # Переоткрытый ядром STEP совпал с построенным телом —
+                    # свидетельство уровня 10 (brep_ifc_reopen).
+                    from app.ai.cad_emg_compat import kernel_reopen_patch
+                    from app.domain.engineering_model_graph import apply_graph_patch
+
+                    try:
+                        patch = kernel_reopen_patch(
+                            engineering_graph,
+                            solid_result.get("kernel_report") or {},
+                            pass_id=f"kernel-{generation_id}",
+                        )
+                        if patch is not None:
+                            engineering_graph = apply_graph_patch(engineering_graph, patch)
+                    except Exception as exc:  # noqa: BLE001 — the graph without it still stands
+                        logger.warning(
+                            "cad_kernel_reopen_graph_failed",
                             generation_id=generation_id,
                             error=str(exc)[:200],
                         )
