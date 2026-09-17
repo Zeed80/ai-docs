@@ -615,6 +615,39 @@ def test_features_confirmed_on_the_sheet_are_shown_on_their_view():
     _state, issues = verify_graph(graph)
     assert "cross_view_not_available" not in [issue["code"] for issue in issues]
 
+    # Несколько сечений без главного вида (живой z4-r4: Б-Б, А-А) — не на
+    # сечение, а на вид с рамкой проверки; фаска «не измерима», но найдена;
+    # паз, найденный по листу, — тоже на виде.
+    spec_z4 = _sleeve_like_spec(
+        [
+            {"kind": "section", "view_id": "B-B", "body_index": 0},
+            {"kind": "section", "view_id": "A-A", "body_index": 0},
+        ]
+    )
+    spec_z4["main_view"]["chamfers"] = [{"id": "0:chamfers:0"}]
+    spec_z4["main_view"]["keyways"] = [{"id": "sheet:keyways:1"}]
+    report_z4 = {
+        "items": [
+            {"kind": "shaft_step", "feature_id": "0:outer:0", "status": "confirmed"},
+            {
+                "kind": "chamfer",
+                "feature_id": "0:chamfers:0",
+                "status": "unmeasurable",
+                "measured": {"size_mm": 1.1},
+            },
+            {"kind": "chamfer", "feature_id": "0:chamfers:9", "status": "unmeasurable"},
+        ],
+        "frame": {"bbox_px": [1.0, 2.0, 3.0, 4.0]},
+    }
+    placed = attach_verified_views(spec_z4, report_z4)
+    by_id = {view["view_id"]: view for view in placed["views"]}
+    assert not by_id["B-B"].get("features_shown")
+    assert by_id["sheet-verified"]["features_shown"] == [
+        "0:outer:0",
+        "0:chamfers:0",
+        "sheet:keyways:1",
+    ]
+
     # Не подтверждённое — без вида.
     doubtful = {"items": [{"kind": "shaft_step", "feature_id": "0:outer:0", "status": "refuted"}]}
     assert attach_verified_views(_sleeve_like_spec([section]), doubtful)["views"] == [section]

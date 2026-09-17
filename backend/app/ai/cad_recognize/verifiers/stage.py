@@ -1040,12 +1040,21 @@ def attach_verified_views(spec: dict[str, Any], report: dict[str, Any]) -> dict[
     """
     import copy
 
+    # Показан на виде — найден на нём: подтверждённый или измеренный (фаска
+    # «не измерима» по размеру — ГОСТ 2.305 рисует её условно, — но на виде
+    # найдена: живой z4-r4). Не найденное проверкой — не добавляется.
     shown = [
         str(item["feature_id"])
         for item in report.get("items") or []
-        if item.get("status") == "confirmed" and item.get("feature_id")
+        if item.get("feature_id") and (item.get("status") == "confirmed" or item.get("measured"))
     ]
     main = spec.get("main_view") or {}
+    # Пазы, найденные по листу (не выписанные ридером), — найдены на виде.
+    shown.extend(
+        str(key["id"])
+        for key in main.get("keyways") or []
+        if isinstance(key, dict) and str(key.get("id") or "").startswith("sheet:")
+    )
     if report.get("sleeve_confirmed"):
         for group in ("bore", "flanges"):
             shown.extend(
@@ -1057,16 +1066,23 @@ def attach_verified_views(spec: dict[str, Any], report: dict[str, Any]) -> dict[
         return spec
     spec = copy.deepcopy(spec)
     views = spec.setdefault("views", [])
-    primary = next(
-        (
-            view
-            for view in views
-            if isinstance(view, dict)
-            and int(view.get("body_index") or 0) == 0
-            and view.get("kind") in {"front", "section"}
-        ),
-        None,
-    )
+    # Главный вид тела 0: `front`; иначе — единственный вид спека (втулка:
+    # разрез А-А). Несколько разрезов и сечений без `front` — не угадывать:
+    # у z4-r4 первым шло сечение Б-Б через паз, и профиль лёг на него.
+    body_views = [
+        view for view in views if isinstance(view, dict) and int(view.get("body_index") or 0) == 0
+    ]
+    primary = next((view for view in body_views if view.get("kind") == "front"), None)
+    if (
+        primary is None
+        and len(body_views) == 1
+        and body_views[0].get("kind")
+        in {
+            "front",
+            "section",
+        }
+    ):
+        primary = body_views[0]
     if primary is None:
         frame = report.get("frame") or {}
         if not frame.get("bbox_px"):
