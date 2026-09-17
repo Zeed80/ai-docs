@@ -110,6 +110,19 @@ def verify_bolt_circle(hypothesis: Hypothesis, frame: ViewFrame | None, sheet: A
         problems.append(f"PCD {measured['pcd_mm']:g} мм, прочитано {pcd:g}")
     if abs(measured["hole_diameter_mm"] - float(hole)) > diameter_tol:
         problems.append(f"Ø {measured['hole_diameter_mm']:g} мм, прочитано {hole:g}")
+    if len(problems) >= 2:
+        # Число, окружность центров и Ø разошлись сразу в двух величинах —
+        # найдены не те окружности, а не ошибка ридера (он ошибается в одной:
+        # фазе, числе, PCD). Фото и 75 dpi v9 (dev): так «опровергались» верные
+        # чтения — Ø 12–17 мм при 5,5–6,6. Замер остаётся.
+        return Verdict(
+            status="unmeasurable",
+            measured=measured,
+            evidence_bbox_px=(x0, y0, x1, y1),
+            anchors_px=tuple((hx, hy) for hx, hy, _ in holes),
+            reason="замер разошёлся сразу в нескольких величинах — вероятно, не те окружности: "
+            + "; ".join(problems),
+        )
     read_phase = expected.get("start_angle_deg")
     if read_phase is not None and _angle_gap(float(read_phase) % step, phase, step) > _PHASE_DEG:
         problems.append(f"фаза {phase:.1f}°, прочитано {float(read_phase):g}°")

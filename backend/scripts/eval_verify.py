@@ -395,6 +395,10 @@ def eval_bolt_circle(png: bytes, truth: dict) -> list[dict[str, Any]]:
                     "unit_px": hole / 2.0 / ref_scale,
                     "frame_found": frame is not None,
                     "frame_error": frame_error,
+                    "status": verdict.status,
+                    "reason": verdict.reason,
+                    "measured": dict(measured),
+                    "real": {**read, "pcd_mm": pcd},
                 }
             )
     return outcomes

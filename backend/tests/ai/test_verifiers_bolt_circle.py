@@ -106,3 +106,15 @@ def test_a_wrong_hole_count_is_refuted():
 
     assert verdict.status == "refuted"
     assert verdict.measured["count"] == COUNT
+
+
+def test_a_measurement_off_in_several_values_at_once_is_not_a_refutation():
+    """Фото и 75 dpi v9 (dev): найдены не те окружности — число, PCD и Ø
+    «разошлись» разом, и верное чтение опровергалось. Ридер ошибается в одной
+    величине; расхождение сразу в двух из «число, PCD, Ø» — «не измеримо»."""
+    several = _check(count=COUNT + 2, pcd_mm=PCD + 20.0)
+
+    assert several.status == "unmeasurable", (several.status, several.reason)
+    assert "не те окружности" in several.reason and several.measured["count"] == COUNT
+    # Одна величина — по-прежнему опровержение.
+    assert _check(pcd_mm=PCD + 20.0).status == "refuted"
