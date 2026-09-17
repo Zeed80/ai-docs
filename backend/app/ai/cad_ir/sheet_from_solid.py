@@ -122,7 +122,7 @@ def classify_part(spec: dict, report: dict) -> str:
 
 
 # Видов в одном запросе /drawing ядро принимает не больше.
-_MAX_KERNEL_VIEWS = 6
+_MAX_KERNEL_VIEWS = 8
 
 
 def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:

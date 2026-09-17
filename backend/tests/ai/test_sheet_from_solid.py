@@ -1294,7 +1294,38 @@ def test_a_keyed_shaft_gets_a_removed_cross_section_through_each_keyway():
     ]
     assert all(v["presentation_kind"] == "removed_section" for v in sections)
     assert not [v for v in views if v.get("label") == "А-А"], "продольное сечение из чтения"
-    assert len(views) <= 6
+    assert len(views) <= 8
+
+
+def test_every_keyway_of_a_four_keyway_shaft_gets_its_own_section():
+    """Корпус X1b: у вала с четырьмя пазами (shaft-4) четвёртому сечению не
+    хватало места в запросе к ядру (6 видов) — b и t1 паза не проставлялись."""
+    spec = {
+        "part": "Вал",
+        "main_view": {
+            "type": "тело вращения (вал)",
+            "outer": [
+                {"diameter_mm": 30.0, "length_mm": 50.0},
+                {"diameter_mm": 25.0, "length_mm": 50.0},
+                {"diameter_mm": 22.0, "length_mm": 50.0},
+                {"diameter_mm": 18.0, "length_mm": 50.0},
+            ],
+            "keyways": [
+                {
+                    "axial_start_mm": 10.0 + 50.0 * i,
+                    "length_mm": 20.0,
+                    "width_mm": 6.0,
+                    "depth_mm": 3.5,
+                }
+                for i in range(4)
+            ],
+        },
+    }
+    views = plan_views("solid_rotation", spec)
+
+    sections = [v for v in views if v.get("section_normal") == "axis"]
+    assert [v["section_station_mm"] for v in sections] == [20.0, 70.0, 120.0, 170.0]
+    assert len(views) <= 8
 
 
 def test_keyway_width_and_depth_are_dimensioned_on_its_cross_section():

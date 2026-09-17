@@ -100,3 +100,38 @@ def test_no_cross_hole_is_drilled_into_a_keyway():
                     hole,
                     keyway,
                 )
+
+
+def test_completeness_requires_keyway_width_and_depth_on_the_section():
+    """Лист без b и t1 паза (X1b) — неполный: по нему паз не изготовить."""
+    import importlib.util
+    import pathlib
+
+    path = pathlib.Path(__file__).resolve().parents[2] / "scripts" / "build_verify_corpus.py"
+    module_spec = importlib.util.spec_from_file_location("build_verify_corpus", path)
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+
+    spec = next(
+        s for s in (synth_spec("shaft", seed) for seed in SEEDS) if s["main_view"].get("keyways")
+    )
+    keyway = spec["main_view"]["keyways"][0]
+    needed = module.needed_dimensions(spec)
+    lengths = list(needed["lengths"])
+    for value in (keyway["width_mm"], keyway["depth_mm"]):
+        assert any(abs(v - value) <= 1e-6 for v in lengths)
+        lengths.remove(next(v for v in lengths if abs(v - value) <= 1e-6))
+
+    labels = [
+        {"kind": "dimension", "dimension_kind": "linear", "value_mm": v}
+        for v in needed["lengths"] + needed["overall"]
+    ] + [
+        {"kind": "dimension", "dimension_kind": "diameter", "value_mm": v}
+        for v in needed["diameters"]
+    ]
+    assert module.coverage(spec, {"labels": labels})["ratio"] == 1.0
+    without_depth = list(labels)
+    without_depth.remove(
+        next(item for item in without_depth if abs(item["value_mm"] - keyway["depth_mm"]) <= 1e-6)
+    )
+    assert module.coverage(spec, {"labels": without_depth})["ratio"] < 1.0

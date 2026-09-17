@@ -88,7 +88,8 @@ def needed_dimensions(spec: dict) -> dict[str, list[float]]:
 def _shaft_feature_values(body: dict, lengths: list[float]) -> dict[str, list[float]]:
     """Пазы и поперечные отверстия вала — как их ставит лист (Ф3.0b).
 
-    Паз — длина и положение начала от левого уступа своей ступени; отверстие —
+    Паз — длина и положение начала от левого уступа своей ступени, ширина и
+    глубина на сечении; отверстие —
     Ø и положение центра от него же. Нулевое положение не ставится.
     """
     starts = [sum(lengths[:i]) for i in range(len(lengths))]
@@ -99,6 +100,8 @@ def _shaft_feature_values(body: dict, lengths: list[float]) -> dict[str, list[fl
     values: dict[str, list[float]] = {"diameters": [], "lengths": []}
     for keyway in body.get("keyways") or []:
         values["lengths"].append(keyway["length_mm"])
+        # Ширина b и глубина t1 — на вынесенном сечении через паз (X1b).
+        values["lengths"] += [keyway["width_mm"], keyway["depth_mm"]]
         offset = from_shoulder(keyway["axial_start_mm"])
         if offset > 0.05:
             values["lengths"].append(offset)

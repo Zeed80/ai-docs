@@ -2712,7 +2712,7 @@ class DrawingRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     candidate: Candidate
-    views: list[SheetViewRequest] = Field(min_length=1, max_length=6)
+    views: list[SheetViewRequest] = Field(min_length=1, max_length=8)
     scale: float = Field(default=1.0, gt=0.0, le=100.0)
     confirm_assumptions: bool = False
     hidden_lines: bool = True
