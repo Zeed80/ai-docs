@@ -1257,3 +1257,77 @@ def test_outer_and_bore_diameters_of_one_step_do_not_share_a_place():
     assert len(places) == 2
     assert places[1] - places[0] >= 2.5 * 3.5
     assert all(0.0 <= place <= 60.0 for place in places)
+
+
+_KEYED = {
+    "part": "Вал",
+    "main_view": {
+        "type": "тело вращения (вал)",
+        "outer": [
+            {"diameter_mm": 30.0, "length_mm": 40.0},
+            {"diameter_mm": 22.0, "length_mm": 60.0},
+        ],
+        "keyways": [
+            {"axial_start_mm": 10.0, "length_mm": 20.0, "width_mm": 8.0, "depth_mm": 4.0},
+            {
+                "axial_start_mm": 60.0,
+                "length_mm": 25.0,
+                "width_mm": 6.0,
+                "depth_mm": 3.5,
+                "angle_deg": 90.0,
+            },
+        ],
+    },
+    "views": [{"kind": "removed_section", "label": "А-А"}],
+}
+
+
+def test_a_keyed_shaft_gets_a_removed_cross_section_through_each_keyway():
+    """X1b: b и t1 паза ставятся на вынесенном сечении — поперёк оси, на середине
+    паза. Прочитанное вынесенное сечение резалось вдоль вида и выреза не имело."""
+    views = plan_views("solid_rotation", _KEYED)
+
+    sections = [v for v in views if v.get("section_normal") == "axis"]
+    assert [(v["section_station_mm"], v["label"]) for v in sections] == [
+        (20.0, "Б-Б"),
+        (72.5, "В-В"),
+    ]
+    assert all(v["presentation_kind"] == "removed_section" for v in sections)
+    assert not [v for v in views if v.get("label") == "А-А"], "продольное сечение из чтения"
+    assert len(views) <= 6
+
+
+def test_keyway_width_and_depth_are_dimensioned_on_its_cross_section():
+    from app.ai.cad_ir.sheet_from_solid import _keyway_section_dimensions
+
+    drawing = {
+        "views": [
+            {"kind": "front"},
+            {
+                "kind": "removed_section",
+                "section_station_mm": 20.0,
+                "bounds_mm": {"u_min": -15, "u_max": 11, "v_min": -15, "v_max": 15},
+            },
+            {
+                "kind": "removed_section",
+                "section_station_mm": 72.5,
+                "bounds_mm": {"u_min": -11, "u_max": 11, "v_min": -11, "v_max": 7.5},
+            },
+        ]
+    }
+
+    _keyway_section_dimensions(drawing, _KEYED, _plan("solid_rotation"))
+
+    by_view = {}
+    for dim in drawing["dimensions"]:
+        by_view.setdefault(dim["view_index"], []).append(dim)
+    first = {d["measured_by"]: d for d in by_view[1]}
+    assert first["keyway_section_width"]["value_mm"] == 8.0
+    assert first["keyway_section_width"]["kind"] == "DistanceY"
+    (a, b) = first["keyway_section_depth"]["anchors_mm"]
+    assert abs(a[0] - 11.0) < 1e-6 and abs(b[0] - 15.0) < 1e-6  # от дна до поверхности Ø30
+    second = {d["measured_by"]: d for d in by_view[2]}
+    # Паз под 90° — вдоль v: ширина по u, глубина по v, Ø22.
+    assert second["keyway_section_width"]["kind"] == "DistanceX"
+    (a, b) = second["keyway_section_depth"]["anchors_mm"]
+    assert abs(a[1] - 7.5) < 1e-6 and abs(b[1] - 11.0) < 1e-6

@@ -121,6 +121,10 @@ def classify_part(spec: dict, report: dict) -> str:
     return "other"
 
 
+# Видов в одном запросе /drawing ядро принимает не больше.
+_MAX_KERNEL_VIEWS = 6
+
+
 def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
     """The views to ask for, in the order the sheet will carry them.
 
@@ -175,8 +179,14 @@ def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
                 if source.get(field) not in (None, []):
                     planned[field] = source[field]
             views.append(planned)
+    keyed = part_class in ("solid_rotation", "hollow_rotation") and bool(
+        [k for k in (spec.get("main_view") or {}).get("keyways") or [] if isinstance(k, dict)]
+    )
     for source in source_views:
-        if source.get("kind") != "removed_section":
+        if source.get("kind") != "removed_section" or keyed:
+            # У вала с пазами вынесенные сечения строятся поперёк оси по самим
+            # пазам (ниже): прочитанное сечение резалось вдоль вида — не та
+            # геометрия, выреза паза в нём нет.
             continue
         planned = {
             "kind": "section",
@@ -234,6 +244,28 @@ def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
             # линия v2: 0/2). `bottom` смотрит на паз, отверстия — окружностями.
             # `front` остаётся основой для ядра и на лист не идёт.
             views.insert(1, {"kind": "bottom"})
+    if keyed:
+        # X1b: ширина b и глубина t1 паза ставятся на вынесенном сечении через
+        # паз (ГОСТ 2.307, ГОСТ 23360) — сечение поперёк оси на середине паза.
+        used = {str(v.get("label") or "") for v in views}
+        letters = [c for c in "БВГДЕЖИК" if f"{c}-{c}" not in used]
+        body = spec.get("main_view") or {}
+        for keyway, letter in zip(body.get("keyways") or [], letters, strict=False):
+            if len(views) >= _MAX_KERNEL_VIEWS or not isinstance(keyway, dict):
+                break
+            start, length = keyway.get("axial_start_mm"), keyway.get("length_mm")
+            if not isinstance(start, (int, float)) or not isinstance(length, (int, float)):
+                continue
+            views.append(
+                {
+                    "kind": "section",
+                    "presentation_kind": "removed_section",
+                    "section_normal": "axis",
+                    "section_station_mm": round(float(start) + float(length) / 2.0, 3),
+                    "label": f"{letter}-{letter}",
+                    "section_symbol": letter,
+                }
+            )
     return views
 
 
@@ -1497,6 +1529,91 @@ def _turned_detail_dimensions(drawing: dict, spec: dict, plan: SheetPlan) -> Non
         dimensions.append(below(first, second, round(size, 3), f"{size:g}×{angle:g}°", "chamfer"))
 
 
+def _keyway_section_dimensions(drawing: dict, spec: dict, plan: SheetPlan) -> None:
+    """Ширина b и глубина t1 паза — на его вынесенном сечении (X1b).
+
+    Сечение поперёк оси (`section_normal=axis`) ядро строит из самого тела: ось —
+    начало координат вида, u = x, v = y в масштабе листа. Паз под углом a
+    вырезает контур в направлении (cos a, sin a): b — между кромками выреза у
+    поверхности, t1 — от поверхности до дна по направлению паза.
+    """
+    import math
+
+    body = spec.get("main_view") or {}
+    keyways = [k for k in body.get("keyways") or [] if isinstance(k, dict)]
+    outer = [s for s in body.get("outer") or [] if isinstance(s, dict)]
+    if not keyways or not outer:
+        return
+    lengths = [float(s.get("length_mm") or 0.0) for s in outer]
+    ratio = plan.ratio or 1.0
+    dimensions = drawing.setdefault("dimensions", [])
+    for index, view in enumerate(drawing.get("views") or []):
+        station = view.get("section_station_mm")
+        if station is None or not view.get("bounds_mm"):
+            continue
+        keyway = next(
+            (
+                k
+                for k in keyways
+                if isinstance(k.get("axial_start_mm"), (int, float))
+                and isinstance(k.get("length_mm"), (int, float))
+                and float(k["axial_start_mm"])
+                <= float(station)
+                <= float(k["axial_start_mm"]) + float(k["length_mm"])
+            ),
+            None,
+        )
+        if keyway is None:
+            continue
+        width, depth = keyway.get("width_mm"), keyway.get("depth_mm")
+        position = 0.0
+        diameter = None
+        for step, length in zip(outer, lengths, strict=False):
+            if position - 1e-6 <= float(station) <= position + length + 1e-6:
+                diameter = float(step.get("diameter_mm") or 0.0)
+                break
+            position += length
+        if not width or not depth or not diameter:
+            continue
+        radius = diameter / 2.0
+        angle = math.radians(float(keyway.get("angle_deg") or 0.0))
+        along = (math.cos(angle), math.sin(angle))
+        across = (-math.sin(angle), math.cos(angle))
+        # Кромки выреза на окружности: смещение b/2 поперёк паза.
+        half = float(width) / 2.0
+        reach = math.sqrt(max(radius**2 - half**2, 0.0))
+
+        def point(a: float, c: float) -> list[float]:
+            return [
+                round((a * along[0] + c * across[0]) * ratio, 6),
+                round((a * along[1] + c * across[1]) * ratio, 6),
+            ]
+
+        horizontal = abs(along[0]) >= abs(along[1])
+        dimensions.append(
+            {
+                "view_index": index,
+                "kind": "DistanceY" if horizontal else "DistanceX",
+                "label": f"{float(width):g}",
+                "anchors_mm": [point(reach, -half), point(reach, half)],
+                "value_mm": round(float(width), 3),
+                "measured_by": "keyway_section_width",
+                "ir_kind": "linear",
+            }
+        )
+        dimensions.append(
+            {
+                "view_index": index,
+                "kind": "DistanceX" if horizontal else "DistanceY",
+                "label": f"{float(depth):g}",
+                "anchors_mm": [point(radius - float(depth), 0.0), point(radius, 0.0)],
+                "value_mm": round(float(depth), 3),
+                "measured_by": "keyway_section_depth",
+                "ir_kind": "linear",
+            }
+        )
+
+
 def _corner_radii(
     view: dict, index: int, dimensions: list[dict], bounds: dict, ratio: float
 ) -> None:
@@ -1696,6 +1813,7 @@ async def build_sheet_from_solid(
     _hole_dimensions(drawing, plan)
     _shaft_feature_dimensions(drawing, spec, plan)
     _turned_detail_dimensions(drawing, spec, plan)
+    _keyway_section_dimensions(drawing, spec, plan)
 
     ir, extent = _assemble(drawing, spec, plan)
     geometry_verification = verify_views_against_solid(
