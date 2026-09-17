@@ -248,13 +248,34 @@ def eval_plate_hole(png: bytes, truth: dict, frame_source: str = "truth") -> lis
             nearest = min(column, key=lambda c: abs(c[1] - other[1]))
             cases.append(("swap_y", (hole[0], other[1], hole[2]), nearest))
         cases.append(("diameter", (hole[0], hole[1], hole[2] + 1.1), hole))
-    outcomes = []
-    for case, (x, y, d), real in cases:
-        verdict = verify(
+    from app.ai.cad_recognize.verifiers.contract import Verdict
+    from app.ai.cad_recognize.verifiers.plate_hole import frame_supported
+
+    verdicts = [
+        verify(
             Hypothesis("plate_hole", "holes", {"x_mm": x, "y_mm": y, "diameter_mm": d}),
             frame,
             gray,
         )
+        for _case, (x, y, d), _real in cases
+    ]
+    # Как в продукте (`stage._plate_holes`): система координат, не подтверждённая
+    # окружностями на прочитанных x, опровергать не может. Прочитанные x — у
+    # случая «верное чтение».
+    if (
+        frame_source == "sheet"
+        and frame is not None
+        and not frame_supported(
+            [(v, h[0]) for (case, h, _r), v in zip(cases, verdicts) if case == "truth"],
+            plate_hole_tolerances(frame.scale_mean)[0],
+        )
+    ):
+        verdicts = [
+            v if v.status == "unmeasurable" else Verdict(status="unmeasurable", reason="frame")
+            for v in verdicts
+        ]
+    outcomes = []
+    for (case, (x, y, d), real), verdict in zip(cases, verdicts, strict=True):
         measured = verdict.measured
         position_tol, diameter_tol = plate_hole_tolerances(reference.scale_mean)
         accurate = bool(measured) and (
@@ -274,6 +295,10 @@ def eval_plate_hole(png: bytes, truth: dict, frame_source: str = "truth") -> lis
                 "unit_px": real[2] / 2.0 / reference.scale_mean,
                 "frame_found": frame is not None,
                 "frame_error": frame_error,
+                "status": verdict.status,
+                "reason": verdict.reason,
+                "measured": dict(measured),
+                "real": {"x_mm": real[0], "y_mm": real[1], "diameter_mm": real[2]},
             }
         )
     return outcomes

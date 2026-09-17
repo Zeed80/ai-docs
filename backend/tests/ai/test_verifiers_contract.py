@@ -93,3 +93,20 @@ def test_a_vertical_dimension_line_is_measured_along_its_own_axis():
 
 def test_the_registry_knows_its_built_in_verifiers():
     assert "dimension_line" in registered_kinds()
+
+
+def test_a_plate_frame_is_doubted_when_most_read_x_find_no_circle_there():
+    """Фото v9 (dev plate-29): план найден неверно — на прочитанных x окружностей
+    нет или их x разошёлся; опровергать чтение такой системой координат нельзя.
+    Ошибки ридера (plate-1: y и Ø) окружность на x не убирают."""
+    from app.ai.cad_recognize.verifiers.contract import Verdict
+    from app.ai.cad_recognize.verifiers.plate_hole import frame_supported
+
+    no_circle = Verdict(status="unmeasurable", reason="на заявленном x окружности нет")
+    shifted = Verdict(status="refuted", measured={"x_mm": 31.2, "y_mm": 5.0, "diameter_mm": 6.0})
+    wrong_y = Verdict(status="refuted", measured={"x_mm": 20.1, "y_mm": 9.0, "diameter_mm": 6.0})
+    right = Verdict(status="confirmed", measured={"x_mm": 40.0, "y_mm": 12.0, "diameter_mm": 5.5})
+
+    assert not frame_supported([(no_circle, 10.0), (shifted, 30.0), (right, 40.0)], 0.5)
+    assert frame_supported([(wrong_y, 20.0), (wrong_y, 20.0), (right, 40.0)], 0.5)
+    assert frame_supported([(no_circle, 10.0)], 0.5)  # одно отверстие — сравнивать не с чем

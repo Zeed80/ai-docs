@@ -234,8 +234,9 @@ def _gray(image_bytes: bytes) -> Any:
 
 
 def _plate_holes(image_bytes: bytes, profile: dict[str, Any], report: dict[str, Any]) -> str | None:
+    from app.ai.cad_recognize.verifiers.contract import Verdict
     from app.ai.cad_recognize.verifiers.plate_frame import locate_plate_frame
-    from app.ai.cad_recognize.verifiers.plate_hole import plate_hole_tolerances
+    from app.ai.cad_recognize.verifiers.plate_hole import frame_supported, plate_hole_tolerances
 
     holes = [
         (index, hole)
@@ -260,8 +261,8 @@ def _plate_holes(image_bytes: bytes, profile: dict[str, Any], report: dict[str, 
     report["frame"] = _frame_payload(frame)
     position_tol, diameter_tol = plate_hole_tolerances(frame.scale_mean)
     half_w, half_h = float(width) / 2.0, float(height) / 2.0
-    for index, hole in holes:
-        verdict = verify(
+    verdicts = [
+        verify(
             Hypothesis(
                 "plate_hole",
                 f"main_view.profile.holes[{index}]",
@@ -274,6 +275,20 @@ def _plate_holes(image_bytes: bytes, profile: dict[str, Any], report: dict[str, 
             frame,
             gray,
         )
+        for index, hole in holes
+    ]
+    read_x = [float(hole["center_x_mm"]) + half_w for _index, hole in holes]
+    if not frame_supported(list(zip(verdicts, read_x, strict=True)), position_tol):
+        # Не та система координат плана: опровергать чтение ею нельзя.
+        doubt = (
+            "система координат плана, вероятно, неверна: у большинства прочитанных x окружности нет"
+        )
+        verdicts = [
+            Verdict(status="unmeasurable", reason=doubt) if v.status != "unmeasurable" else v
+            for v in verdicts
+        ]
+        report["frame"] = None
+    for (index, hole), verdict in zip(holes, verdicts, strict=True):
         measured = {}
         if verdict.measured:
             measured = {

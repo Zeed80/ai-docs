@@ -126,6 +126,38 @@ def verify_plate_hole(hypothesis: Hypothesis, frame: ViewFrame | None, sheet: An
     )
 
 
+# Причины вердикта «на прочитанном x окружности нет» — признак не той системы
+# координат плана, а не ошибки ридера: x ридер читает почти всегда верно.
+_NO_CIRCLE_AT_X = (
+    "на заявленном x окружности нет",
+    "окружности в полосе есть, но не на заявленном x",
+)
+
+
+def frame_supported(checks: list[tuple[Verdict, float]], position_tolerance_mm: float) -> bool:
+    """Система координат плана подтверждена отверстиями: у большинства
+    прочитанных x нашлась окружность, и её x совпал с прочитанным.
+
+    ``checks`` — вердикт и прочитанный x. Ридер читает x почти всегда верно
+    (plate-1: все x верны, ошибки — в y и Ø), поэтому «на x окружности нет» и
+    «x окружности разошёлся с прочитанным» — признак не той системы координат,
+    а не ошибки чтения. Фото корпуса v9, dev: plate-29 — масштаб плана мимо на
+    11 %, верные чтения опровергались по x и y. Одно отверстие — сравнивать не
+    с чем.
+    """
+    if len(checks) < 2:
+        return True
+    doubtful = 0
+    for verdict, read_x in checks:
+        if verdict.reason in _NO_CIRCLE_AT_X:
+            doubtful += 1
+        elif "x_mm" in verdict.measured and abs(verdict.measured["x_mm"] - read_x) > (
+            position_tolerance_mm
+        ):
+            doubtful += 1
+    return doubtful < 0.5 * len(checks)
+
+
 def plate_hole_tolerances(mm_per_px: float) -> tuple[float, float]:
     """Допуски положения и Ø в мм — не меньше пары пикселей листа.
 
