@@ -1909,6 +1909,7 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
         list(range(len(views))),
         px_per_mm=PAPER_PX_PER_MM,
     )
+    entities += _view_label_entities(views, placements)
     if plan.geometry_only:
         entities += _annotation_entities(
             spec,
@@ -1937,6 +1938,51 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
         ir.sheet.frame = False
         ir.sheet.title_block = {}
     return ir, (extent_w, extent_h)
+
+
+def _view_label_entities(
+    views: list[dict[str, Any]], placements: list[dict[str, float] | None]
+) -> list[Any]:
+    """Обозначение разреза и сечения над видом («Б-Б», ГОСТ 2.305).
+
+    Надписей видов лист не выводил вовсе: вынесенные сечения через пазы (X1b) и
+    главный разрез полого вала стояли без букв, и связать их с листом было
+    нечем — ни человеку, ни ридеру.
+    """
+    from app.ai.cad_ir.schema import Point, TextEntity
+    from app.ai.cad_projection import _ORIGIN, DIM_TEXT_MM
+
+    entities: list[Any] = []
+    for view, placement in zip(views, placements, strict=False):
+        label = str((view or {}).get("label") or "").strip()
+        box = (view or {}).get("bounds_mm")
+        if (
+            not label
+            or not placement
+            or not isinstance(box, dict)
+            or (view.get("kind") not in ("section", "removed_section"))
+        ):
+            continue
+        u = placement["offset_u"] + (float(box["u_min"]) + float(box["u_max"])) / 2.0
+        v = placement["offset_v"] - float(box["v_max"]) - _VIEW_LABEL_GAP_MM
+        entities.append(
+            TextEntity(
+                position=Point(x=u * PAPER_PX_PER_MM, y=v * PAPER_PX_PER_MM),
+                text=label,
+                height=DIM_TEXT_MM * 1.4 * PAPER_PX_PER_MM,
+                rotation=0.0,
+                anchor="middle",
+                line_class="dim",
+                width_class="thin",
+                **_ORIGIN,
+            )
+        )
+    return entities
+
+
+# Надпись вида — над рядом размеров над контуром (отступ размера 8 мм + число
+# 3,5 мм + зазор): на 6 мм «Б-Б» ложилась на размерную линию глубины паза.
+_VIEW_LABEL_GAP_MM = 18.0
 
 
 def _annotation_entities(spec: dict, *, x_mm: float, y_mm: float) -> list[Any]:

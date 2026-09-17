@@ -1331,3 +1331,29 @@ def test_keyway_width_and_depth_are_dimensioned_on_its_cross_section():
     assert second["keyway_section_width"]["kind"] == "DistanceX"
     (a, b) = second["keyway_section_depth"]["anchors_mm"]
     assert abs(a[1] - 7.5) < 1e-6 and abs(b[1] - 11.0) < 1e-6
+
+
+def test_section_views_carry_their_designation_above_them():
+    """Надписей «Б-Б» над вынесенными сечениями и «А-А» над разрезом лист не
+    выводил — связать сечение с листом было нечем."""
+    from app.ai.cad_ir.sheet_from_solid import _view_label_entities
+
+    views = [
+        {"kind": "front", "bounds_mm": {"u_min": 0, "u_max": 10, "v_min": -5, "v_max": 5}},
+        {
+            "kind": "removed_section",
+            "label": "Б-Б",
+            "bounds_mm": {"u_min": -15, "u_max": 15, "v_min": -15, "v_max": 15},
+        },
+        {
+            "kind": "side",
+            "label": "ignored",
+            "bounds_mm": {"u_min": -15, "u_max": 15, "v_min": -15, "v_max": 15},
+        },
+    ]
+    placements = [{"offset_u": 0, "offset_v": 50}, {"offset_u": 100, "offset_v": 50}, None]
+
+    (label,) = _view_label_entities(views, placements)
+
+    assert label.text == "Б-Б"
+    assert label.position.y < (50 - 15) * 4.0  # над контуром сечения
