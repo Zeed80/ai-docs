@@ -618,3 +618,27 @@ def test_features_confirmed_on_the_sheet_are_shown_on_their_view():
     # Не подтверждённое — без вида.
     doubtful = {"items": [{"kind": "shaft_step", "feature_id": "0:outer:0", "status": "refuted"}]}
     assert attach_verified_views(_sleeve_like_spec([section]), doubtful)["views"] == [section]
+
+
+def test_a_step_whose_diameter_is_hidden_by_a_keyway_is_not_confirmed_by_its_length():
+    """Корпус v9: Ø +1,5 на ступени под пазом «подтверждался» — Ø под пазом по
+    виду не мерится, а совпала одна длина. Такая ступень — «не измерима»."""
+    spec = {
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 30.0, "length_mm": 30.0},
+                {"diameter_mm": 21.5, "length_mm": 40.0},  # на листе Ø20
+                {"diameter_mm": 25.0, "length_mm": 30.0},
+            ],
+            "keyways": [
+                {"axial_start_mm": 40.0, "length_mm": 20.0, "width_mm": 6.0, "depth_mm": 3.5}
+            ],
+        }
+    }
+
+    report = verify_spec_against_sheet(_shaft_png(keyway=True), spec)
+
+    steps = [item for item in report["items"] if item["kind"] == "shaft_step"]
+    assert steps[1]["status"] == "unmeasurable", steps[1]
+    assert "паз" in steps[1]["reason"]
+    assert steps[0]["status"] == "confirmed" and steps[2]["status"] == "confirmed"

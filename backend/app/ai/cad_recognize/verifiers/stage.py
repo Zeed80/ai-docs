@@ -500,6 +500,11 @@ def _shaft(
             status, reason, measured = "unmeasurable", verdict.reason, {}
         elif wrong:
             status, reason = "refuted", "; ".join(own)
+        elif measured and "diameter_mm" not in measured:
+            # Ø под пазом по виду не мерится: длина совпала, но «подтверждено»
+            # спрятало бы неверный Ø (корпус v9: Ø +1,5 под пазом — «подтверждён»).
+            status = "unmeasurable"
+            reason = "Ø ступени по виду не измерен (паз); длина совпала с листом"
         elif measured:
             status, reason = "confirmed", ""
         else:

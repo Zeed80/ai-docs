@@ -518,8 +518,26 @@ def eval_shaft_profile(png: bytes, truth: dict) -> list[dict[str, Any]]:
         }
     length_tol, diameter_tol = shaft_tolerances(ref_scale)
     middle = len(steps) // 2
+    # Ступени под пазом Ø не мерят (см. ниже `keyed`).
+    stations_all = [0.0]
+    for item in steps:
+        stations_all.append(stations_all[-1] + item["length_mm"])
+    keyways_read = (truth["spec"].get("main_view") or {}).get("keyways") or []
+
+    def under_keyway(index: int) -> bool:
+        return any(
+            isinstance(key.get("axial_start_mm"), (int, float))
+            and key["axial_start_mm"] < stations_all[index + 1]
+            and key["axial_start_mm"] + float(key.get("length_mm") or 0.0) > stations_all[index]
+            for key in keyways_read
+        )
+
+    # «Неверный Ø» — на ступени, где Ø измерим: под пазом случай проверял бы
+    # неизмеримое и засчитывал «подтверждено» промахом проверяльщика.
+    measurable = [i for i in range(len(steps)) if not under_keyway(i)]
+    wrong_index = min(measurable, key=lambda i: abs(i - middle)) if measurable else middle
     wrong_d = [dict(item) for item in steps]
-    wrong_d[middle]["diameter_mm"] += 1.5
+    wrong_d[wrong_index]["diameter_mm"] += 1.5
     wrong_l = [dict(item) for item in steps]
     if middle + 1 < len(steps):
         wrong_l[middle]["length_mm"] += 2.0
@@ -590,6 +608,11 @@ def eval_shaft_profile(png: bytes, truth: dict) -> list[dict[str, Any]]:
                 "unit_px": min(item["diameter_mm"] for item in steps) / 2.0 / ref_scale,
                 "frame_found": frame is not None,
                 "frame_error": frame_error,
+                "status": verdict.status,
+                "reason": verdict.reason,
+                "measured_steps": measured,
+                "real_steps": steps,
+                "keyed": sorted(keyed),
             }
         )
     return outcomes
