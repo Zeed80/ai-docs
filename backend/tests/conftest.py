@@ -33,6 +33,16 @@ os.environ["RATE_LIMIT_API_PER_MINUTE"] = "0"
 os.environ["RATE_LIMIT_LOGIN_PER_MINUTE"] = "0"
 os.environ.setdefault("CELERY_TASK_ALWAYS_EAGER", "true")
 
+# Redis — только свой. По умолчанию приложение ходит в redis://localhost:6379,
+# а на хосте этот порт публикует ЧУЖОЙ стек (china-key-learning): тесты
+# настроек писали туда ai_config/agent_config, телеметрия — свои ключи. Внутри
+# контейнера REDIS_URL указывает на боевой Redis стека. Поэтому адрес заменяется
+# недоступным (любое непокрытое обращение падает сразу, а не пишет в чужое), а
+# клиенты приложения — Redis в памяти на каждый тест (`_redis_in_memory`).
+# Настоящий тестовый Redis — только явно: TEST_REDIS_URL.
+_TEST_REDIS_URL = os.environ.get("TEST_REDIS_URL")
+os.environ["REDIS_URL"] = _TEST_REDIS_URL or "redis://127.0.0.1:1/0"
+
 # ── DB URL resolution ──────────────────────────────────────────────────────────
 
 
@@ -220,3 +230,75 @@ def _generated_skills_go_to_tmp(tmp_path, monkeypatch):
     monkeypatch.setattr("app.ai.capability_builder._GENERATED_ROOT", root)
     monkeypatch.setattr("app.api.dynamic_skill_runner._GENERATED_ROOT", root)
     return root
+
+
+@pytest.fixture(autouse=True)
+def _redis_in_memory(request, monkeypatch):
+    """Клиенты Redis приложения — в памяти, свежие на каждый тест.
+
+    Без fakeredis (образ backend без dev-зависимостей) остаётся недоступный
+    REDIS_URL: обращение падает, но никуда не пишет.
+    """
+    # Тесты самих пулов подменяют их моками и в сеть не ходят; адрес всё равно
+    # недоступный.
+    if _TEST_REDIS_URL or request.node.get_closest_marker("real_redis_client"):
+        yield
+        return
+    try:
+        import fakeredis
+        import fakeredis.aioredis
+    except ImportError:
+        yield
+        return
+
+    import asyncio
+
+    class _NetworkLikeFakeRedis(fakeredis.aioredis.FakeRedis):
+        """Команда отдаёт управление циклу, как настоящий сетевой вызов.
+
+        fakeredis отвечает, не уступая циклу, и меняет порядок конкурентных
+        корутин: test_concurrent_callers_refresh_the_token_only_once падал на
+        порядке, которого с настоящим Redis не бывает.
+        """
+
+        async def execute_command(self, *args, **options):
+            await asyncio.sleep(0)
+            return await super().execute_command(*args, **options)
+
+    server = fakeredis.FakeServer()
+
+    def sync_client():
+        return fakeredis.FakeRedis(server=server, decode_responses=True)
+
+    def async_client():
+        return _NetworkLikeFakeRedis(server=server, decode_responses=True)
+
+    import app.utils.redis_client as redis_client
+
+    monkeypatch.setattr(redis_client, "get_sync_redis", sync_client)
+    monkeypatch.setattr(redis_client, "get_async_redis", async_client)
+    monkeypatch.setattr(redis_client, "get_async_redis_pubsub", async_client)
+    # Импорт на уровне модуля держит собственную ссылку на функцию.
+    monkeypatch.setattr(
+        "app.services.integration_config.get_sync_redis", sync_client, raising=False
+    )
+    monkeypatch.setattr(
+        "app.ai.gpu_lock._redis", lambda: fakeredis.FakeRedis(server=server), raising=False
+    )
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _settings_files_go_to_tmp(tmp_path, monkeypatch):
+    """Файлы настроек и песочницы — во временный каталог теста.
+
+    ``data/`` на хосте — рабочие копии разработчика, а в контейнере это
+    боевой том (/app/data): тест PATCH /api/ai/config переписывал выбор моделей
+    агента, конструктор возможностей копил каталоги в agent_sandbox.
+    """
+    data = tmp_path / "data"
+    data.mkdir()
+    monkeypatch.setattr("app.api.ai_settings._CONFIG_FILE", data / "ai_config.json")
+    monkeypatch.setattr("app.ai.agent_config._CONFIG_FILE", data / "agent_config.json")
+    monkeypatch.setattr("app.ai.capability_sandbox._ROOT", data / "agent_sandbox")
+    monkeypatch.setattr("app.ai.capability_sandbox._STAGING_ROOT", data / "agent_staging")

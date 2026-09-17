@@ -69,6 +69,9 @@ dev = [
     # the entire pytest process instead of failing just the offending test.
     "pytest-timeout>=2.3",
     "httpx>=0.28",
+    # Redis в памяти для тестов (tests/conftest.py): на хосте localhost:6379 —
+    # чужой стек, в контейнере REDIS_URL — боевой Redis.
+    "fakeredis>=2.26",
     "testcontainers[postgres]>=4.8",
     "ruff>=0.16,<0.17",
     "mypy>=1.13",
@@ -135,6 +138,7 @@ timeout = 900
 # того, чтобы завалить один виновный тест.
 timeout_method = "signal"
 markers = [
+    "real_redis_client: тест проверяет сами функции app.utils.redis_client (пулы подменены моками) — conftest не подставляет Redis в памяти",
     "live: requires running Ollama at host-gateway:11434",
     "llamacpp: requires llama.cpp at llama-server:8080",
     "vllm: requires vLLM at vllm-server:8000",

@@ -3,7 +3,12 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from app.utils import redis_client
+
+# Проверяются сами пулы: Redis в памяти из conftest их подменил бы.
+pytestmark = pytest.mark.real_redis_client
 
 
 def test_async_redis_pool_is_recreated_for_a_new_event_loop() -> None:
