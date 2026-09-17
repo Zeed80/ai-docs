@@ -110,9 +110,22 @@ def verify_plate_hole(hypothesis: Hypothesis, frame: ViewFrame | None, sheet: An
     }
     bbox = (centre_px[0] - r, centre_px[1] - r, centre_px[0] + r, centre_px[1] + r)
     position_tol, diameter_tol = plate_hole_tolerances(frame.scale_mean)
-    problems = []
     if abs(measured["x_mm"] - x_mm) > position_tol:
-        problems.append(f"x {measured['x_mm']:g} мм, прочитано {x_mm:g}")
+        # x ридер читает почти всегда верно: окружность с другим x — чаще не
+        # та (дуга скругления, соседнее отверстие, пятно подписи), чем ошибка
+        # чтения. Фото v9 (dev): такие «опровержения» мерили Ø на 4–13 мм мимо.
+        # Замер остаётся — по нему судит предохранитель системы координат.
+        return Verdict(
+            status="unmeasurable",
+            measured=measured,
+            evidence_bbox_px=bbox,
+            anchors_px=(centre_px,),
+            reason=(
+                f"окружность на x {measured['x_mm']:g} мм, прочитано {x_mm:g} — "
+                "вероятно, другая окружность"
+            ),
+        )
+    problems = []
     if y_mm is not None and abs(measured["y_mm"] - y_mm) > position_tol:
         problems.append(f"y {measured['y_mm']:g} мм, прочитано {y_mm:g}")
     if abs(measured["diameter_mm"] - diameter_mm) > diameter_tol:

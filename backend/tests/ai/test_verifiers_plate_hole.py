@@ -93,3 +93,15 @@ def test_a_corner_fillet_arc_next_to_a_corner_hole_is_not_taken_for_it():
     )
 
     assert verdict.status == "confirmed", (verdict.reason, verdict.measured)
+
+
+def test_a_circle_found_off_the_read_x_is_another_circle_not_a_refutation():
+    """Фото v9 (dev): окружность в полосе с x мимо прочитанного — дуга, соседнее
+    отверстие, пятно подписи; такие «опровержения» мерили Ø на 4–13 мм мимо.
+    x ридер читает почти всегда верно — это «не измеримо», замер остаётся."""
+    x, y, d = HOLES[1]
+    verdict = _check(x + 1.5, y, d)
+
+    assert verdict.status == "unmeasurable", (verdict.status, verdict.reason)
+    assert "другая окружность" in verdict.reason
+    assert abs(verdict.measured["x_mm"] - x) <= 0.3
