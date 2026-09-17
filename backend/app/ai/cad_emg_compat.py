@@ -788,6 +788,44 @@ def kernel_reopen_patch(
     )
 
 
+def projection_comparison_patch(
+    graph: EngineeringModelGraph, comparison: dict[str, Any], *, pass_id: str
+) -> GraphPatch | None:
+    """Свидетельство уровня 11: огибающая и уступы собранного тела легли на лист.
+
+    Даётся только при ``status == "passed"`` сравнения
+    (`verifiers.projection_compare.compare_turned_projection`); «не измеримо» и
+    «не прошло» свидетельства не дают — код допуска остаётся.
+    """
+    import hashlib
+    import json
+
+    if (comparison or {}).get("status") != "passed":
+        return None
+    payload = {
+        key: comparison.get(key)
+        for key in ("method", "segments", "shoulders", "sampled_share", "excluded", "tolerance")
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    evidence = Evidence(
+        id=f"evidence:projection:{pass_id}:sheet-view",
+        kind="projection_comparison",
+        payload={**payload, "reason": comparison.get("reason")},
+        sha256=digest,
+    )
+    return GraphPatch(
+        patch_id=f"patch:projection:{pass_id}:sheet-view",
+        base_revision=graph.revision,
+        base_sha256=graph.canonical_sha256,
+        producer="system",
+        pass_id=pass_id,
+        idempotency_key=f"projection:{pass_id}:sheet-view",
+        add_evidence=[evidence],
+    )
+
+
 def spec_feature_tree_as_graph(
     spec: Any,
     candidate: FeatureTreeCandidate,

@@ -4321,6 +4321,55 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                             generation_id=generation_id,
                             error=str(exc)[:200],
                         )
+                    # Огибающая и уступы собранного тела вращения против вида,
+                    # проверенного по листу, — свидетельство уровня 11
+                    # (projection_comparison). Лист не в масштабе или грубый —
+                    # свидетельства нет, код допуска остаётся.
+                    front_view = ((solid_result.get("projection") or {}).get("views") or {}).get(
+                        "front"
+                    )
+                    sheet_frame = (verification or {}).get("frame")
+                    if (
+                        content
+                        and front_view
+                        and sheet_frame
+                        and (spec.get("main_view") or {}).get("outer")
+                    ):
+                        import io as _io
+
+                        import numpy as _np
+                        from PIL import Image as _Image
+
+                        from app.ai.cad_emg_compat import projection_comparison_patch
+                        from app.ai.cad_recognize.verifiers.projection_compare import (
+                            compare_turned_projection,
+                        )
+
+                        try:
+                            comparison = compare_turned_projection(
+                                _np.asarray(_Image.open(_io.BytesIO(content)).convert("L")),
+                                sheet_frame,
+                                front_view,
+                                spec,
+                            )
+                            solid_result["sheet_projection_comparison"] = comparison
+                            await _record(
+                                "verify.projection",
+                                "completed",
+                                f"Проекция тела против листа: {comparison['reason']}",
+                                comparison,
+                            )
+                            patch = projection_comparison_patch(
+                                engineering_graph, comparison, pass_id=f"projection-{generation_id}"
+                            )
+                            if patch is not None:
+                                engineering_graph = apply_graph_patch(engineering_graph, patch)
+                        except Exception as exc:  # noqa: BLE001 — сравнение не ломает сборку
+                            logger.warning(
+                                "cad_projection_compare_failed",
+                                generation_id=generation_id,
+                                error=str(exc)[:200],
+                            )
                 spec_ir = solid_result.pop("_sheet_ir", None)
                 if spec_ir is None:
                     return await _fail(
