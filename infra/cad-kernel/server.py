@@ -2672,6 +2672,13 @@ class SheetViewRequest(BaseModel):
     section_strategy: Literal["Offset"] = "Offset"
     # The letter pair a section is labelled with (Г-Г → "Г").
     section_symbol: str | None = Field(default=None, max_length=8)
+    # X1b: a REMOVED cross-section of a turned part (Б-Б through a keyway or a
+    # cross-hole) cuts ACROSS the axis, not along the base view's direction.
+    # "axis" — the plane z = ZMin + section_station_mm, seen along the axis
+    # (the `side` frame: u = x, v = y); built from the solid's own cut, so the
+    # outline is exactly the material and the keyway notch is in it.
+    section_normal: Literal["view", "axis"] = "view"
+    section_station_mm: float | None = None
     # Parent-view model coordinates and model radius. A detail with no exact
     # crop is rejected by the API instead of silently enlarging the whole part.
     detail_center_mm: tuple[float, float] | None = None
@@ -2832,6 +2839,55 @@ def _techdraw_edges(view, samples: int) -> dict[str, list[dict[str, Any]]]:
     return out
 
 
+def _axial_cut_outlines(
+    shape: Part.Shape, station_mm: float, scale: float, samples: int
+) -> list[list[tuple[float, float]]]:
+    """Outlines of the material in the plane z = ZMin + station, in the `side`
+    frame (u = x, v = y), centred on the axis and scaled — the removed section
+    of a turned part. Outer boundary first; holes (a bore) follow as their own
+    outlines."""
+    box = shape.BoundBox
+    z = box.ZMin + station_mm
+    if not box.ZMin - 1e-6 <= z <= box.ZMax + 1e-6:
+        return []
+    reach = max(box.XLength, box.YLength) * 2.0 + 10.0
+    plane = Part.makePlane(
+        reach * 2, reach * 2, App.Vector(-reach, -reach, z), App.Vector(0.0, 0.0, 1.0)
+    )
+    try:
+        cut = shape.common(plane)
+    except Exception:  # noqa: BLE001
+        return []
+    outlines: list[list[tuple[float, float]]] = []
+    for face in cut.Faces:
+        for wire in [face.OuterWire, *[w for w in face.Wires if not w.isSame(face.OuterWire)]]:
+            ordered = getattr(wire, "OrderedEdges", None) or wire.Edges
+            points: list[tuple[float, float]] = []
+            for edge in ordered:
+                try:
+                    first, last = edge.FirstParameter, edge.LastParameter
+                    count = samples if edge.Curve.__class__.__name__ != "Line" else 1
+                    sampled = []
+                    for index in range(count + 1):
+                        point = edge.valueAt(first + (last - first) * index / count)
+                        sampled.append((round(point.x * scale, 6), round(point.y * scale, 6)))
+                except Exception:  # noqa: BLE001
+                    continue
+                if points and sampled:
+                    if math.dist(points[-1], sampled[-1]) < math.dist(points[-1], sampled[0]):
+                        sampled.reverse()
+                points.extend(sampled)
+            deduped: list[tuple[float, float]] = []
+            for point in points:
+                if not deduped or point != deduped[-1]:
+                    deduped.append(point)
+            if len(deduped) > 3 and deduped[0] == deduped[-1]:
+                deduped.pop()
+            if len(deduped) >= 3:
+                outlines.append(deduped)
+    return outlines
+
+
 @app.post("/drawing")
 def build_drawing(request: DrawingRequest) -> dict[str, Any]:
     """A sheet's views built by TechDraw, sections included.
@@ -2879,6 +2935,45 @@ def build_drawing(request: DrawingRequest) -> dict[str, Any]:
                 centre_u, centre_v = wanted.detail_center_mm or (0.0, 0.0)
                 view.AnchorPoint = App.Vector(centre_u, centre_v, 0.0)
                 view.Radius = float(wanted.detail_radius_mm or 0.0)
+            elif wanted.kind == "section" and wanted.section_normal == "axis":
+                if wanted.section_station_mm is None:
+                    raise HTTPException(422, "an axial section needs section_station_mm")
+                outlines = _axial_cut_outlines(
+                    shape, float(wanted.section_station_mm), request.scale,
+                    max(8, request.curve_samples),
+                )
+                if not outlines:
+                    raise HTTPException(
+                        422,
+                        f"no material at axial station {wanted.section_station_mm:g} mm",
+                    )
+                visible = []
+                for outline in outlines:
+                    for start, end in zip(outline, outline[1:] + outline[:1]):
+                        if start != end:
+                            visible.append({
+                                "type": "line",
+                                "points": [list(start), list(end)],
+                                "edge_index": len(visible),
+                            })
+                us = [p[0] for outline in outlines for p in outline]
+                vs = [p[1] for outline in outlines for p in outline]
+                view_objects.append(None)
+                views.append({
+                    "kind": wanted.presentation_kind or "removed_section",
+                    "label": wanted.label,
+                    "detail_center_mm": None,
+                    "detail_radius_mm": None,
+                    "detail_scale_factor": None,
+                    "bounds_mm": {
+                        "u_min": min(us), "u_max": max(us), "v_min": min(vs), "v_max": max(vs),
+                    },
+                    "visible": visible,
+                    "hidden": [],
+                    "hatch": outlines,
+                    "section_station_mm": wanted.section_station_mm,
+                })
+                continue
             elif wanted.kind == "section":
                 if base_view is None:
                     raise HTTPException(
@@ -3012,6 +3107,10 @@ def build_drawing(request: DrawingRequest) -> dict[str, Any]:
             if wanted_dim.view_index >= len(view_objects):
                 continue
             owner = view_objects[wanted_dim.view_index]
+            if owner is None:
+                # An axial cross-section is built from the solid, not by
+                # TechDraw: its dimensions are the caller's, off the outline.
+                continue
             dim = document.addObject("TechDraw::DrawViewDimension", f"Dim{len(dimensions)}")
             page.addView(dim)
             dim.Type = wanted_dim.kind

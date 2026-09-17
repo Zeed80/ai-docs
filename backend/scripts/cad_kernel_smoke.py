@@ -540,6 +540,61 @@ def _check_face_groove() -> None:
     )
 
 
+def _check_axial_cross_section() -> None:
+    """X1b: вынесенное сечение Б-Б через паз — поперёк оси, из самого тела.
+    Вал Ø30, паз 8 × 4 (закрытый) на 20…45: сечение на 30 — круг с вырезом."""
+    import math
+
+    shaft = _feature("revolve", profile_points=[{"r": 15.0, "z": 0.0}, {"r": 15.0, "z": 60.0}])
+    keyway = _feature(
+        "keyway",
+        axial_start_mm=20.0,
+        length_mm=25.0,
+        width_mm=8.0,
+        depth_mm=4.0,
+        angle_deg=0.0,
+        end_type="closed",
+    )
+    status, payload = _post(
+        "/drawing",
+        {
+            "candidate": _candidate(shaft, keyway, label="keyed shaft"),
+            "confirm_assumptions": True,
+            "views": [
+                {"kind": "front"},
+                {
+                    "kind": "section",
+                    "section_normal": "axis",
+                    "section_station_mm": 30.0,
+                    "label": "Б-Б",
+                },
+            ],
+            "scale": 1.0,
+        },
+    )
+    if status != 200:
+        check("axial cross-section builds", False, f"HTTP {status}: {str(payload)[:300]}")
+        return
+    section = payload["views"][1]
+    (outline,) = section["hatch"]
+    area = 0.5 * abs(
+        sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(outline, outline[1:] + outline[:1]))
+    )
+    # Сегмент круга над дном паза ниже хорды: площадь выреза ≈ b × t (± сегмент).
+    circle = math.pi * 15.0**2
+    notch = area - circle
+    bounds = section["bounds_mm"]
+    check(
+        "axial cross-section is a disk with the keyway notch",
+        section["kind"] == "removed_section"
+        # Паз срезает контур с одной стороны — полный Ø остаётся по другой оси.
+        and abs(max(bounds["u_max"] - bounds["u_min"], bounds["v_max"] - bounds["v_min"]) - 30.0)
+        < 0.2
+        and -8.0 * 4.0 * 1.2 < notch < -8.0 * 4.0 * 0.8,
+        f"area={area:.1f}, circle={circle:.1f}, notch={notch:.1f}",
+    )
+
+
 def main() -> int:
     status, health = _post("/health", {}) if False else (200, None)
     with urllib.request.urlopen(f"{KERNEL}/health", timeout=30) as response:
@@ -1077,6 +1132,7 @@ def main() -> int:
     _check_full_application_pipeline()
     _check_flange_on_axial_station()
     _check_face_groove()
+    _check_axial_cross_section()
 
     failed = [name for ok, name, _detail in _results if not ok]
     print(f"\n{len(_results) - len(failed)}/{len(_results)} passed")
