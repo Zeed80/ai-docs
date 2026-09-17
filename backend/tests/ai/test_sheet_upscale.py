@@ -204,3 +204,69 @@ def test_a_comfyui_refusal_keeps_its_reason_and_a_one_off_failure_is_retried(mon
 
     assert len(calls) == 2
     assert retried.applied is True, retried.reason
+
+
+# ── Настройки оператора ──────────────────────────────────────────────────────
+
+
+def test_the_operator_caps_the_factor():
+    """Лист 600 px с линией 0,77 px просит ×8; оператор ограничил ×4."""
+    assert sheet_upscale.upscale_factor(0.77, (425, 600), 4.5, max_factor=4) == 4
+    assert sheet_upscale.upscale_factor(1.5, (620, 877), 4.5, max_factor=3) == 3
+
+
+def _options(params=None, config=None, env=True):
+    return sheet_upscale.upscale_options(
+        params or {}, config or {}, env_enabled=env, env_timeout_s=600.0
+    )
+
+
+def test_the_run_checkbox_wins_over_settings_and_settings_over_the_environment():
+    assert _options(env=False).enabled is False
+    assert _options(env=False).enabled_source == "environment"
+    assert _options({}, {"cad_upscale_enabled": True}, env=False).enabled is True
+    run_off = _options({"auto_upscale": False}, {"cad_upscale_enabled": True})
+    assert (run_off.enabled, run_off.enabled_source) == (False, "run")
+    run_on = _options({"auto_upscale": True}, {"cad_upscale_enabled": False}, env=False)
+    assert (run_on.enabled, run_on.enabled_source) == (True, "run")
+
+
+def test_stored_numbers_apply_only_inside_the_limits():
+    options = _options(
+        {},
+        {
+            "cad_upscale_min_line_px": 6.0,
+            "cad_upscale_max_factor": 4,
+            "cad_upscale_timeout_s": 900,
+            "cad_upscale_min_agreement": 0.8,
+        },
+    )
+    assert (options.min_line_px, options.max_factor, options.timeout_s, options.min_agreement) == (
+        6.0,
+        4,
+        900.0,
+        0.8,
+    )
+    # Порог согласия 0,1 пропускал бы подменённые подписи — берётся умолчание.
+    broken = _options({}, {"cad_upscale_min_agreement": 0.1, "cad_upscale_max_factor": True})
+    assert broken.min_agreement == sheet_upscale.MIN_TILE_AGREEMENT
+    assert broken.max_factor == 8
+
+
+def test_the_operator_agreement_threshold_decides_whether_the_upscale_is_kept(monkeypatch):
+    """Строгий порог оператора отвергает лист, который проходит по умолчанию:
+    шум по всему листу опускает согласие плиток до ~0,88 — ниже 0,92, выше 0,72."""
+    low = _sheet(2)
+    factor = sheet_upscale.upscale_factor(sheet_upscale.main_line_px(low), low.shape, 4.5)
+    size = (low.shape[1] * factor, low.shape[0] * factor)
+    honest = np.asarray(Image.fromarray(low).resize(size, Image.LANCZOS)).astype(float)
+    rng = np.random.default_rng(1)
+    noisy = np.clip(honest + rng.normal(0, 60, honest.shape), 0, 255).astype(np.uint8)
+    _fake_comfy(monkeypatch, noisy)
+
+    default = sheet_upscale.upscale_sheet(_png(low), comfy_url="http://x")
+    strict = sheet_upscale.upscale_sheet(_png(low), comfy_url="http://x", min_agreement=0.92)
+
+    assert default.applied is True
+    assert strict.applied is False
+    assert "< 0.92" in strict.reason

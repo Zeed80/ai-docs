@@ -8,7 +8,7 @@ import structlog
 import yaml
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -249,9 +249,33 @@ async def delete_model(model_name: str) -> dict:
 # ── Config CRUD ───────────────────────────────────────────────────────────────
 
 
+def _with_cad_upscale(cfg: dict) -> dict:
+    """Конфигурация плюс итоговые параметры улучшения листа для экрана настроек.
+
+    Хранятся только поля ``cad_upscale_*``, заданные оператором; ``cad_upscale``
+    в ответе — что реально применится (с умолчаниями окружения) и пределы.
+    """
+    from app.ai.cad_recognize.sheet_upscale import LIMITS, upscale_options
+
+    options = upscale_options(
+        {},
+        cfg,
+        env_enabled=settings.cad_auto_upscale,
+        env_timeout_s=settings.cad_upscale_timeout_s,
+    )
+    return {
+        **cfg,
+        "cad_upscale": {
+            **options.as_event(),
+            "env_enabled": settings.cad_auto_upscale,
+            "limits": {key: list(bounds) for key, bounds in LIMITS.items()},
+        },
+    }
+
+
 @router.get("/config")
 async def get_config() -> dict:
-    return get_ai_config()
+    return _with_cad_upscale(get_ai_config())
 
 
 @router.get("/config/status")
@@ -330,6 +354,13 @@ class ConfigUpdate(BaseModel):
     turboquant_enabled: bool | None = None
     turboquant_kv_cache_dtype: str | None = None
     turboquant_max_model_len: int | None = None
+    # Улучшение грубого листа перед оцифровкой (SeedVR2). null — вернуть
+    # решение окружению (CAD_AUTO_UPSCALE). Пределы — sheet_upscale.LIMITS.
+    cad_upscale_enabled: bool | None = None
+    cad_upscale_min_line_px: float | None = Field(default=None, ge=2.0, le=12.0)
+    cad_upscale_max_factor: int | None = Field(default=None, ge=2, le=8)
+    cad_upscale_timeout_s: float | None = Field(default=None, ge=60.0, le=3600.0)
+    cad_upscale_min_agreement: float | None = Field(default=None, ge=0.5, le=0.95)
 
 
 @router.patch("/config")
@@ -357,7 +388,7 @@ async def update_config(
         )
         await db.commit()
     logger.info("ai_config_updated", **update)
-    return cfg
+    return _with_cad_upscale(cfg)
 
 
 # ── Built-in agent config ────────────────────────────────────────────────────

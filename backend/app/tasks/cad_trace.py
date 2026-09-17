@@ -3320,20 +3320,42 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         # измеримо» становится почти как на 300 dpi и ловит выдумки ридера.
         # Любой отказ — исходник, как без апскейла; исходник хранится рядом.
         upscale_report: dict[str, Any] | None = None
-        if content and vectorize_method == "spec" and params.get("auto_upscale", True):
+        if content and vectorize_method == "spec":
             import asyncio as _asyncio
 
-            from app.ai.cad_recognize.sheet_upscale import upscale_sheet
+            from app.ai.cad_recognize.sheet_upscale import upscale_options, upscale_sheet
+            from app.api.ai_settings import get_ai_config
             from app.config import settings as _upscale_settings
 
-            if _upscale_settings.cad_auto_upscale:
+            # Галочка прогона → настройки оператора (Настройки → Данные) →
+            # CAD_AUTO_UPSCALE; числа — из настроек в пределах LIMITS.
+            options = upscale_options(
+                params,
+                get_ai_config(),
+                env_enabled=_upscale_settings.cad_auto_upscale,
+                env_timeout_s=_upscale_settings.cad_upscale_timeout_s,
+            )
+            if not options.enabled:
+                await _record(
+                    "source.upscale",
+                    "skipped",
+                    "Улучшение листа выключено"
+                    + (
+                        " для этого прогона" if options.enabled_source == "run" else " в настройках"
+                    ),
+                    {"options": options.as_event()},
+                )
+            else:
                 upscaled = await _asyncio.to_thread(
                     upscale_sheet,
                     content,
                     comfy_url=_upscale_settings.comfyui_url,
-                    timeout_s=_upscale_settings.cad_upscale_timeout_s,
+                    timeout_s=options.timeout_s,
+                    min_line_px=options.min_line_px,
+                    max_factor=options.max_factor,
+                    min_agreement=options.min_agreement,
                 )
-                upscale_report = upscaled.as_event()
+                upscale_report = {**upscaled.as_event(), "options": options.as_event()}
                 if upscaled.applied:
                     original_path = (
                         f"image-gen/{owner_sub or 'shared'}/{generation_id}_normalized_original.png"

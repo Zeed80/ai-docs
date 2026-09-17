@@ -1220,7 +1220,30 @@
     "blocked_solid_input": "What would be sent to the 3D model",
     "kernel_payload_json": "Full CAD-kernel request JSON",
     "pdf_dpi": "PDF rasterisation resolution",
-    "pdf_dpi_option": "{dpi} DPI"
+    "pdf_dpi_option": "{dpi} DPI",
+    "upscale_run": "Enhance a coarse sheet",
+    "upscale_run_hint": "Thin scan lines (below the threshold in settings) are upscaled with SeedVR2 before reading. Applies to this run only.",
+    "upscale": {
+      "title": "Coarse sheet enhancement before digitization",
+      "subtitle": "A scan with thin lines is upscaled by SeedVR2 in the local ComfyUI so the sheet checks can measure it. A safeguard compares the result with the source; on disagreement or failure the source is used. The checkbox on the digitization page overrides these settings.",
+      "enabled": "Enhance coarse sheets by default",
+      "source_settings": "set here",
+      "source_environment": "environment default (CAD_AUTO_UPSCALE: {value})",
+      "reset_environment": "Use the environment default",
+      "on": "on",
+      "off": "off",
+      "min_line_px_label": "Main line thickness threshold, px",
+      "min_line_px_hint": "Sheets with thinner lines are upscaled. {low} to {high}; 4.5 is the shaft check threshold.",
+      "max_factor_label": "Maximum upscale factor",
+      "max_factor_hint": "{low} to {high}. Higher is slower and needs more VRAM; output is capped at 7200 px.",
+      "min_agreement_label": "Agreement threshold with the source",
+      "min_agreement_hint": "{low} to {high}. Lower lets more redrawn digits through; higher refuses more often and keeps the source. Calibrated: 0.72.",
+      "timeout_s_label": "ComfyUI timeout, s",
+      "timeout_s_hint": "{low} to {high}.",
+      "save": "Save parameters",
+      "saved": "Saved",
+      "error": "Settings unavailable: {error}"
+    }
   },
   "email": {
     "title": "Mail",

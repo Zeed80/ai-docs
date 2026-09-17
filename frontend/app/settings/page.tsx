@@ -13,6 +13,7 @@ import { EmailTemplatesSection } from "@/components/email/email-templates";
 import { EmailRulesSection } from "@/components/email/rule-builder";
 import { SignaturesSection, EmailPolicySection } from "@/components/email/address-book";
 import { PersonalMailboxCard } from "@/components/email/personal-mailbox-card";
+import UpscaleSettingsCard from "@/components/cad/UpscaleSettingsCard";
 import { isGpuBarEnabled, setGpuBarEnabled } from "@/components/gpu-status-bar";
 import { useAgentName, broadcastAgentName } from "@/lib/agent-name";
 import { tz } from "@/lib/user-time";
@@ -3544,6 +3545,9 @@ export default function SettingsPage() {
               </div>
             )}
           </SectionCard>
+
+          {/* Улучшение грубого листа перед оцифровкой чертежей */}
+          <UpscaleSettingsCard />
 
           {/* Links to sub-pages */}
           <SectionCard

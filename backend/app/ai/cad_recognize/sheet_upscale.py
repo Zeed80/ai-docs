@@ -114,7 +114,9 @@ def main_line_px(gray: Any) -> float:
     return float(np.percentile(weights, 90))
 
 
-def upscale_factor(line_px: float, shape: tuple[int, int], min_line_px: float) -> int:
+def upscale_factor(
+    line_px: float, shape: tuple[int, int], min_line_px: float, max_factor: int = _MAX_FACTOR
+) -> int:
     """Во сколько раз увеличить: 0 — не нужно или некуда.
 
     Столько, чтобы основная линия дошла до порога, но не меньше ×3 (опыт:
@@ -125,7 +127,8 @@ def upscale_factor(line_px: float, shape: tuple[int, int], min_line_px: float) -
     """
     if line_px <= 0.0 or line_px >= min_line_px:
         return 0
-    factor = min(_MAX_FACTOR, max(3, math.ceil(min_line_px / (_SR_THINNING * line_px))))
+    ceiling = max(2, min(int(max_factor), _MAX_FACTOR))
+    factor = min(ceiling, max(3, math.ceil(min_line_px / (_SR_THINNING * line_px))))
     while factor >= 2 and max(shape) * factor > MAX_SIDE_PX:
         factor -= 1
     return factor if factor >= 2 else 0
@@ -392,6 +395,8 @@ def upscale_sheet(
     comfy_url: str,
     min_line_px: float | None = None,
     timeout_s: float = 600,
+    max_factor: int = _MAX_FACTOR,
+    min_agreement: float = MIN_TILE_AGREEMENT,
 ) -> UpscaleResult:
     """Увеличить грубый лист; при любом сомнении вернуть исходник с причиной."""
     import numpy as np
@@ -402,7 +407,7 @@ def upscale_sheet(
     threshold = float(min_line_px or _MIN_LINE_PX)
     gray = np.asarray(Image.open(io.BytesIO(content)).convert("L"))
     line_px = main_line_px(gray)
-    factor = upscale_factor(line_px, gray.shape, threshold)
+    factor = upscale_factor(line_px, gray.shape, threshold, max_factor)
     if factor == 0:
         reason = (
             "лист достаточно чёткий"
@@ -451,18 +456,18 @@ def upscale_sheet(
     seconds = time.monotonic() - started
     scores = agreement(gray, upscaled)
     patched = 0
-    if scores["worst_tile"] < MIN_TILE_AGREEMENT:
+    if scores["worst_tile"] < min_agreement:
         candidate, patched = patch_disagreeing(gray, upscaled, factor)
         if patched <= _MAX_PATCHED_SHARE * max(1.0, scores["tiles"]):
             upscaled = candidate
             scores = {**agreement(gray, upscaled), "patched_tiles": float(patched)}
-    if scores["worst_tile"] < MIN_TILE_AGREEMENT:
+    if scores["worst_tile"] < min_agreement:
         return UpscaleResult(
             content,
             False,
             (
                 "увеличенный лист расходится с исходником "
-                f"(худшая плитка {scores['worst_tile']:.2f} < {MIN_TILE_AGREEMENT:g})"
+                f"(худшая плитка {scores['worst_tile']:.2f} < {min_agreement:g})"
             ),
             line_px=line_px,
             factor=factor,
@@ -480,4 +485,72 @@ def upscale_sheet(
         factor=factor,
         seconds=seconds,
         agreement=scores,
+    )
+
+
+# Границы параметров, которые оператор правит в настройках. Ниже 2 px линия
+# ломается уже на исходнике; выше 12 — увеличивался бы почти любой скан.
+# Порог согласия ниже 0,5 пропускает подменённые подписи (калибровка E17c).
+LIMITS: dict[str, tuple[float, float]] = {
+    "min_line_px": (2.0, 12.0),
+    "max_factor": (2.0, float(_MAX_FACTOR)),
+    "timeout_s": (60.0, 3600.0),
+    "min_agreement": (0.5, 0.95),
+}
+
+
+@dataclass(frozen=True)
+class UpscaleOptions:
+    enabled: bool
+    min_line_px: float
+    max_factor: int
+    timeout_s: float
+    min_agreement: float
+    # Откуда взято решение «увеличивать или нет»: прогон, настройки, окружение.
+    enabled_source: str
+
+    def as_event(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "enabled_source": self.enabled_source,
+            "min_line_px": self.min_line_px,
+            "max_factor": self.max_factor,
+            "timeout_s": self.timeout_s,
+            "min_agreement": self.min_agreement,
+        }
+
+
+def upscale_options(
+    params: dict[str, Any], config: dict[str, Any], *, env_enabled: bool, env_timeout_s: float
+) -> UpscaleOptions:
+    """Итоговые параметры апскейла: прогон → настройки оператора → окружение.
+
+    Галочка прогона (`params.auto_upscale`) решает в обе стороны; без неё —
+    `cad_upscale_enabled` из настроек; без него — `CAD_AUTO_UPSCALE`. Числа вне
+    `LIMITS` из хранилища не берутся — остаётся умолчание модуля.
+    """
+    from app.ai.cad_recognize.verifiers.shaft_profile import _MIN_LINE_PX
+
+    def number(key: str, default: float) -> float:
+        value = config.get(f"cad_upscale_{key}")
+        low, high = LIMITS[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return default
+        return float(value) if low <= float(value) <= high else default
+
+    run = params.get("auto_upscale")
+    stored = config.get("cad_upscale_enabled")
+    if isinstance(run, bool):
+        enabled, source = run, "run"
+    elif isinstance(stored, bool):
+        enabled, source = stored, "settings"
+    else:
+        enabled, source = bool(env_enabled), "environment"
+    return UpscaleOptions(
+        enabled=enabled,
+        min_line_px=number("min_line_px", float(_MIN_LINE_PX)),
+        max_factor=int(number("max_factor", float(_MAX_FACTOR))),
+        timeout_s=number("timeout_s", float(env_timeout_s)),
+        min_agreement=number("min_agreement", MIN_TILE_AGREEMENT),
+        enabled_source=source,
     )

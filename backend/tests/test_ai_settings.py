@@ -119,3 +119,21 @@ async def test_get_embedding_profile(client: AsyncClient):
     assert resp.status_code == 200
     data = resp.json()
     assert isinstance(data, dict)
+
+
+@pytest.mark.asyncio
+async def test_config_rejects_an_upscale_agreement_below_the_safe_limit(client: AsyncClient):
+    """Порог согласия ниже 0,5 пропускает подменённые подписи — не сохраняется."""
+    resp = await client.patch("/api/ai/config", json={"cad_upscale_min_agreement": 0.1})
+    assert resp.status_code == 422
+
+
+def test_config_response_carries_the_effective_upscale_options():
+    from app.api.ai_settings import _with_cad_upscale
+
+    data = _with_cad_upscale({"cad_upscale_enabled": False, "cad_upscale_max_factor": 4})
+
+    assert data["cad_upscale"]["enabled"] is False
+    assert data["cad_upscale"]["enabled_source"] == "settings"
+    assert data["cad_upscale"]["max_factor"] == 4
+    assert data["cad_upscale"]["limits"]["min_agreement"] == [0.5, 0.95]
