@@ -276,3 +276,21 @@ def test_the_reader_turns_the_angle_between_flanges_into_the_bend_angle():
     sheet = sheet_metal_from_answer(answer, _taken(40, 20, 120, 2.5, 80))
     assert sheet["bend_angles_deg"] == [60.0]
     assert sheet["flanges_mm"] == pytest.approx([37.113249, 17.113249], abs=1e-6)
+
+
+def test_the_built_sheet_metal_part_is_checked_by_section_and_width():
+    """Живой прогон 86fba5cd: швеллер собран, а сверка тела знала только вал и
+    пластину — «no_supported_body», тело отклонено."""
+    from app.ai.cad_solid import verify_solid_against_spec
+
+    spec = _channel_spec()
+    area = section_area([20.0, 40.0, 20.0], 2, 2.0, 2.0)
+    report = {
+        "bounds_mm": {"x": 24.0, "y": 48.0, "z": 50.0},
+        "volume_mm3": area * 50.0,
+        "solid_count": 1,
+        "brep_valid": True,
+        "manifold": True,
+    }
+    assert verify_solid_against_spec(report, spec).ok
+    assert not verify_solid_against_spec({**report, "volume_mm3": area * 49.0}, spec).ok

@@ -2086,6 +2086,13 @@ def verify_solid_against_spec(
     declared operation still built) remain blocking regardless — this never
     waves through a broken build, only a legitimately bigger one.
     """
+    if isinstance((spec.get("main_view") or {}).get("sheet_metal"), dict):
+        return _verify_sheet_metal(spec, report, require_envelope_match=require_envelope_match)
+    if (
+        spec.get("welds")
+        or len([p for p in spec.get("parts") or [] if isinstance(p, dict) and p.get("profile")]) > 1
+    ):
+        return _verify_weldment(spec, report, require_envelope_match=require_envelope_match)
     parts = _rotation_parts(spec)
     if not parts:
         return _verify_prismatic(spec, report, require_envelope_match=require_envelope_match)
@@ -2261,6 +2268,123 @@ def _flange_envelope(
         extent = max(extent, span)
         volume += max(0.0, area - body) * depth
     return extent, volume
+
+
+def _close(a: float, b: float) -> bool:
+    return b > 0 and abs(a - b) <= max(0.05, b * 0.005)
+
+
+def _built_envelope(report: dict) -> tuple[float, float, float]:
+    bounds = report.get("bounds_mm") or {}
+    return (
+        float(bounds.get("x") or 0.0),
+        float(bounds.get("y") or 0.0),
+        float(bounds.get("z") or 0.0),
+    )
+
+
+def _verify_sheet_metal(
+    spec: dict, report: dict, *, require_envelope_match: bool = True
+) -> SolidVerification:
+    """Гнутая деталь (X4): габарит сечения и ширина, объём — сечение × ширина.
+
+    Живой прогон: сверка тела знала только вал и пластину, и собранный
+    швеллер отклонялся как «no_supported_body».
+    """
+    from app.ai.cad_dimension_graph import sketch_outline
+    from app.ai.sheet_metal import bent_section, section_area
+
+    sheet = spec["main_view"]["sheet_metal"]
+    try:
+        flanges = [float(v) for v in sheet["flanges_mm"]]
+        turns = [int(v) for v in sheet["turns"]]
+        radius, thickness = float(sheet["radius_mm"]), float(sheet["thickness_mm"])
+        width = float(sheet["width_mm"])
+        angles = (
+            [float(v) for v in sheet["bend_angles_deg"]] if sheet.get("bend_angles_deg") else None
+        )
+        outline = sketch_outline(bent_section(flanges, turns, radius, thickness, angles)) or []
+    except (KeyError, TypeError, ValueError):
+        return SolidVerification({"ok": False, "reason": "sheet_metal_unreadable"})
+    stated_x = max(p[0] for p in outline) - min(p[0] for p in outline)
+    stated_y = max(p[1] for p in outline) - min(p[1] for p in outline)
+    stated = sorted((stated_x, stated_y, width))
+    built = sorted(_built_envelope(report))
+    volume = float(report.get("volume_mm3") or 0.0)
+    expected = section_area(flanges, len(turns), radius, thickness, angles) * width
+    topology_ok = bool(
+        report.get("brep_valid") and report.get("manifold") and report.get("solid_count") == 1
+    )
+    envelope_ok = all(abs(a - b) <= max(0.1, b * 0.005) for a, b in zip(built, stated, strict=True))
+    volume_ok = _close(volume, expected)
+    return SolidVerification(
+        {
+            "ok": topology_ok and volume_ok and (envelope_ok or not require_envelope_match),
+            "envelope_ok": envelope_ok,
+            "envelope_match_required": require_envelope_match,
+            "stated_envelope_mm": [round(v, 3) for v in stated],
+            "built_envelope_mm": [round(v, 3) for v in built],
+            "volume_ok": volume_ok,
+            "volume_mm3": volume,
+            "expected_volume_mm3": round(expected, 3),
+            "topology_ok": topology_ok,
+            "brep_valid": bool(report.get("brep_valid")),
+            "manifold": bool(report.get("manifold")),
+            "solid_count": report.get("solid_count"),
+        }
+    )
+
+
+def _verify_weldment(
+    spec: dict, report: dict, *, require_envelope_match: bool = True
+) -> SolidVerification:
+    """Сварной узел (X3): габарит размещённых тел, объём пластин и валиков,
+    число тел.
+
+    Живой прогон: узел сверялся как пластина по одному основанию (высота 8
+    против 58) и отклонялся.
+    """
+    bodies = [p for p in spec.get("parts") or [] if isinstance(p, dict) and p.get("profile")]
+    boxes = [_body_box(body) for body in bodies]
+    if not boxes or None in boxes:
+        return SolidVerification({"ok": False, "reason": "weldment_bodies_not_rectangular"})
+    stated = tuple(
+        max(box[1][axis] for box in boxes) - min(box[0][axis] for box in boxes) for axis in range(3)
+    )
+    built = _built_envelope(report)
+    expected = sum(
+        float(b["profile"]["width_mm"])
+        * float(b["profile"]["height_mm"])
+        * float(b["profile"]["thickness_mm"])
+        for b in bodies
+    )
+    beads, _notes = _weld_beads(spec, bodies, start_index=len(bodies))
+    for bead in beads:
+        leg = float(bead.params["sketch_profile"][0]["to"][0])
+        expected += leg * leg / 2.0 * float(bead.params["depth_mm"])
+    volume = float(report.get("volume_mm3") or 0.0)
+    solids = len(bodies) + len(beads)
+    topology_ok = bool(
+        report.get("brep_valid") and (report.get("solid_count") in (None, solids)) and volume > 0
+    )
+    envelope_ok = all(_close(a, b) for a, b in zip(built, stated, strict=True))
+    volume_ok = _close(volume, expected)
+    return SolidVerification(
+        {
+            "ok": topology_ok and volume_ok and (envelope_ok or not require_envelope_match),
+            "envelope_ok": envelope_ok,
+            "envelope_match_required": require_envelope_match,
+            "stated_envelope_mm": [round(v, 3) for v in stated],
+            "built_envelope_mm": [round(v, 3) for v in built],
+            "volume_ok": volume_ok,
+            "volume_mm3": volume,
+            "expected_volume_mm3": round(expected, 3),
+            "solids_expected": solids,
+            "solid_count": report.get("solid_count"),
+            "topology_ok": topology_ok,
+            "brep_valid": bool(report.get("brep_valid")),
+        }
+    )
 
 
 def _verify_prismatic(

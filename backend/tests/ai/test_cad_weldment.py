@@ -203,3 +203,22 @@ def test_the_reader_builds_no_rib_from_a_position_the_sheet_does_not_state():
     }
     assert weldment_from_answer(answer, _taken(80, 30, 5, 65, 120, 8), notes) is None
     assert "положение ребра не проставлено" in notes[0]
+
+
+def test_the_built_weldment_is_checked_as_a_whole():
+    """Живой прогон 272235a5: узел собран верно (3 тела, 221 600 мм³), а сверка
+    сравнивала его с одним основанием — высота 8 против 58 — и отклоняла."""
+    from app.ai.cad_solid import verify_solid_against_spec
+    from app.ai.verify_corpus.synth import synth_spec
+
+    spec = synth_spec("weldment", 0)
+    report = {
+        "bounds_mm": {"x": 200.0, "y": 100.0, "z": 58.0},
+        "volume_mm3": 221599.99999999997,
+        "solid_count": 3,
+        "brep_valid": True,
+        "manifold": True,
+    }
+    assert verify_solid_against_spec(report, spec).ok
+    missing_bead = {**report, "volume_mm3": 221600.0 - 5.0**2 / 2.0 * 200.0, "solid_count": 2}
+    assert not verify_solid_against_spec(missing_bead, spec).ok
