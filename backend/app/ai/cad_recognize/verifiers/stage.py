@@ -57,7 +57,10 @@ def verify_spec_against_sheet(image_bytes: bytes, spec: dict[str, Any]) -> dict[
         reason = "нет проверяемых элементов (пластина, круглая деталь, тело вращения)"
     if shape in {"rectangle", "sketch"}:
         _plate_contour(image_bytes, spec or {}, profile, report)
-    if shape == "rectangle":
+    if shape in {"rectangle", "sketch"}:
+        # Эскиз тоже: живой корпус прочитан «пластиной» 50 × 80 × 16 (контур по
+        # листу дал sketch), и толщину не проверял никто — а по видам она 50.
+        _housing_by_sheet(image_bytes, spec or {}, profile, report)
         _housing_thickness(image_bytes, profile, report)
         _wall_features_on_sheet(image_bytes, profile, report)
     _sheet_scale(image_bytes, spec or {}, report)
@@ -237,6 +240,54 @@ def _gray(image_bytes: bytes) -> Any:
     from PIL import Image
 
     return np.asarray(Image.open(io.BytesIO(image_bytes)).convert("L"))
+
+
+def _housing_by_sheet(
+    image_bytes: bytes, spec: dict[str, Any], profile: dict[str, Any], report: dict[str, Any]
+) -> None:
+    """Корпус по листу: три вида по геометрии, размеры — по надписям (Ф5).
+
+    Когда габариты прочитаны неверно, план по ним не найти, и проверка честно
+    молчит: живой корпус прочитан «пластиной» 50 × 80 × 16 при 80 × 80 × 50.
+    Предложение по листу решает согласование, как у профиля вала и контура
+    пластины.
+    """
+    from app.ai.cad_recognize.verifiers.housing_views import discover_housing_views
+    from app.ai.cad_recognize.verifiers.reconcile import sheet_numbers
+
+    found = discover_housing_views(_gray(image_bytes), sheet_numbers(spec))
+    if not found or not found.get("thickness_mm"):
+        return
+    report["housing_by_sheet"] = found
+    read = {
+        "width_mm": profile.get("width_mm"),
+        "height_mm": profile.get("height_mm"),
+        "thickness_mm": profile.get("thickness_mm"),
+    }
+    differs = [
+        key
+        for key, value in read.items()
+        if not _is_number(value)
+        or abs(float(value) - float(found[key])) > max(0.5, 0.01 * float(found[key]))
+    ]
+    if not differs:
+        return
+    report["housing_proposal"] = {
+        "width_mm": found["width_mm"],
+        "height_mm": found["height_mm"],
+        "thickness_mm": found["thickness_mm"],
+        "read": read,
+        "differs": differs,
+        "reason": (
+            "по листу габарит "
+            f"{found['width_mm']:g} × {found['height_mm']:g} × {found['thickness_mm']:g}; "
+            "прочитано "
+            + " × ".join(
+                f"{float(read[key]):g}" if _is_number(read[key]) else "?"
+                for key in ("width_mm", "height_mm", "thickness_mm")
+            )
+        ),
+    }
 
 
 def _housing_thickness(image_bytes: bytes, profile: dict[str, Any], report: dict[str, Any]) -> None:

@@ -178,3 +178,149 @@ def _levels_right(
         and height * _ALIGNMENT <= (line.end - line.start) <= height * _MAX_SIDE
     ]
     return columns
+
+
+# Масштаб принимается, если сторона вида совпала с надписью листа в пределах
+# этой доли (лист рисуется в масштабе, но линия имеет толщину).
+_LABEL_TOLERANCE = 0.02
+# Кандидат в вид — прямоугольник, стороны которого покрыты основной линией
+# не меньше чем на эту долю.
+_RECT_COVERAGE = 0.8
+
+
+def discover_housing_views(sheet: Any, labels: list[float]) -> dict[str, Any] | None:
+    """Корпус по листу: три вида по геометрии, размеры — по надписям (Ф5).
+
+    Когда габариты прочитаны неверно, план по ним не найти: живой корпус
+    прочитан «пластиной» 50 × 80 × 16 при 100 × 100 × 50, и проверка честно
+    отвечала «не измеримо». Здесь виды ищутся сами: самый большой замкнутый
+    прямоугольник основной линии — план, под ним и справа от него — виды в
+    проекционной связи. Масштаб выбирается тот, при котором стороны видов
+    ложатся на надписи листа: числа — с листа, геометрия — замером.
+    """
+    import numpy as np
+
+    from app.ai.cad_recognize.sheet_upscale import main_line_px
+    from app.ai.cad_recognize.verifiers.flange_outline import _main_lines
+    from app.ai.cad_recognize.verifiers.plate_frame import _lines
+
+    gray = np.asarray(sheet)
+    line_px = main_line_px(gray)
+    if line_px <= 0:
+        return None
+    main = _main_lines(gray, line_px) > 0
+    min_length = max(10, int(round(0.05 * min(gray.shape))))
+    horizontal = _lines(main, min_length, axis=0)
+    vertical = _lines(main, min_length, axis=1)
+    rectangles = _rectangles(horizontal, vertical)
+    if not rectangles:
+        return None
+    plan = max(rectangles, key=lambda box: (box[2] - box[0]) * (box[3] - box[1]))
+    x0, y0, x1, y1 = plan
+    width_px, height_px = x1 - x0, y1 - y0
+    below = [
+        box
+        for box in rectangles
+        if box[1] > y1 + 0.02 * height_px
+        and min(box[2], x1) - max(box[0], x0) >= _ALIGNMENT * width_px
+    ]
+    right = [
+        box
+        for box in rectangles
+        if box[0] > x1 + 0.02 * width_px
+        and min(box[3], y1) - max(box[1], y0) >= _ALIGNMENT * height_px
+    ]
+    thickness_px = None
+    if below:
+        thickness_px = min(box[3] - box[1] for box in below)
+    if right:
+        side_px = min(box[2] - box[0] for box in right)
+        thickness_px = side_px if thickness_px is None else (thickness_px + side_px) / 2.0
+    scale = _scale_by_labels([width_px, height_px, thickness_px], labels)
+    if scale is None:
+        return None
+
+    def stated(value: float | None) -> float | None:
+        """Число берётся с НАДПИСИ листа, геометрия — замером (принцип плана)."""
+        if value is None:
+            return None
+        measured = value * scale
+        nearest = min(numbers, key=lambda n: abs(n - measured)) if numbers else None
+        if nearest is not None and abs(nearest - measured) <= _LABEL_TOLERANCE * nearest:
+            return round(float(nearest), 3)
+        return round(measured, 2)
+
+    numbers = sorted({float(value) for value in labels if value and float(value) > 1.0})
+    return {
+        "plan_bbox_px": [round(float(v), 1) for v in plan],
+        "front_bbox_px": (
+            None if not below else [round(float(v), 1) for v in min(below, key=lambda b: b[1])]
+        ),
+        "side_bbox_px": (
+            None if not right else [round(float(v), 1) for v in min(right, key=lambda b: b[0])]
+        ),
+        "mm_per_px": round(scale, 6),
+        "width_mm": stated(width_px),
+        "height_mm": stated(height_px),
+        "thickness_mm": stated(thickness_px),
+    }
+
+
+def _rectangles(horizontal: list, vertical: list) -> list[tuple[float, float, float, float]]:
+    """Замкнутые прямоугольники основной линии: (x0, y0, x1, y1)."""
+    boxes = []
+    for index, top in enumerate(horizontal):
+        for bottom in horizontal[index + 1 :]:
+            low, high = sorted((top.position, bottom.position))
+            if high - low < 10:
+                continue
+            columns = [
+                line
+                for line in vertical
+                if line.overlap(low, high) >= _RECT_COVERAGE * (high - low)
+            ]
+            for i, left in enumerate(columns):
+                for right in columns[i + 1 :]:
+                    a, b = sorted((left.position, right.position))
+                    if b - a < 10:
+                        continue
+                    if top.overlap(a, b) >= _RECT_COVERAGE * (b - a) and bottom.overlap(
+                        a, b
+                    ) >= _RECT_COVERAGE * (b - a):
+                        boxes.append((a, low, b, high))
+    return boxes
+
+
+def _scale_by_labels(spans_px: list[float | None], labels: list[float]) -> float | None:
+    """Масштаб, при котором стороны видов ложатся на надписи листа.
+
+    Кандидаты берутся по сторонам ПЛАНА, и обе его стороны обязаны лечь на
+    надписи: надписей на листе много (координаты, размеры элементов), и
+    половинный масштаб тоже «совпадал» — корпус выходил 40 × 40 при 80 × 80.
+    При равном числе совпадений берётся больший масштаб: тело — самый большой
+    объект листа, и меньший масштаб описывает его же элемент.
+    """
+    spans = [value for value in spans_px if value]
+    plan_sides = [value for value in spans_px[:2] if value]
+    numbers = sorted({float(value) for value in labels if value and float(value) > 1.0})
+    if len(plan_sides) < 2 or not numbers:
+        return None
+
+    def nearest(value: float) -> tuple[float, float]:
+        best = min(numbers, key=lambda n: abs(n - value))
+        return best, abs(best - value) / max(best, 1e-6)
+
+    best: tuple[int, float, float] | None = None
+    for side in plan_sides:
+        for number in numbers:
+            scale = number / side
+            fits = [nearest(other * scale) for other in plan_sides]
+            if any(relative > _LABEL_TOLERANCE for _value, relative in fits):
+                continue
+            hits = sum(1 for other in spans if nearest(other * scale)[1] <= _LABEL_TOLERANCE)
+            error = sum(relative for _value, relative in fits)
+            if best is None or (hits, scale, -error) > (best[0], best[2], -best[1]):
+                best = (hits, error, scale)
+    if best is None:
+        return None
+    return best[2]

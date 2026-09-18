@@ -3894,8 +3894,10 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 # планка part_04: Г-образная деталь прочитана прямоугольником).
                 from app.ai.cad_recognize.verifiers.reconcile import (
                     apply_contour,
+                    apply_housing,
                     apply_sleeve,
                     contour_decision,
+                    housing_decision,
                     sleeve_decision,
                 )
 
@@ -3931,6 +3933,38 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         verification = None
                     if verification is not None:
                         verification["sleeve_adoption"] = sleeve
+
+                # Габарит корпуса по листу (Ф5): три вида в проекционной связи,
+                # размеры — по надписям. Живой корпус читался «пластиной»
+                # 50 × 80 × 16 при 80 × 80 × 50.
+                housing = housing_decision(spec, verification) if verification else None
+                if housing and housing.get("action") == "adopt":
+                    spec = _revalidated_spec(apply_housing(spec, housing))
+                    crosscheck = cross_check_spec(spec, check_ink)
+                    blocking_checks = [
+                        finding["message"]
+                        for finding in crosscheck["findings"]
+                        if finding["severity"] == "error"
+                    ]
+                    dimension_graph = build_dimension_graph(spec)
+                    blocking_checks.extend(dimension_graph["errors"])
+                    await _record(
+                        "reconcile.housing",
+                        "completed",
+                        f"Габарит корпуса собран по листу: {housing['reason']}",
+                        {"decision": housing},
+                    )
+                    try:
+                        verification = verify_spec_against_sheet(content, spec)
+                    except Exception as exc:  # noqa: BLE001 — проверка не ломает прогон
+                        logger.warning(
+                            "cad_verify_failed",
+                            generation_id=generation_id,
+                            error=str(exc)[:200],
+                        )
+                        verification = None
+                elif housing:
+                    (verification or {}).setdefault("notes", []).append(housing["reason"])
 
                 contour = contour_decision(spec, verification) if verification else None
                 if contour:

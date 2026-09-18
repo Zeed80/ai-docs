@@ -378,3 +378,77 @@ def test_a_wall_feature_measurement_is_adopted_when_the_sheet_states_it():
     assert decision["value"] == 25.0
     updated, _report = apply_reconciliation(spec, report, [decision])
     assert updated["main_view"]["profile"]["wall_features"][0]["center_u_mm"] == 25.0
+
+
+def _housing_report(read: dict, found: dict, thickness_confirmed: bool = False) -> dict:
+    return {
+        "items": (
+            [{"kind": "plate_thickness", "status": "confirmed"}] if thickness_confirmed else []
+        ),
+        "housing_proposal": {
+            **found,
+            "read": read,
+            "differs": [key for key in read if read[key] != found.get(key)],
+            "reason": "по листу габарит",
+        },
+        "notes": [],
+    }
+
+
+def test_the_housing_size_is_taken_from_the_sheet_when_the_read_one_is_not_confirmed():
+    """Живой корпус: прочитан «пластиной» 50 × 80 × 16 при 80 × 80 × 50."""
+    from app.ai.cad_recognize.verifiers.reconcile import apply_housing, housing_decision
+
+    spec = {
+        "dimensions": [{"value": v} for v in ("80", "80", "50", "16", "27")],
+        "main_view": {
+            "profile": {
+                "shape": "sketch",
+                "sketch": [{"kind": "line", "to": [50.0, 0.0]}],
+                "width_mm": 50.0,
+                "height_mm": 80.0,
+                "thickness_mm": 16.0,
+            }
+        },
+    }
+    report = _housing_report(
+        {"width_mm": 50.0, "height_mm": 80.0, "thickness_mm": 16.0},
+        {"width_mm": 80.0, "height_mm": 80.0, "thickness_mm": 50.0},
+    )
+
+    decision = housing_decision(spec, report)
+
+    assert decision["action"] == "adopt"
+    updated = apply_housing(spec, decision)
+    profile = updated["main_view"]["profile"]
+    assert (profile["shape"], profile["width_mm"], profile["thickness_mm"]) == (
+        "rectangle",
+        80.0,
+        50.0,
+    )
+    assert "sketch" not in profile
+
+
+def test_a_confirmed_thickness_is_not_replaced_by_the_sheet_proposal():
+    from app.ai.cad_recognize.verifiers.reconcile import housing_decision
+
+    spec = {"dimensions": [{"value": v} for v in ("80", "50")], "main_view": {"profile": {}}}
+    report = _housing_report(
+        {"width_mm": 80.0, "height_mm": 80.0, "thickness_mm": 50.0},
+        {"width_mm": 80.0, "height_mm": 80.0, "thickness_mm": 50.0},
+        thickness_confirmed=True,
+    )
+
+    assert housing_decision(spec, report) is None
+
+
+def test_numbers_the_sheet_does_not_state_go_to_the_human():
+    from app.ai.cad_recognize.verifiers.reconcile import housing_decision
+
+    spec = {"dimensions": [{"value": "80"}], "main_view": {"profile": {}}}
+    report = _housing_report(
+        {"width_mm": 50.0, "height_mm": 80.0, "thickness_mm": 16.0},
+        {"width_mm": 80.0, "height_mm": 80.0, "thickness_mm": 50.0},
+    )
+
+    assert housing_decision(spec, report)["action"] == "ask_human"

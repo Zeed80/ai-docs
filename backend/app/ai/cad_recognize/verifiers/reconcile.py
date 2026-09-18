@@ -557,6 +557,65 @@ def apply_reconciliation(
     return spec, report
 
 
+def housing_decision(spec: dict[str, Any], report: dict[str, Any]) -> dict[str, Any] | None:
+    """Принять габарит корпуса по листу вместо прочитанного.
+
+    Правило то же, что у профиля вала: предложение строгое (три вида в
+    проекционной связи, обе стороны плана легли на надписи листа), и
+    принимается оно, только если ПРОЧИТАННОЕ листом не подтвердилось —
+    толщина по видам не сошлась или план по прочитанным габаритам не найден.
+    Подтверждённое проверкой не заменяется.
+
+    Требовать, чтобы прочитанного не было среди надписей, здесь нельзя: у
+    корпуса надписей много (координаты элементов), и «50» с «16» на листе
+    есть — просто не как габарит (живой корпус: прочитано 50 × 80 × 16 при
+    80 × 80 × 50).
+    """
+    proposal = report.get("housing_proposal")
+    if not proposal:
+        return None
+    numbers = sheet_numbers(spec)
+    proposed = [float(proposal[key]) for key in ("width_mm", "height_mm", "thickness_mm")]
+    if not all(
+        any(abs(number - value) <= max(0.05, 0.01 * value) for number in numbers)
+        for value in proposed
+    ):
+        return {
+            **proposal,
+            "action": "ask_human",
+            "reason": proposal["reason"] + "; часть чисел по листу не подтверждена надписями",
+        }
+    confirmed = any(
+        item.get("kind") == "plate_thickness" and item.get("status") == "confirmed"
+        for item in report.get("items") or []
+    )
+    if confirmed:
+        return None  # прочитанное подтверждено замером — не заменяем
+    return {**proposal, "action": "adopt"}
+
+
+def apply_housing(spec: dict[str, Any], decision: dict[str, Any]) -> dict[str, Any]:
+    """Габарит корпуса по листу — в спек (контур прямоугольный)."""
+    import copy
+
+    if decision.get("action") != "adopt":
+        return spec
+    spec = copy.deepcopy(spec)
+    profile = ((spec.get("main_view") or {}).get("profile")) or {}
+    if not profile:
+        return spec
+    profile["shape"] = "rectangle"
+    profile.pop("sketch", None)
+    for key in ("width_mm", "height_mm", "thickness_mm"):
+        profile[key] = float(decision[key])
+    notes = spec.setdefault("optional_unresolved", [])
+    notes.append(
+        "принято по листу: габарит корпуса "
+        f"{decision['width_mm']:g} × {decision['height_mm']:g} × {decision['thickness_mm']:g}"
+    )
+    return spec
+
+
 def profile_decision(spec: dict[str, Any], report: dict[str, Any]) -> dict[str, Any] | None:
     """Принять профиль вала, собранный по листу, вместо прочитанного.
 
