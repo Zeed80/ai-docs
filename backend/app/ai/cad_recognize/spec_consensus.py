@@ -748,6 +748,22 @@ def consensus_spec(specs: list[dict], *, minimum: int | None = None) -> dict:
         [spec.get("views") or [] for spec in usable], "kind", minimum=minimum
     )
     merged["parts"] = parts
+    # Швы (X3) — целиком: тела, обозначение, катет. Шов одного прохода не
+    # подтверждён; не голосовать их значило бы терять молча.
+    welds = [
+        [
+            json.dumps(weld, sort_keys=True)
+            for weld in spec.get("welds") or []
+            if isinstance(weld, dict)
+        ]
+        for spec in usable
+    ]
+    counted = Counter(key for read in welds for key in set(read))
+    merged["welds"] = [
+        json.loads(key) for key, count in sorted(counted.items()) if count >= minimum
+    ]
+    if any(count < minimum for count in counted.values()):
+        optional.append("проходы не сошлись на части сварных швов — не перенесены")
     if usable[0].get("source_images"):
         merged["source_images"] = usable[0]["source_images"]
 

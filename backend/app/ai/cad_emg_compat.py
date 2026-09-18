@@ -406,9 +406,12 @@ def feature_tree_from_graph(
                 }[assertion.origin],
                 detail=f"EMG {assertion.id} ({assertion.assurance})",
             )
+        body_index = params.pop("body_index", 0)
+        provenance.pop("body_index", None)
         features.append(
             Feature3D(
                 kind=kind,
+                body_index=int(body_index or 0),
                 source_entity_ids=[],
                 source_feature_ids=sorted(realized_features.get(operation_id, [])),
                 params=params,
@@ -978,10 +981,20 @@ def spec_feature_tree_as_graph(
             )
         )
         operation_assertion_ids.append(sequence_id)
-        for name, value in sorted(feature.params.items()):
+        # Номер тела операции: без него многотельное дерево (X3: сварной узел,
+        # тела вращения в parts[]) приходило в ядро одним телом — граф его не
+        # хранил. У однотельного дерева не пишется: граф не меняется.
+        operation_params = dict(feature.params)
+        if feature.body_index:
+            operation_params["body_index"] = int(feature.body_index)
+        for name, value in sorted(operation_params.items()):
             if value is None:
                 continue
-            provenance = feature.param_provenance.get(name)
+            provenance = feature.param_provenance.get(name) or (
+                ParamProvenance(origin="propagated", detail="номер тела в дереве операций")
+                if name == "body_index"
+                else None
+            )
             origin = provenance_origin.get(
                 provenance.origin if provenance else "guessed", "assumed"
             )

@@ -541,16 +541,249 @@ def _wall_feature_params(
 
 
 def _prismatic_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
+    """Плоские и призматические тела листа — каждое своим поддеревом.
+
+    Строилось только ПЕРВОЕ тело из ``parts[]``: остальные пластины сварного
+    узла пропадали без следа и без замечания. Теперь каждое тело — со своим
+    ``body_index`` и размещением относительно первого (X3); тело, которое не
+    строится, отказывает всему дереву — строить часть узла молча нельзя.
+    """
+    bodies = [body for body in (spec.get("parts") or []) if isinstance(body, dict)]
+    if not bodies:
+        bodies = [spec.get("main_view") or {}]
+    bodies = [body for body in bodies if isinstance(body.get("profile"), dict)]
+    if not bodies:
+        return None
+    if len(bodies) == 1:
+        return _one_prismatic_tree(spec, bodies[0]["profile"])
+    features: list[Feature3D] = []
+    missing: list[str] = []
+    unplaced = 0
+    for body_index, body in enumerate(bodies):
+        tree = _one_prismatic_tree(spec, body["profile"])
+        if tree is None:
+            return None
+        for feature in tree.features:
+            feature.body_index = body_index
+        placement = body.get("placement")
+        if body_index > 0:
+            if isinstance(placement, dict) and placement.get("position_mm"):
+                base = tree.features[0]
+                base.params["placement"] = {
+                    "position_mm": [float(v) for v in placement["position_mm"]],
+                    "axis": [float(v) for v in placement.get("axis") or [0.0, 0.0, 1.0]],
+                    "angle_deg": float(placement.get("angle_deg") or 0.0),
+                }
+                base.param_provenance["placement"] = ParamProvenance(
+                    origin="stated", detail="размещение тела прочитано с листа"
+                )
+            else:
+                unplaced += 1
+        features.extend(tree.features)
+        missing.extend(note for note in tree.missing_data if "ни одного отверстия" not in note)
+    if unplaced:
+        missing.append(
+            f"на листе прочитано тел: {len(bodies)}; взаимное расположение {unplaced} "
+            "из них не прочитано, построены раздельно"
+        )
+    else:
+        beads, weld_notes = _weld_beads(spec, bodies, start_index=len(bodies))
+        features.extend(beads)
+        missing.extend(weld_notes)
+    label = str(spec.get("part") or "Узел") + f" — {len(bodies)} тел по прочитанным контурам"
+    return FeatureTreeCandidate(
+        features=features, score=0.85, label=label[:500], missing_data=missing
+    )
+
+
+def _rotation_of(placement: dict | None) -> list[list[float]]:
+    """Матрица поворота размещения (ось-угол, как у ядра)."""
+    import math
+
+    if not isinstance(placement, dict):
+        return [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    x, y, z = (float(v) for v in placement.get("axis") or [0.0, 0.0, 1.0])
+    norm = math.sqrt(x * x + y * y + z * z) or 1.0
+    x, y, z = x / norm, y / norm, z / norm
+    angle = math.radians(float(placement.get("angle_deg") or 0.0))
+    c, s_, t = math.cos(angle), math.sin(angle), 1.0 - math.cos(angle)
+    return [
+        [t * x * x + c, t * x * y - s_ * z, t * x * z + s_ * y],
+        [t * x * y + s_ * z, t * y * y + c, t * y * z - s_ * x],
+        [t * x * z - s_ * y, t * y * z + s_ * x, t * z * z + c],
+    ]
+
+
+def _axis_angle(matrix: list[list[float]]) -> tuple[list[float], float]:
+    """Ось и угол (°) поворота по его матрице."""
+    import math
+
+    trace = matrix[0][0] + matrix[1][1] + matrix[2][2]
+    angle = math.acos(max(-1.0, min(1.0, (trace - 1.0) / 2.0)))
+    if angle < 1e-9:
+        return [0.0, 0.0, 1.0], 0.0
+    if abs(angle - math.pi) < 1e-6:
+        # Поворот на 180°: ось — столбец с наибольшей диагональю (M + I)/2.
+        diagonal = [math.sqrt(max(0.0, (matrix[i][i] + 1.0) / 2.0)) for i in range(3)]
+        index = max(range(3), key=lambda i: diagonal[i])
+        axis = [0.0, 0.0, 0.0]
+        axis[index] = diagonal[index]
+        for other in range(3):
+            if other != index:
+                axis[other] = matrix[index][other] / (2.0 * diagonal[index])
+        return axis, 180.0
+    denominator = 2.0 * math.sin(angle)
+    axis = [
+        (matrix[2][1] - matrix[1][2]) / denominator,
+        (matrix[0][2] - matrix[2][0]) / denominator,
+        (matrix[1][0] - matrix[0][1]) / denominator,
+    ]
+    return axis, math.degrees(angle)
+
+
+def _body_box(body: dict) -> tuple[list[float], list[float]] | None:
+    """Габарит прямоугольного тела в системе первого тела (после размещения)."""
+    profile = body.get("profile") or {}
+    if profile.get("shape") != "rectangle":
+        return None
+    size = [_num(profile.get(key)) for key in ("width_mm", "height_mm", "thickness_mm")]
+    if not all(size):
+        return None
+    placement = body.get("placement") if isinstance(body.get("placement"), dict) else None
+    rotation = _rotation_of(placement)
+    position = [float(v) for v in (placement or {}).get("position_mm") or [0.0, 0.0, 0.0]]
+    corners = [
+        [
+            sum(rotation[row][col] * point[col] for col in range(3)) + position[row]
+            for row in range(3)
+        ]
+        for point in (
+            (x, y, z) for x in (0.0, size[0]) for y in (0.0, size[1]) for z in (0.0, size[2])
+        )
+    ]
+    return (
+        [min(corner[axis] for corner in corners) for axis in range(3)],
+        [max(corner[axis] for corner in corners) for axis in range(3)],
+    )
+
+
+def _weld_beads(
+    spec: dict, bodies: list[dict], *, start_index: int
+) -> tuple[list[Feature3D], list[str]]:
+    """Валики угловых швов (X3): треугольник с катетом по стыку двух тел.
+
+    Стык ищется по габаритам размещённых тел: грани встык, площадка касания —
+    след меньшего тела на большем. Валик — вдоль длинной стороны площадки, с
+    одной стороны (Т1, У4) или с обеих (``both_sides``, Т3). Шов без катета
+    или между телами, которые не касаются, не строится и уходит замечанием.
+    """
+    features: list[Feature3D] = []
+    notes: list[str] = []
+    index = start_index
+    for weld in spec.get("welds") or []:
+        if not isinstance(weld, dict):
+            continue
+        pair = weld.get("bodies") or []
+        leg = _num(weld.get("leg_mm"))
+        name = str(weld.get("designation") or "шов")
+        if len(pair) != 2 or not leg or not all(0 <= int(i) < len(bodies) for i in pair):
+            notes.append(f"сварной шов {name}: тела или катет не прочитаны — не построен")
+            continue
+        boxes = [_body_box(bodies[int(i)]) for i in pair]
+        if None in boxes:
+            notes.append(f"сварной шов {name}: стык не прямоугольных тел — не построен")
+            continue
+        contact = _contact(boxes[0], boxes[1])
+        if contact is None:
+            notes.append(f"сварной шов {name}: тела {pair[0]} и {pair[1]} не касаются")
+            continue
+        normal_axis, level, up, (lo, hi) = contact
+        others = [axis for axis in range(3) if axis != normal_axis]
+        long_axis = max(others, key=lambda axis: hi[axis] - lo[axis])
+        side_axis = next(axis for axis in others if axis != long_axis)
+        sides = (-1.0, 1.0) if weld.get("both_sides") else (-1.0,)
+        for sign in sides:
+            out = [0.0, 0.0, 0.0]
+            out[side_axis] = sign
+            rise = [0.0, 0.0, 0.0]
+            rise[normal_axis] = up
+            along = [
+                out[1] * rise[2] - out[2] * rise[1],
+                out[2] * rise[0] - out[0] * rise[2],
+                out[0] * rise[1] - out[1] * rise[0],
+            ]
+            corner = [0.0, 0.0, 0.0]
+            corner[normal_axis] = level
+            corner[side_axis] = lo[side_axis] if sign < 0 else hi[side_axis]
+            corner[long_axis] = lo[long_axis] if along[long_axis] > 0 else hi[long_axis]
+            axis, angle = _axis_angle([[out[row], rise[row], along[row]] for row in range(3)])
+            features.append(
+                Feature3D(
+                    kind="extrude",
+                    body_index=index,
+                    params={
+                        "sketch_profile": [
+                            {"kind": "line", "to": [leg, 0.0]},
+                            {"kind": "line", "to": [0.0, leg]},
+                            {"kind": "line", "to": [0.0, 0.0]},
+                        ],
+                        "depth_mm": round(hi[long_axis] - lo[long_axis], 6),
+                        "placement": {
+                            "position_mm": [round(v, 6) for v in corner],
+                            "axis": [round(v, 9) for v in axis],
+                            "angle_deg": round(angle, 9),
+                        },
+                    },
+                    param_provenance={
+                        "sketch_profile": ParamProvenance(
+                            origin="stated", detail=f"катет шва {name} △{leg:g} по чертежу"
+                        ),
+                        "depth_mm": ParamProvenance(
+                            origin="propagated", detail="шов по всей длине стыка тел"
+                        ),
+                        "placement": ParamProvenance(
+                            origin="propagated", detail="место шва — стык размещённых тел"
+                        ),
+                    },
+                    confidence=0.8,
+                )
+            )
+            index += 1
+    return features, notes
+
+
+def _contact(first, second):
+    """Площадка касания двух габаритов: (ось нормали, уровень, знак «к меньшему»,
+    (min, max) площадки) или None."""
+    (lo1, hi1), (lo2, hi2) = first, second
+    for axis in range(3):
+        for level, up_from_first in ((hi1[axis], 1.0), (lo1[axis], -1.0)):
+            other = lo2[axis] if up_from_first > 0 else hi2[axis]
+            if abs(level - other) > 1e-6:
+                continue
+            lo = [max(lo1[i], lo2[i]) for i in range(3)]
+            hi = [min(hi1[i], hi2[i]) for i in range(3)]
+            if any(hi[i] - lo[i] <= 1e-6 for i in range(3) if i != axis):
+                continue
+            area_first = 1.0
+            area_second = 1.0
+            for i in range(3):
+                if i != axis:
+                    area_first *= hi1[i] - lo1[i]
+                    area_second *= hi2[i] - lo2[i]
+            # «Вверх» — от большего тела к меньшему (ребро стоит на основании).
+            up = up_from_first if area_second <= area_first else -up_from_first
+            return axis, level, up, (lo, hi)
+    return None
+
+
+def _one_prismatic_tree(spec: dict, profile: dict) -> FeatureTreeCandidate | None:
     """A plate or flange: the read outline given its read thickness.
 
     Thickness comes from a side view or a section; a sheet that never stated it
     yields no solid at all, exactly as the 2D drafter refuses to draft a section
     whose length was never read.
     """
-    profiles = _prismatic_profiles(spec)
-    if not profiles:
-        return None
-    profile = profiles[0]
     thickness = _num(profile.get("thickness_mm"))
     if not thickness or thickness <= 0:
         return None

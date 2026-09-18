@@ -760,6 +760,23 @@ def prismatic_profile_is_complete(profile: SpecPrismaticProfile | None) -> bool:
     return bool(profile.thickness_mm and profile.thickness_mm > 0)
 
 
+class SpecWeld(BaseModel):
+    """Сварной шов между двумя телами листа (X3, ГОСТ 2.312 / ГОСТ 5264).
+
+    ``bodies`` — индексы тел в ``parts``; ``designation`` — буквенно-цифровое
+    обозначение шва по стандарту (Т1 — тавровое одностороннее, Т3 —
+    двустороннее, У4 — угловое, Н1 — нахлёсточное, С2 — стыковое);
+    ``leg_mm`` — катет углового шва (знак △ на листе). Шов не прибавляет
+    тела к детали по построению, а валик углового шва строится по стыку.
+    """
+
+    bodies: list[int] = Field(min_length=2, max_length=2)
+    designation: str | None = None
+    standard: str | None = None
+    leg_mm: float | None = Field(default=None, gt=0)
+    both_sides: bool = False
+
+
 class EngineeringDrawingSpec(BaseModel):
     """Fail-closed contract between drawing recognition and CAD drafting."""
 
@@ -767,6 +784,8 @@ class EngineeringDrawingSpec(BaseModel):
     part: str = ""
     main_view: SpecBody
     parts: list[SpecBody] = Field(default_factory=list)
+    # X3: сварные швы между телами ``parts`` (ГОСТ 2.312).
+    welds: list[SpecWeld] = Field(default_factory=list)
     # Extra projections the sheet carries. Empty = front view only, which is
     # what every spec produced before views existed — so old specs still draft.
     views: list[SpecView] = Field(default_factory=list)
