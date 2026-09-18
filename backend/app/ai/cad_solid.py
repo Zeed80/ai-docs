@@ -379,7 +379,12 @@ def _sheet_metal_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
         radius = float(sheet["radius_mm"])
         thickness = float(sheet["thickness_mm"])
         width = float(sheet["width_mm"])
-        sketch = bent_section(flanges, turns, radius, thickness)
+        angles = (
+            [float(value) for value in sheet["bend_angles_deg"]]
+            if sheet.get("bend_angles_deg")
+            else None
+        )
+        sketch = bent_section(flanges, turns, radius, thickness, angles)
     except (KeyError, TypeError, ValueError):
         return None
     stated = {
@@ -389,7 +394,7 @@ def _sheet_metal_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
         "depth_mm": ParamProvenance(origin="stated", detail="ширина листовой детали с чертежа"),
     }
     flat = developed_length(
-        flanges, len(turns), radius, thickness, float(sheet.get("k_factor") or 0.5)
+        flanges, len(turns), radius, thickness, float(sheet.get("k_factor") or 0.5), angles
     )
     return FeatureTreeCandidate(
         features=[

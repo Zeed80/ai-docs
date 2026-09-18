@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import math
 import random
 from typing import Any
 
@@ -535,6 +536,17 @@ def _sheet_metal(rng: random.Random) -> dict[str, Any]:
     if len(flanges) == 5:
         # Шляпный профиль — стенки одной высоты, иначе полки не в одной плоскости.
         flanges[3] = flanges[1]
+    # Уголок бывает и не прямым (гиб на 45…135°): у него размер полки — до
+    # условной вершины, а угол проставлен отдельно.
+    angles = None
+    if len(turns) == 1 and rng.random() < 0.35:
+        angles = [float(rng.choice((45, 60, 120, 135)))]
+        # Лист ставит круглый наружный размер до условной вершины; прямой
+        # участок — он минус вылет гиба (R + s)·tg(θ/2).
+        reach = (radius + thickness) * math.tan(math.radians(angles[0]) / 2.0)
+        flanges = [round(value - reach, 6) for value in flanges]
+        if min(flanges) < shortest:
+            flanges = [round(value + reach + 20.0 - reach, 6) for value in flanges]
     return {
         "schema_version": 1,
         "main_view": {
@@ -546,6 +558,7 @@ def _sheet_metal(rng: random.Random) -> dict[str, Any]:
                 "radius_mm": radius,
                 "thickness_mm": thickness,
                 "width_mm": float(rng.choice((20, 30, 40, 50, 60, 80, 100))),
+                **({"bend_angles_deg": angles} if angles else {}),
             },
         },
         "views": [{"kind": "front", "body_index": 0}],

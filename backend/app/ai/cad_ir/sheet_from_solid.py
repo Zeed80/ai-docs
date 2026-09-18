@@ -2268,6 +2268,8 @@ def _sheet_metal_dimensions(drawing: dict, spec: dict, plan: SheetPlan) -> None:
     наружной поверхности соседней полки через гиб. Размеры строятся по
     эскизу сечения, переведённому в координаты вида по совпадению вершин.
     """
+    import math
+
     from app.ai.sheet_metal import bent_section, flange_spans
 
     if plan.part_class != "sheet_metal":
@@ -2279,6 +2281,11 @@ def _sheet_metal_dimensions(drawing: dict, spec: dict, plan: SheetPlan) -> None:
         radius = float(sheet["radius_mm"])
         thickness = float(sheet["thickness_mm"])
         width = float(sheet["width_mm"])
+        angles = (
+            [float(value) for value in sheet["bend_angles_deg"]]
+            if sheet.get("bend_angles_deg")
+            else None
+        )
     except (KeyError, TypeError, ValueError):
         return
     views = drawing.get("views") or []
@@ -2288,19 +2295,24 @@ def _sheet_metal_dimensions(drawing: dict, spec: dict, plan: SheetPlan) -> None:
     width_index = next((i for i, view in enumerate(plan.views) if view["kind"] == "top"), None)
     if profile_index is not None and profile_index < len(views):
         mapping = _sketch_to_view(
-            views[profile_index], bent_section(flanges, turns, radius, thickness), ratio
+            views[profile_index], bent_section(flanges, turns, radius, thickness, angles), ratio
         )
         if mapping is not None:
             transform, rotate = mapping
-            for span in flange_spans(flanges, turns, radius, thickness):
+            for span in flange_spans(flanges, turns, radius, thickness, angles):
                 first = transform(*span["start"])
                 second = transform(*span["end"])
                 out_u, out_v = rotate(*span["outward"])
                 horizontal = abs(first[1] - second[1]) < abs(first[0] - second[0])
+                aligned = span["axis"] == "aligned"
                 dimensions.append(
                     {
                         "view_index": profile_index,
-                        "kind": "DistanceX" if horizontal else "DistanceY",
+                        "kind": "Distance"
+                        if aligned
+                        else "DistanceX"
+                        if horizontal
+                        else "DistanceY",
                         "label": f"{span['value']:g}",
                         "anchors_mm": [list(first), list(second)],
                         "value_mm": round(span["value"], 3),
@@ -2308,6 +2320,37 @@ def _sheet_metal_dimensions(drawing: dict, spec: dict, plan: SheetPlan) -> None:
                         "ir_kind": "linear",
                         # Наружу от полки: под видом или справа от него.
                         "below": (out_v < 0) if horizontal else (out_u > 0),
+                    }
+                )
+            # Угол между полками у гиба не на 90° — хордой между полками с
+            # подписью угла (ГОСТ 2.307 ставит его дугой; отрисовка дуг размеров
+            # пока не умеет, а число на листе нужно и человеку, и ридеру).
+            for index, angle in enumerate(angles or []):
+                if abs(angle - 90.0) < 1e-6:
+                    continue
+                spans = flange_spans(flanges, turns, radius, thickness, angles)
+                corner = spans[index]["end"]
+                reach = 0.6 * min(spans[index]["value"], spans[index + 1]["value"])
+                before = spans[index]["start"]
+                after = spans[index + 1]["end"]
+
+                def toward(target, origin=corner, reach=reach):
+                    du, dv = target[0] - origin[0], target[1] - origin[1]
+                    norm = math.hypot(du, dv) or 1.0
+                    return (origin[0] + du / norm * reach, origin[1] + dv / norm * reach)
+
+                dimensions.append(
+                    {
+                        "view_index": profile_index,
+                        "kind": "Angle",
+                        "label": f"{180.0 - angle:g}°",
+                        "anchors_mm": [
+                            list(transform(*toward(before))),
+                            list(transform(*toward(after))),
+                        ],
+                        "value_mm": round(180.0 - angle, 3),
+                        "measured_by": "sheet_metal_angle",
+                        "ir_kind": "angular",
                     }
                 )
             # Толщина — поперёк свободного торца первой полки.
@@ -2327,8 +2370,6 @@ def _sheet_metal_dimensions(drawing: dict, spec: dict, plan: SheetPlan) -> None:
             )
             # Внутренний радиус гиба — один размер на все гибы (он у них общий).
             if turns:
-                import math
-
                 for item in views[profile_index].get("visible") or []:
                     if item.get("type") != "arc" or not item.get("center"):
                         continue
@@ -2781,6 +2822,11 @@ def _flat_pattern_entities(
         thickness = float(sheet["thickness_mm"])
         width = float(sheet["width_mm"])
         k_factor = float(sheet.get("k_factor") or 0.5)
+        angles = (
+            [float(value) for value in sheet["bend_angles_deg"]]
+            if sheet.get("bend_angles_deg")
+            else [90.0] * len(turns)
+        )
     except (KeyError, TypeError, ValueError):
         return []
     placed = [
@@ -2799,8 +2845,8 @@ def _flat_pattern_entities(
     if not placed or main is None:
         return []
     ratio = plan.ratio or 1.0
-    length = developed_length(flanges, len(turns), radius, thickness, k_factor)
-    arc = (math.pi / 2.0) * (radius + k_factor * thickness)
+    length = developed_length(flanges, len(turns), radius, thickness, k_factor, angles)
+    arcs = [math.radians(angle) * (radius + k_factor * thickness) for angle in angles]
     # Нижний край занятого места на листе (y бумаги растёт вниз).
     lowest = max(placement["offset_v"] - float(box["v_min"]) for placement, box in placed)
     left = main[0]["offset_u"] + float(main[1]["u_min"])
@@ -2824,7 +2870,7 @@ def _flat_pattern_entities(
     ]
     # Линия гиба — середина дуги гиба на развёртке.
     for index in range(len(turns)):
-        station = sum(flanges[: index + 1]) + index * arc + arc / 2.0
+        station = sum(flanges[: index + 1]) + sum(arcs[:index]) + arcs[index] / 2.0
         entities.append(
             Segment(
                 p1=point(station * ratio, -2.0),

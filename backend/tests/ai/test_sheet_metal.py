@@ -236,3 +236,43 @@ def test_the_operator_can_say_the_part_is_sheet_metal():
     assert "kind=sheet_metal" in _kind_prompt("sheet_metal_part")
     kind, notes = _apply_operator_kind("plate", "sheet_metal_part")
     assert kind == "sheet_metal" and notes
+
+
+def test_a_bend_that_is_not_square_keeps_area_and_developed_length():
+    """Гиб на 60° (угол между полками 120°): площадь — полки и сектор кольца,
+    развёртка — дуга по нейтральному слою на этот угол. Живое ядро: уголок
+    40/20 × 80 при R = s = 2,5 — 11 630,70 мм³, как по формуле."""
+    flanges, turns, angles = [37.113249, 17.113249], [1], [60.0]
+    sketch = bent_section(flanges, turns, 2.5, 2.5, angles)
+    area, _ = _polygon_area(sketch)
+    assert area == pytest.approx(section_area(flanges, 1, 2.5, 2.5, angles), rel=1e-3)
+    assert section_area(flanges, 1, 2.5, 2.5, angles) * 80 == pytest.approx(11630.70, abs=0.05)
+    assert developed_length(flanges, 1, 2.5, 2.5, 0.5, angles) == pytest.approx(
+        sum(flanges) + math.radians(60) * 3.75
+    )
+
+
+def test_an_outer_flange_size_runs_to_the_virtual_sharp():
+    """У гиба не на 90° полку проставляют до пересечения наружных поверхностей:
+    прямой участок + (R + s)·tg(θ/2)."""
+    from app.ai.sheet_metal import flange_spans
+
+    spans = flange_spans([37.113249, 17.113249], [1], 2.5, 2.5, [60.0])
+    assert [round(span["value"], 3) for span in spans] == [40.0, 20.0]
+    assert spans[1]["axis"] == "aligned"
+
+
+def test_the_reader_turns_the_angle_between_flanges_into_the_bend_angle():
+    from app.ai.cad_recognize.spec_fragments import sheet_metal_from_answer
+
+    answer = {
+        "shape": "angle",
+        "flanges_mm": [40, 20],
+        "angles_deg": [120],
+        "radius_mm": 2.5,
+        "thickness_mm": 2.5,
+        "width_mm": 80,
+    }
+    sheet = sheet_metal_from_answer(answer, _taken(40, 20, 120, 2.5, 80))
+    assert sheet["bend_angles_deg"] == [60.0]
+    assert sheet["flanges_mm"] == pytest.approx([37.113249, 17.113249], abs=1e-6)

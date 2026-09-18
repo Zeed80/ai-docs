@@ -568,11 +568,18 @@ class SpecSheetMetal(BaseModel):
     thickness_mm: float = Field(gt=0)
     width_mm: float = Field(gt=0)
     k_factor: float = Field(default=0.5, gt=0, le=1)
+    # Угол гиба (отклонение полки), по одному на гиб; None — все по 90°.
+    bend_angles_deg: list[float] | None = None
 
     @model_validator(mode="after")
     def _turn_per_bend(self) -> SpecSheetMetal:
         if len(self.turns) != len(self.flanges_mm) - 1:
             raise ValueError("turns must have one entry per bend (flanges − 1)")
+        if self.bend_angles_deg is not None and (
+            len(self.bend_angles_deg) != len(self.turns)
+            or any(not 0.0 < angle < 180.0 for angle in self.bend_angles_deg)
+        ):
+            raise ValueError("bend_angles_deg: one angle per bend, strictly between 0 and 180")
         if any(length <= 0 for length in self.flanges_mm):
             raise ValueError("flanges_mm must be positive")
         return self

@@ -71,9 +71,17 @@ def needed_dimensions(spec: dict) -> dict[str, list[float]]:
 
         flanges, turns = sheet["flanges_mm"], sheet["turns"]
         radius, thickness = sheet["radius_mm"], sheet["thickness_mm"]
-        lengths = [span["value"] for span in flange_spans(flanges, turns, radius, thickness)]
+        angles = sheet.get("bend_angles_deg")
+        lengths = [
+            round(span["value"], 3)
+            for span in flange_spans(flanges, turns, radius, thickness, angles)
+        ]
         lengths += [thickness, radius, sheet["width_mm"]]
-        lengths.append(round(developed_length(flanges, len(turns), radius, thickness), 1))
+        lengths.append(
+            round(developed_length(flanges, len(turns), radius, thickness, 0.5, angles), 1)
+        )
+        # Угол между полками у гиба не на 90°.
+        lengths += [180.0 - angle for angle in angles or [] if abs(angle - 90.0) > 1e-6]
         return {"diameters": [], "lengths": sorted(lengths), "overall": []}
     profile = body.get("profile")
     if isinstance(profile, dict):

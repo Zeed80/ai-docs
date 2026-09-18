@@ -19,23 +19,41 @@ import math
 from typing import Any
 
 
-def _rotate(vector: tuple[float, float], turn: int) -> tuple[float, float]:
-    """Поворот на 90° влево (turn=+1) или вправо (turn=-1)."""
+def _rotate(vector: tuple[float, float], turn: int, angle_deg: float = 90.0) -> tuple[float, float]:
+    """Поворот на ``angle_deg`` влево (turn=+1) или вправо (turn=-1)."""
+    if angle_deg == 90.0:
+        x, y = vector
+        return (-y, x) if turn > 0 else (y, -x)
+    angle = math.radians(angle_deg) * (1.0 if turn > 0 else -1.0)
     x, y = vector
-    return (-y, x) if turn > 0 else (y, -x)
+    return (x * math.cos(angle) - y * math.sin(angle), x * math.sin(angle) + y * math.cos(angle))
+
+
+def _angles(turns: list[int], angles_deg: list[float] | None) -> list[float]:
+    if angles_deg is None:
+        return [90.0] * len(turns)
+    if len(angles_deg) != len(turns) or any(not 0.0 < a < 180.0 for a in angles_deg):
+        raise ValueError("угол гиба — по одному на гиб, строго между 0 и 180°")
+    return [float(a) for a in angles_deg]
 
 
 def bent_section(
-    flanges: list[float], turns: list[int], radius: float, thickness: float
+    flanges: list[float],
+    turns: list[int],
+    radius: float,
+    thickness: float,
+    angles_deg: list[float] | None = None,
 ) -> list[dict[str, Any]]:
     """Замкнутый эскиз сечения гнутой детали (отрезки и дуги от (0, 0)).
 
-    ``turns`` — по гибу между соседними полками: +1 влево, −1 вправо (90°).
+    ``turns`` — по гибу между соседними полками: +1 влево, −1 вправо;
+    ``angles_deg`` — угол гиба (отклонение полки), по умолчанию 90°.
     """
     if len(turns) != len(flanges) - 1:
         raise ValueError("гибов должно быть на один меньше, чем полок")
     if radius <= 0 or thickness <= 0 or any(length <= 0 for length in flanges):
         raise ValueError("радиус, толщина и полки должны быть положительны")
+    angles = _angles(turns, angles_deg)
     half = thickness / 2.0
     middle_radius = radius + half
     # Средняя линия: отрезки и дуги по порядку.
@@ -50,7 +68,7 @@ def bent_section(
             turn = turns[index]
             normal = _rotate(direction, turn)
             centre = (point[0] + normal[0] * middle_radius, point[1] + normal[1] * middle_radius)
-            new_direction = _rotate(direction, turn)
+            new_direction = _rotate(direction, turn, angles[index])
             end = (
                 centre[0] - _rotate(new_direction, turn)[0] * middle_radius,
                 centre[1] - _rotate(new_direction, turn)[1] * middle_radius,
@@ -122,21 +140,41 @@ def bent_section(
 
 
 def developed_length(
-    flanges: list[float], bends: int, radius: float, thickness: float, k_factor: float = 0.5
+    flanges: list[float],
+    bends: int,
+    radius: float,
+    thickness: float,
+    k_factor: float = 0.5,
+    angles_deg: list[float] | None = None,
 ) -> float:
     """Длина развёртки: полки + дуги гибов по нейтральному слою R + K·t."""
-    return float(sum(flanges)) + bends * (math.pi / 2.0) * (radius + k_factor * thickness)
+    angles = angles_deg if angles_deg is not None else [90.0] * bends
+    return float(sum(flanges)) + sum(
+        math.radians(angle) * (radius + k_factor * thickness) for angle in angles
+    )
 
 
-def section_area(flanges: list[float], bends: int, radius: float, thickness: float) -> float:
-    """Площадь сечения: полки t × L и четверть кольца на каждом гибе."""
-    return thickness * float(sum(flanges)) + bends * (math.pi / 4.0) * (
-        (radius + thickness) ** 2 - radius**2
+def section_area(
+    flanges: list[float],
+    bends: int,
+    radius: float,
+    thickness: float,
+    angles_deg: list[float] | None = None,
+) -> float:
+    """Площадь сечения: полки t × L и сектор кольца на каждом гибе."""
+    angles = angles_deg if angles_deg is not None else [90.0] * bends
+    ring = (radius + thickness) ** 2 - radius**2
+    return thickness * float(sum(flanges)) + sum(
+        math.radians(angle) / 2.0 * ring for angle in angles
     )
 
 
 def flange_spans(
-    flanges: list[float], turns: list[int], radius: float, thickness: float
+    flanges: list[float],
+    turns: list[int],
+    radius: float,
+    thickness: float,
+    angles_deg: list[float] | None = None,
 ) -> list[dict[str, Any]]:
     """Наружные размеры полок в системе эскиза :func:`bent_section`.
 
@@ -147,6 +185,7 @@ def flange_spans(
     размера вдоль полки на её наружной стороне, ``outward`` — нормаль наружу,
     ``value`` — значение, ``axis`` — ``"x"`` или ``"y"``.
     """
+    angles = _angles(turns, angles_deg)
     half = thickness / 2.0
     middle_radius = radius + half
     point = (0.0, 0.0)
@@ -160,14 +199,16 @@ def flange_spans(
             turn = turns[index]
             normal = _rotate(direction, turn)
             centre = (point[0] + normal[0] * middle_radius, point[1] + normal[1] * middle_radius)
-            new_direction = _rotate(direction, turn)
+            new_direction = _rotate(direction, turn, angles[index])
             point = (
                 centre[0] - _rotate(new_direction, turn)[0] * middle_radius,
                 centre[1] - _rotate(new_direction, turn)[1] * middle_radius,
             )
             direction = new_direction
     spans: list[dict[str, Any]] = []
-    reach = radius + thickness
+    # До пересечения наружных поверхностей соседних полок (условная вершина):
+    # (R + s)·tg(θ/2) — у гиба на 90° это R + s.
+    reach = [(radius + thickness) * math.tan(math.radians(angle) / 2.0) for angle in angles]
     for index, (start, end, direction) in enumerate(walked):
         before = turns[index - 1] if index > 0 else None
         after = turns[index] if index < len(turns) else None
@@ -175,8 +216,8 @@ def flange_spans(
         # единственного её гиба).
         turn = after if after is not None else before
         outward = _rotate(direction, -turn if turn else -1)
-        lead = reach if before is not None else 0.0
-        tail = reach if after is not None else 0.0
+        lead = reach[index - 1] if before is not None else 0.0
+        tail = reach[index] if after is not None else 0.0
         a = (start[0] - direction[0] * lead, start[1] - direction[1] * lead)
         b = (end[0] + direction[0] * tail, end[1] + direction[1] * tail)
         a = (a[0] + outward[0] * half, a[1] + outward[1] * half - half)
@@ -185,9 +226,15 @@ def flange_spans(
             {
                 "start": [round(a[0], 6), round(a[1], 6)],
                 "end": [round(b[0], 6), round(b[1], 6)],
-                "outward": [round(outward[0]), round(outward[1])],
+                "outward": [round(outward[0], 6), round(outward[1], 6)],
                 "value": round(flanges[index] + lead + tail, 6),
-                "axis": "x" if abs(direction[0]) > 0.5 else "y",
+                "axis": (
+                    "x"
+                    if abs(direction[1]) < 1e-9
+                    else "y"
+                    if abs(direction[0]) < 1e-9
+                    else "aligned"
+                ),
             }
         )
     return spans

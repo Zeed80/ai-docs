@@ -392,6 +392,8 @@ _SHEET_METAL_PROMPT = (
     "- flanges_mm: размеры полок ПО ПОРЯДКУ вдоль сечения, от одного края до "
     "другого, — так, как они проставлены (обычно по наружной поверхности);\n"
     "- turns: только для other — направление каждого гиба по ходу: left или right;\n"
+    "- angles_deg: только если гиб НЕ прямой — угол между полками у каждого "
+    "гиба, как проставлен на листе (например 120); иначе null;\n"
     "- radius_mm: внутренний радиус гиба (надпись R);\n"
     "- thickness_mm: толщина листа (надпись s или размер толщины);\n"
     "- width_mm: ширина детали (размер вдоль линии гиба на другом виде).\n"
@@ -412,6 +414,7 @@ _SHEET_METAL_SCHEMA = {
             "maxItems": 11,
             "items": {"type": "string", "enum": ["left", "right"]},
         },
+        "angles_deg": {"type": ["array", "null"], "maxItems": 11, "items": {"type": "number"}},
         "radius_mm": {"type": ["number", "null"]},
         "thickness_mm": {"type": ["number", "null"]},
         "width_mm": {"type": ["number", "null"]},
@@ -4735,25 +4738,44 @@ def sheet_metal_from_answer(
         if notes is not None:
             notes.append("листовая деталь не построена: " + ", ".join(missing))
         return None
-    reach = radius + thickness
+    # Угол между полками с листа → угол гиба (отклонение полки) = 180 − угол.
+    included = answer.get("angles_deg")
+    bends: list[float] = [90.0] * len(turns)
+    if isinstance(included, list) and included:
+        stated = [taken_value(value, taken) for value in included]
+        if len(stated) != len(turns) or any(
+            value is None or not 0.0 < value < 180.0 for value in stated
+        ):
+            if notes is not None:
+                notes.append("листовая деталь не построена: углы гибов не с листа")
+            return None
+        bends = [180.0 - value for value in stated]
+    import math
+
+    reach = [(radius + thickness) * math.tan(math.radians(angle) / 2.0) for angle in bends]
     flanges: list[float] = []
     for index, value in enumerate(outer):
-        bends = (index > 0) + (index < len(outer) - 1)
-        straight = round(value - bends * reach, 3)
+        setback = (reach[index - 1] if index > 0 else 0.0) + (
+            reach[index] if index < len(outer) - 1 else 0.0
+        )
+        straight = round(value - setback, 6)
         if straight <= 0:
             if notes is not None:
                 notes.append(
-                    f"листовая деталь не построена: полка {value:g} короче гибов (R + s = {reach:g})"
+                    f"листовая деталь не построена: полка {value:g} короче гибов ({setback:g})"
                 )
             return None
         flanges.append(straight)
-    return {
+    sheet = {
         "flanges_mm": flanges,
         "turns": list(turns),
         "radius_mm": radius,
         "thickness_mm": thickness,
         "width_mm": width,
     }
+    if any(abs(angle - 90.0) > 1e-6 for angle in bends):
+        sheet["bend_angles_deg"] = bends
+    return sheet
 
 
 async def _weldment_by_question(
