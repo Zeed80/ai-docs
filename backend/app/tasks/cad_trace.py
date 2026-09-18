@@ -2660,6 +2660,23 @@ def _revalidated_spec(spec: dict) -> dict:
     return assign_stable_feature_ids(revalidated)
 
 
+async def _store_assembly_reading(factory, gen_uuid, assembly: dict) -> None:
+    """Состав сборки — в параметры прогона; прогон завершён, не провален."""
+    from app.db.models import ImageGeneration, ImageGenStatus
+    from app.services import studio_queue
+
+    async with factory() as db:
+        gen = await db.get(ImageGeneration, gen_uuid)
+        if gen is None:
+            return
+        gen.params = {**(gen.params or {}), "assembly": assembly}
+        gen.status = ImageGenStatus.done
+        gen.error = None
+        job = await studio_queue.job_for_generation(db, gen_uuid)
+        await studio_queue.mark_job_done(db, job)
+        await db.commit()
+
+
 async def _store_failed_reading(
     factory,
     gen_uuid,
@@ -3440,6 +3457,43 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         # "trace" is the auxiliary pixel path below: it is kept for classes the
         # spec drafter cannot express yet and as a verification surface, not as
         # the way to reach an exact ЕСКД redraw.
+        if vectorize_method == "spec" and digitization_type.normalized == "mechanical_assembly":
+            # Сборка (план, X5/Ф6): по сборочному чертежу 3D сборки не
+            # восстановить, но состав — позиции и их строки спецификации —
+            # читается. Раньше такой прогон отказывал целиком.
+            from app.ai.cad_recognize.assembly_positions import read_assembly
+
+            specification = download_file(source_paths[1]) if len(source_paths) > 1 else None
+            try:
+                assembly = await read_assembly(content, specification)
+            except Exception as exc:  # noqa: BLE001 — чтение сборки не валит прогон
+                return await _fail(f"Сборку прочитать не удалось: {str(exc)[:200]}")
+            await _record(
+                "assembly.positions",
+                "completed",
+                (
+                    f"Позиций на чертеже {len(assembly['positions'])}, строк спецификации "
+                    f"{assembly['rows']}; связано {len(assembly['linked'])}"
+                ),
+                {
+                    key: assembly[key]
+                    for key in (
+                        "positions_without_row",
+                        "rows_without_position",
+                        "duplicated_rows",
+                        "link_rate",
+                        "specification_source",
+                    )
+                },
+            )
+            await _store_assembly_reading(factory, gen_uuid, assembly)
+            await _record(
+                "pipeline",
+                "completed",
+                "Сборка: состав прочитан, 3D сборки по чертежу не строится",
+                {"terminal": True},
+            )
+            return {"assembly": assembly}
         if vectorize_method in ("spec", "graph", "text_spec"):
             if vectorize_method == "spec" and not digitization_type.spec_redraw_supported:
                 return await _fail(

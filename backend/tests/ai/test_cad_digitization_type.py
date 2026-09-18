@@ -64,3 +64,10 @@ def test_non_axial_geometry_still_reports_a_type_mismatch():
 def test_a_read_shaft_passes_the_gate():
     spec = {"main_view": {"type": "тело вращения (вал)", "outer": [{"diameter_mm": 30}]}}
     assert validate_spec_for_digitization_type(spec, "rotation_body") == []
+
+
+def test_an_assembly_is_read_for_its_composition_not_refused():
+    """X5: сборка по описанию раньше отказывала целиком; теперь читается состав —
+    позиции чертежа и строки спецификации (`assembly_positions`)."""
+    assert resolve_digitization_type("mechanical_assembly").spec_redraw_supported is True
+    assert resolve_digitization_type("sheet_metal_part").spec_redraw_supported is True

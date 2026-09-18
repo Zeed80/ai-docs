@@ -37,6 +37,8 @@ _SPEC_REDRAW_TYPES = {
     "rotation_body",
     "arbitrary_mechanical_part",
     "sheet_metal_part",
+    # Сборка: по описанию читается состав (позиции ↔ спецификация), не 3D.
+    "mechanical_assembly",
 }
 
 
