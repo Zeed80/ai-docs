@@ -98,6 +98,53 @@ def truth_from_dxf(doc) -> dict[str, list[str]]:
     return {"axes": sorted(axes), "levels": sorted(levels)}
 
 
+def render_sheet(doc, long_side: int = 3000) -> bytes | None:
+    """Рендер DXF нужного размера.
+
+    `eval_vectorize._render_dxf_png` отдаёт ~500 px по короткой стороне при
+    любом заданном размере: `finalize()` бэкенда ezdxf сам ужимает фигуру до
+    ~6 × 5 дюймов. Первый прогон E10 шёл по таким листам (отметки 36 %).
+    Здесь размер фигуры восстанавливается после finalize.
+    """
+    import io
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from ezdxf.addons.drawing import Frontend, RenderContext
+    from ezdxf.addons.drawing.config import BackgroundPolicy, ColorPolicy, Configuration
+    from ezdxf.addons.drawing.matplotlib import MatplotlibBackend
+
+    msp = doc.modelspace()
+    for insert in list(msp.query("INSERT")):
+        if insert.dxf.name not in doc.blocks:
+            msp.delete_entity(insert)
+    for layer in doc.layers:
+        try:
+            layer.dxf.color = abs(int(layer.dxf.color)) or 7
+            layer.thaw()
+        except Exception:  # noqa: BLE001
+            continue
+    figure = plt.figure(dpi=100)
+    axes = figure.add_axes([0, 0, 1, 1])
+    backend = MatplotlibBackend(axes)
+    config = Configuration(background_policy=BackgroundPolicy.WHITE, color_policy=ColorPolicy.BLACK)
+    try:
+        Frontend(RenderContext(doc), backend, config=config).draw_entities(msp)
+        backend.finalize()
+        width, height = figure.get_size_inches()
+        factor = long_side / 100.0 / max(width, height)
+        figure.set_size_inches(width * factor, height * factor)
+        buffer = io.BytesIO()
+        figure.savefig(buffer, format="png", dpi=100, facecolor="white")
+        return buffer.getvalue()
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        plt.close(figure)
+
+
 def score(truth: list[str], read: list[str]) -> dict[str, int]:
     truth_set, read_set = set(truth), set(read)
     return {
@@ -114,7 +161,7 @@ async def main() -> int:
 
     from app.ai.cad_recognize.spec_fragments import _ask, _overview
     from app.ai.router import ai_router
-    from scripts.eval_vectorize import _convert_dwg, _render_dxf_png
+    from scripts.eval_vectorize import _convert_dwg
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--dwg-dir", type=pathlib.Path, required=True)
@@ -133,7 +180,7 @@ async def main() -> int:
             except Exception:  # noqa: BLE001
                 doc, _audit = recover.readfile(dxf)
             truth = truth_from_dxf(doc)
-            png = _render_dxf_png(doc, 3000)
+            png = render_sheet(doc, 3000)
             if not png:
                 continue
             import io
