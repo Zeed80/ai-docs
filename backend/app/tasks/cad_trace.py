@@ -3893,9 +3893,11 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 # строго объясняются надписями — принимается целиком (живая
                 # планка part_04: Г-образная деталь прочитана прямоугольником).
                 from app.ai.cad_recognize.verifiers.reconcile import (
+                    apply_cavity,
                     apply_contour,
                     apply_housing,
                     apply_sleeve,
+                    cavity_addition,
                     contour_decision,
                     housing_decision,
                     sleeve_decision,
@@ -3965,6 +3967,28 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         verification = None
                 elif housing:
                     (verification or {}).setdefault("notes", []).append(housing["reason"])
+
+                # Полость корпуса, которую ридер не выписал (Ф5): ширина и
+                # глубина — из разреза, высота и положение — по штриховым
+                # кромкам плана; каждое число обязано стоять надписью.
+                cavity = cavity_addition(spec, verification) if verification else None
+                if cavity:
+                    spec = _revalidated_spec(apply_cavity(spec, cavity))
+                    await _record(
+                        "reconcile.cavity",
+                        "completed",
+                        f"Полость корпуса найдена по листу: {cavity['reason']}",
+                        {"addition": cavity},
+                    )
+                    try:
+                        verification = verify_spec_against_sheet(content, spec)
+                    except Exception as exc:  # noqa: BLE001 — проверка не ломает прогон
+                        logger.warning(
+                            "cad_verify_failed",
+                            generation_id=generation_id,
+                            error=str(exc)[:200],
+                        )
+                        verification = None
 
                 contour = contour_decision(spec, verification) if verification else None
                 if contour:

@@ -188,7 +188,9 @@ _LABEL_TOLERANCE = 0.02
 _RECT_COVERAGE = 0.8
 
 
-def discover_housing_views(sheet: Any, labels: list[float]) -> dict[str, Any] | None:
+def discover_housing_views(
+    sheet: Any, labels: list[float], read: tuple[float, float] | None = None
+) -> dict[str, Any] | None:
     """Корпус по листу: три вида по геометрии, размеры — по надписям (Ф5).
 
     Когда габариты прочитаны неверно, план по ним не найти: живой корпус
@@ -251,7 +253,14 @@ def discover_housing_views(sheet: Any, labels: list[float]) -> dict[str, Any] | 
         elif pairs:
             thickness_px = pairs[0][0]
             below = [(x0, pairs[0][1][0], x1, pairs[0][1][1])]
-    scale = _scale_by_labels([width_px, height_px, thickness_px], labels)
+    # Сначала — гипотеза модели: если прочитанные ширина и высота ложатся на
+    # план (обе, одним масштабом), масштаб берётся от них, а толщина
+    # меряется. Живой корпус: 80 × 80 прочитано верно, а среди выписанных
+    # надписей не было ни 80, ни 50 — масштаб «по надписям» подобрался по
+    # мелким числам (44 × 44 × 27).
+    scale = _scale_from_read(read, width_px, height_px)
+    if scale is None:
+        scale = _scale_by_labels([width_px, height_px, thickness_px], labels, _stamp_scales(gray))
     if scale is None:
         return None
 
@@ -460,14 +469,51 @@ def _rectangles(horizontal: list, vertical: list) -> list[tuple[float, float, fl
     return boxes
 
 
-def _scale_by_labels(spans_px: list[float | None], labels: list[float]) -> float | None:
+def _scale_from_read(
+    read: tuple[float, float] | None, width_px: float, height_px: float
+) -> float | None:
+    """Масштаб от прочитанных габаритов — если план их подтверждает."""
+    if not read or not all(isinstance(v, (int, float)) and v > 0 for v in read):
+        return None
+    read_w, read_h = float(read[0]), float(read[1])
+    for a, b in ((read_w, read_h), (read_h, read_w)):
+        scale_u, scale_v = a / width_px, b / height_px
+        if abs(scale_u / scale_v - 1.0) <= _LABEL_TOLERANCE:
+            return (scale_u + scale_v) / 2.0
+    return None
+
+
+def _stamp_scales(gray: Any) -> list[float]:
+    """Масштабы листа по основной надписи ЕСКД (ряд ГОСТ 2.302), мм детали на px.
+
+    Надписи, которые выписал ридер, — ненадёжная опора для масштаба: на живом
+    корпусе габарита среди них не было, и масштаб выбрался по мелким числам
+    (принято 44 × 44 × 27 при 80 × 80 × 50). Штамп 185 × 55 мм — линейка
+    БУМАГИ, и вместе с рядом стандартных масштабов даёт короткий список
+    допустимых мм/px, не зависящий от чтения.
+    """
+    from app.ai.cad_recognize.verifiers.sheet_scale import _GOST_SCALES, locate_title_block
+
+    block = locate_title_block(gray)
+    if block is None or block.paper_px_per_mm <= 0:
+        return []
+    paper_mm_per_px = 1.0 / block.paper_px_per_mm
+    return [paper_mm_per_px * paper / model for model, paper in _GOST_SCALES]
+
+
+def _scale_by_labels(
+    spans_px: list[float | None], labels: list[float], allowed: list[float] | None = None
+) -> float | None:
     """Масштаб, при котором стороны видов ложатся на надписи листа.
 
     Кандидаты берутся по сторонам ПЛАНА, и обе его стороны обязаны лечь на
     надписи: надписей на листе много (координаты, размеры элементов), и
     половинный масштаб тоже «совпадал» — корпус выходил 40 × 40 при 80 × 80.
-    При равном числе совпадений берётся больший масштаб: тело — самый большой
-    объект листа, и меньший масштаб описывает его же элемент.
+    Если штамп листа дал ряд стандартных масштабов (``allowed``), кандидат
+    обязан быть одним из них: на живом корпусе среди прочитанных надписей не
+    было габарита, и без этой привязки принималось 44 × 44 × 27 при
+    80 × 80 × 50. При равном числе совпадений берётся больший масштаб: тело —
+    самый большой объект листа.
     """
     spans = [value for value in spans_px if value]
     plan_sides = [value for value in spans_px[:2] if value]
@@ -479,10 +525,17 @@ def _scale_by_labels(spans_px: list[float | None], labels: list[float]) -> float
         best = min(numbers, key=lambda n: abs(n - value))
         return best, abs(best - value) / max(best, 1e-6)
 
+    def on_ladder(scale: float) -> bool:
+        return not allowed or any(
+            abs(scale / candidate - 1.0) <= _LABEL_TOLERANCE for candidate in allowed
+        )
+
     best: tuple[int, float, float] | None = None
     for side in plan_sides:
         for number in numbers:
             scale = number / side
+            if not on_ladder(scale):
+                continue
             fits = [nearest(other * scale) for other in plan_sides]
             if any(relative > _LABEL_TOLERANCE for _value, relative in fits):
                 continue

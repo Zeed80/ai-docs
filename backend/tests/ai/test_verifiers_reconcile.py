@@ -502,3 +502,21 @@ def test_a_cavity_whose_numbers_are_not_on_the_sheet_is_not_added():
     }
 
     assert cavity_addition(spec, report) is None
+
+
+def test_the_housing_scale_comes_from_the_read_size_when_the_plan_confirms_it():
+    """Живой корпус: 80 × 80 прочитано верно, а среди выписанных надписей не
+    было ни 80, ни 50 — масштаб «по надписям» подобрался по мелким числам и
+    принимал 44 × 44 × 27. Гипотеза модели первична, когда план её подтверждает."""
+    from app.ai.cad_recognize.verifiers.housing_views import _scale_by_labels, _scale_from_read
+
+    plan_px = (473.0, 473.0)
+    labels = [3, 4, 6, 8, 9, 10, 11, 13.5, 16, 20, 23, 25, 27, 32, 44]
+    wrong = _scale_by_labels([*plan_px, 295.0], labels)
+    assert abs(473.0 * wrong - 44.0) < 0.5  # вот как выходило 44 × 44 × 27
+
+    scale = _scale_from_read((80.0, 80.0), *plan_px)
+    assert abs(473.0 * scale - 80.0) < 1e-6
+    assert abs(295.0 * scale - 49.9) < 0.1
+    # Прочитанное, которого план не подтверждает, масштаба не даёт.
+    assert _scale_from_read((50.0, 80.0), *plan_px) is None

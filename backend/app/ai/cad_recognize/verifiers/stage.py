@@ -255,7 +255,12 @@ def _housing_by_sheet(
     from app.ai.cad_recognize.verifiers.housing_views import discover_housing_views
     from app.ai.cad_recognize.verifiers.reconcile import sheet_numbers
 
-    found = discover_housing_views(_gray(image_bytes), sheet_numbers(spec))
+    read_size = (profile.get("width_mm"), profile.get("height_mm"))
+    found = discover_housing_views(
+        _gray(image_bytes),
+        sheet_numbers(spec),
+        read_size if all(_is_number(v) for v in read_size) else None,
+    )
     if not found or not found.get("thickness_mm"):
         return
     report["housing_by_sheet"] = found
