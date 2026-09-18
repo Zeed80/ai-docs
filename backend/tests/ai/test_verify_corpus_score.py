@@ -107,3 +107,17 @@ def test_a_sheet_metal_part_is_scored_by_its_flanges_bends_and_sizes():
     # Прочитанная пластиной — класс не распознан, всё мимо.
     missed = score_spec(truth, {"main_view": {"profile": {"shape": "rectangle"}}})
     assert not missed["class_ok"] and not missed["flanges_exact"]
+
+
+def test_a_weldment_is_scored_by_plates_places_and_welds():
+    truth = synth_spec("weldment", 9)
+    perfect = score_spec(truth, copy.deepcopy(truth))
+    assert perfect["kind"] == "weldment" and perfect["class_ok"]
+    for key in ("plates", "placed", "welds"):
+        assert perfect[key]["found"] == perfect[key]["expected"] > 0
+
+    moved = copy.deepcopy(truth)
+    moved["parts"][1]["placement"]["position_mm"][1] += 3.0
+    shifted = score_spec(truth, moved)
+    assert shifted["plates"]["found"] == shifted["plates"]["expected"]
+    assert shifted["placed"]["found"] == shifted["placed"]["expected"] - 1

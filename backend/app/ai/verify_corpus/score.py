@@ -114,9 +114,52 @@ def score_spec(truth_spec: dict[str, Any], read_spec: dict[str, Any] | None) -> 
     read = read_spec.get("main_view") or {}
     if truth.get("outer"):
         return {"kind": "rotation", **_score_rotation(truth, read)}
+    if truth_spec.get("welds"):
+        return {"kind": "weldment", **_score_weldment(truth_spec, read_spec)}
     if isinstance(truth.get("sheet_metal"), dict):
         return {"kind": "sheet_metal", **_score_sheet_metal(truth, read)}
     return {"kind": "profile", **_score_profile(truth, read)}
+
+
+def _score_weldment(truth: dict[str, Any], read: dict[str, Any]) -> dict[str, Any]:
+    """Сварной узел (X3): пластины по размерам, рёбра по месту, швы по типу и катету."""
+    from app.ai.cad_solid import _body_box
+
+    def sizes(spec: dict) -> list[tuple]:
+        return [
+            tuple(
+                (part.get("profile") or {}).get(key)
+                for key in ("width_mm", "height_mm", "thickness_mm")
+            )
+            for part in spec.get("parts") or []
+            if isinstance(part, dict)
+        ]
+
+    def boxes(spec: dict) -> list:
+        found = []
+        for part in spec.get("parts") or []:
+            try:
+                box = _body_box(part) if isinstance(part, dict) else None
+            except (TypeError, ValueError):
+                box = None
+            if box is not None:
+                found.append(box)
+        return found
+
+    same_size = lambda a, b: all(_agree(x, y) for x, y in zip(a, b, strict=True))  # noqa: E731
+    same_box = lambda a, b: all(  # noqa: E731
+        _agree(x, y) for x, y in zip(a[0] + a[1], b[0] + b[1], strict=True)
+    )
+    same_weld = lambda a, b: (  # noqa: E731
+        str(a.get("designation")) == str(b.get("designation"))
+        and _agree(a.get("leg_mm"), b.get("leg_mm"))
+    )
+    return {
+        "class_ok": len(read.get("parts") or []) >= 2,
+        "plates": _field(*_match(sizes(truth), sizes(read), same_size)),
+        "placed": _field(*_match(boxes(truth), boxes(read), same_box)),
+        "welds": _field(*_match(truth.get("welds") or [], read.get("welds") or [], same_weld)),
+    }
 
 
 def _score_sheet_metal(truth: dict[str, Any], read: dict[str, Any]) -> dict[str, Any]:

@@ -34,12 +34,13 @@ logger = structlog.get_logger(__name__)
 _KIND_PROMPT = (
     "Ты — инженер-конструктор. Посмотри на чертёж и ответь ОДНОЙ строкой JSON "
     "без пояснений:\n"
-    '{"part":"название детали из штампа","kind":"rotation|plate|flange|sheet_metal|other",'
+    '{"part":"название детали из штампа","kind":"rotation|plate|flange|sheet_metal|weldment|other",'
     '"bodies":1,"views":["front","side","top","section","detail","removed_section"]}\n'
     "kind: rotation — тело вращения (вал, шпиндель, втулка); plate — плоская "
     "деталь с толщиной; flange — круглая пластина/фланец; sheet_metal — гнутая "
     "деталь из листа (уголок, швеллер, скоба, есть развёртка или s толщины "
-    "листа); other — остальное.\n"
+    "листа); weldment — сварной узел из нескольких пластин (обозначения швов "
+    "ГОСТ 5264, перечень позиций); other — остальное.\n"
     "views — только те проекции, что реально есть на листе.\n"
     "Кириллицу пиши буквами, не экранируй. Только JSON."
 )
@@ -418,6 +419,62 @@ _SHEET_METAL_SCHEMA = {
     "required": ["shape", "flanges_mm"],
 }
 
+_WELDMENT_PROMPT = (
+    "С чертежа уже прочитаны надписи и размеры:\n{callouts}\n\n"
+    "Это сварной узел: основание и рёбра, приваренные к нему. По перечню "
+    "позиций и размерам укажи для КАЖДОЙ позиции:\n"
+    "- position: номер позиции;\n"
+    "- role: base (основание, лежит внизу) или rib (ребро, стоит на основании);\n"
+    "- width_mm, height_mm, thickness_mm — размеры пластины из перечня;\n"
+    "- offset_mm — только у ребра: расстояние от кромки основания до ближней "
+    "стенки ребра (размер на виде слева).\n"
+    "И для КАЖДОГО шва (полка выноски вида «ГОСТ 5264-80-Т3-△4»): между какими "
+    "позициями (between), тип (Т1, Т3, У4…), катет leg_mm (число после △).\n"
+    "Числа бери ТОЛЬКО с листа; чего нет — null. ОДНОЙ строкой JSON:\n"
+    '{{"plates":[{{"position":1,"role":"base","width_mm":0,"height_mm":0,'
+    '"thickness_mm":0,"offset_mm":null}}],'
+    '"welds":[{{"between":[1,2],"type":"Т1","leg_mm":0}}]}}\n'
+    "Только JSON."
+)
+
+_WELDMENT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "plates": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "position": {"type": ["integer", "null"]},
+                    "role": {"type": ["string", "null"]},
+                    "width_mm": {"type": ["number", "null"]},
+                    "height_mm": {"type": ["number", "null"]},
+                    "thickness_mm": {"type": ["number", "null"]},
+                    "offset_mm": {"type": ["number", "null"]},
+                },
+            },
+        },
+        "welds": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "between": {"type": "array", "maxItems": 2, "items": {"type": "integer"}},
+                    "type": {"type": ["string", "null"]},
+                    "leg_mm": {"type": ["number", "null"]},
+                },
+            },
+        },
+    },
+    "required": ["plates", "welds"],
+}
+
+# Двусторонние угловые и тавровые швы ГОСТ 5264 (остальные — односторонние).
+_BOTH_SIDED_WELDS = frozenset({"Т3", "Т5", "Т7", "Т9", "У5", "У7", "У10", "Н2"})
+
+
 # Направления гибов стандартных профилей; зеркальный профиль — та же деталь.
 _SHEET_METAL_TURNS = {
     "angle": (1,),
@@ -606,7 +663,7 @@ _KIND_SCHEMA = {
         "part": {"type": ["string", "null"]},
         "kind": {
             "type": "string",
-            "enum": ["rotation", "plate", "flange", "sheet_metal", "other"],
+            "enum": ["rotation", "plate", "flange", "sheet_metal", "weldment", "other"],
         },
         "bodies": {"type": ["integer", "null"]},
         # Bounded on purpose. An unbounded array under constrained decoding
@@ -4699,6 +4756,122 @@ def sheet_metal_from_answer(
     }
 
 
+async def _weldment_by_question(
+    image: Any,
+    callouts: dict,
+    *,
+    router: Any,
+    confidential: bool,
+    audit: list[dict[str, Any]] | None = None,
+    notes: list[str] | None = None,
+) -> dict[str, Any] | None:
+    """Сварной узел (X3): пластины по перечню, положения рёбер, швы."""
+    candidates = _callout_numbers(callouts)
+    if not candidates:
+        return None
+    allowed = set(candidates)
+
+    def taken(value: float) -> float | None:
+        return value if any(abs(value - c) <= max(0.05, c * 0.005) for c in allowed) else None
+
+    listed = ", ".join(f"{value:g}" for value in candidates[:32])
+    answer = await _ask(
+        _WELDMENT_PROMPT.format(callouts=listed),
+        image,
+        num_predict=900,
+        schema=_WELDMENT_SCHEMA,
+        router=router,
+        confidential=confidential,
+        audit=audit,
+    )
+    if not answer:
+        return None
+    return weldment_from_answer(answer, taken, notes)
+
+
+def weldment_from_answer(
+    answer: dict[str, Any], taken: Any, notes: list[str] | None = None
+) -> dict[str, Any] | None:
+    """Ответ модели → ``parts`` с размещением и ``welds`` спека, или None.
+
+    Ребро стоит на верхней грани основания вдоль его ширины, ближней стенкой
+    на ``offset_mm`` от кромки — так проставляет лист (вид слева). Другое
+    взаимное расположение этот вопрос не выражает и уходит замечанием.
+    """
+    missing: list[str] = []
+    plates = sorted(
+        (item for item in answer.get("plates") or [] if isinstance(item, dict)),
+        key=lambda item: (str(item.get("role")) != "base", item.get("position") or 0),
+    )
+    if not plates or str(plates[0].get("role")) != "base":
+        if notes is not None:
+            notes.append("сварной узел не построен: основание не названо")
+        return None
+    parts: list[dict[str, Any]] = []
+    index_of: dict[int, int] = {}
+    base_thickness = None
+    for item in plates:
+        size = [
+            taken_value(item.get(key), taken) for key in ("width_mm", "height_mm", "thickness_mm")
+        ]
+        position = item.get("position")
+        if None in size:
+            missing.append(f"поз. {position}: размеры не с листа")
+            continue
+        body: dict[str, Any] = {
+            "name": "Основание" if not parts else f"Ребро {len(parts)}",
+            "type": "пластина",
+            "profile": {
+                "shape": "rectangle",
+                "width_mm": size[0],
+                "height_mm": size[1],
+                "thickness_mm": size[2],
+                "holes": [],
+                "hole_patterns": [],
+                "slots": [],
+            },
+        }
+        if parts:
+            offset = taken_value(item.get("offset_mm"), taken)
+            if offset is None or base_thickness is None:
+                missing.append(f"поз. {position}: положение ребра не проставлено")
+                continue
+            body["placement"] = {
+                "position_mm": [0.0, offset + size[2], base_thickness],
+                "axis": [1.0, 0.0, 0.0],
+                "angle_deg": 90.0,
+            }
+        else:
+            base_thickness = size[2]
+        if isinstance(position, int):
+            index_of[position] = len(parts)
+        parts.append(body)
+    welds: list[dict[str, Any]] = []
+    for item in answer.get("welds") or []:
+        if not isinstance(item, dict):
+            continue
+        between = [index_of.get(int(value)) for value in item.get("between") or []]
+        leg = taken_value(item.get("leg_mm"), taken)
+        kind = str(item.get("type") or "").strip().upper().replace("T", "Т").replace("Y", "У")
+        if len(between) != 2 or None in between or leg is None:
+            missing.append(f"шов {kind or '?'}: позиции или катет не с листа")
+            continue
+        welds.append(
+            {
+                "bodies": sorted(between),
+                "designation": kind or None,
+                "standard": "ГОСТ 5264-80",
+                "leg_mm": leg,
+                "both_sides": kind in _BOTH_SIDED_WELDS,
+            }
+        )
+    if missing and notes is not None:
+        notes.append("сварной узел: " + "; ".join(missing))
+    if len(parts) < 2:
+        return None
+    return {"parts": parts, "welds": welds}
+
+
 def taken_value(value: Any, taken: Any) -> float | None:
     """Число из ответа модели, если лист его действительно несёт."""
     if not isinstance(value, (int, float)) or isinstance(value, bool):
@@ -4956,6 +5129,7 @@ async def read_spec_by_fragments(
         )
 
     body: dict[str, Any] = {"type": _type_label(kind)}
+    weldment: dict[str, Any] | None = None
     unresolved: list[str] = []
     if unreadable_annotation_count:
         unresolved.append(f"PMI: {unreadable_annotation_count} обозначений без читаемого текста")
@@ -5075,6 +5249,15 @@ async def read_spec_by_fragments(
             body["profile"] = profile
         else:
             unresolved.append("контур плоской детали не прочитан")
+    elif kind == "weldment":
+        weldment = await _weldment_by_question(
+            geometry_view,
+            callouts,
+            router=router,
+            confidential=confidential,
+            audit=fragment_answers,
+            notes=unresolved,
+        )
     elif kind == "sheet_metal":
         sheet = await _sheet_metal_by_question(
             geometry_view,
@@ -5115,7 +5298,8 @@ async def read_spec_by_fragments(
         "schema_version": 1,
         "part": part or str(stamp.get("name") or ""),
         "main_view": body,
-        "parts": [],
+        "parts": (weldment or {}).get("parts") or [],
+        "welds": (weldment or {}).get("welds") or [],
         "views": [
             {"kind": view, "body_index": 0}
             for view in (kind_answer.get("views") or [])
@@ -5135,7 +5319,12 @@ async def read_spec_by_fragments(
         "fragments": {
             "kind": bool(kind_answer),
             "stamp": bool(stamp),
-            "geometry": bool(body.get("outer") or body.get("profile") or body.get("sheet_metal")),
+            "geometry": bool(
+                body.get("outer")
+                or body.get("profile")
+                or body.get("sheet_metal")
+                or (weldment or {}).get("parts")
+            ),
             "callouts": bool(callouts),
             "pmi_regions": len(pmi_evidence),
             "structured_pmi": bool(structured_pmi),
@@ -5277,6 +5466,7 @@ def _type_label(kind: str) -> str:
         "plate": "призматическая (пластина)",
         "flange": "фланец",
         "sheet_metal": "листовая деталь",
+        "weldment": "сварной узел",
     }.get(kind, kind or "")
 
 

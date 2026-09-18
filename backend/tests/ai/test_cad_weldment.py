@@ -132,3 +132,74 @@ def test_every_body_keeps_its_own_index_through_the_graph():
         for f in rebuilt.features
         for name in f.params
     )
+
+
+def _taken(*numbers: float):
+    return lambda value: value if any(abs(value - n) < 1e-6 for n in numbers) else None
+
+
+def test_the_reader_places_each_rib_where_the_sheet_dimensions_it():
+    """Ответ модели по перечню и виду слева → тела с размещением и швы."""
+    from app.ai.cad_recognize.spec_fragments import weldment_from_answer
+
+    answer = {
+        "plates": [
+            {
+                "position": 2,
+                "role": "rib",
+                "width_mm": 80,
+                "height_mm": 30,
+                "thickness_mm": 5,
+                "offset_mm": 65,
+            },
+            {
+                "position": 1,
+                "role": "base",
+                "width_mm": 80,
+                "height_mm": 120,
+                "thickness_mm": 8,
+                "offset_mm": None,
+            },
+        ],
+        "welds": [{"between": [1, 2], "type": "T3", "leg_mm": 4}],
+    }
+    built = weldment_from_answer(answer, _taken(80, 30, 5, 65, 120, 8, 4))
+
+    base, rib = built["parts"]
+    assert base["profile"]["height_mm"] == 120.0 and "placement" not in base
+    # Ближняя стенка ребра на 65 от кромки: ребро y 65…70 стоит на z = 8.
+    assert rib["placement"]["position_mm"] == [0.0, 70.0, 8.0]
+    assert built["welds"] == [
+        {
+            "bodies": [0, 1],
+            "designation": "Т3",
+            "standard": "ГОСТ 5264-80",
+            "leg_mm": 4.0,
+            "both_sides": True,
+        }
+    ]
+    # Из прочитанного строится узел с валиками по обе стороны ребра.
+    tree = feature_tree_from_spec({"part": "Опора", "main_view": {"type": "узел"}, **built})
+    assert sum(1 for f in tree.features if f.body_index >= 2) == 2
+
+
+def test_the_reader_builds_no_rib_from_a_position_the_sheet_does_not_state():
+    from app.ai.cad_recognize.spec_fragments import weldment_from_answer
+
+    notes: list[str] = []
+    answer = {
+        "plates": [
+            {"position": 1, "role": "base", "width_mm": 80, "height_mm": 120, "thickness_mm": 8},
+            {
+                "position": 2,
+                "role": "rib",
+                "width_mm": 80,
+                "height_mm": 30,
+                "thickness_mm": 5,
+                "offset_mm": 64,
+            },
+        ],
+        "welds": [],
+    }
+    assert weldment_from_answer(answer, _taken(80, 30, 5, 65, 120, 8), notes) is None
+    assert "положение ребра не проставлено" in notes[0]
