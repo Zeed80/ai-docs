@@ -63,8 +63,42 @@ def verify_spec_against_sheet(image_bytes: bytes, spec: dict[str, Any]) -> dict[
         _housing_by_sheet(image_bytes, spec or {}, profile, report)
         _housing_thickness(image_bytes, profile, report)
         _wall_features_on_sheet(image_bytes, profile, report)
+    sheet_metal = ((spec or {}).get("main_view") or {}).get("sheet_metal")
+    if isinstance(sheet_metal, dict):
+        _bent_section(image_bytes, sheet_metal, report)
+        reason = None
     _sheet_scale(image_bytes, spec or {}, report)
     return _finish(report, started, reason)
+
+
+def _bent_section(image_bytes: bytes, sheet: dict[str, Any], report: dict[str, Any]) -> None:
+    """Сечение гнутой детали (X4): число гибов, их направления и углы по листу."""
+    from app.ai.cad_recognize.verifiers.bent_section import (
+        bent_section_verdict,
+        measure_bent_section,
+    )
+
+    try:
+        measured = measure_bent_section(_gray(image_bytes))
+    except Exception as exc:  # noqa: BLE001 — проверка не валит прогон
+        measured = None
+        report["notes"].append(f"сечение гнутой детали не измерено: {str(exc)[:120]}")
+    verdict = bent_section_verdict(sheet, measured)
+    item = {
+        "kind": "bent_section",
+        "path": "main_view.sheet_metal",
+        "read": {
+            "bends": len(sheet.get("turns") or []),
+            "turns": list(sheet.get("turns") or []),
+            "angles_deg": list(sheet.get("bend_angles_deg") or []),
+        },
+        "status": verdict["status"],
+        "measured": verdict["measured"],
+        "reason": verdict["reason"],
+    }
+    if measured is not None:
+        item["evidence_bbox_px"] = [round(v, 1) for v in measured["bbox_px"]]
+    report["items"].append(item)
 
 
 def _sheet_scale(image_bytes: bytes, spec: dict[str, Any], report: dict[str, Any]) -> None:

@@ -3998,6 +3998,26 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 # Массив отверстий, противоречащий отверстиям, подтверждённым листом,
                 # — ошибка чтения (живой корпус: «окружность болтов Ø69» поверх
                 # четырёх подтверждённых угловых отверстий блокировала сборку).
+                # Гнутая деталь (X4): форма сечения — по листу, если ридер
+                # перепутал только направления гибов (швеллер ↔ Z-профиль).
+                from app.ai.cad_recognize.verifiers.reconcile import (
+                    apply_bent_section,
+                    bent_section_decision,
+                )
+
+                bent = bent_section_decision(spec, verification) if verification else None
+                if bent:
+                    spec = _revalidated_spec(apply_bent_section(spec, bent))
+                    await _record(
+                        "reconcile.bent_section",
+                        "completed",
+                        (
+                            "Форма сечения принята по листу"
+                            if bent["action"] == "adopt"
+                            else "Форма сечения расходится с листом — решение человеку"
+                        ),
+                        {"decision": bent},
+                    )
                 drops = contradicting_patterns(spec, verification) if verification else []
                 if drops:
                     spec = _revalidated_spec(apply_pattern_drops(spec, drops))

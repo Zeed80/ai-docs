@@ -757,6 +757,8 @@
       "assurance_verify_group_chamfer": "фаски",
       "assurance_verify_group_wall_feature": "элементы граней",
       "assurance_verify_group_plate_thickness": "толщина",
+      "assurance_verify_kind_bent_section": "Сечение гнутой детали",
+      "assurance_verify_group_bent_section": "сечение",
       "assurance_verify_kind_plate_hole": "Отверстие {index}",
       "assurance_verify_kind_bolt_circle": "Окружность болтов {index}",
       "assurance_verify_kind_concentric_hole": "Центральное отверстие",

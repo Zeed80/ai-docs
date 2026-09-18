@@ -618,6 +618,68 @@ def apply_cavity(spec: dict[str, Any], addition: dict[str, Any]) -> dict[str, An
     return spec
 
 
+def bent_section_decision(spec: dict[str, Any], report: dict[str, Any]) -> dict[str, Any] | None:
+    """Направления гибов — по листу, если ридер ошибся только в них (X4).
+
+    Модель путает швеллер и Z-профиль: полки и их размеры прочитаны верно, а
+    направление гиба — нет. Число гибов совпало с листом, направления — нет:
+    форма сечения видна на листе без чтения, и она принимается. Другое число
+    гибов или неизмеренный угол — решение человеку: размеров недостающей полки
+    лист замером не даёт.
+    """
+    item = next(
+        (i for i in report.get("items") or [] if i.get("kind") == "bent_section"),
+        None,
+    )
+    sheet = ((spec.get("main_view") or {}).get("sheet_metal")) or {}
+    if item is None or item.get("status") != "refuted" or not sheet:
+        return None
+    measured = item.get("measured") or {}
+    turns = list(measured.get("turns") or [])
+    angles = list(measured.get("angles_deg") or [])
+    read_turns = list(sheet.get("turns") or [])
+    if len(turns) != len(read_turns) or None in angles:
+        return {
+            "kind": "bent_section",
+            "path": "main_view.sheet_metal",
+            "field": "turns",
+            "action": "ask_human",
+            "read": read_turns,
+            "measured": turns,
+            "reason": f"{item.get('reason')}: размеров полок лист замером не даёт — решение человеку",
+        }
+    return {
+        "kind": "bent_section",
+        "path": "main_view.sheet_metal",
+        "field": "turns",
+        "action": "adopt",
+        "read": read_turns,
+        "measured": turns,
+        "value": {"turns": turns, "bend_angles_deg": angles},
+        "reason": f"{item.get('reason')}: форма сечения принята по листу, размеры полок прочитаны",
+    }
+
+
+def apply_bent_section(spec: dict[str, Any], decision: dict[str, Any]) -> dict[str, Any]:
+    """Направления и углы гибов с листа — в копию спека."""
+    import copy
+
+    if decision.get("action") != "adopt":
+        spec = copy.deepcopy(spec)
+        spec.setdefault("optional_unresolved", []).append(decision["reason"])
+        return spec
+    spec = copy.deepcopy(spec)
+    sheet = spec["main_view"]["sheet_metal"]
+    sheet["turns"] = [int(t) for t in decision["value"]["turns"]]
+    angles = [float(round(a)) for a in decision["value"]["bend_angles_deg"]]
+    if all(abs(a - 90.0) <= 5.0 for a in angles):
+        sheet.pop("bend_angles_deg", None)
+    else:
+        sheet["bend_angles_deg"] = angles
+    spec.setdefault("optional_unresolved", []).append(decision["reason"])
+    return spec
+
+
 def contradicting_patterns(spec: dict[str, Any], report: dict[str, Any]) -> list[dict[str, Any]]:
     """Массивы отверстий, которые противоречат отверстиям, подтверждённым листом.
 

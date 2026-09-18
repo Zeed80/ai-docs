@@ -757,6 +757,8 @@
       "assurance_verify_group_chamfer": "chamfers",
       "assurance_verify_group_wall_feature": "face features",
       "assurance_verify_group_plate_thickness": "thickness",
+      "assurance_verify_kind_bent_section": "Bent section",
+      "assurance_verify_group_bent_section": "section",
       "assurance_verify_kind_plate_hole": "Hole {index}",
       "assurance_verify_kind_bolt_circle": "Bolt circle {index}",
       "assurance_verify_kind_concentric_hole": "Central hole",
