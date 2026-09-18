@@ -579,6 +579,35 @@ def test_a_pattern_contradicting_confirmed_holes_is_dropped():
     assert len(updated["main_view"]["profile"]["holes"]) == 4
 
 
+def test_notes_about_a_dropped_pattern_go_with_it():
+    """Живой корпус 26270edd: массив снят, а замечания о нём остались
+    блокерами — сборка встала на уже несуществующей окружности."""
+    from app.ai.cad_recognize.verifiers.reconcile import (
+        apply_pattern_drops,
+        contradicting_patterns,
+    )
+
+    spec = _plate_with_pattern(
+        {
+            "kind": "bolt_circle",
+            "count": 4,
+            "hole_diameter_mm": 13.5,
+            "bolt_circle_diameter_mm": 69.0,
+        }
+    )
+    kept = "Толщина детали не подтверждена на чертеже"
+    spec["unresolved"] = [
+        "geometry_input_incomplete:main_view.profile.hole_patterns.0:required pattern "
+        "parameters are missing or invalid",
+        "тело 0: делительная окружность Ø69 с отверстиями Ø13.5 не помещается в контур",
+        kept,
+    ]
+
+    updated = apply_pattern_drops(spec, contradicting_patterns(spec, _confirmed_corner_holes()))
+
+    assert updated["unresolved"] == [kept]
+
+
 def test_a_pattern_that_matches_the_confirmed_holes_stays():
     """Та же четвёрка, описанная окружностью Ø82 под 45°, — не противоречие."""
     import math

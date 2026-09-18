@@ -688,10 +688,24 @@ def apply_pattern_drops(spec: dict[str, Any], decisions: list[dict[str, Any]]) -
         return spec
     spec = copy.deepcopy(spec)
     profile = ((spec.get("main_view") or {}).get("profile")) or {}
+    patterns = profile.get("hole_patterns") or []
+    # Замечания о снятом массиве устаревают вместе с ним: живой корпус
+    # 26270edd — массив снят, а «делительная окружность Ø69 не помещается»
+    # и «параметры массива не заданы» остались блокерами сборки.
+    markers = [f"hole_patterns.{index}" for index in drops] + [
+        f"окружность Ø{float(patterns[index]['bolt_circle_diameter_mm']):g} "
+        for index in drops
+        if index < len(patterns)
+        and isinstance(patterns[index], dict)
+        and isinstance(patterns[index].get("bolt_circle_diameter_mm"), (int, float))
+    ]
     profile["hole_patterns"] = [
-        pattern
-        for index, pattern in enumerate(profile.get("hole_patterns") or [])
-        if index not in drops
+        pattern for index, pattern in enumerate(patterns) if index not in drops
+    ]
+    spec["unresolved"] = [
+        note
+        for note in spec.get("unresolved") or []
+        if not any(marker in str(note) for marker in markers)
     ]
     spec.setdefault("optional_unresolved", []).extend(d["reason"] for d in decisions)
     return spec

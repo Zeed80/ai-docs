@@ -46,6 +46,18 @@ def needed_dimensions(spec: dict) -> dict[str, list[float]]:
     метрика мерит то, что лист обязан нести уже сейчас, а не мечту.
     """
     body = spec["main_view"]
+    sheet = body.get("sheet_metal")
+    if isinstance(sheet, dict):
+        # Гнутая деталь (X4): полки по наружной поверхности, толщина, радиус
+        # гиба, ширина и длина развёртки — без неё заготовку не вырезать.
+        from app.ai.sheet_metal import developed_length, flange_spans
+
+        flanges, turns = sheet["flanges_mm"], sheet["turns"]
+        radius, thickness = sheet["radius_mm"], sheet["thickness_mm"]
+        lengths = [span["value"] for span in flange_spans(flanges, turns, radius, thickness)]
+        lengths += [thickness, radius, sheet["width_mm"]]
+        lengths.append(round(developed_length(flanges, len(turns), radius, thickness), 1))
+        return {"diameters": [], "lengths": sorted(lengths), "overall": []}
     profile = body.get("profile")
     if isinstance(profile, dict):
         diameters = {h["diameter_mm"] for h in profile.get("holes") or []}

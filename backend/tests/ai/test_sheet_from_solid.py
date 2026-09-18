@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 
 import ezdxf
+import pytest
 
 from app.ai.cad_ir.sheet_from_solid import (
     _assemble,
@@ -1543,3 +1544,96 @@ def test_a_housing_dimensions_its_wall_features_from_the_drawn_geometry():
     assert sorted(by_measure["housing_overall"]) == [40.0, 80.0, 100.0]
     # Координаты — от кромок тела, а не от края вида: прилив на 10 от середины.
     assert sorted(by_measure["wall_feature_position"]) == [10.0, 20.0, 40.0, 50.0]
+
+
+# ── Листовая деталь (X4) ─────────────────────────────────────────────────────
+
+
+def _channel() -> dict:
+    return {
+        "main_view": {
+            "type": "листовая деталь",
+            "sheet_metal": {
+                "flanges_mm": [15.0, 40.0, 12.0],
+                "turns": [1, 1],
+                "radius_mm": 2.0,
+                "thickness_mm": 2.0,
+                "width_mm": 50.0,
+            },
+        }
+    }
+
+
+def _drawn_section(sketch: list[dict], ratio: float, flip_u: bool) -> dict:
+    """Вид ядра: эскиз, отражённый по u и сдвинутый, — как ядро кладёт оси по-своему."""
+    points = [(0.0, 0.0)] + [tuple(segment["to"]) for segment in sketch]
+    sign = -1.0 if flip_u else 1.0
+    placed = [(sign * x * ratio + 7.0, y * ratio - 3.0) for x, y in points]
+    return {
+        "visible": [
+            {"type": "line", "points": [list(a), list(b)]}
+            for a, b in zip(placed, placed[1:], strict=False)
+        ]
+    }
+
+
+def test_a_sheet_metal_part_is_drawn_as_its_section_with_the_width_beside():
+    """Раньше гнутая деталь шла классом «фланец» (по габариту): разрез полоской
+    и ни одного размера — ни полок, ни толщины, ни развёртки."""
+    from app.ai.cad_ir.sheet_from_solid import classify_part, plan_views
+
+    spec = _channel()
+    assert classify_part(spec, {"bounds_mm": {"x": 20, "y": 44, "z": 50}}) == "sheet_metal"
+    assert [view["kind"] for view in plan_views("sheet_metal", spec)] == ["front", "side", "top"]
+
+
+def test_flange_dimensions_land_on_the_drawn_section_whatever_its_axes():
+    """Эскиз сечения и вид ядра — в разных осях: размер, положенный по числам
+    эскиза без перевода, встал бы мимо детали."""
+    from app.ai.cad_ir.sheet_from_solid import SheetPlan, _sheet_metal_dimensions
+    from app.ai.sheet_metal import bent_section
+
+    spec = _channel()
+    sheet = spec["main_view"]["sheet_metal"]
+    sketch = bent_section(sheet["flanges_mm"], sheet["turns"], 2.0, 2.0)
+    plan = SheetPlan(
+        part_class="sheet_metal",
+        views=[{"kind": "front"}, {"kind": "side"}, {"kind": "top"}],
+        sheet_format="A4",
+        landscape=True,
+        ratio=0.5,
+        scale_label="1:2",
+        layout_w_mm=0.0,
+        layout_h_mm=0.0,
+    )
+    drawing = {
+        "views": [
+            {},
+            _drawn_section(sketch, 0.5, flip_u=True),
+            {"bounds_mm": {"u_min": 0.0, "u_max": 25.0, "v_min": 0.0, "v_max": 22.0}},
+        ],
+        "dimensions": [],
+    }
+
+    _sheet_metal_dimensions(drawing, spec, plan)
+
+    labels = sorted(item["label"] for item in drawing["dimensions"])
+    # Полки по наружной поверхности: прямой участок + (R + s) на каждый гиб.
+    assert labels == sorted(["19", "48", "16", "s2", "50"])
+    web = next(item for item in drawing["dimensions"] if item["label"] == "48")
+    (u1, v1), (u2, v2) = web["anchors_mm"]
+    assert web["kind"] == "DistanceY"
+    assert abs(abs(v2 - v1) - 48 * 0.5) < 1e-6
+    # Наружная поверхность стенки в эскизе — x = 15 + R + s = 19; вид отражён
+    # по u и сдвинут на 7: u = 7 − 19·0,5.
+    assert u1 == pytest.approx(7.0 - 19.0 * 0.5)
+    assert u2 == pytest.approx(u1)
+
+
+def test_the_sheet_metal_metric_requires_the_flat_length():
+    from scripts.build_verify_corpus import needed_dimensions
+
+    needed = needed_dimensions(_channel())
+    # 15 + 40 + 12 + 2 · π/2 · (2 + 0,5 · 2) = 76,4
+    assert 76.4 in needed["lengths"]
+    assert {19.0, 48.0, 16.0, 2.0, 50.0} <= set(needed["lengths"])

@@ -778,6 +778,19 @@ def verify_views_against_solid(
     diameter = max(float(bounds.get("x") or 0.0), float(bounds.get("y") or 0.0)) * ratio
     checks: dict[str, Any] = {"ok": True, "part_class": part_class, "scale": ratio}
 
+    if part_class == "sheet_metal":
+        # Гнутая деталь (X4): вид вдоль ширины — сечение, его рамка — это
+        # габарит тела поперёк ширины.
+        side = (views.get("side") or {}).get("bounds_mm")
+        if side:
+            span = sorted((side["u_max"] - side["u_min"], side["v_max"] - side["v_min"]))
+            solid = sorted(float(bounds.get(axis) or 0.0) * ratio for axis in ("x", "y"))
+            checks["side_matches_solid"] = all(
+                abs(a - b) <= max(0.05, b * 0.005) for a, b in zip(span, solid, strict=True)
+            )
+            checks["ok"] = checks["side_matches_solid"]
+        return checks
+
     if part_class in ("flange", "plate"):
         # Seen along the axis: both extents are the outline, and the thickness
         # is what a side view or a section shows instead.

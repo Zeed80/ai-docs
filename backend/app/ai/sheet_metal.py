@@ -133,3 +133,61 @@ def section_area(flanges: list[float], bends: int, radius: float, thickness: flo
     return thickness * float(sum(flanges)) + bends * (math.pi / 4.0) * (
         (radius + thickness) ** 2 - radius**2
     )
+
+
+def flange_spans(
+    flanges: list[float], turns: list[int], radius: float, thickness: float
+) -> list[dict[str, Any]]:
+    """Наружные размеры полок в системе эскиза :func:`bent_section`.
+
+    На чертеже гнутой детали полку образмеривают по наружной поверхности
+    (ГОСТ 2.307): от свободного торца или наружной поверхности соседней полки
+    до наружной поверхности следующей. Это прямой участок плюс ``R + s`` на
+    каждый прилегающий гиб. Возвращается по полке: ``start``/``end`` — концы
+    размера вдоль полки на её наружной стороне, ``outward`` — нормаль наружу,
+    ``value`` — значение, ``axis`` — ``"x"`` или ``"y"``.
+    """
+    half = thickness / 2.0
+    middle_radius = radius + half
+    point = (0.0, 0.0)
+    direction = (1.0, 0.0)
+    walked: list[tuple[tuple[float, float], tuple[float, float], tuple[float, float]]] = []
+    for index, length in enumerate(flanges):
+        end = (point[0] + direction[0] * length, point[1] + direction[1] * length)
+        walked.append((point, end, direction))
+        point = end
+        if index < len(turns):
+            turn = turns[index]
+            normal = _rotate(direction, turn)
+            centre = (point[0] + normal[0] * middle_radius, point[1] + normal[1] * middle_radius)
+            new_direction = _rotate(direction, turn)
+            point = (
+                centre[0] - _rotate(new_direction, turn)[0] * middle_radius,
+                centre[1] - _rotate(new_direction, turn)[1] * middle_radius,
+            )
+            direction = new_direction
+    spans: list[dict[str, Any]] = []
+    reach = radius + thickness
+    for index, (start, end, direction) in enumerate(walked):
+        before = turns[index - 1] if index > 0 else None
+        after = turns[index] if index < len(turns) else None
+        # Наружная сторона — против поворота гиба (у свободной полки — против
+        # единственного её гиба).
+        turn = after if after is not None else before
+        outward = _rotate(direction, -turn if turn else -1)
+        lead = reach if before is not None else 0.0
+        tail = reach if after is not None else 0.0
+        a = (start[0] - direction[0] * lead, start[1] - direction[1] * lead)
+        b = (end[0] + direction[0] * tail, end[1] + direction[1] * tail)
+        a = (a[0] + outward[0] * half, a[1] + outward[1] * half - half)
+        b = (b[0] + outward[0] * half, b[1] + outward[1] * half - half)
+        spans.append(
+            {
+                "start": [round(a[0], 6), round(a[1], 6)],
+                "end": [round(b[0], 6), round(b[1], 6)],
+                "outward": [round(outward[0]), round(outward[1])],
+                "value": round(flanges[index] + lead + tail, 6),
+                "axis": "x" if abs(direction[0]) > 0.5 else "y",
+            }
+        )
+    return spans

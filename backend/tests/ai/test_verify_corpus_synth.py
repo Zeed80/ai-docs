@@ -186,3 +186,28 @@ def test_a_housing_has_a_cavity_and_at_least_one_wall_feature():
         cavity = [item for item in walls if item["on_plane"] == "top"]
         assert len(cavity) == 1 and cavity[0]["kind"] == "pocket"
         assert [item for item in walls if item["on_plane"] != "top"]
+
+
+# ── Листовые детали (X4) ─────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("seed", range(200))
+def test_every_sheet_metal_part_is_bendable_and_builds_a_tree(seed):
+    """Полка не короче трёх толщин и R + s, радиус гиба не меньше толщины."""
+    spec = synth_spec("sheet_metal", seed)
+    EngineeringDrawingSpec.model_validate(spec)
+    sheet = spec["main_view"]["sheet_metal"]
+    assert sheet["radius_mm"] >= sheet["thickness_mm"]
+    shortest = max(3 * sheet["thickness_mm"], sheet["radius_mm"] + sheet["thickness_mm"])
+    assert min(sheet["flanges_mm"]) >= shortest
+    assert feature_tree_from_spec(spec) is not None
+
+
+def test_a_hat_profile_has_webs_of_one_height():
+    hats = [
+        synth_spec("sheet_metal", seed)["main_view"]["sheet_metal"]
+        for seed in range(60)
+        if synth_spec("sheet_metal", seed)["main_view"]["name"] == "шляпный профиль"
+    ]
+    assert hats
+    assert all(hat["flanges_mm"][1] == hat["flanges_mm"][3] for hat in hats)

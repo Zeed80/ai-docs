@@ -32,7 +32,13 @@ _STEP_LENGTHS = (12, 15, 18, 20, 25, 30, 35, 40, 50, 60, 70, 80)
 def synth_spec(kind: str, seed: int) -> dict[str, Any]:
     """Спек детали заданного типа. Детерминирован по ``seed``."""
     rng = random.Random(f"{kind}:{seed}")
-    builders = {"shaft": _shaft, "plate": _plate, "flange": _flange, "housing": _housing}
+    builders = {
+        "shaft": _shaft,
+        "plate": _plate,
+        "flange": _flange,
+        "housing": _housing,
+        "sheet_metal": _sheet_metal,
+    }
     if kind not in builders:
         raise ValueError(f"генератор для типа «{kind}» ещё не написан")
     return builders[kind](rng)
@@ -495,6 +501,58 @@ def _housing(rng: random.Random) -> dict[str, Any]:
             }
         )
     return _prismatic_spec(rng, profile, rng.choice(_NAMES_PLATE_RECT), "корпус")
+
+
+# Гнутые профили (X4): направления гибов по порядку, +1 влево, −1 вправо.
+_BENT_PROFILES = {
+    "уголок": (1,),
+    "швеллер": (1, 1),
+    "Z-профиль": (1, -1),
+    "шляпный профиль": (-1, 1, 1, -1),
+}
+# Толщина листа (ГОСТ 19903) и внутренний радиус гиба не меньше толщины.
+_SHEET_THICKNESS = (1.0, 1.5, 2.0, 2.5, 3.0, 4.0)
+
+
+def _sheet_metal(rng: random.Random) -> dict[str, Any]:
+    """Гнутая деталь из листа: полки и гибы на 90°, радиус, толщина, ширина.
+
+    Полка не короче трёх толщин и радиуса гиба — короче её не согнуть; радиус
+    гиба не меньше толщины. Эталон, который сам гнёт полку в 1 мм из листа 4,
+    учил бы проверку принимать брак.
+    """
+    name, turns = rng.choice(sorted(_BENT_PROFILES.items()))
+    thickness = rng.choice(_SHEET_THICKNESS)
+    radius = rng.choice((1.0, 1.5, 2.0)) * thickness
+    shortest = max(3.0 * thickness, radius + thickness, 8.0)
+    flanges = [
+        float(
+            rng.choice([value for value in (10, 12, 15, 20, 25, 30, 40, 50) if value >= shortest])
+        )
+        for _ in range(len(turns) + 1)
+    ]
+    if len(flanges) == 5:
+        # Шляпный профиль — стенки одной высоты, иначе полки не в одной плоскости.
+        flanges[3] = flanges[1]
+    return {
+        "schema_version": 1,
+        "main_view": {
+            "name": name,
+            "type": "листовая деталь",
+            "sheet_metal": {
+                "flanges_mm": flanges,
+                "turns": list(turns),
+                "radius_mm": radius,
+                "thickness_mm": thickness,
+                "width_mm": float(rng.choice((20, 30, 40, 50, 60, 80, 100))),
+            },
+        },
+        "views": [{"kind": "front", "body_index": 0}],
+        "dimensions": [],
+        "annotations": [],
+        "title_block": {"name": name, "material": rng.choice(_MATERIALS)},
+        "unresolved": [],
+    }
 
 
 def _prismatic_spec(

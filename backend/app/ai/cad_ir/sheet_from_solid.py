@@ -109,6 +109,8 @@ def classify_part(spec: dict, report: dict) -> str:
         _rotation_parts,
     )
 
+    if isinstance((spec.get("main_view") or {}).get("sheet_metal"), dict):
+        return "sheet_metal"
     parts = _rotation_parts(spec)
     if parts:
         return "hollow_rotation" if parts[0].get("bore") else "solid_rotation"
@@ -193,6 +195,12 @@ def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
                 "x_direction": [1.0, 0.0, 0.0],
             }
         )
+        views.append({"kind": "top"})
+    elif part_class == "sheet_metal":
+        # Гнутая деталь (X4): главный вид — вдоль ширины (`side`), на нём
+        # сечение с полками и гибами; справа `top` — ширина. `front` — основа
+        # для ядра, на лист не идёт.
+        views.append({"kind": "side"})
         views.append({"kind": "top"})
     elif part_class in ("flange", "plate"):
         # Вид ВДОЛЬ оси выдавливания (`side`, вдоль −Z) — это деталь в плане:
@@ -424,7 +432,13 @@ def _estimate_layout_mm(part_class: str, report: dict, views: list[dict]) -> tup
     diameter = max(float(bounds.get("x") or 0.0), float(bounds.get("y") or 0.0))
     kinds = [view.get("presentation_kind") or view["kind"] for view in views]
 
-    if part_class in ("flange", "plate"):
+    if part_class == "sheet_metal":
+        # Сечение (x × y) и справа вид на ширину (z × y).
+        section_w, section_h = float(bounds.get("x") or 0.0), float(bounds.get("y") or 0.0)
+        width = max(section_w + VIEW_GAP_MM + length, _flat_length_mm(report, bounds))
+        # Под сечением — развёртка (длина × ширина) с надписью и размером.
+        height = section_h + VIEW_GAP_MM + length + _FLAT_TITLE_MM
+    elif part_class in ("flange", "plate"):
         width, height = diameter, diameter
         # Справа от плана — разрез фланца или вид на толщину пластины (`top`).
         if any(kind in kinds for kind in ("section", "removed_section", "top")):
@@ -518,6 +532,9 @@ def plan_sheet(
     elif part_class == "solid_rotation" and any(v["kind"] == "bottom" for v in views):
         # Вал с пазом: главный вид — `bottom`, лицом к пазу.
         scaffold = {index for index, view in enumerate(views) if view["kind"] == "front"}
+    elif part_class == "sheet_metal":
+        scaffold = {index for index, view in enumerate(views) if view["kind"] == "front"}
+        right = {index for index, view in enumerate(views) if view["kind"] == "top"}
     elif part_class in ("flange", "plate"):
         # Главный вид плоской детали — план; вид на ребро `front` нужен ядру
         # как основа, а на листе стоял бы с перекошенными осями — кроме
@@ -2139,6 +2156,199 @@ def _keyway_section_dimensions(drawing: dict, spec: dict, plan: SheetPlan) -> No
         )
 
 
+# Восемь поворотов и отражений осей: вид ядра кладёт оси эскиза по-своему.
+_ORTHOGONAL = tuple(
+    (a, b, c, d)
+    for a, b, c, d in (
+        (1, 0, 0, 1),
+        (-1, 0, 0, 1),
+        (1, 0, 0, -1),
+        (-1, 0, 0, -1),
+        (0, 1, 1, 0),
+        (0, -1, 1, 0),
+        (0, 1, -1, 0),
+        (0, -1, -1, 0),
+    )
+)
+
+
+def _sketch_to_view(view: dict, sketch: list[dict], ratio: float):
+    """Перевод точки эскиза сечения в координаты вида — по совпадению вершин.
+
+    Вид ядра кладёт оси эскиза как ему удобно (поворот, отражение); числа
+    из эскиза нельзя класть на лист, пока не найдено, как именно. Проверяется
+    восемь вариантов: вершины эскиза, переведённые с выравниванием рамок,
+    обязаны лечь на концы отрезков вида.
+    """
+    ends: list[tuple[float, float]] = []
+    for item in view.get("visible") or []:
+        for point in item.get("points") or []:
+            ends.append((float(point[0]), float(point[1])))
+    if not ends:
+        return None
+    vertices = [(0.0, 0.0)] + [(float(seg["to"][0]), float(seg["to"][1])) for seg in sketch]
+    view_u = min(u for u, _v in ends)
+    view_v = min(v for _u, v in ends)
+    tolerance = 0.05 * ratio + 0.02
+    best = None
+    for a, b, c, d in _ORTHOGONAL:
+        mapped = [(ratio * (a * x + b * y), ratio * (c * x + d * y)) for x, y in vertices]
+        shift_u = view_u - min(u for u, _v in mapped)
+        shift_v = view_v - min(v for _u, v in mapped)
+        hits = sum(
+            1
+            for u, v in mapped
+            if any(
+                abs(u + shift_u - eu) <= tolerance and abs(v + shift_v - ev) <= tolerance
+                for eu, ev in ends
+            )
+        )
+        if best is None or hits > best[0]:
+            best = (hits, (a, b, c, d), shift_u, shift_v)
+    if best is None or best[0] < 0.9 * len(vertices):
+        return None
+    _hits, (a, b, c, d), shift_u, shift_v = best
+
+    def transform(x: float, y: float) -> tuple[float, float]:
+        return ratio * (a * x + b * y) + shift_u, ratio * (c * x + d * y) + shift_v
+
+    def rotate(x: float, y: float) -> tuple[float, float]:
+        return a * x + b * y, c * x + d * y
+
+    return transform, rotate
+
+
+def _sheet_metal_dimensions(drawing: dict, spec: dict, plan: SheetPlan) -> None:
+    """Размеры гнутой детали (X4): полки по наружной поверхности, s, R, ширина.
+
+    Ядро не назовёт наружный размер полки ребром — он идёт от торца до
+    наружной поверхности соседней полки через гиб. Размеры строятся по
+    эскизу сечения, переведённому в координаты вида по совпадению вершин.
+    """
+    from app.ai.sheet_metal import bent_section, flange_spans
+
+    if plan.part_class != "sheet_metal":
+        return
+    sheet = (spec.get("main_view") or {}).get("sheet_metal") or {}
+    try:
+        flanges = [float(value) for value in sheet["flanges_mm"]]
+        turns = [int(value) for value in sheet["turns"]]
+        radius = float(sheet["radius_mm"])
+        thickness = float(sheet["thickness_mm"])
+        width = float(sheet["width_mm"])
+    except (KeyError, TypeError, ValueError):
+        return
+    views = drawing.get("views") or []
+    ratio = plan.ratio or 1.0
+    dimensions = drawing.setdefault("dimensions", [])
+    profile_index = next((i for i, view in enumerate(plan.views) if view["kind"] == "side"), None)
+    width_index = next((i for i, view in enumerate(plan.views) if view["kind"] == "top"), None)
+    if profile_index is not None and profile_index < len(views):
+        mapping = _sketch_to_view(
+            views[profile_index], bent_section(flanges, turns, radius, thickness), ratio
+        )
+        if mapping is not None:
+            transform, rotate = mapping
+            for span in flange_spans(flanges, turns, radius, thickness):
+                first = transform(*span["start"])
+                second = transform(*span["end"])
+                out_u, out_v = rotate(*span["outward"])
+                horizontal = abs(first[1] - second[1]) < abs(first[0] - second[0])
+                dimensions.append(
+                    {
+                        "view_index": profile_index,
+                        "kind": "DistanceX" if horizontal else "DistanceY",
+                        "label": f"{span['value']:g}",
+                        "anchors_mm": [list(first), list(second)],
+                        "value_mm": round(span["value"], 3),
+                        "measured_by": "sheet_metal_flange",
+                        "ir_kind": "linear",
+                        # Наружу от полки: под видом или справа от него.
+                        "below": (out_v < 0) if horizontal else (out_u > 0),
+                    }
+                )
+            # Толщина — поперёк свободного торца первой полки.
+            start = transform(0.0, 0.0)
+            end = transform(0.0, -thickness)
+            vertical = abs(start[0] - end[0]) < abs(start[1] - end[1])
+            dimensions.append(
+                {
+                    "view_index": profile_index,
+                    "kind": "DistanceY" if vertical else "DistanceX",
+                    "label": f"s{thickness:g}",
+                    "anchors_mm": [list(start), list(end)],
+                    "value_mm": round(thickness, 3),
+                    "measured_by": "sheet_metal_thickness",
+                    "ir_kind": "linear",
+                }
+            )
+            # Внутренний радиус гиба — один размер на все гибы (он у них общий).
+            if turns:
+                import math
+
+                for item in views[profile_index].get("visible") or []:
+                    if item.get("type") != "arc" or not item.get("center"):
+                        continue
+                    if abs(float(item.get("radius") or 0.0) - radius * ratio) > 0.02 * ratio:
+                        continue
+                    cu, cv = (float(value) for value in item["center"])
+                    points = item.get("points") or []
+                    if len(points) < 2:
+                        continue
+                    mid_u = (float(points[0][0]) + float(points[-1][0])) / 2.0 - cu
+                    mid_v = (float(points[0][1]) + float(points[-1][1])) / 2.0 - cv
+                    norm = math.hypot(mid_u, mid_v) or 1.0
+                    tip = (
+                        cu + mid_u / norm * radius * ratio,
+                        cv + mid_v / norm * radius * ratio,
+                    )
+                    dimensions.append(
+                        {
+                            "view_index": profile_index,
+                            "kind": "Radius",
+                            "label": f"R{radius:g}",
+                            "anchors_mm": [[cu, cv], [tip[0], tip[1]]],
+                            "value_mm": round(radius, 3),
+                            "measured_by": "sheet_metal_radius",
+                            "ir_kind": "radial",
+                        }
+                    )
+                    break
+    if width_index is not None and width_index < len(views):
+        bounds = views[width_index].get("bounds_mm") or {}
+        if bounds and abs((bounds["u_max"] - bounds["u_min"]) - width * ratio) <= 0.05 * ratio:
+            dimensions.append(
+                {
+                    "view_index": width_index,
+                    "kind": "DistanceX",
+                    "label": f"{width:g}",
+                    "anchors_mm": [
+                        [bounds["u_min"], bounds["v_max"]],
+                        [bounds["u_max"], bounds["v_max"]],
+                    ],
+                    "value_mm": round(width, 3),
+                    "measured_by": "sheet_metal_width",
+                    "ir_kind": "linear",
+                }
+            )
+        elif bounds and abs((bounds["v_max"] - bounds["v_min"]) - width * ratio) <= 0.05 * ratio:
+            dimensions.append(
+                {
+                    "view_index": width_index,
+                    "kind": "DistanceY",
+                    "label": f"{width:g}",
+                    "anchors_mm": [
+                        [bounds["u_max"], bounds["v_min"]],
+                        [bounds["u_max"], bounds["v_max"]],
+                    ],
+                    "value_mm": round(width, 3),
+                    "measured_by": "sheet_metal_width",
+                    "ir_kind": "linear",
+                    "below": True,
+                }
+            )
+
+
 def _corner_radii(
     view: dict, index: int, dimensions: list[dict], bounds: dict, ratio: float
 ) -> None:
@@ -2340,6 +2550,7 @@ async def build_sheet_from_solid(
     _shaft_feature_dimensions(drawing, spec, plan)
     _turned_detail_dimensions(drawing, spec, plan)
     _keyway_section_dimensions(drawing, spec, plan)
+    _sheet_metal_dimensions(drawing, spec, plan)
 
     ir, extent = _assemble(drawing, spec, plan)
     geometry_verification = verify_views_against_solid(
@@ -2349,7 +2560,13 @@ async def build_sheet_from_solid(
             if view.get("bounds_mm")
         },
         report,
-        part_class="flange" if plan.part_class in ("flange", "plate") else "rotation",
+        part_class=(
+            "flange"
+            if plan.part_class in ("flange", "plate")
+            else plan.part_class
+            if plan.part_class == "sheet_metal"
+            else "rotation"
+        ),
         # The views came back already multiplied by the sheet scale; the solid
         # is measured in real millimetres.
         scale=plan.ratio,
@@ -2413,6 +2630,8 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
         anchor=plan.anchor_view,
     )
     extent_w, extent_h = sheet_extent_mm(views, placements)
+    # Развёртка стоит под видами — она тоже занимает место на листе.
+    extent_h += _flat_pattern_height_mm(spec, plan)
     offset_u = area_x0 + max((area_w - extent_w) / 2.0, 0.0)
     offset_v = area_y0 + max((area_h - extent_h) / 2.0, 0.0)
     entities, placements = place_sheet_views(
@@ -2438,6 +2657,7 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
         px_per_mm=PAPER_PX_PER_MM,
     )
     entities += _view_label_entities(views, placements)
+    entities += _flat_pattern_entities(spec, plan, views, placements)
     entities += _cutting_plane_entities(views, placements, plan)
     if plan.geometry_only:
         entities += _annotation_entities(
@@ -2467,6 +2687,153 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
         ir.sheet.frame = False
         ir.sheet.title_block = {}
     return ir, (extent_w, extent_h)
+
+
+_FLAT_TITLE_MM = 20.0
+
+
+def _flat_pattern_height_mm(spec: dict, plan: SheetPlan) -> float:
+    from app.ai.cad_projection import VIEW_GAP_MM
+
+    if plan.part_class != "sheet_metal":
+        return 0.0
+    sheet = (spec.get("main_view") or {}).get("sheet_metal") or {}
+    width = sheet.get("width_mm")
+    if not isinstance(width, (int, float)):
+        return 0.0
+    # Зазор, надпись, сама развёртка и размер длины под ней.
+    return VIEW_GAP_MM + _FLAT_TITLE_MM + float(width) * (plan.ratio or 1.0) + 15.0
+
+
+def _flat_length_mm(report: dict, bounds: dict) -> float:
+    """Грубая длина развёртки для раскладки: сумма сторон сечения."""
+    return float(bounds.get("x") or 0.0) + 2.0 * float(bounds.get("y") or 0.0)
+
+
+def _flat_pattern_entities(
+    spec: dict, plan: SheetPlan, views: list[dict], placements: list[dict | None]
+) -> list[Any]:
+    """Развёртка гнутой детали (X4, ГОСТ 2.109): прямоугольник длина × ширина,
+    линии гибов тонкой штрихпунктирной, длина развёртки размером.
+
+    Длина — по нейтральному слою (R + K·s), как её считает `sheet_metal`:
+    по ней заготовку и режут. Ядро развёртку не строит — она выводится из
+    той же геометрии, что и тело (E14: развёртка ↔ 3D 0,0000 мм).
+    """
+    import math
+
+    from app.ai.cad_ir.schema import Point, Segment, TextEntity
+    from app.ai.cad_projection import _ORIGIN, DIM_TEXT_MM, VIEW_GAP_MM, dimensions_from_kernel
+    from app.ai.sheet_metal import developed_length
+
+    if plan.part_class != "sheet_metal":
+        return []
+    sheet = (spec.get("main_view") or {}).get("sheet_metal") or {}
+    try:
+        flanges = [float(value) for value in sheet["flanges_mm"]]
+        turns = [int(value) for value in sheet["turns"]]
+        radius = float(sheet["radius_mm"])
+        thickness = float(sheet["thickness_mm"])
+        width = float(sheet["width_mm"])
+        k_factor = float(sheet.get("k_factor") or 0.5)
+    except (KeyError, TypeError, ValueError):
+        return []
+    placed = [
+        (placement, view.get("bounds_mm"))
+        for view, placement in zip(views, placements, strict=False)
+        if placement and isinstance(view.get("bounds_mm"), dict)
+    ]
+    main = next(
+        (
+            (placement, view.get("bounds_mm"))
+            for index, (view, placement) in enumerate(zip(views, placements, strict=False))
+            if placement and plan.views[index]["kind"] == "side" and view.get("bounds_mm")
+        ),
+        None,
+    )
+    if not placed or main is None:
+        return []
+    ratio = plan.ratio or 1.0
+    length = developed_length(flanges, len(turns), radius, thickness, k_factor)
+    arc = (math.pi / 2.0) * (radius + k_factor * thickness)
+    # Нижний край занятого места на листе (y бумаги растёт вниз).
+    lowest = max(placement["offset_v"] - float(box["v_min"]) for placement, box in placed)
+    left = main[0]["offset_u"] + float(main[1]["u_min"])
+    top = lowest + VIEW_GAP_MM + _FLAT_TITLE_MM / 2.0
+    run, rise = length * ratio, width * ratio
+
+    def point(u: float, v: float) -> Point:
+        # u вправо, v вверх от нижнего левого угла развёртки.
+        return Point(x=(left + u) * PAPER_PX_PER_MM, y=(top + rise - v) * PAPER_PX_PER_MM)
+
+    corners = [(0.0, 0.0), (run, 0.0), (run, rise), (0.0, rise)]
+    entities: list[Any] = [
+        Segment(
+            p1=point(*corners[index]),
+            p2=point(*corners[(index + 1) % 4]),
+            line_class="contour",
+            width_class="main",
+            **_ORIGIN,
+        )
+        for index in range(4)
+    ]
+    # Линия гиба — середина дуги гиба на развёртке.
+    for index in range(len(turns)):
+        station = sum(flanges[: index + 1]) + index * arc + arc / 2.0
+        entities.append(
+            Segment(
+                p1=point(station * ratio, -2.0),
+                p2=point(station * ratio, rise + 2.0),
+                line_class="axis",
+                width_class="thin",
+                **_ORIGIN,
+            )
+        )
+    entities.append(
+        TextEntity(
+            position=Point(
+                x=(left + run / 2.0) * PAPER_PX_PER_MM,
+                y=(top - _FLAT_TITLE_MM / 4.0) * PAPER_PX_PER_MM,
+            ),
+            text="Развёртка",
+            height=DIM_TEXT_MM * 1.4 * PAPER_PX_PER_MM,
+            rotation=0.0,
+            anchor="middle",
+            line_class="dim",
+            width_class="thin",
+            **_ORIGIN,
+        )
+    )
+    value = round(length, 1)
+    entities += dimensions_from_kernel(
+        [
+            {
+                "view_index": 0,
+                "kind": "DistanceX",
+                "label": f"{value:g}",
+                "anchors_mm": [[0.0, 0.0], [run, 0.0]],
+                "value_mm": value,
+                "measured_by": "sheet_metal_flat_length",
+                "ir_kind": "linear",
+                "below": True,
+            }
+        ],
+        {
+            0: {
+                "offset_u": left,
+                "offset_v": top + rise,
+                "bounds_mm": {
+                    "u_min": 0.0,
+                    "u_max": run,
+                    "v_min": 0.0,
+                    "v_max": rise,
+                },
+            }
+        },
+        [0],
+        px_per_mm=PAPER_PX_PER_MM,
+    )
+    return entities
 
 
 def _view_label_entities(
