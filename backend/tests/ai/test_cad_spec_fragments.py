@@ -1956,3 +1956,36 @@ async def test_a_plate_without_wall_features_keeps_its_profile_clean(monkeypatch
 
     assert "wall_features" not in profile
     assert notes == []
+
+
+@pytest.mark.asyncio
+async def test_a_sheet_metal_read_never_falls_back_to_the_whole_sheet_reader(monkeypatch):
+    """Живой Z-профиль: узкий вопрос не собрал полки, и полное чтение листа —
+    которое листовых деталей не выражает — 11 минут спустя вернуло
+    «призматическую» деталь без геометрии, затерев класс оператора."""
+    fragment_spec = {
+        "main_view": {"type": "листовая деталь"},
+        "unresolved": ["листовая деталь не построена: толщина листа"],
+        "fragments": {"geometry": False},
+    }
+    called: list[str] = []
+
+    async def fake_fragments(*_a, **_k):
+        called.append("fragments")
+        return dict(fragment_spec)
+
+    async def fake_whole(*_a, **_k):
+        called.append("whole")
+        return {"main_view": {"type": "призматическая"}}
+
+    monkeypatch.setattr(
+        "app.ai.cad_recognize.spec_fragments.read_spec_by_fragments", fake_fragments
+    )
+    monkeypatch.setattr(
+        "app.ai.cad_recognize.spec_vectorize.read_drawing_spec_consensus", fake_whole
+    )
+    result = await read_spec_best_effort(b"x", passes=3)
+
+    assert "whole" not in called
+    assert result["main_view"]["type"] == "листовая деталь"
+    assert any("толщина листа" in note for note in result["unresolved"])

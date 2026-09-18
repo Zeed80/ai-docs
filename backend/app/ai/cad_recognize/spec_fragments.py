@@ -6088,7 +6088,18 @@ async def read_spec_best_effort(
             "_partial_spec": fragments if fragments else None,
         },
     )
-    if fragment_ready or budget_requires_partial:
+    # Листовую деталь и сварной узел полное чтение листа выразить не может
+    # (его схема — тело вращения или пластина): живой Z-профиль ушёл в него
+    # на 11 минут и вернулся «призматической» деталью без геометрии, затерев
+    # класс, выбранный оператором. У этих классов остаётся фрагментное
+    # чтение с замечаниями о недостающем.
+    fragment_type = str(((fragments or {}).get("main_view") or {}).get("type") or "")
+    beyond_whole_sheet = fragment_type in (_type_label("sheet_metal"), _type_label("weldment"))
+    if fragment_ready or budget_requires_partial or (fragments and beyond_whole_sheet):
+        if beyond_whole_sheet and not fragment_ready:
+            fragments.setdefault("optional_unresolved", []).append(
+                f"полное чтение листа не запускалось: оно не выражает класс «{fragment_type}»"
+            )
         if budget_requires_partial:
             fragments.setdefault("optional_unresolved", []).append(
                 "полное чтение не запускалось: сохранён лучший consensus в пределах времени"

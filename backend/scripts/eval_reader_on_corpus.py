@@ -93,6 +93,10 @@ async def _run(args: argparse.Namespace) -> int:
             "score": score,
             "unresolved": (spec or {}).get("unresolved") or [],
             "read_main_view": (spec or {}).get("main_view"),
+            # Сварной узел (X3) читается телами и швами — без них ошибку в
+            # узле не разобрать (weldment-1: одна пластина мимо, какая — неясно).
+            "read_parts": (spec or {}).get("parts") or [],
+            "read_welds": (spec or {}).get("welds") or [],
             # Что модель выписала с листа: без этого не отличить «не прочитала
             # R5» от «прочитала, но не назначила роль» (базовая линия v4).
             "read_dimensions": [
