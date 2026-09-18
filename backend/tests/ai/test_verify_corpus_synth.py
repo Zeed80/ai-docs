@@ -68,7 +68,7 @@ def test_the_corpus_actually_contains_the_features_verifiers_need():
 
 def test_an_unwritten_part_type_says_so():
     with pytest.raises(ValueError, match="ещё не написан"):
-        synth_spec("weldment", 0)
+        synth_spec("construction", 0)
 
 
 def test_adjacent_steps_never_share_a_diameter():
