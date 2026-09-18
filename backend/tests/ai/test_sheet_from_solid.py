@@ -1729,3 +1729,35 @@ def test_a_diameter_line_does_not_cross_the_keyway_facing_the_viewer():
     [request] = _diameter_requests(view, 0, [30.0], 1.0)
 
     assert not 15.0 <= request["_place_u"] <= 35.0
+
+
+def test_a_shelf_turns_away_from_a_witness_line_of_a_lower_row():
+    """Ф3 (корпус валов, 10 из 398): полка короткого размера под видом всегда
+    шла вправо и пересекала выносную размера из нижнего ряда."""
+    from app.ai.cad_ir.schema import TextEntity
+    from app.ai.cad_projection import dimensions_from_kernel
+
+    placements = {
+        "v": {"offset_u": 0.0, "offset_v": 200.0, "bounds_mm": {"v_min": 0.0, "v_max": 20.0}}
+    }
+    short = {
+        "view_index": 0,
+        "kind": "DistanceX",
+        "label": "4.3",
+        "anchors_mm": [[50.0, 0.0], [52.0, 0.0]],
+        "value_mm": 4.3,
+        "below": True,
+    }
+    # Нижний ряд: длинный размер, чья левая выносная — сразу справа от короткого.
+    long = {
+        "view_index": 0,
+        "kind": "DistanceX",
+        "label": "40",
+        "anchors_mm": [[60.0, 0.0], [120.0, 0.0]],
+        "value_mm": 40.0,
+        "below": True,
+    }
+    wide = {**long, "anchors_mm": [[20.0, 0.0], [130.0, 0.0]], "label": "110"}
+    entities = dimensions_from_kernel([short, long, wide], placements, ["v"], px_per_mm=1.0)
+    label = next(e for e in entities if isinstance(e, TextEntity) and e.text == "4.3")
+    assert label.position.x < 50.0

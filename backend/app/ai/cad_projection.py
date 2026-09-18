@@ -513,6 +513,7 @@ def dimensions_from_kernel(
 
     entities: list[Any] = []
     tiers = _length_tiers(dimensions)
+    witnesses = _witness_lines(dimensions, placements, view_order, tiers)
     for position, item in enumerate(dimensions):
         anchors = item.get("anchors_mm") or []
         if len(anchors) < 2:
@@ -675,16 +676,28 @@ def dimensions_from_kernel(
             if not vertical and label_mm > room:
                 start = carry
                 reach = start + DIM_EXTENSION_MM + label_mm
+                # Полка — в ту сторону, где на её длине нет чужих выносных:
+                # выносные размеров нижних рядов тянутся от детали сквозь
+                # верхние ряды, и полка, всегда шедшая вправо, их пересекала
+                # (корпус валов: 10 из 398 размеров, план Ф3).
+                end_u, end_v, sign = u2, v2, 1.0
+                row_v = v2 + ov
+                forward = (u2 + ou + tu * start, u2 + ou + tu * reach)
+                backward = (u1 + ou - tu * reach, u1 + ou - tu * start)
+                if _crossings(witnesses, index, position, row_v, forward) > _crossings(
+                    witnesses, index, position, row_v, backward
+                ):
+                    end_u, end_v, sign = u1, v1, -1.0
                 entities.append(
                     Segment(
-                        p1=to_point(u2 + ou + tu * start, v2 + ov + tv * start),
-                        p2=to_point(u2 + ou + tu * reach, v2 + ov + tv * reach),
+                        p1=to_point(end_u + ou + sign * tu * start, end_v + ov + sign * tv * start),
+                        p2=to_point(end_u + ou + sign * tu * reach, end_v + ov + sign * tv * reach),
                         **style,
                     )
                 )
                 along = reach - label_mm / 2.0
-                mid_u = u2 + ou + tu * along + tnu * 1.5
-                mid_v = v2 + ov + tv * along + tnv * 1.5
+                mid_u = end_u + ou + sign * tu * along + tnu * 1.5
+                mid_v = end_v + ov + sign * tv * along + tnv * 1.5
             entities.append(
                 TextEntity(
                     position=to_point(mid_u, mid_v),
@@ -720,6 +733,54 @@ def dimensions_from_kernel(
             )
         )
     return entities
+
+
+def _witness_lines(
+    dimensions: list[dict[str, Any]],
+    placements: dict[str, dict[str, float]],
+    view_order: list[str],
+    tiers: dict[int, int],
+) -> list[tuple[int, int, float, float, float]]:
+    """Выносные горизонтальных размеров: (вид, размер, u, v от, v до), мм вида."""
+    lines: list[tuple[int, int, float, float, float]] = []
+    for position, item in enumerate(dimensions):
+        anchors = item.get("anchors_mm") or []
+        kind = str(item.get("kind") or "")
+        index = int(item.get("view_index") or 0)
+        if len(anchors) < 2 or kind != "DistanceX" or index >= len(view_order):
+            continue
+        placement = placements.get(view_order[index]) or {}
+        bounds = placement.get("bounds_mm") or {}
+        points = _projected_dimension_points(
+            kind,
+            (float(anchors[0][0]), float(anchors[0][1])),
+            (float(anchors[1][0]), float(anchors[1][1])),
+            top=float(bounds["v_max"]) if "v_max" in bounds else None,
+            bottom=float(bounds["v_min"]) if item.get("below") and "v_min" in bounds else None,
+            tier=tiers.get(position, 0),
+            place_u=_placed_u(item, tiers.get(position, 0)),
+        )
+        offset = -DIM_OFFSET_MM if item.get("below") else DIM_OFFSET_MM
+        for (anchor_u, anchor_v), (base_u, base_v) in points:
+            end_v = base_v + offset + (-DIM_EXTENSION_MM if item.get("below") else DIM_EXTENSION_MM)
+            lines.append((index, position, anchor_u, min(anchor_v, end_v), max(anchor_v, end_v)))
+    return lines
+
+
+def _crossings(
+    witnesses: list[tuple[int, int, float, float, float]],
+    view: int,
+    own: int,
+    row_v: float,
+    span: tuple[float, float],
+) -> int:
+    """Сколько чужих выносных пересекает полку на уровне ``row_v``."""
+    low, high = min(span), max(span)
+    return sum(
+        1
+        for index, position, u, v_low, v_high in witnesses
+        if index == view and position != own and low < u < high and v_low < row_v < v_high
+    )
 
 
 def _hatch_from_outlines(
