@@ -35,8 +35,12 @@ PROMPT = (
     "Это строительный чертёж (план, разрез или фасад). Выпиши:\n"
     "- axes: обозначения координационных осей — цифры или буквы в кружках на "
     "концах штрихпунктирных линий осей;\n"
-    "- levels: отметки уровня — числа вида +3.360, -6.200, 0.000 (у знака "
-    "отметки или на выносной полке).\n"
+    "- levels: отметки уровня. Отметка стоит на полке над ЗНАКОМ ОТМЕТКИ "
+    "(стрелка или треугольник, упёртый в линию уровня), в метрах с тремя "
+    "знаками после точки: +3.360, -6.200, 0.000. Знак «+» или «−» пиши ровно "
+    "как на листе (ниже нуля — минус). Размеры в миллиметрах (3000, 150) и "
+    "числа размерных цепочек — НЕ отметки. Если знака отметки у числа нет — "
+    "не выписывай его.\n"
     "Только то, что видно на листе, без повторов. ОДНОЙ строкой JSON:\n"
     '{"axes":["1","2","А"],"levels":["0.000","+3.360"]}\nТолько JSON.'
 )
@@ -145,6 +149,54 @@ def render_sheet(doc, long_side: int = 3000) -> bytes | None:
         plt.close(figure)
 
 
+LEVELS_PROMPT = (
+    "Это фрагмент строительного чертежа. Выпиши отметки уровня: число на "
+    "полке над ЗНАКОМ ОТМЕТКИ (стрелка или треугольник, упёртый в линию "
+    "уровня), в метрах с тремя знаками после точки: +3.360, -6.200, 0.000. "
+    "Знак пиши как на листе. Размеры в миллиметрах и числа размерных цепочек — "
+    "НЕ отметки. Нет отметок — пустой список. ОДНОЙ строкой JSON:\n"
+    '{"levels":["0.000"]}\nТолько JSON.'
+)
+LEVELS_SCHEMA = {
+    "type": "object",
+    "properties": {"levels": {"type": "array", "maxItems": 30, "items": {"type": "string"}}},
+    "required": ["levels"],
+}
+
+
+def content_regions(image, *, max_regions: int = 12) -> list[tuple[int, int, int, int]]:
+    """Области листа с рисунком: кластеры чернил, слитые с запасом.
+
+    Лист с несколькими чертежами (фасады, план) целиком модели не прочесть:
+    текст отметок в нём 3–4 px. Каждый чертёж — отдельный вырез.
+    """
+    import cv2
+    import numpy as np
+
+    gray = np.asarray(image.convert("L"))
+    scale = 800.0 / max(gray.shape)
+    small = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    ink = (small < 200).astype(np.uint8)
+    ink = cv2.dilate(ink, np.ones((15, 15), np.uint8))
+    count, _labels, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+    boxes = []
+    for index in range(1, count):
+        x, y, w, h, area = stats[index]
+        if w * h < 400:
+            continue
+        pad = 8
+        boxes.append(
+            (
+                int(max(0, x - pad) / scale),
+                int(max(0, y - pad) / scale),
+                int(min(small.shape[1], x + w + pad) / scale),
+                int(min(small.shape[0], y + h + pad) / scale),
+            )
+        )
+    boxes.sort(key=lambda b: -(b[2] - b[0]) * (b[3] - b[1]))
+    return boxes[:max_regions]
+
+
 def score(truth: list[str], read: list[str]) -> dict[str, int]:
     truth_set, read_set = set(truth), set(read)
     return {
@@ -166,6 +218,9 @@ async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dwg-dir", type=pathlib.Path, required=True)
     parser.add_argument("--out", type=pathlib.Path, required=True)
+    parser.add_argument(
+        "--tiles", action="store_true", help="отметки — по вырезам областей с рисунком"
+    )
     args = parser.parse_args()
     rows = []
     with tempfile.TemporaryDirectory() as tmp:
@@ -181,6 +236,7 @@ async def main() -> int:
                 doc, _audit = recover.readfile(dxf)
             truth = truth_from_dxf(doc)
             png = render_sheet(doc, 3000)
+            big = render_sheet(doc, 7000) if args.tiles else None
             if not png:
                 continue
             import io
@@ -197,6 +253,21 @@ async def main() -> int:
             )
             read_axes = sorted({normalize_axis(a) for a in (answer or {}).get("axes") or []})
             read_levels = sorted({normalize_level(v) for v in (answer or {}).get("levels") or []})
+            if big:
+                full = Image.open(io.BytesIO(big)).convert("RGB")
+                tiled: set[str] = set()
+                for box in content_regions(full):
+                    part = await _ask(
+                        LEVELS_PROMPT,
+                        _overview(full.crop(box), side=1800),
+                        router=ai_router,
+                        confidential=True,
+                        num_predict=400,
+                        schema=LEVELS_SCHEMA,
+                        timeout_seconds=120.0,
+                    )
+                    tiled |= {normalize_level(v) for v in (part or {}).get("levels") or []}
+                read_levels = sorted(tiled)
             row = {
                 "sheet": dwg.stem,
                 "truth": truth,
