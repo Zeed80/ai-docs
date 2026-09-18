@@ -21,6 +21,9 @@ const VERIFY_KINDS = new Set([
   "cross_hole",
   "groove",
   "chamfer",
+  // Корпуса (Ф5): элементы граней и толщина, измеренная по видам листа.
+  "wall_feature",
+  "plate_thickness",
 ]);
 
 /** «Отверстие 3» из `main_view.profile.holes[2]` — номер элемента с единицы. */
@@ -37,6 +40,10 @@ const FIELD_KEYS = new Set([
   "diameter_mm",
   "length_mm",
   "width_mm",
+  "height_mm",
+  "thickness_mm",
+  "center_u_mm",
+  "center_v_mm",
   "bolt_circle_diameter_mm",
   "hole_diameter_mm",
 ]);

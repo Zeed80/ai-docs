@@ -266,3 +266,34 @@ describe("AssurancePanel — проверка прочитанного по ли
     expect(container.innerHTML).toBe("");
   });
 });
+
+describe("AssurancePanel — элементы граней корпуса", () => {
+  it("называет элемент грани и толщину по-человечески", () => {
+    const verification: SpecVerification = {
+      items: [
+        {
+          kind: "wall_feature",
+          path: "main_view.profile.wall_features[1]",
+          read: { diameter_mm: 40, center_u_mm: -20 },
+          status: "refuted",
+          measured: { diameter_mm: 40.1, center_u_mm: 25 },
+          reason: "center_u_mm: 25 мм, прочитано -20",
+        },
+        {
+          kind: "plate_thickness",
+          path: "main_view.profile",
+          read: { thickness_mm: 20 },
+          status: "refuted",
+          measured: { thickness_mm: 60 },
+          reason: "толщина измерена по виду: 60.00 мм; прочитано 20",
+        },
+      ],
+      summary: { checked: 2, confirmed: 0, refuted: 2, unmeasurable: 0 },
+    };
+
+    render(<AssurancePanel verification={verification} t={t} />);
+
+    expect(screen.getByText(/Элемент грани 2/)).toBeInTheDocument();
+    expect(screen.getByText(/Толщина/)).toBeInTheDocument();
+  });
+});

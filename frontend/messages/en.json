@@ -1016,7 +1016,13 @@
       "cad_brep_bad": "⚠ B-Rep invalid/open",
       "cad_face_surface": "Surface: {value}",
       "cad_face_area": "Area: {value} mm²",
-      "cad_face_deselect": "Deselect"
+      "cad_face_deselect": "Deselect",
+      "assurance_verify_kind_wall_feature": "Face feature {index}",
+      "assurance_verify_kind_plate_thickness": "Thickness",
+      "assurance_field_height_mm": "height",
+      "assurance_field_thickness_mm": "thickness",
+      "assurance_field_center_u_mm": "position on the face",
+      "assurance_field_center_v_mm": "position on the face (2)"
     },
     "workflow": {
       "loading": "Loading workflows…",
