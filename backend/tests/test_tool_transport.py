@@ -413,6 +413,7 @@ async def test_logical_key_is_transport_metadata_not_model_arguments(monkeypatch
         ("analytics", "table_inline_edit", "analytics.table_inline_edit"),
         ("documents", "link", "documents.link"),
         ("email", "draft", "email.draft"),
+        ("invoices", "update", "invoices.update"),
         ("normalization", "create_norm_card", "normalization.create_norm_card"),
         ("normalization", "update_canonical_item", "normalization.update_canonical_item"),
         ("normalization", "update_norm_card", "normalization.update_norm_card"),
@@ -554,6 +555,27 @@ def test_e05_2_6_direct_routes_resolve_to_exact_catalog_operations(skill, args, 
     ],
 )
 def test_e05_2_7_direct_routes_resolve_to_exact_catalog_operations(skill, args, expected):
+    operation = one_db_commit_operation(skill, args)
+    assert operation is not None
+    assert operation.name == expected
+
+
+@pytest.mark.parametrize(
+    "skill,args,expected",
+    [
+        (
+            {"method": "PATCH", "path": "/api/invoices/{invoice_id}"},
+            {"invoice_id": "invoice-1", "notes": "Corrected by operator"},
+            "invoices.update",
+        ),
+        (
+            {"method": "POST", "path": "/api/tool-catalog/suppliers"},
+            {"name": "Tool supplier", "website": "https://supplier.example.test"},
+            "tool_catalog.create_supplier",
+        ),
+    ],
+)
+def test_e05_2_8_direct_routes_resolve_to_exact_catalog_operations(skill, args, expected):
     operation = one_db_commit_operation(skill, args)
     assert operation is not None
     assert operation.name == expected
@@ -1027,6 +1049,52 @@ async def test_e05_2_6_preserves_raw_success_response_and_original_body(
     ],
 )
 async def test_e05_2_7_preserves_raw_success_response_and_original_body(
+    monkeypatch, skill, args, expected_body, raw_response, operation, method
+):
+    from app.ai import agent_loop
+
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    getattr(client, method).return_value = httpx.Response(200, json=raw_response)
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", MagicMock(return_value=client))
+    monkeypatch.setattr(agent_loop, "internal_headers", lambda: {})
+
+    result = await execute_skill(skill, args, BuiltinAgentConfig())
+
+    assert result["status"] == "succeeded"
+    assert result["data"] == raw_response
+    assert result["evidence"]["operation"] == operation
+    getattr(client, method).assert_awaited_once()
+    assert getattr(client, method).call_args.kwargs["json"] == expected_body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "skill,args,expected_body,raw_response,operation,method",
+    [
+        (
+            {"method": "PATCH", "path": "/api/invoices/{invoice_id}"},
+            {
+                "invoice_id": "invoice-1",
+                "invoice_number": "INV-2026-002",
+                "notes": "Corrected by operator",
+            },
+            {"invoice_number": "INV-2026-002", "notes": "Corrected by operator"},
+            {"id": "invoice-1", "invoice_number": "INV-2026-002"},
+            "invoices.update",
+            "patch",
+        ),
+        (
+            {"method": "POST", "path": "/api/tool-catalog/suppliers"},
+            {"name": "Tool supplier", "website": "https://supplier.example.test"},
+            {"name": "Tool supplier", "website": "https://supplier.example.test"},
+            {"id": "supplier-1", "name": "Tool supplier"},
+            "tool_catalog.create_supplier",
+            "post",
+        ),
+    ],
+)
+async def test_e05_2_8_preserves_raw_success_response_and_original_body(
     monkeypatch, skill, args, expected_body, raw_response, operation, method
 ):
     from app.ai import agent_loop
