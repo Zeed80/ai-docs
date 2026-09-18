@@ -210,6 +210,31 @@ def _score_profile(truth: dict[str, Any], read: dict[str, Any]) -> dict[str, Any
             for key in ("center_x_mm", "center_y_mm", "length_mm", "width_mm")
         ),
     )
+
+    # Карманы и приливы на гранях (X2, корпуса): элемент считается прочитанным,
+    # если совпали грань, вид элемента, размер, глубина и положение на грани.
+    def wall_agrees(t: dict, r: dict) -> bool:
+        if r.get("kind") != t.get("kind") or r.get("on_plane") != t.get("on_plane"):
+            return False
+        if not _agree(r.get("depth_mm"), t.get("depth_mm")):
+            return False
+        keys = (
+            ("diameter_mm",)
+            if t.get("profile", "circle") == "circle"
+            else ("width_mm", "height_mm")
+        )
+        if not all(_agree(r.get(key), t.get(key)) for key in keys):
+            return False
+        return all(
+            abs(float(r.get(key) or 0.0) - float(t.get(key) or 0.0)) <= _POSITION_MM
+            for key in ("center_u_mm", "center_v_mm")
+        )
+
+    walls = _match(
+        [item for item in t_profile.get("wall_features") or [] if isinstance(item, dict)],
+        [item for item in r_profile.get("wall_features") or [] if isinstance(item, dict)],
+        wall_agrees,
+    )
     radius = t_profile.get("corner_radius_mm")
     return {
         "geometry": bool(r_profile.get("shape")),
@@ -222,6 +247,7 @@ def _score_profile(truth: dict[str, Any], read: dict[str, Any]) -> dict[str, Any
         "hole_diameters": _field(*by_diameter),
         "hole_positions": _field(*by_position),
         "slots": _field(*slots),
+        "wall_features": _field(*walls),
     }
 
 
