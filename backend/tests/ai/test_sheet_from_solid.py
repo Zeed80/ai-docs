@@ -1708,3 +1708,24 @@ def test_the_weldment_metric_requires_every_plate_and_its_position():
 
     needed = needed_dimensions(_weldment())
     assert needed["lengths"] == sorted([80.0, 120.0, 8.0, 30.0, 5.0, 65.0, 30.0, 6.0, 26.0])
+
+
+def test_a_diameter_line_does_not_cross_the_keyway_facing_the_viewer():
+    """Ф3: на виде `bottom` паз лицом к наблюдателю образующие не рвёт, и
+    линия Ø шла через середину ступени — прямо по контуру паза."""
+    from app.ai.cad_ir.sheet_from_solid import _diameter_requests
+
+    view = {
+        "visible": [
+            {"type": "line", "edge_index": 1, "points": [[0.0, 15.0], [50.0, 15.0]]},
+            {"type": "line", "edge_index": 2, "points": [[0.0, -15.0], [50.0, -15.0]]},
+            # Паз 15…35 шириной 8: две прямые и концевые дуги.
+            {"type": "line", "edge_index": 3, "points": [[19.0, 4.0], [31.0, 4.0]]},
+            {"type": "line", "edge_index": 4, "points": [[19.0, -4.0], [31.0, -4.0]]},
+            {"type": "arc", "edge_index": 5, "center": [19.0, 0.0], "radius": 4.0},
+            {"type": "arc", "edge_index": 6, "center": [31.0, 0.0], "radius": 4.0},
+        ]
+    }
+    [request] = _diameter_requests(view, 0, [30.0], 1.0)
+
+    assert not 15.0 <= request["_place_u"] <= 35.0

@@ -1099,6 +1099,11 @@ def _diameter_requests(
     requests: list[dict[str, Any]] = []
     used: set[int] = set()
     placed: list[float] = []
+    level_of = {edge: v for v, _u0, _u1, edge in lines}
+
+    def v_a_of(edge: int) -> float:
+        return level_of.get(edge, 0.0)
+
     for _shared, diameter_mm, edge_a, edge_b, lo, hi in sorted(candidates, key=lambda c: -c[0]):
         if edge_a in used or edge_b in used:
             continue
@@ -1107,7 +1112,9 @@ def _diameter_requests(
             continue
         wanted.remove(match)
         used.update({edge_a, edge_b})
-        place_u = _separated_place(lo, hi, placed)
+        place_u = _separated_place(
+            lo, hi, placed, blocked=_interior_spans(view, lo, hi, v_top=max(v_a_of(edge_a), 0.0))
+        )
         placed.append(place_u)
         requests.append(
             {
@@ -1128,7 +1135,43 @@ def _diameter_requests(
     return requests
 
 
-def _separated_place(lo: float, hi: float, placed: list[float]) -> float:
+def _interior_spans(view: dict, lo: float, hi: float, *, v_top: float) -> list[tuple[float, float]]:
+    """Участки ступени, занятые элементами внутри контура: паз лицом, отверстие.
+
+    На главном виде `bottom` паз смотрит на наблюдателя и образующие ступени
+    не разрывает — общий участок был всей ступенью, и линия Ø шла прямо через
+    контур паза (план, Ф3). Занятое — u-проекции линий, дуг и окружностей,
+    лежащих строго внутри ступени по высоте.
+    """
+    spans: list[tuple[float, float]] = []
+    inner = 0.95 * v_top
+    for item in (view.get("visible") or []) + (view.get("hidden") or []):
+        kind = item.get("type")
+        if kind in ("circle", "arc") and item.get("center") and item.get("radius"):
+            cu, cv = (float(value) for value in item["center"])
+            radius = float(item["radius"])
+            if abs(cv) + radius < inner or abs(cv) < inner:
+                u0, u1 = cu - radius, cu + radius
+            else:
+                continue
+        elif kind == "line" and len(item.get("points") or []) == 2:
+            (u0, v0), (u1, v1) = item["points"]
+            if abs(v0 - v1) > 1e-6 or abs(v0) >= inner:
+                continue
+            u0, u1 = min(u0, u1), max(u0, u1)
+            # Осевая и линии через весь вал — не элемент ступени.
+            if u0 <= lo + 1e-6 and u1 >= hi - 1e-6:
+                continue
+        else:
+            continue
+        if u1 > lo and u0 < hi:
+            spans.append((max(u0, lo), min(u1, hi)))
+    return spans
+
+
+def _separated_place(
+    lo: float, hi: float, placed: list[float], blocked: list[tuple[float, float]] | None = None
+) -> float:
     """Где встать диаметру на своём участке, не поверх соседнего диаметра.
 
     Середина общего участка образующих — хорошее место, пока участок у
@@ -1141,10 +1184,30 @@ def _separated_place(lo: float, hi: float, placed: list[float]) -> float:
 
     gap = 2.5 * DIM_TEXT_MM
     options = [(lo + hi) / 2.0, lo + (hi - lo) * 0.25, lo + (hi - lo) * 0.75]
+    spans = blocked or []
+    if spans:
+        # Свободные промежутки между занятыми участками — середины их, от
+        # самого широкого; занятая середина ступени — не место для Ø.
+        edges = sorted(spans)
+        free: list[tuple[float, float]] = []
+        cursor = lo
+        for u0, u1 in edges:
+            if u0 > cursor:
+                free.append((cursor, u0))
+            cursor = max(cursor, u1)
+        if cursor < hi:
+            free.append((cursor, hi))
+        margin = 0.5 * DIM_TEXT_MM
+        roomy = [(a, b) for a, b in free if b - a >= 2.0 * margin]
+        if roomy:
+            options = [(a + b) / 2.0 for a, b in sorted(roomy, key=lambda f: -(f[1] - f[0]))]
     for option in options:
         if all(abs(option - other) >= gap for other in placed):
             return option
-    return max(options, key=lambda option: min(abs(option - other) for other in placed))
+    return max(
+        options,
+        key=lambda option: min((abs(option - other) for other in placed), default=0.0),
+    )
 
 
 def _closest(value: float, pool: list[float], *, tolerance: float = 0.01) -> float | None:
