@@ -374,6 +374,10 @@ def _wall_features_on_sheet(
             )
             continue
         measured = measure_wall_feature(gray, tuple(box), mm_per_px, face, item)
+        # Глубина элемента пока не меряется: на виде с ребра нужно отличить
+        # дно кармана от любой другой линии внутри тела, а поиск ближайшей
+        # линии к кромке давал мусор (0,008 мм при 58). Проверяются размер и
+        # положение; глубина остаётся прочитанной.
         verdict = wall_feature_verdict(entry["read"], measured, line_mm)
         if verdict["status"] == "refuted" and _points_at_another(item, measured, walls):
             # Замер указывает на СОСЕДНИЙ элемент той же грани: расхождение,
