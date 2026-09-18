@@ -35,6 +35,9 @@ import {
   sourceUrl,
 } from "@/lib/studio-api";
 
+import AssemblyCompositionPanel, {
+  type AssemblyComposition,
+} from "@/components/cad/AssemblyCompositionPanel";
 import AssurancePanel from "@/components/cad/AssurancePanel";
 import ProfileHolesEditor from "@/components/cad/ProfileHolesEditor";
 import CadModelTracePanel from "@/components/cad/CadModelTracePanel";
@@ -1260,6 +1263,8 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
     SpecCrossCheck | undefined;
   const specVerification = gen.params?.spec_verification as
     SpecVerification | undefined;
+  const assemblyComposition = gen.params?.assembly as
+    AssemblyComposition | undefined;
   const specDimensionCheck = gen.params?.spec_dimension_check as
     SpecDimensionCheck | undefined;
   const specAssumptions = (gen.params?.spec_assumptions ??
@@ -1538,6 +1543,8 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
           </div>
         </details>
       )}
+
+      <AssemblyCompositionPanel assembly={assemblyComposition} t={t} />
 
       <AssurancePanel
         crosscheck={specCrosscheck}
