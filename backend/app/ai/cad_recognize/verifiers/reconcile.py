@@ -35,6 +35,8 @@ ADOPTABLE: dict[str, tuple[tuple[str, str], ...]] = {
     # Корпуса (Ф5): размер и положение элемента грани. Положение здесь —
     # надписанное поле: лист несёт координаты элемента от кромок его грани,
     # и замер принимается по тому же правилу, что и размер.
+    # Толщина корпуса и пластины, измеренная по видам листа (Ф5).
+    "plate_thickness": (("thickness_mm", "thickness"),),
     "wall_feature": (
         ("diameter_mm", "size"),
         ("width_mm", "size"),
@@ -614,6 +616,88 @@ def apply_cavity(spec: dict[str, Any], addition: dict[str, Any]) -> dict[str, An
     )
     spec.setdefault("optional_unresolved", []).append("найдено по листу: " + addition["reason"])
     return spec
+
+
+def contradicting_patterns(spec: dict[str, Any], report: dict[str, Any]) -> list[dict[str, Any]]:
+    """Массивы отверстий, которые противоречат отверстиям, подтверждённым листом.
+
+    Живой корпус 4638b638: четыре отверстия Ø13,5 по углам ридер выписал и
+    поштучно (все подтверждены проверкой), и массивом «окружность болтов Ø69»
+    той же серии. Окружности на листе нет, она не помещается в контур, и гейт
+    заблокировал сборку. Массив той же серии, чьи отверстия не совпали с
+    подтверждёнными, — ошибка чтения, а не второй набор отверстий.
+    """
+    from app.ai.verify_corpus.score import expand_holes
+
+    profile = ((spec.get("main_view") or {}).get("profile")) or {}
+    patterns = [p for p in profile.get("hole_patterns") or [] if isinstance(p, dict)]
+    confirmed = [
+        item.get("read") or {}
+        for item in report.get("items") or []
+        if item.get("kind") == "plate_hole" and item.get("status") == "confirmed"
+    ]
+    holes = [
+        (float(h["center_x_mm"]), float(h["center_y_mm"]), float(h["diameter_mm"]))
+        for h in confirmed
+        if all(
+            isinstance(h.get(k), (int, float))
+            for k in ("center_x_mm", "center_y_mm", "diameter_mm")
+        )
+    ]
+    if not patterns or len(holes) < 2:
+        return []
+    decisions = []
+    for index, pattern in enumerate(patterns):
+        diameter = pattern.get("hole_diameter_mm")
+        if not isinstance(diameter, (int, float)):
+            continue
+        same = [hole for hole in holes if abs(hole[2] - float(diameter)) <= 0.05]
+        expanded = expand_holes({"hole_patterns": [pattern]})
+        if len(same) < 2 or not expanded:
+            continue
+        matched = sum(
+            1
+            for x, y, _d in expanded
+            if any(abs(x - hx) <= 1.0 and abs(y - hy) <= 1.0 for hx, hy, _hd in same)
+        )
+        if matched == len(expanded):
+            continue
+        decisions.append(
+            {
+                "kind": "hole_pattern",
+                "path": f"main_view.profile.hole_patterns[{index}]",
+                "action": "drop",
+                "reason": (
+                    f"массив Ø{float(diameter):g} × {len(expanded)} не совпал с "
+                    f"{len(same)} отверстиями той же серии, подтверждёнными листом "
+                    f"(совпало {matched}) — ошибка чтения, не построен"
+                ),
+            }
+        )
+    return decisions
+
+
+def apply_pattern_drops(spec: dict[str, Any], decisions: list[dict[str, Any]]) -> dict[str, Any]:
+    """Снять массивы, противоречащие подтверждённым отверстиям."""
+    import copy
+
+    drops = {
+        int(_INDEX_TAIL.search(d["path"]).group(1)) for d in decisions if d.get("action") == "drop"
+    }
+    if not drops:
+        return spec
+    spec = copy.deepcopy(spec)
+    profile = ((spec.get("main_view") or {}).get("profile")) or {}
+    profile["hole_patterns"] = [
+        pattern
+        for index, pattern in enumerate(profile.get("hole_patterns") or [])
+        if index not in drops
+    ]
+    spec.setdefault("optional_unresolved", []).extend(d["reason"] for d in decisions)
+    return spec
+
+
+_INDEX_TAIL = re.compile(r"\[(\d+)\]$")
 
 
 def housing_decision(spec: dict[str, Any], report: dict[str, Any]) -> dict[str, Any] | None:

@@ -520,3 +520,108 @@ def test_the_housing_scale_comes_from_the_read_size_when_the_plan_confirms_it():
     assert abs(295.0 * scale - 49.9) < 0.1
     # Прочитанное, которого план не подтверждает, масштаба не даёт.
     assert _scale_from_read((50.0, 80.0), *plan_px) is None
+
+
+def _plate_with_pattern(pattern: dict) -> dict:
+    return {
+        "main_view": {
+            "profile": {
+                "shape": "rectangle",
+                "width_mm": 80.0,
+                "height_mm": 80.0,
+                "holes": [
+                    {"center_x_mm": x, "center_y_mm": y, "diameter_mm": 13.5}
+                    for x in (-29.0, 29.0)
+                    for y in (-29.0, 29.0)
+                ],
+                "hole_patterns": [pattern],
+            }
+        }
+    }
+
+
+def _confirmed_corner_holes() -> dict:
+    return {
+        "items": [
+            {
+                "kind": "plate_hole",
+                "status": "confirmed",
+                "read": {"center_x_mm": x, "center_y_mm": y, "diameter_mm": 13.5},
+            }
+            for x in (-29.0, 29.0)
+            for y in (-29.0, 29.0)
+        ]
+    }
+
+
+def test_a_pattern_contradicting_confirmed_holes_is_dropped():
+    """Живой корпус: «окружность болтов Ø69» поверх четырёх подтверждённых
+    угловых отверстий блокировала сборку — окружности на листе нет."""
+    from app.ai.cad_recognize.verifiers.reconcile import (
+        apply_pattern_drops,
+        contradicting_patterns,
+    )
+
+    spec = _plate_with_pattern(
+        {
+            "kind": "bolt_circle",
+            "count": 4,
+            "hole_diameter_mm": 13.5,
+            "bolt_circle_diameter_mm": 69.0,
+        }
+    )
+
+    decisions = contradicting_patterns(spec, _confirmed_corner_holes())
+
+    assert [d["action"] for d in decisions] == ["drop"]
+    updated = apply_pattern_drops(spec, decisions)
+    assert updated["main_view"]["profile"]["hole_patterns"] == []
+    assert len(updated["main_view"]["profile"]["holes"]) == 4
+
+
+def test_a_pattern_that_matches_the_confirmed_holes_stays():
+    """Та же четвёрка, описанная окружностью Ø82 под 45°, — не противоречие."""
+    import math
+
+    from app.ai.cad_recognize.verifiers.reconcile import contradicting_patterns
+
+    spec = _plate_with_pattern(
+        {
+            "kind": "bolt_circle",
+            "count": 4,
+            "hole_diameter_mm": 13.5,
+            "bolt_circle_diameter_mm": 2 * math.hypot(29.0, 29.0),
+            "start_angle_deg": 45.0,
+        }
+    )
+
+    assert contradicting_patterns(spec, _confirmed_corner_holes()) == []
+
+
+def test_the_thickness_measured_by_the_views_is_adopted_when_the_sheet_states_it():
+    from app.ai.cad_recognize.verifiers.reconcile import apply_reconciliation, reconcile
+
+    spec = {
+        "dimensions": [{"value": v} for v in ("80", "50")],
+        "main_view": {"profile": {"shape": "rectangle", "width_mm": 80.0, "thickness_mm": 16.0}},
+    }
+    report = {
+        "items": [
+            {
+                "kind": "plate_thickness",
+                "path": "main_view.profile",
+                "feature_id": "profile:thickness",
+                "status": "refuted",
+                "read": {"thickness_mm": 16.0},
+                "measured": {"thickness_mm": 49.94},
+                "tolerance_mm": {"thickness": 0.5},
+            }
+        ],
+        "notes": [],
+    }
+
+    (decision,) = reconcile(spec, report)
+
+    assert (decision["action"], decision["value"]) == ("adopt", 50.0)
+    updated, _ = apply_reconciliation(spec, report, [decision])
+    assert updated["main_view"]["profile"]["thickness_mm"] == 50.0

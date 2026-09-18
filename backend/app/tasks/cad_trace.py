@@ -3896,9 +3896,11 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     apply_cavity,
                     apply_contour,
                     apply_housing,
+                    apply_pattern_drops,
                     apply_sleeve,
                     cavity_addition,
                     contour_decision,
+                    contradicting_patterns,
                     housing_decision,
                     sleeve_decision,
                 )
@@ -3939,6 +3941,18 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 # Габарит корпуса по листу (Ф5): три вида в проекционной связи,
                 # размеры — по надписям. Живой корпус читался «пластиной»
                 # 50 × 80 × 16 при 80 × 80 × 50.
+                # Массив отверстий, противоречащий отверстиям, подтверждённым листом,
+                # — ошибка чтения (живой корпус: «окружность болтов Ø69» поверх
+                # четырёх подтверждённых угловых отверстий блокировала сборку).
+                drops = contradicting_patterns(spec, verification) if verification else []
+                if drops:
+                    spec = _revalidated_spec(apply_pattern_drops(spec, drops))
+                    await _record(
+                        "reconcile.patterns",
+                        "completed",
+                        f"Снято массивов, противоречащих листу: {len(drops)}",
+                        {"decisions": drops},
+                    )
                 housing = housing_decision(spec, verification) if verification else None
                 if housing and housing.get("action") == "adopt":
                     spec = _revalidated_spec(apply_housing(spec, housing))
