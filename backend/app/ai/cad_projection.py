@@ -282,9 +282,14 @@ def place_sheet_views(
             continue
         kind = view.get("kind")
         if index in to_below or (kind in ("top", "bottom") and index not in to_right):
-            # Directly below the anchor, sharing its u — first-angle.
+            # Под главным видом, по ОСИ: выравнивание по левому краю ломает
+            # проекционную связь, когда у видов разные выступы (корпус: разрез
+            # уезжал на 8 мм относительно плана, и элементы на нём искались не
+            # там).
+            anchor_axis_u = origin_u_mm + anchor_width / 2.0
+            box_axis_u = (box["u_max"] + box["u_min"]) / 2.0
             placements[index] = {
-                "offset_u": origin_u_mm - box["u_min"],
+                "offset_u": anchor_axis_u - box_axis_u,
                 "offset_v": bottom_edge_mm + gap_mm + box["v_max"],
             }
             bottom_edge_mm += gap_mm + (box["v_max"] - box["v_min"])

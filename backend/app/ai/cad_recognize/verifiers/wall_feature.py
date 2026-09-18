@@ -313,3 +313,85 @@ def wall_feature_verdict(
         "measured": measured,
         "reason": "; ".join(problems) or "размер и положение совпали с листом",
     }
+
+
+# Боковая стенка кармана видна с ребра как линия от кромки грани до дна:
+# она должна тянуться не меньше чем на эту долю глубины.
+_SIDE_REACH = 0.7
+
+
+def measure_depth_on_edge_view(
+    gray: Any,
+    edges: tuple[float, float],
+    mm_per_px: float,
+    span_px: float,
+    *,
+    axis: str,
+    outward: bool,
+) -> float | None:
+    """Глубина кармана или вылет прилива на виде, где грань видна с ребра.
+
+    Дно кармана — не «ближайшая к кромке линия» (так замер давал 0,008 мм при
+    58): это линия ДЛИНОЙ В САМ ЭЛЕМЕНТ, опирающаяся на две боковые, которые
+    идут от кромки грани внутрь. Ищется по длине, а не по предсказанному
+    месту: центры видов на листе не совпадают — в габарит вида входят выступы
+    приливов.
+
+    ``edges`` — кромки тела на этом виде вдоль оси глубины, ``span_px`` —
+    длина элемента вдоль кромки.
+    """
+    import numpy as np
+
+    from app.ai.cad_recognize.verifiers.plate_frame import _ink, _lines
+
+    gray = np.asarray(gray)
+    low_edge, high_edge = sorted(edges)
+    if span_px < 4 or mm_per_px <= 0 or high_edge - low_edge < 4:
+        return None
+    ink = _ink(gray)
+    tolerance = max(3.0, 0.03 * span_px)
+    along = _lines(ink, max(4, int(round(0.5 * span_px))), axis=0 if axis == "v" else 1)
+
+    def side_ink(position: float, start: float, end: float) -> bool:
+        """Идёт ли от кромки к линии сплошной штрих — боковая стенка элемента.
+
+        Считаются сами чернила, а не «линии»: дно и боковые стенки нарисованы
+        одним контуром, и поиск связных компонент возвращал их одной фигурой с
+        центром посередине — боковых «не находилось» вовсе.
+        """
+        low_i, high_i = int(min(start, end)), int(max(start, end))
+        if high_i - low_i < 3:
+            return False
+        column = int(round(position))
+        band = (
+            ink[low_i:high_i, max(0, column - 2) : column + 3]
+            if axis == "v"
+            else ink[max(0, column - 2) : column + 3, low_i:high_i]
+        )
+        if band.size == 0:
+            return False
+        covered = band.any(axis=1 if axis == "v" else 0)
+        return float(covered.mean()) >= _SIDE_REACH
+
+    best: tuple[float, float] | None = None
+    for line in along:
+        length = line.end - line.start
+        if abs(length - span_px) > tolerance:
+            continue
+        inside = low_edge + tolerance < line.position < high_edge - tolerance
+        if outward == inside:
+            continue
+        for edge in (low_edge, high_edge):
+            depth_px = abs(line.position - edge)
+            if depth_px < tolerance:
+                continue
+            if not (
+                side_ink(line.start, edge, line.position)
+                and side_ink(line.end, edge, line.position)
+            ):
+                continue
+            if best is None or depth_px < best[0]:
+                best = (depth_px, line.position)
+    if best is None:
+        return None
+    return round(best[0] * mm_per_px, 3)

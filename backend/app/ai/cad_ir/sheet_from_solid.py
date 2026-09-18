@@ -128,16 +128,21 @@ def classify_part(spec: dict, report: dict) -> str:
 _MAX_KERNEL_VIEWS = 8
 
 
-_FRONT_WALL_PLANES = ("front", "back")
+def _wall_features(spec: dict) -> list[dict]:
+    profile = ((spec.get("main_view") or {}).get("profile")) or {}
+    return [item for item in (profile.get("wall_features") or []) if isinstance(item, dict)]
 
 
-def _has_front_wall_features(spec: dict) -> bool:
-    """Есть ли у детали карманы/приливы на передней или задней стенке."""
-    body = spec.get("main_view") or {}
-    profile = body.get("profile") or {}
+def _has_wall_features(spec: dict) -> bool:
+    """Есть ли у детали карманы или приливы на гранях (корпус)."""
+    return bool(_wall_features(spec))
+
+
+def _has_cavity(spec: dict) -> bool:
+    """Есть ли полость — карман на верхней или нижней грани."""
     return any(
-        isinstance(item, dict) and item.get("on_plane") in _FRONT_WALL_PLANES
-        for item in (profile.get("wall_features") or [])
+        item.get("kind") == "pocket" and item.get("on_plane") in ("top", "bottom")
+        for item in _wall_features(spec)
     )
 
 
@@ -154,7 +159,12 @@ def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
     # Корпус (X2): у детали есть элементы на передних стенках — тогда вид
     # спереди идёт на лист, и ширина на нём должна лежать горизонтально
     # (по умолчанию ядро кладёт её вертикально — это годится только валу).
-    if _has_front_wall_features(spec):
+    if _has_wall_features(spec):
+        # Корпус (X2/Ф5): вид спереди идёт на лист — на нём элементы передних
+        # стенок; ширина на нём должна лежать горизонтально (по умолчанию ядро
+        # кладёт её вертикально — это годится только валу). Полость же видна
+        # только РАЗРЕЗОМ (ГОСТ 2.305): штриховыми линиями её глубину не
+        # измерить ни человеку, ни проверке.
         views[0] = {"kind": "front", "x_direction": [1.0, 0.0, 0.0]}
     if part_class == "hollow_rotation":
         source = source_sections[0] if source_sections else {}
@@ -168,6 +178,22 @@ def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
         if source.get("section_path_mm"):
             section["section_path_mm"] = source["section_path_mm"]
         views.append(section)
+    elif part_class in ("flange", "plate") and _has_cavity(spec):
+        # Корпус с полостью: под планом — РАЗРЕЗ через середину детали
+        # (ГОСТ 2.305), а не вид спереди: глубину полости показывает он.
+        # План — главный вид; под ним разрез через середину, справа — вид
+        # на толщину.
+        views.append({"kind": "side"})
+        views.append(
+            {
+                "kind": "section",
+                "label": "А-А",
+                "section_symbol": "А",
+                # Ширина детали — горизонтально, как на её видах.
+                "x_direction": [1.0, 0.0, 0.0],
+            }
+        )
+        views.append({"kind": "top"})
     elif part_class in ("flange", "plate"):
         # Вид ВДОЛЬ оси выдавливания (`side`, вдоль −Z) — это деталь в плане:
         # контур, отверстия, окружность болтов, прорези. Он и есть главный вид
@@ -403,8 +429,12 @@ def _estimate_layout_mm(part_class: str, report: dict, views: list[dict]) -> tup
         # Справа от плана — разрез фланца или вид на толщину пластины (`top`).
         if any(kind in kinds for kind in ("section", "removed_section", "top")):
             width += VIEW_GAP_MM + max(length, 1.0)
-        # Под планом — вид спереди корпуса (ширина × толщина).
-        if any(view.get("kind") == "front" and view.get("x_direction") for view in views):
+        # Под планом — вид спереди корпуса или его разрез (ширина × толщина).
+        if any(
+            (view.get("kind") == "front" and view.get("x_direction"))
+            or view.get("kind") == "section"
+            for view in views
+        ):
             height += VIEW_GAP_MM + max(length, 1.0)
     else:
         width, height = length, diameter
@@ -498,16 +528,22 @@ def plan_sheet(
             for index, view in enumerate(views)
             if view["kind"] == "front" and not view.get("x_direction")
         }
-        # Корпус: план — главный вид, вид спереди — под ним.
-        front_on_sheet = [
+        # Корпус: план — главный вид, вид спереди или разрез — под ним.
+        below = {
             index
             for index, view in enumerate(views)
-            if view["kind"] == "front" and view.get("x_direction")
-        ]
-        if front_on_sheet:
-            below = set(front_on_sheet)
+            if (view["kind"] == "front" and view.get("x_direction"))
+            or (view["kind"] == "section" and _has_cavity(spec))
+        }
+        if below:
             anchor = next(
                 (index for index, view in enumerate(views) if view["kind"] == "side"), None
+            )
+            # Разрез строится от вида спереди — сам он на лист не идёт.
+            scaffold |= (
+                {index for index, view in enumerate(views) if view["kind"] == "front"}
+                if any(view["kind"] == "section" for view in views)
+                else set()
             )
         # `top` пластины делит с планом вертикальную ось — его место справа.
         right = {index for index, view in enumerate(views) if view["kind"] == "top"}
@@ -1114,7 +1150,13 @@ def _wall_feature_dimensions(drawing: dict, spec: dict, plan: SheetPlan) -> None
         return None
 
     plan_view = view_index("side")
-    front_view = view_index("front", front_on_sheet=True)
+    # У корпуса с полостью вид спереди заменён разрезом (ГОСТ 2.305): элементы
+    # передних стенок и полость показывает он.
+    front_view = (
+        view_index("section")
+        if view_index("section") is not None
+        else view_index("front", front_on_sheet=True)
+    )
     side_view = view_index("top")
     # Грань → (вид лицом, размеры тела на нём, вид с ребра, ось глубины на нём).
     faces = {

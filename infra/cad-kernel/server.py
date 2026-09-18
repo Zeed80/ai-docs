@@ -3078,8 +3078,9 @@ def build_drawing(request: DrawingRequest) -> dict[str, Any]:
                 # Without an explicit X the section picks its own, and it comes
                 # out mirrored against the base view: the shaft was drawn with
                 # its flange on the wrong end while every dimension still said
-                # otherwise.
-                view.XDirection = App.Vector(0.0, 0.0, 1.0)
+                # otherwise. A caller may name the axis itself — у корпуса
+                # ширина должна лежать горизонтально, как и на его виде.
+                view.XDirection = App.Vector(*(wanted.x_direction or (0.0, 0.0, 1.0)))
                 centre = shape.BoundBox.Center
                 depth = (
                     wanted.section_origin_mm

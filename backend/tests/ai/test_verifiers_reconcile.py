@@ -452,3 +452,53 @@ def test_numbers_the_sheet_does_not_state_go_to_the_human():
     )
 
     assert housing_decision(spec, report)["action"] == "ask_human"
+
+
+def test_a_cavity_found_on_the_sheet_is_added_when_its_numbers_are_stated():
+    """Ф5: полость ридер не выписывает вовсе — её несёт лист (разрез и план)."""
+    from app.ai.cad_recognize.verifiers.reconcile import apply_cavity, cavity_addition
+
+    spec = {
+        "dimensions": [{"value": v} for v in ("100", "80", "50", "70.8", "32")],
+        "main_view": {"profile": {"shape": "rectangle", "width_mm": 100.0, "height_mm": 80.0}},
+    }
+    report = {
+        "cavity_proposal": {
+            "kind": "pocket",
+            "on_plane": "top",
+            "profile": "rectangle",
+            "width_mm": 70.8,
+            "height_mm": 70.8,
+            "depth_mm": 32.0,
+            "center_u_mm": 0.0,
+            "center_v_mm": 0.0,
+            "bbox_px": [10.0, 20.0, 30.0, 40.0],
+            "reason": "полость по листу 70.8 × 70.8 глубиной 32",
+        }
+    }
+
+    addition = cavity_addition(spec, report)
+
+    assert addition["action"] == "add"
+    updated = apply_cavity(spec, addition)
+    (cavity,) = updated["main_view"]["profile"]["wall_features"]
+    assert (cavity["width_mm"], cavity["depth_mm"], cavity["on_plane"]) == (70.8, 32.0, "top")
+    assert cavity["evidence"][0]["bbox"] == [10.0, 20.0, 30.0, 40.0]
+
+
+def test_a_cavity_whose_numbers_are_not_on_the_sheet_is_not_added():
+    from app.ai.cad_recognize.verifiers.reconcile import cavity_addition
+
+    spec = {"dimensions": [{"value": "100"}], "main_view": {"profile": {}}}
+    report = {
+        "cavity_proposal": {
+            "width_mm": 70.8,
+            "height_mm": 70.8,
+            "depth_mm": 32.0,
+            "center_u_mm": 0.0,
+            "center_v_mm": 0.0,
+            "reason": "полость по листу",
+        }
+    }
+
+    assert cavity_addition(spec, report) is None

@@ -259,6 +259,30 @@ def _housing_by_sheet(
     if not found or not found.get("thickness_mm"):
         return
     report["housing_by_sheet"] = found
+    cavity = found.get("cavity")
+    walls = [item for item in (profile.get("wall_features") or []) if isinstance(item, dict)]
+    has_cavity = any(
+        item.get("on_plane") in ("top", "bottom") and item.get("kind") == "pocket" for item in walls
+    )
+    if cavity and cavity.get("height_mm") and not has_cavity:
+        # Полость ридер не выписывает вовсе (живой корпус: ни одного элемента
+        # грани), а лист её несёт: в разрезе — ширина и глубина, в плане —
+        # штриховые кромки. Решает согласование.
+        report["cavity_proposal"] = {
+            "kind": "pocket",
+            "on_plane": "top",
+            "profile": "rectangle",
+            "width_mm": cavity["width_mm"],
+            "height_mm": cavity["height_mm"],
+            "depth_mm": cavity["depth_mm"],
+            "center_u_mm": cavity["center_u_mm"],
+            "center_v_mm": cavity["center_v_mm"],
+            "bbox_px": cavity.get("bbox_px"),
+            "reason": (
+                f"полость по листу {cavity['width_mm']:g} × {cavity['height_mm']:g} "
+                f"глубиной {cavity['depth_mm']:g} — ридер её не выписал"
+            ),
+        }
     read = {
         "width_mm": profile.get("width_mm"),
         "height_mm": profile.get("height_mm"),

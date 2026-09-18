@@ -557,6 +557,65 @@ def apply_reconciliation(
     return spec, report
 
 
+def cavity_addition(spec: dict[str, Any], report: dict[str, Any]) -> dict[str, Any] | None:
+    """Полость корпуса, найденная по листу, — в спек, если её числа на листе.
+
+    Правило то же, что у паза, найденного по листу (E19): предложение строгое
+    (ширина и глубина — из разреза, высота и положение — по штриховым кромкам
+    плана), и каждое его число обязано стоять надписью на листе.
+    """
+    proposal = report.get("cavity_proposal")
+    if not proposal:
+        return None
+    numbers = sheet_numbers(spec)
+    values = [float(proposal[key]) for key in ("width_mm", "height_mm", "depth_mm")]
+    if not all(
+        any(abs(number - value) <= max(0.05, 0.01 * value) for number in numbers)
+        for value in values
+    ):
+        return None
+    return {**proposal, "action": "add"}
+
+
+def apply_cavity(spec: dict[str, Any], addition: dict[str, Any]) -> dict[str, Any]:
+    """Добавить найденную полость в контур детали."""
+    import copy
+
+    if addition.get("action") != "add":
+        return spec
+    spec = copy.deepcopy(spec)
+    profile = ((spec.get("main_view") or {}).get("profile")) or {}
+    if not profile:
+        return spec
+    walls = profile.setdefault("wall_features", [])
+    walls.append(
+        {
+            "id": "sheet:wall_features:0",
+            "kind": "pocket",
+            "on_plane": "top",
+            "profile": "rectangle",
+            "width_mm": float(addition["width_mm"]),
+            "height_mm": float(addition["height_mm"]),
+            "depth_mm": float(addition["depth_mm"]),
+            "center_u_mm": float(addition["center_u_mm"]),
+            "center_v_mm": float(addition["center_v_mm"]),
+            "evidence": (
+                [
+                    {
+                        "image_index": 0,
+                        "bbox": list(addition["bbox_px"]),
+                        "raw_text": "полость по листу",
+                    }
+                ]
+                if addition.get("bbox_px")
+                else []
+            ),
+        }
+    )
+    spec.setdefault("optional_unresolved", []).append("найдено по листу: " + addition["reason"])
+    return spec
+
+
 def housing_decision(spec: dict[str, Any], report: dict[str, Any]) -> dict[str, Any] | None:
     """Принять габарит корпуса по листу вместо прочитанного.
 
