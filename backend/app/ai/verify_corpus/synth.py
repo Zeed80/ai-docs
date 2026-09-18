@@ -38,6 +38,7 @@ def synth_spec(kind: str, seed: int) -> dict[str, Any]:
         "flange": _flange,
         "housing": _housing,
         "sheet_metal": _sheet_metal,
+        "weldment": _weldment,
     }
     if kind not in builders:
         raise ValueError(f"генератор для типа «{kind}» ещё не написан")
@@ -547,6 +548,83 @@ def _sheet_metal(rng: random.Random) -> dict[str, Any]:
                 "width_mm": float(rng.choice((20, 30, 40, 50, 60, 80, 100))),
             },
         },
+        "views": [{"kind": "front", "body_index": 0}],
+        "dimensions": [],
+        "annotations": [],
+        "title_block": {"name": name, "material": rng.choice(_MATERIALS)},
+        "unresolved": [],
+    }
+
+
+def _weld_plate(width: float, height: float, thickness: float, name: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "type": "пластина",
+        "profile": {
+            "shape": "rectangle",
+            "width_mm": width,
+            "height_mm": height,
+            "thickness_mm": thickness,
+            "holes": [],
+            "hole_patterns": [],
+            "slots": [],
+        },
+    }
+
+
+def _weldment(rng: random.Random) -> dict[str, Any]:
+    """Сварной узел: основание и одно-два ребра на нём, угловые швы ГОСТ 5264.
+
+    Ребро стоит на верхней грани основания вдоль его ширины; у края — шов
+    с внутренней стороны (Т1, снаружи варить не на чем), в середине —
+    одно- или двусторонний (Т1/Т3). Катет не больше тонкой из свариваемых
+    толщин — эталон с катетом толще листа учил бы проверку принимать брак.
+    """
+    width = float(rng.choice((80, 100, 120, 150, 200)))
+    depth = float(rng.choice((50, 60, 80, 100, 120)))
+    thickness = float(rng.choice((6, 8, 10, 12)))
+    parts = [_weld_plate(width, depth, thickness, "Основание")]
+    welds: list[dict[str, Any]] = []
+    ribs = rng.randint(1, 2)
+    taken: list[tuple[float, float]] = []
+    for number in range(ribs):
+        rib_t = float(rng.choice((4, 5, 6, 8)))
+        rib_h = float(rng.choice((30, 40, 50, 60)))
+        leg = float(min(rng.choice((3, 4, 5, 6)), rib_t, thickness))
+        at_edge = number == 0 and rng.random() < 0.4
+        if at_edge:
+            edge = depth
+        else:
+            edge = round(rng.uniform(rib_t + leg + 5, depth - leg - 5), 0)
+        span = (edge - rib_t - leg - 5, edge + leg + 5)
+        if any(not (span[1] <= lo or span[0] >= hi) for lo, hi in taken):
+            continue
+        taken.append(span)
+        rib = _weld_plate(width, rib_h, rib_t, f"Ребро {number + 1}")
+        # Поворот вокруг x на 90°: толщина ребра уходит в −y, высота — вверх.
+        rib["placement"] = {
+            "position_mm": [0.0, edge, thickness],
+            "axis": [1.0, 0.0, 0.0],
+            "angle_deg": 90.0,
+        }
+        parts.append(rib)
+        both = not at_edge and rng.random() < 0.5
+        welds.append(
+            {
+                "bodies": [0, len(parts) - 1],
+                "designation": "Т3" if both else "Т1",
+                "standard": "ГОСТ 5264-80",
+                "leg_mm": leg,
+                "both_sides": both,
+            }
+        )
+    name = rng.choice(("Кронштейн", "Опора", "Стойка", "Подставка"))
+    return {
+        "schema_version": 1,
+        "part": name,
+        "main_view": {"name": name, "type": "сварной узел"},
+        "parts": parts,
+        "welds": welds,
         "views": [{"kind": "front", "body_index": 0}],
         "dimensions": [],
         "annotations": [],

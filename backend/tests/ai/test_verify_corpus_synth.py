@@ -211,3 +211,26 @@ def test_a_hat_profile_has_webs_of_one_height():
     ]
     assert hats
     assert all(hat["flanges_mm"][1] == hat["flanges_mm"][3] for hat in hats)
+
+
+# ── Сварные узлы (X3) ────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("seed", range(200))
+def test_every_weldment_builds_every_plate_and_every_bead(seed):
+    """Живое ядро (20 seed сквозь граф): объём = пластины + валики по формуле."""
+    spec = synth_spec("weldment", seed)
+    EngineeringDrawingSpec.model_validate(spec)
+    tree = feature_tree_from_spec(spec)
+    bodies = len(spec["parts"])
+    beads = [feature for feature in tree.features if feature.body_index >= bodies]
+    assert len(beads) == sum(2 if weld["both_sides"] else 1 for weld in spec["welds"])
+    assert tree.missing_data == []
+
+
+@pytest.mark.parametrize("seed", range(200))
+def test_a_weld_leg_is_never_thicker_than_the_plates_it_joins(seed):
+    spec = synth_spec("weldment", seed)
+    for weld in spec["welds"]:
+        first, second = (spec["parts"][index]["profile"] for index in weld["bodies"])
+        assert weld["leg_mm"] <= min(first["thickness_mm"], second["thickness_mm"])
