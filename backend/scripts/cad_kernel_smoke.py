@@ -511,6 +511,56 @@ def _check_work_plane_features() -> None:
     )
 
 
+def _check_body_placement() -> None:
+    """X3 (сварные узлы, сборки): тело ставится туда, где его показывает лист.
+
+    Раньше несколько тел раскладывались условным сдвигом с предупреждением
+    «взаимное расположение не прочитано». С прочитанным размещением — стойка
+    100×10×10, поставленная на плиту 100×60×10, даёт габарит плиты с высотой
+    плиты + стойки, одним составом, без предупреждения о раскладке.
+    """
+    plate = _feature("extrude", width_mm=100.0, height_mm=60.0, depth_mm=10.0)
+    post = _feature(
+        "extrude",
+        width_mm=100.0,
+        height_mm=10.0,
+        depth_mm=10.0,
+        placement={"position_mm": [0.0, 25.0, 10.0], "axis": [0.0, 0.0, 1.0], "angle_deg": 0.0},
+    )
+    post["body_index"] = 1
+    status, body = _compile(_candidate(plate, post, label="placement"))
+    check("placement: два тела с размещением собираются", status == 200, str(body)[:160])
+    if status != 200:
+        return
+    report = _report_from_zip(body)
+    bounds = report["bounds_mm"]
+    check(
+        "placement: стойка стоит на плите (высота 20, ширина 100, глубина 60)",
+        abs(float(bounds["z"]) - 20.0) <= 0.01
+        and abs(float(bounds["x"]) - 100.0) <= 0.01
+        and abs(float(bounds["y"]) - 60.0) <= 0.01,
+        str(bounds),
+    )
+    warnings = " ".join(report.get("warnings") or [])
+    check(
+        "placement: предупреждения о раскладке нет",
+        "не прочитано" not in warnings,
+        warnings[:160],
+    )
+    turned = dict(post)
+    turned["params"] = {
+        **post["params"],
+        "placement": {"position_mm": [60.0, 0.0, 10.0], "axis": [0.0, 0.0, 1.0], "angle_deg": 90.0},
+    }
+    status, body = _compile(_candidate(plate, turned, label="placement-turned"))
+    bounds = _report_from_zip(body)["bounds_mm"] if status == 200 else {}
+    check(
+        "placement: поворот на 90° кладёт стойку поперёк",
+        status == 200 and abs(float(bounds.get("y", 0)) - 100.0) <= 0.01,
+        str(bounds),
+    )
+
+
 def _check_flange_on_axial_station() -> None:
     """A sleeve with a three-lug flange midway along its axis (test-drawings
     part_03): the boss starts at an axial station, reaches past the turned
@@ -1237,6 +1287,7 @@ def main() -> int:
     _check_face_groove()
     _check_axial_cross_section()
     _check_work_plane_features()
+    _check_body_placement()
 
     failed = [name for ok, name, _detail in _results if not ok]
     print(f"\n{len(_results) - len(failed)}/{len(_results)} passed")

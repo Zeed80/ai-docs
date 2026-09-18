@@ -1302,21 +1302,60 @@ def _build_shape(
     operation_audit: list[dict[str, Any]] = []
     offset_y = 0.0
     margin_mm = 20.0
-    for shape, body_warnings, body_audit in built:
+    unplaced = 0
+    placements = {
+        feature.body_index: feature.params.get("placement")
+        for _index, feature in bases
+    }
+    for body_index, (shape, body_warnings, body_audit) in zip(body_indices, built, strict=True):
         placed = shape.copy()
-        placed.translate(App.Vector(0.0, offset_y, 0.0))
-        offset_y += placed.BoundBox.YLength + margin_mm
+        placement = placements.get(body_index)
+        # Первое тело — опорное: остальные размещены относительно него, и без
+        # собственного размещения оно стоит в начале координат, а не
+        # «раскладывается».
+        reference = body_index == body_indices[0] and any(
+            placements.get(other) is not None for other in body_indices[1:]
+        )
+        if reference:
+            pass
+        elif placement is not None:
+            # X3: размещение тела прочитано (сварной узел, сборка) — тело
+            # ставится туда, где его показывает лист, а не раскладочным сдвигом.
+            placed = placed.transformShape(_placement_matrix(placement), True)
+        else:
+            unplaced += 1
+            placed.translate(App.Vector(0.0, offset_y, 0.0))
+            offset_y += placed.BoundBox.YLength + margin_mm
         shapes.append(placed)
         warnings.extend(body_warnings)
         operation_audit.extend(body_audit)
-    warnings.append(
-        f"Лист описывает {len(built)} независимых тел; их взаимное расположение "
-        "на чертеже не прочитано — построены раздельно, без предположения о позиции"
-    )
+    if unplaced:
+        warnings.append(
+            f"Лист описывает {len(built)} независимых тел; расположение {unplaced} из "
+            "них на чертеже не прочитано — построены раздельно, без предположения о позиции"
+        )
     compound = Part.Compound(shapes)
     if compound.isNull() or not compound.isValid():
         raise HTTPException(422, "OpenCascade produced an invalid multi-body compound")
     return compound, warnings, operation_audit
+
+
+def _placement_matrix(placement: Any) -> App.Matrix:
+    """Жёсткое размещение тела: сдвиг position_mm и поворот angle_deg вокруг axis."""
+    if not isinstance(placement, dict):
+        raise HTTPException(422, "placement must be an object")
+    position = placement.get("position_mm") or [0.0, 0.0, 0.0]
+    axis = placement.get("axis") or [0.0, 0.0, 1.0]
+    angle = placement.get("angle_deg") or 0.0
+    try:
+        vector = App.Vector(*(float(v) for v in position))
+        axis_vector = App.Vector(*(float(v) for v in axis))
+        angle_value = float(angle)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(422, f"placement is malformed: {exc}") from exc
+    if len(position) != 3 or len(axis) != 3 or axis_vector.Length <= 1e-9:
+        raise HTTPException(422, "placement needs position_mm[3] and a non-zero axis[3]")
+    return App.Placement(vector, App.Rotation(axis_vector, angle_value)).toMatrix()
 
 
 def _build_one_body(

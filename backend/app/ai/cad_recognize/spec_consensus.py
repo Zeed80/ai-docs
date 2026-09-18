@@ -254,6 +254,26 @@ def _vote_sections(
     return accepted, best[1], problem
 
 
+def _agreed_placement(placements: list[dict], *, minimum: int) -> dict | None:
+    """Размещение, совпавшее (в пределах 0,1 мм и 0,5°) у не меньше чем minimum проходов."""
+
+    def key(item: dict) -> tuple:
+        position = tuple(round(float(v), 1) for v in item.get("position_mm") or [])
+        axis = tuple(round(float(v), 3) for v in item.get("axis") or [0.0, 0.0, 1.0])
+        return position, axis, round(float(item.get("angle_deg") or 0.0) * 2) / 2
+
+    counts: dict[tuple, list[dict]] = {}
+    for item in placements:
+        try:
+            counts.setdefault(key(item), []).append(item)
+        except (TypeError, ValueError):
+            continue
+    if not counts:
+        return None
+    best = max(counts.values(), key=len)
+    return dict(best[0]) if len(best) >= minimum else None
+
+
 def _body_consensus(
     bodies: list[dict], *, minimum: int, total: int, label: str
 ) -> tuple[dict, list[str], list[str]]:
@@ -271,6 +291,17 @@ def _body_consensus(
     name, _count = _vote_text([body.get("name") for body in bodies], minimum=minimum)
     if name is not None:
         merged["name"] = name
+    # Размещение тела (X3) голосуется целиком: совпало у большинства проходов —
+    # берётся; иначе не переносится (без размещения тело строится раздельно).
+    placements = [
+        body.get("placement") for body in bodies if isinstance(body.get("placement"), dict)
+    ]
+    if placements:
+        agreed = _agreed_placement(placements, minimum=minimum)
+        if agreed is not None:
+            merged["placement"] = agreed
+        else:
+            notes.append(f"{label}: проходы не сошлись на размещении тела — не перенесено")
 
     outer, _agreed, problem = _vote_sections(
         [body.get("outer") or [] for body in bodies], minimum=minimum, label=label

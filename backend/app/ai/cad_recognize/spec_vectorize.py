@@ -554,9 +554,23 @@ class SpecFlange(BaseModel):
     evidence: list[SpecEvidence] = Field(default_factory=list)
 
 
+class SpecPlacement(BaseModel):
+    """Где тело стоит относительно первого тела (X3: сварные узлы, сборки).
+
+    Без него несколько тел листа строились раздельно, условным сдвигом.
+    ``position_mm`` — сдвиг, ``axis``/``angle_deg`` — поворот вокруг оси.
+    """
+
+    position_mm: list[float] = Field(min_length=3, max_length=3)
+    axis: list[float] = Field(default_factory=lambda: [0.0, 0.0, 1.0], min_length=3, max_length=3)
+    angle_deg: float = 0.0
+
+
 class SpecBody(BaseModel):
     name: str | None = None
     type: str = "unknown"
+    # X3: размещение тела относительно первого; None — не прочитано.
+    placement: SpecPlacement | None = None
     outer: list[SpecSection] = Field(default_factory=list)
     bore: list[SpecSection] = Field(default_factory=list)
     profile: SpecPrismaticProfile | None = None
@@ -2237,6 +2251,10 @@ def _rotation_body(node: dict, outer: list[dict], body_index: int) -> dict:
     for field in _BODY_FEATURE_FIELDS:
         items = node.get(field)
         body[field] = [item for item in items if isinstance(item, dict)] if items else []
+    # X3: размещение тела относительно первого — без него тело строилось
+    # раздельно (переносится, как фланцы: список полей собирается заново).
+    if isinstance(node.get("placement"), dict):
+        body["placement"] = dict(node["placement"])
     return body
 
 

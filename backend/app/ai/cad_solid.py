@@ -1116,10 +1116,37 @@ def _rotation_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
         missing.extend(body_missing)
 
     if len(parts) > 1:
-        missing.append(
-            f"на листе прочитано тел: {len(parts)}; их взаимное расположение "
-            "не прочитано, построены раздельно"
-        )
+        # X3: размещение тела — параметр его базовой операции (первое тело —
+        # опорное). Не прочитанное — строится раздельно, с замечанием.
+        unplaced = 0
+        for body in parts[1:]:
+            placement = body.get("placement")
+            if isinstance(placement, dict) and placement.get("position_mm"):
+                body_index = int(body.get("body_index") or 0)
+                base = next(
+                    (
+                        feature
+                        for feature in features
+                        if feature.body_index == body_index and feature.kind == "revolve"
+                    ),
+                    None,
+                )
+                if base is not None:
+                    base.params["placement"] = {
+                        "position_mm": [float(v) for v in placement["position_mm"]],
+                        "axis": [float(v) for v in placement.get("axis") or [0.0, 0.0, 1.0]],
+                        "angle_deg": float(placement.get("angle_deg") or 0.0),
+                    }
+                    base.param_provenance["placement"] = ParamProvenance(
+                        origin="stated", detail="размещение тела прочитано с листа"
+                    )
+                    continue
+            unplaced += 1
+        if unplaced:
+            missing.append(
+                f"на листе прочитано тел: {len(parts)}; взаимное расположение {unplaced} "
+                "из них не прочитано, построены раздельно"
+            )
 
     label = str(spec.get("part") or "Тело вращения") + " — revolve по прочитанному профилю"
     return FeatureTreeCandidate(
