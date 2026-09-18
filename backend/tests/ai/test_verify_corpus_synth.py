@@ -135,3 +135,54 @@ def test_completeness_requires_keyway_width_and_depth_on_the_section():
         next(item for item in without_depth if abs(item["value_mm"] - keyway["depth_mm"]) <= 1e-6)
     )
     assert module.coverage(spec, {"labels": without_depth})["ratio"] < 1.0
+
+
+# ── Корпуса (G2) ─────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("seed", range(200))
+def test_every_housing_passes_the_schema_and_builds_a_tree(seed):
+    spec = synth_spec("housing", seed)
+    EngineeringDrawingSpec.model_validate(spec)
+    assert feature_tree_from_spec(spec) is not None
+
+
+@pytest.mark.parametrize("seed", range(200))
+def test_no_housing_feature_hangs_off_its_own_face(seed):
+    """Эталон, который сам ставит прилив за краем стенки, учил бы проверку
+    принимать брак: у корпуса это ещё и отказ ядра."""
+    profile = synth_spec("housing", seed)["main_view"]["profile"]
+    width, height = profile["width_mm"], profile["height_mm"]
+    thickness = profile["thickness_mm"]
+    faces = {
+        "top": (width, height),
+        "bottom": (width, height),
+        "front": (width, thickness),
+        "back": (width, thickness),
+        "left": (height, thickness),
+        "right": (height, thickness),
+    }
+    for item in profile["wall_features"]:
+        face_u, face_v = faces[item["on_plane"]]
+        if item["profile"] == "circle":
+            reach_u = reach_v = item["diameter_mm"] / 2
+        else:
+            reach_u, reach_v = item["width_mm"] / 2, item["height_mm"] / 2
+        assert abs(item["center_u_mm"]) + reach_u <= face_u / 2 + 1e-6, item
+        assert abs(item["center_v_mm"]) + reach_v <= face_v / 2 + 1e-6, item
+        if item["kind"] == "pocket" and item["on_plane"] != "top":
+            # Карман в стенке не прорезает её насквозь.
+            assert item["depth_mm"] < thickness
+    for pattern in profile["hole_patterns"]:
+        radius = pattern["hole_diameter_mm"] / 2
+        assert abs(pattern["start_x_mm"]) + radius <= width / 2
+        assert abs(pattern["start_y_mm"]) + radius <= height / 2
+
+
+def test_a_housing_has_a_cavity_and_at_least_one_wall_feature():
+    """Иначе это не корпус, а пластина, и Ф5 мерить нечем."""
+    for seed in range(20):
+        walls = synth_spec("housing", seed)["main_view"]["profile"]["wall_features"]
+        cavity = [item for item in walls if item["on_plane"] == "top"]
+        assert len(cavity) == 1 and cavity[0]["kind"] == "pocket"
+        assert [item for item in walls if item["on_plane"] != "top"]
