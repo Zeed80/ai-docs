@@ -328,7 +328,7 @@ def measure_depth_on_edge_view(
     *,
     axis: str,
     outward: bool,
-) -> float | None:
+) -> tuple[float, float] | None:
     """Глубина кармана или вылет прилива на виде, где грань видна с ребра.
 
     Дно кармана — не «ближайшая к кромке линия» (так замер давал 0,008 мм при
@@ -338,7 +338,8 @@ def measure_depth_on_edge_view(
     приливов.
 
     ``edges`` — кромки тела на этом виде вдоль оси глубины, ``span_px`` —
-    длина элемента вдоль кромки.
+    длина элемента вдоль кромки. Возвращает (глубина в мм, кромка в px): по
+    кромке видно, с какой стороны элемент — а значит, на какой он грани.
     """
     import numpy as np
 
@@ -373,7 +374,7 @@ def measure_depth_on_edge_view(
         covered = band.any(axis=1 if axis == "v" else 0)
         return float(covered.mean()) >= _SIDE_REACH
 
-    best: tuple[float, float] | None = None
+    best: tuple[float, float, float] | None = None
     for line in along:
         length = line.end - line.start
         if abs(length - span_px) > tolerance:
@@ -391,7 +392,7 @@ def measure_depth_on_edge_view(
             ):
                 continue
             if best is None or depth_px < best[0]:
-                best = (depth_px, line.position)
+                best = (depth_px, line.position, edge)
     if best is None:
         return None
-    return round(best[0] * mm_per_px, 3)
+    return round(best[0] * mm_per_px, 3), best[2]
