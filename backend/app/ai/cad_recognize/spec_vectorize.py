@@ -2172,7 +2172,7 @@ _BODY_FEATURE_FIELDS = (
 
 # The prismatic-profile equivalent of _BODY_FEATURE_FIELDS — holes/patterns/
 # slots live one level deeper, under body["profile"].
-_PROFILE_FEATURE_FIELDS = ("holes", "hole_patterns", "slots")
+_PROFILE_FEATURE_FIELDS = ("holes", "hole_patterns", "slots", "wall_features")
 
 # The stepped profile itself. Not a "feature cut into" the body, but the
 # correspondence graph (cad_ir/correspondence.py) needs to name a SPECIFIC

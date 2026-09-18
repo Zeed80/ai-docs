@@ -886,3 +886,52 @@ def test_a_measurement_that_lands_on_another_feature_of_the_face_is_unmeasurable
         read, {"diameter_mm": 30.2, "center_u_mm": -9.8, "center_v_mm": 0.1}, line_mm=0.5
     )
     assert near["status"] == "confirmed"
+
+
+def test_a_confirmed_wall_feature_is_shown_on_both_of_its_views():
+    """Ф5: элемент грани виден на своём виде (размер и место) и на соседнем с
+    ребра (глубина) — это межвидовое соответствие корпуса."""
+    from app.ai.cad_emg_compat import native_feature_graph_additions
+    from app.ai.cad_recognize.verifiers.stage import attach_verified_views
+
+    spec = {
+        "main_view": {
+            "profile": {
+                **_HOUSING_PROFILE,
+                "wall_features": [
+                    {
+                        "id": "0:wall:0",
+                        "kind": "boss",
+                        "on_plane": "front",
+                        "profile": "circle",
+                        "diameter_mm": 40.0,
+                        "depth_mm": 8.0,
+                        "center_u_mm": 25.0,
+                        "center_v_mm": 0.0,
+                    }
+                ],
+            }
+        },
+        "views": [],
+    }
+    report = {
+        "items": [
+            {"kind": "wall_feature", "feature_id": "0:wall:0", "status": "confirmed"},
+        ],
+        "housing_views": {
+            "plan_bbox_px": [100.0, 100.0, 400.0, 300.0],
+            "front_bbox_px": [100.0, 360.0, 400.0, 480.0],
+            "side_bbox_px": [460.0, 100.0, 580.0, 300.0],
+            "thickness_mm": 60.0,
+        },
+        "frame": {"bbox_px": [100.0, 100.0, 400.0, 300.0]},
+    }
+
+    placed = attach_verified_views(spec, report)
+
+    by_id = {view["view_id"]: view for view in placed["views"]}
+    assert by_id["sheet-verified-front"]["features_shown"] == ["0:wall:0"]
+    assert by_id["sheet-verified-plan"]["features_shown"] == ["0:wall:0"]
+    _nodes, edges, _assertions = native_feature_graph_additions(placed)
+    same = [edge for edge in edges if edge.type == "same_object_across_views"]
+    assert len(same) == 1

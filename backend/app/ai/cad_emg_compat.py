@@ -444,6 +444,10 @@ def feature_tree_from_graph(
 # not a build parameter; taper/thread are their own nested objects, left for
 # a follow-up once they need their own Feature/Parameter nodes.
 _FEATURE_PARAM_FIELDS = (
+    # Корпуса (X2/Ф5): грань размещения и положение элемента на ней.
+    "on_plane",
+    "center_u_mm",
+    "center_v_mm",
     "diameter_mm",
     "length_mm",
     "width_mm",
@@ -491,6 +495,7 @@ _FEATURE_LIST_KIND = {
     "holes": "hole",
     "hole_patterns": "hole_pattern",
     "slots": "slot",
+    "wall_features": "wall_feature",
 }
 
 

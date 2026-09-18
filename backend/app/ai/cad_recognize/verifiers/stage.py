@@ -1215,7 +1215,18 @@ def attach_verified_views(spec: dict[str, Any], report: dict[str, Any]) -> dict[
                 for entry in main.get(group) or []
                 if isinstance(entry, dict) and entry.get("id")
             )
+    if report.get("housing_views"):
+        # Элемент грани стоит на СВОИХ видах (`_attach_housing_views`), а не на
+        # общем «проверенном виде»: иначе он оказывается сразу на трёх видах.
+        walls = {
+            str(item.get("id"))
+            for item in ((main.get("profile") or {}).get("wall_features") or [])
+            if isinstance(item, dict) and item.get("id")
+        }
+        shown = [item for item in shown if item not in walls]
     if not shown:
+        spec = copy.deepcopy(spec)
+        _attach_housing_views(spec, report, spec.setdefault("views", []))
         return spec
     spec = copy.deepcopy(spec)
     views = spec.setdefault("views", [])
@@ -1285,7 +1296,84 @@ def attach_verified_views(spec: dict[str, Any], report: dict[str, Any]) -> dict[
                 ],
             }
         )
+    _attach_housing_views(spec, report, views)
     return spec
+
+
+def _attach_housing_views(
+    spec: dict[str, Any], report: dict[str, Any], views: list[dict[str, Any]]
+) -> None:
+    """Виды корпуса и элементы граней на них (Ф5).
+
+    Виды найдены проекционной связью (`housing_views`), элементы — замерены на
+    них. Элемент показан на ДВУХ видах: на своём (размер и положение) и на
+    соседнем с ребра (глубина и вылет) — это и есть межвидовое соответствие
+    корпуса.
+    """
+    housing = report.get("housing_views") or {}
+    if not housing.get("plan_bbox_px"):
+        return
+    profile = ((spec.get("main_view") or {}).get("profile")) or {}
+    walls = [item for item in (profile.get("wall_features") or []) if isinstance(item, dict)]
+    confirmed = {
+        str(item.get("feature_id"))
+        for item in report.get("items") or []
+        if item.get("kind") == "wall_feature" and item.get("status") == "confirmed"
+    }
+    if not walls or not confirmed:
+        return
+    boxes = {
+        "plan": ("sheet-verified-plan", "план, проверенный по листу", housing.get("plan_bbox_px")),
+        "front": (
+            "sheet-verified-front",
+            "вид спереди, проверенный по листу",
+            housing.get("front_bbox_px"),
+        ),
+        "side": (
+            "sheet-verified-side",
+            "вид слева, проверенный по листу",
+            housing.get("side_bbox_px"),
+        ),
+    }
+    # Грань → вид лицом и вид с ребра.
+    faces = {
+        "top": ("plan", "front"),
+        "bottom": ("plan", "front"),
+        "front": ("front", "plan"),
+        "back": ("front", "plan"),
+        "left": ("side", "plan"),
+        "right": ("side", "plan"),
+    }
+    shown: dict[str, list[str]] = {}
+    for index, item in enumerate(walls):
+        feature_id = str(item.get("id") or f"profile:wall:{index}")
+        if feature_id not in confirmed:
+            continue
+        for key in faces.get(str(item.get("on_plane")), ()):  # лицом и с ребра
+            if boxes.get(key, (None, None, None))[2]:
+                shown.setdefault(key, []).append(feature_id)
+    by_id = {str(view.get("view_id")): view for view in views if isinstance(view, dict)}
+    for key, ids in shown.items():
+        view_id, label, bbox = boxes[key]
+        view = by_id.get(view_id)
+        if view is None:
+            view = {
+                "kind": "front" if key == "plan" else "side",
+                "view_id": view_id,
+                "label": label,
+                "relation": "primary" if key == "plan" else "orthographic",
+                "body_index": 0,
+                "features_shown": [],
+                "evidence": [
+                    {
+                        "image_index": 0,
+                        "bbox": [float(value) for value in bbox],
+                        "raw_text": "вид найден проекционной связью по листу",
+                    }
+                ],
+            }
+            views.append(view)
+        view["features_shown"] = list(dict.fromkeys([*(view.get("features_shown") or []), *ids]))
 
 
 def _first_measured(hypothesis: Hypothesis, frames: list[Any], sheet: Any) -> tuple[Any, Any]:
