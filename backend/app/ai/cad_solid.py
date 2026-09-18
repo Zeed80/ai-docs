@@ -354,7 +354,59 @@ def feature_tree_from_spec(spec: dict) -> FeatureTreeCandidate | None:
     rotation = _rotation_feature_tree(spec)
     if rotation is not None:
         return rotation
+    sheet = _sheet_metal_feature_tree(spec)
+    if sheet is not None:
+        return sheet
     return _prismatic_feature_tree(spec)
+
+
+def _sheet_metal_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
+    """Гнутая деталь из листа (X4): сечение с гибами, выдавленное на ширину.
+
+    Верстак SheetMetal не нужен (E14): эскиз основания ядра принимает дуги,
+    и сечение полок с гибами, выдавленное на ширину, — это и есть деталь; объём
+    совпадает с формулой, развёртка с 3D — до 0,0000 мм.
+    """
+    from app.ai.sheet_metal import bent_section, developed_length
+
+    body = spec.get("main_view") or {}
+    sheet = body.get("sheet_metal")
+    if not isinstance(sheet, dict):
+        return None
+    try:
+        flanges = [float(value) for value in sheet["flanges_mm"]]
+        turns = [int(value) for value in sheet["turns"]]
+        radius = float(sheet["radius_mm"])
+        thickness = float(sheet["thickness_mm"])
+        width = float(sheet["width_mm"])
+        sketch = bent_section(flanges, turns, radius, thickness)
+    except (KeyError, TypeError, ValueError):
+        return None
+    stated = {
+        "sketch_profile": ParamProvenance(
+            origin="stated", detail="сечение из прочитанных полок, гибов, радиуса и толщины"
+        ),
+        "depth_mm": ParamProvenance(origin="stated", detail="ширина листовой детали с чертежа"),
+    }
+    flat = developed_length(
+        flanges, len(turns), radius, thickness, float(sheet.get("k_factor") or 0.5)
+    )
+    return FeatureTreeCandidate(
+        features=[
+            Feature3D(
+                kind="extrude",
+                params={"sketch_profile": sketch, "depth_mm": width},
+                param_provenance=stated,
+                confidence=0.85,
+            )
+        ],
+        score=0.9,
+        label=(
+            str(spec.get("part") or "Листовая деталь")
+            + f" — гибов {len(turns)}, развёртка {flat:.2f} мм"
+        )[:500],
+        missing_data=[],
+    )
 
 
 # A closed loop the sheet's own read coordinates should return to exactly

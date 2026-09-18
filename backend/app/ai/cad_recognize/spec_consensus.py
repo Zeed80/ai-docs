@@ -303,6 +303,19 @@ def _body_consensus(
         else:
             notes.append(f"{label}: проходы не сошлись на размещении тела — не перенесено")
 
+    # Листовая деталь (X4) голосуется целиком: полки, гибы, радиус, толщина.
+    sheets = [
+        json.dumps(body["sheet_metal"], sort_keys=True)
+        for body in bodies
+        if isinstance(body.get("sheet_metal"), dict)
+    ]
+    if sheets:
+        best, count = Counter(sheets).most_common(1)[0]
+        if count >= minimum:
+            merged["sheet_metal"] = json.loads(best)
+        else:
+            notes.append(f"{label}: проходы не сошлись на листовой детали — не перенесено")
+
     outer, _agreed, problem = _vote_sections(
         [body.get("outer") or [] for body in bodies], minimum=minimum, label=label
     )

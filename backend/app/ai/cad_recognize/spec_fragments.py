@@ -5138,7 +5138,9 @@ def spec_has_geometry(spec: dict | None) -> bool:
     bodies = [spec.get("main_view") or {}, *(spec.get("parts") or [])]
     return any(
         isinstance(body, dict)
-        and bool(body.get("outer") or (body.get("profile") or {}).get("shape"))
+        and bool(
+            body.get("outer") or (body.get("profile") or {}).get("shape") or body.get("sheet_metal")
+        )
         for body in bodies
     )
 

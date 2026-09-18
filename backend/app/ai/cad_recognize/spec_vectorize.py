@@ -554,6 +554,30 @@ class SpecFlange(BaseModel):
     evidence: list[SpecEvidence] = Field(default_factory=list)
 
 
+class SpecSheetMetal(BaseModel):
+    """Гнутая деталь из листа (X4): полки, гибы на 90°, радиус, толщина, ширина.
+
+    ``flanges_mm`` — прямые участки полок между гибами, ``turns`` — по гибу:
+    +1 влево, −1 вправо; ``radius_mm`` — внутренний радиус гиба. Строится как
+    сечение с гибами, выдавленное на ширину (эксперимент E14).
+    """
+
+    flanges_mm: list[float] = Field(min_length=2, max_length=12)
+    turns: list[Literal[1, -1]] = Field(min_length=1, max_length=11)
+    radius_mm: float = Field(gt=0)
+    thickness_mm: float = Field(gt=0)
+    width_mm: float = Field(gt=0)
+    k_factor: float = Field(default=0.5, gt=0, le=1)
+
+    @model_validator(mode="after")
+    def _turn_per_bend(self) -> SpecSheetMetal:
+        if len(self.turns) != len(self.flanges_mm) - 1:
+            raise ValueError("turns must have one entry per bend (flanges − 1)")
+        if any(length <= 0 for length in self.flanges_mm):
+            raise ValueError("flanges_mm must be positive")
+        return self
+
+
 class SpecPlacement(BaseModel):
     """Где тело стоит относительно первого тела (X3: сварные узлы, сборки).
 
@@ -571,6 +595,8 @@ class SpecBody(BaseModel):
     type: str = "unknown"
     # X3: размещение тела относительно первого; None — не прочитано.
     placement: SpecPlacement | None = None
+    # X4: гнутая деталь из листа — полки, гибы, радиус, толщина, ширина.
+    sheet_metal: SpecSheetMetal | None = None
     outer: list[SpecSection] = Field(default_factory=list)
     bore: list[SpecSection] = Field(default_factory=list)
     profile: SpecPrismaticProfile | None = None

@@ -78,3 +78,92 @@ def test_a_malformed_section_is_refused():
         bent_section([40.0, 30.0], [], 3.0, 2.0)
     with pytest.raises(ValueError, match="положительны"):
         bent_section([40.0, 0.0], [1], 3.0, 2.0)
+
+
+def _channel_spec(sheet: dict | None = None) -> dict:
+    return {
+        "part": "Швеллер гнутый",
+        "main_view": {
+            "type": "листовая деталь",
+            "sheet_metal": sheet
+            or {
+                "flanges_mm": [20.0, 40.0, 20.0],
+                "turns": [1, 1],
+                "radius_mm": 2.0,
+                "thickness_mm": 2.0,
+                "width_mm": 50.0,
+            },
+        },
+    }
+
+
+def test_a_read_sheet_metal_part_becomes_a_bent_section_extruded_by_width():
+    """X4: листовая деталь в спеке — дерево операций с сечением и шириной.
+
+    Раньше ни схема, ни дерево гибов не знали: деталь выпадала как «класс не
+    определён» и строилась в лучшем случае прямоугольной пластиной."""
+    from app.ai.cad_recognize.spec_vectorize import EngineeringDrawingSpec
+    from app.ai.cad_solid import feature_tree_from_spec
+
+    spec = EngineeringDrawingSpec.model_validate(_channel_spec()).model_dump()
+    tree = feature_tree_from_spec(spec)
+
+    assert tree is not None
+    [extrude] = tree.features
+    assert extrude.kind == "extrude"
+    assert extrude.params["depth_mm"] == 50.0
+    assert any(segment["kind"] == "arc" for segment in extrude.params["sketch_profile"])
+    area, _centroid = _polygon_area(extrude.params["sketch_profile"])
+    assert area == pytest.approx(section_area([20.0, 40.0, 20.0], 2, 2.0, 2.0), rel=1e-3)
+    assert {"sketch_profile", "depth_mm"} <= set(extrude.param_provenance)
+
+
+def test_the_schema_refuses_a_bend_count_that_does_not_match_the_flanges():
+    from pydantic import ValidationError
+
+    from app.ai.cad_recognize.spec_vectorize import EngineeringDrawingSpec
+
+    bad = _channel_spec(
+        {
+            "flanges_mm": [20.0, 40.0, 20.0],
+            "turns": [1],
+            "radius_mm": 2.0,
+            "thickness_mm": 2.0,
+            "width_mm": 50.0,
+        }
+    )
+    with pytest.raises(ValidationError):
+        EngineeringDrawingSpec.model_validate(bad)
+
+
+def test_the_consensus_keeps_an_agreed_sheet_metal_part_and_drops_a_disputed_one():
+    """Та же семья молчаливых потерь, что фланцы и размещение: поле, которого
+    консенсус не знает, выпадало без следа."""
+    from app.ai.cad_recognize.spec_consensus import consensus_spec
+
+    merged = consensus_spec([_channel_spec(), _channel_spec(), _channel_spec()])
+    assert merged["main_view"]["sheet_metal"]["flanges_mm"] == [20.0, 40.0, 20.0]
+
+    other = dict(_channel_spec()["main_view"]["sheet_metal"], radius_mm=4.0)
+    third = dict(other, radius_mm=6.0)
+    split = consensus_spec([_channel_spec(), _channel_spec(other), _channel_spec(third)])
+    assert "sheet_metal" not in split["main_view"]
+
+
+def test_a_sheet_metal_part_counts_as_geometry():
+    from app.ai.cad_recognize.spec_fragments import spec_has_geometry
+
+    assert spec_has_geometry(_channel_spec())
+
+
+def test_the_bent_section_survives_the_round_trip_through_the_graph():
+    from app.ai.cad_emg_compat import feature_tree_from_graph, spec_feature_tree_as_graph
+    from app.ai.cad_solid import feature_tree_from_spec
+
+    spec = _channel_spec()
+    graph = spec_feature_tree_as_graph(spec, feature_tree_from_spec(spec), graph_id="g")
+    rebuilt = feature_tree_from_graph(graph, target_id="preview")
+
+    [extrude] = [f for f in rebuilt.features if f.kind == "extrude"]
+    assert extrude.params["depth_mm"] == 50.0
+    assert sum(1 for s in extrude.params["sketch_profile"] if s["kind"] == "arc") == 4
