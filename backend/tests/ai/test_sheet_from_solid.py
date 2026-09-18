@@ -1492,6 +1492,17 @@ def test_a_housing_dimensions_its_wall_features_from_the_drawn_geometry():
     plan = _plan("plate")
     plan.ratio = ratio
     plan.scaffold_views = set()
+
+    def rect(u0, u1, v0, v1):
+        return [
+            {"type": "line", "points": [[u0, v0], [u1, v0]]},
+            {"type": "line", "points": [[u0, v1], [u1, v1]]},
+            {"type": "line", "points": [[u0, v0], [u0, v1]]},
+            {"type": "line", "points": [[u1, v0], [u1, v1]]},
+        ]
+
+    # Вид смещён вылетом прилива: кромки тела не по центру вида (как у корпуса
+    # G2 — план −23,5…+26,5 при габарите 100).
     drawing = {
         "views": [
             {
@@ -1499,18 +1510,22 @@ def test_a_housing_dimensions_its_wall_features_from_the_drawn_geometry():
                 "kind": "front",
                 "x_direction": [1.0, 0.0, 0.0],
                 "bounds_mm": {"u_min": -50, "u_max": 50, "v_min": -20, "v_max": 28},
-                "visible": [{"type": "circle", "center": [10.0, 0.0], "radius": 12.5}],
+                "visible": [
+                    *rect(-50.0, 50.0, -20.0, 20.0),
+                    {"type": "circle", "center": [-40.0, 0.0], "radius": 12.5},
+                ],
+                "hidden": [{"type": "line", "points": [[-35.0, -12.0], [35.0, -12.0]]}],
             },
             {
-                # План: ширина × высота, полость прямоугольником.
+                # План: ширина × высота, полость прямоугольником, прилив за кромкой.
                 "kind": "side",
-                "bounds_mm": {"u_min": -50, "u_max": 58, "v_min": -40, "v_max": 40},
+                "bounds_mm": {"u_min": -50, "u_max": 50, "v_min": -48, "v_max": 40},
                 "visible": [
-                    {"type": "line", "points": [[-35.0, -25.0], [35.0, -25.0]]},
-                    {"type": "line", "points": [[-35.0, 25.0], [35.0, 25.0]]},
-                    {"type": "line", "points": [[10.0, 40.0], [10.0, 48.0]]},
-                    {"type": "line", "points": [[-2.5, 48.0], [22.5, 48.0]]},
+                    *rect(-50.0, 50.0, -40.0, 40.0),
+                    *rect(-35.0, 35.0, -25.0, 25.0),
+                    {"type": "line", "points": [[-52.5, -48.0], [-27.5, -48.0]]},
                 ],
+                "hidden": [],
             },
             {"kind": "top", "bounds_mm": {"u_min": -20, "u_max": 20, "v_min": -40, "v_max": 40}},
         ]
@@ -1522,7 +1537,9 @@ def test_a_housing_dimensions_its_wall_features_from_the_drawn_geometry():
     for dim in drawing["dimensions"]:
         by_measure.setdefault(dim["measured_by"], []).append(round(dim["value_mm"], 2))
     assert 25.0 in by_measure["wall_feature"]  # Ø прилива
-    assert sorted(by_measure["wall_feature"])[:2] == [25.0, 50.0]  # полость 70 × 50
+    assert sorted(by_measure["wall_feature"]) == [25.0, 50.0, 70.0]  # полость 70 × 50
     assert 8.0 in by_measure["wall_feature_depth"]  # вылет прилива за кромку
     # Габарит — по кромкам ТЕЛА: за крайние линии вида выходят приливы.
     assert sorted(by_measure["housing_overall"]) == [40.0, 80.0, 100.0]
+    # Координаты — от кромок тела, а не от края вида: прилив на 10 от середины.
+    assert sorted(by_measure["wall_feature_position"]) == [10.0, 20.0, 40.0, 50.0]

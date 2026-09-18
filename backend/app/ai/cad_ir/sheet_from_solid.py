@@ -1118,12 +1118,12 @@ def _wall_feature_dimensions(drawing: dict, spec: dict, plan: SheetPlan) -> None
     side_view = view_index("top")
     # Грань → (вид лицом, размеры тела на нём, вид с ребра, ось глубины на нём).
     faces = {
-        "top": (plan_view, (width, height), front_view, "v"),
-        "bottom": (plan_view, (width, height), front_view, "v"),
-        "front": (front_view, (width, thickness), plan_view, "v"),
-        "back": (front_view, (width, thickness), plan_view, "v"),
-        "left": (side_view, (thickness, height), plan_view, "u"),
-        "right": (side_view, (thickness, height), plan_view, "u"),
+        "top": (plan_view, (width, height), front_view, "v", (width, thickness)),
+        "bottom": (plan_view, (width, height), front_view, "v", (width, thickness)),
+        "front": (front_view, (width, thickness), plan_view, "v", (width, height)),
+        "back": (front_view, (width, thickness), plan_view, "v", (width, height)),
+        "left": (side_view, (thickness, height), plan_view, "u", (width, height)),
+        "right": (side_view, (thickness, height), plan_view, "u", (width, height)),
     }
     dimensions = drawing.setdefault("dimensions", [])
     _housing_overall(dimensions, plan_view, front_view, (width, height), thickness, ratio)
@@ -1135,14 +1135,15 @@ def _wall_feature_dimensions(drawing: dict, spec: dict, plan: SheetPlan) -> None
         face = faces.get(str(item.get("on_plane")))
         if face is None:
             continue
-        face_index, body, edge_index, depth_axis = face
+        face_index, body, edge_index, depth_axis, edge_body = face
         if face_index is None:
             continue
-        drawn = _wall_feature_shape(views[face_index], item, ratio, body, taken, face_index)
+        frame = _body_frame(views[face_index], body, ratio)
+        drawn = _wall_feature_shape(views[face_index], item, ratio, body, taken, face_index, frame)
         if drawn is not None:
             taken.append((face_index, drawn["u"], drawn["v"]))
             _wall_feature_size(dimensions, face_index, item, drawn, ratio)
-            _wall_feature_position(dimensions, face_index, drawn, body, ratio)
+            _wall_feature_position(dimensions, face_index, drawn, frame, body, ratio)
         if edge_index is not None:
             _wall_feature_depth(
                 dimensions,
@@ -1151,6 +1152,7 @@ def _wall_feature_dimensions(drawing: dict, spec: dict, plan: SheetPlan) -> None
                 item,
                 ratio,
                 depth_axis,
+                _body_frame(views[edge_index], edge_body, ratio),
                 _edge_body_extent(faces, item, width, height, thickness),
             )
 
@@ -1165,6 +1167,36 @@ def _edge_body_extent(
     if plane in ("front", "back"):
         return height
     return width
+
+
+def _body_frame(
+    view: dict, body: tuple[float, float], ratio: float
+) -> tuple[float, float, float, float] | None:
+    """Кромки ТЕЛА на виде: (u_min, u_max, v_min, v_max), мм листа.
+
+    Центр вида тело не задаёт: приливы выходят за габарит и смещают рамку вида
+    (корпус G2: вид «top» шире тела на вылет переднего прилива, и координаты
+    уезжали на 1–3 мм). Кромки ищутся как линии длиной в габарит тела.
+    """
+    want_u, want_v = body[0] * ratio, body[1] * ratio
+    tolerance = 0.3 * ratio
+    levels_v: list[float] = []
+    levels_u: list[float] = []
+    for entry in (view.get("visible") or []) + (view.get("hidden") or []):
+        if entry.get("type") != "line" or len(entry.get("points") or []) != 2:
+            continue
+        (au, av), (bu, bv) = ((float(p[0]), float(p[1])) for p in entry["points"])
+        if abs(av - bv) <= 1e-6 and abs(abs(bu - au) - want_u) <= tolerance:
+            levels_v.append(av)
+        elif abs(au - bu) <= 1e-6 and abs(abs(bv - av) - want_v) <= tolerance:
+            levels_u.append(au)
+    if not levels_u or not levels_v:
+        return None
+    u_min, u_max = min(levels_u), max(levels_u)
+    v_min, v_max = min(levels_v), max(levels_v)
+    if abs((u_max - u_min) - want_u) > tolerance or abs((v_max - v_min) - want_v) > tolerance:
+        return None
+    return u_min, u_max, v_min, v_max
 
 
 def _housing_overall(
@@ -1221,12 +1253,18 @@ def _wall_feature_shape(
     body: tuple[float, float],
     taken: list[tuple[int, float, float]] | None = None,
     view_index: int = -1,
+    frame: tuple[float, float, float, float] | None = None,
 ) -> dict[str, Any] | None:
     """Элемент на своём виде: круг нужного радиуса или прямоугольник нужного размера."""
     tolerance = 0.3 * ratio
     used = taken or []
 
     def free(u: float, v: float) -> bool:
+        if frame is not None and not (
+            frame[0] - tolerance <= u <= frame[1] + tolerance
+            and frame[2] - tolerance <= v <= frame[3] + tolerance
+        ):
+            return False  # элемент лежит на своей грани, а не за её кромкой
         return not any(
             index == view_index and abs(u - ou) <= tolerance and abs(v - ov) <= tolerance
             for index, ou, ov in used
@@ -1258,6 +1296,13 @@ def _wall_feature_shape(
             horizontals.append((min(au, bu), max(au, bu), av))
         elif abs(au - bu) <= 1e-6 and abs(bv - av) > 1e-6:
             verticals.append((min(av, bv), max(av, bv), au))
+
+    def has_side(column: float, low: float, high: float) -> bool:
+        return any(
+            abs(u - column) <= tolerance and v0 <= low + tolerance and v1 >= high - tolerance
+            for v0, v1, u in verticals
+        )
+
     for u0, u1, v_a in horizontals:
         for u2, u3, v_b in horizontals:
             if v_b <= v_a or abs(u0 - u2) > tolerance or abs(u1 - u3) > tolerance:
@@ -1266,6 +1311,10 @@ def _wall_feature_shape(
             if (
                 abs(pair[0] - sizes[0]) <= tolerance
                 and abs(pair[1] - sizes[1]) <= tolerance
+                # Обе боковые стороны на месте: без этого верхняя линия полости
+                # и линия чужого кармана складывались в «прямоугольник».
+                and has_side(u0, v_a, v_b)
+                and has_side(u1, v_a, v_b)
                 and free((u0 + u1) / 2.0, (v_a + v_b) / 2.0)
             ):
                 return {
@@ -1334,13 +1383,21 @@ def _wall_feature_size(
 
 
 def _wall_feature_position(
-    dimensions: list[dict], view_index: int, drawn: dict, body: tuple[float, float], ratio: float
+    dimensions: list[dict],
+    view_index: int,
+    drawn: dict,
+    frame: tuple[float, float, float, float] | None,
+    body: tuple[float, float],
+    ratio: float,
 ) -> None:
     """Координаты центра от кромок тела на том же виде (ГОСТ 2.307, от баз)."""
-    body_u, body_v = body[0] * ratio / 2.0, body[1] * ratio / 2.0
+    if frame is not None:
+        left, _right, bottom, _top = frame
+    else:
+        left, bottom = -body[0] * ratio / 2.0, -body[1] * ratio / 2.0
     for kind, edge, centre, anchors in (
-        ("DistanceX", -body_u, drawn["u"], [[-body_u, drawn["v"]], [drawn["u"], drawn["v"]]]),
-        ("DistanceY", -body_v, drawn["v"], [[drawn["u"], -body_v], [drawn["u"], drawn["v"]]]),
+        ("DistanceX", left, drawn["u"], [[left, drawn["v"]], [drawn["u"], drawn["v"]]]),
+        ("DistanceY", bottom, drawn["v"], [[drawn["u"], bottom], [drawn["u"], drawn["v"]]]),
     ):
         value = (centre - edge) / ratio
         if value <= 0.05:
@@ -1365,6 +1422,7 @@ def _wall_feature_depth(
     item: dict,
     ratio: float,
     axis: str,
+    frame: tuple[float, float, float, float] | None,
     body_extent: float,
 ) -> None:
     """Вылет прилива (за кромку тела) или глубина кармана (внутрь от кромки).
@@ -1376,6 +1434,13 @@ def _wall_feature_depth(
     half = body_extent * ratio / 2.0
     if depth <= 0 or half <= 0:
         return
+    # Кромки тела на этом виде: вид смещён выступающими приливами, и отсчёт от
+    # центра вида промахивался (корпус G2: кромки плана −23,5 и +26,5).
+    if frame is not None:
+        low_edge, high_edge = (frame[0], frame[1]) if axis == "u" else (frame[2], frame[3])
+    else:
+        low_edge, high_edge = -half, half
+    centre = (low_edge + high_edge) / 2.0
     outward = item.get("kind") == "boss"
     tolerance = 0.3 * ratio
     lines = []
@@ -1388,13 +1453,14 @@ def _wall_feature_depth(
         elif axis == "u" and abs(au - bu) <= 1e-6:
             lines.append((au, min(av, bv), max(av, bv)))
     for level, low, high in lines:
-        for edge in (-half, half):
-            wanted = edge + depth * (1.0 if (edge > 0) == outward else -1.0)
+        for edge in (low_edge, high_edge):
+            outer = edge > centre
+            wanted = edge + depth * (1.0 if outer == outward else -1.0)
             if abs(level - wanted) > tolerance:
                 continue
-            if outward and abs(level) <= half + tolerance:
+            if outward and low_edge - tolerance <= level <= high_edge + tolerance:
                 continue  # прилив выходит ЗА кромку
-            if not outward and abs(level) >= half - tolerance:
+            if not outward and not (low_edge + tolerance < level < high_edge - tolerance):
                 continue  # дно кармана лежит внутри тела
             middle = (low + high) / 2.0
             first = [middle, level] if axis == "v" else [level, middle]
@@ -1454,8 +1520,12 @@ def _hole_dimensions(drawing: dict, plan: SheetPlan, spec: dict | None = None) -
             # Кромки ТЕЛА, а не крайние линии вида: у корпуса за габарит
             # выходят приливы стенок, и координаты отверстий мерились от них
             # (корпус G2: 15,5 вместо 7,5, габарит 100,5 вместо 100).
-            u_min, v_min = -body[0] / 2.0, -body[1] / 2.0
-            v_max = body[1] / 2.0
+            frame = _body_frame(view, (body[0] / ratio, body[1] / ratio), ratio)
+            if frame is not None:
+                u_min, v_min, v_max = frame[0], frame[2], frame[3]
+            else:
+                u_min, v_min = -body[0] / 2.0, -body[1] / 2.0
+                v_max = body[1] / 2.0
         cu = (float(bounds["u_min"]) + float(bounds["u_max"])) / 2.0
         cv = (v_min + v_max) / 2.0
         circles = [
