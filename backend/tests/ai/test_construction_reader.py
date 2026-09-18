@@ -206,4 +206,25 @@ async def test_read_construction_drawing_fails_closed_on_garbage_response():
     router = _FakeRouter("не могу прочитать это изображение")
     model, report = await read_construction_drawing(b"fake-image-bytes", router=router)
     assert model is None
-    assert report == {"read_failed": True}
+    assert report == {"read_failed": True, "read_failure": "ответ модели — не JSON"}
+
+
+@pytest.mark.asyncio
+async def test_a_wall_without_a_readable_thickness_excludes_only_itself():
+    """Живой план «на отм. 0.000»: модель прочла стены, у части честно не
+    нашла толщину (null, как велит вопрос), схема требовала число — и весь
+    лист отбрасывался молча как «не прочитан»."""
+    payload = """{
+      "storey": {"name": "1 этаж", "elevation_mm": 0, "default_wall_height_mm": 3000},
+      "walls": [
+        {"id": "w1", "start_x_mm": 0, "start_y_mm": 0, "end_x_mm": 5000, "end_y_mm": 0,
+         "thickness_mm": 380},
+        {"id": "w2", "start_x_mm": 0, "start_y_mm": 0, "end_x_mm": 0, "end_y_mm": 6000,
+         "thickness_mm": null}
+      ],
+      "openings": []
+    }"""
+    model, report = await read_construction_drawing(b"x", router=_FakeRouter(payload))
+
+    assert model is not None and len(model.elements) == 1
+    assert {"id": "w2", "kind": "wall", "reason": "no_thickness"} in report["skipped"]

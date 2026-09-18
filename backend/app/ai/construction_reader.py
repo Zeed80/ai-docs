@@ -43,7 +43,10 @@ class WallRead(BaseModel):
     start_y_mm: float
     end_x_mm: float
     end_y_mm: float
-    thickness_mm: float = Field(gt=0)
+    # None — толщина на листе не читается (вопрос прямо велит так отвечать).
+    # Живой план «на отм. 0.000»: у части стен её не было, схема требовала
+    # число — и весь лист отбрасывался молча. Теперь исключается одна стена.
+    thickness_mm: float | None = Field(default=None, gt=0)
     # Optional: a floor plan often states one storey height in a note rather
     # than per wall. None here falls back to StoreyRead.default_wall_height_mm.
     height_mm: float | None = Field(default=None, gt=0)
@@ -224,6 +227,9 @@ def construction_read_as_model(
     wall_boxes: dict[str, Any] = {}
     wall_elements: list[WallElement] = []
     for wall in sheet.walls:
+        if wall.thickness_mm is None:
+            skipped.append({"id": wall.id, "kind": "wall", "reason": "no_thickness"})
+            continue
         height_mm = wall.height_mm or sheet.storey.default_wall_height_mm
         if height_mm is None:
             skipped.append({"id": wall.id, "kind": "wall", "reason": "no_height"})
@@ -305,7 +311,9 @@ async def _read_sheet_via_vlm(
     router: Any | None,
     confidential: bool,
     allow_cloud: bool,
+    failure: dict[str, Any] | None = None,
 ) -> ConstructionSheetRead | None:
+    failure = failure if failure is not None else {}
     import base64
 
     from app.ai.cad_recognize.spec_vectorize import _parse_spec_json
@@ -327,14 +335,17 @@ async def _read_sheet_via_vlm(
     )
     try:
         response = await router.run(request)
-    except Exception:  # noqa: BLE001 -- a router failure fails closed below
+    except Exception as exc:  # noqa: BLE001 -- a router failure fails closed below
+        failure["read_failure"] = f"модель не ответила: {type(exc).__name__}: {str(exc)[:200]}"
         return None
     parsed = _parse_spec_json(response.text or "")
     if not parsed:
+        failure["read_failure"] = "ответ модели — не JSON"
         return None
     try:
         return ConstructionSheetRead.model_validate(parsed)
-    except ValidationError:
+    except ValidationError as exc:
+        failure["read_failure"] = f"ответ не по схеме: {str(exc)[:300]}"
         return None
 
 
@@ -354,9 +365,16 @@ async def read_construction_drawing(
     that simply built nothing (``report["blocked"]``), which still carries
     the fuller `construction_read_as_model` report shape.
     """
+    failure: dict[str, Any] = {}
     sheet = await _read_sheet_via_vlm(
-        image_bytes, router=router, confidential=confidential, allow_cloud=allow_cloud
+        image_bytes,
+        router=router,
+        confidential=confidential,
+        allow_cloud=allow_cloud,
+        failure=failure,
     )
     if sheet is None:
-        return None, {"read_failed": True}
+        # Причина — в отчёт: «не прочитан» без неё прятал, что модель лист
+        # прочла, а отбросила его схема (живой план «на отм. 0.000»).
+        return None, {"read_failed": True, **failure}
     return construction_read_as_model(sheet, site_name=site_name, building_name=building_name)

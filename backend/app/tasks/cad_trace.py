@@ -2686,7 +2686,7 @@ async def _read_domain_model(content: bytes, reader: tuple[str, str | None]):
 def _domain_summary(reader: tuple[str, str | None], model: Any, report: dict) -> str:
     """Итог чтения словами — что построено и что исключено (не угадано)."""
     if report.get("read_failed"):
-        return "Лист не прочитан: модель не вернула разбор"
+        return "Лист не прочитан: " + str(report.get("read_failure") or "модель не вернула разбор")
     skipped = len(report.get("skipped") or [])
     if reader[0] == "construction":
         text = (
