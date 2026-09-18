@@ -71,3 +71,28 @@ def test_an_assembly_is_read_for_its_composition_not_refused():
     позиции чертежа и строки спецификации (`assembly_positions`)."""
     assert resolve_digitization_type("mechanical_assembly").spec_redraw_supported is True
     assert resolve_digitization_type("sheet_metal_part").spec_redraw_supported is True
+
+
+def test_construction_and_schemes_go_to_their_own_readers():
+    """X5/Ф7: ридеры строительных и схем были, но /cad отказывал этим типам."""
+    from app.tasks.cad_trace import _DOMAIN_READERS, _domain_summary
+
+    assert _DOMAIN_READERS["construction_structure"] == ("construction", None)
+    assert _DOMAIN_READERS["pid_scheme"] == ("system", "pid")
+    assert "rotation_body" not in _DOMAIN_READERS
+
+    summary = _domain_summary(
+        ("construction", None),
+        None,
+        {
+            "walls_read": 5,
+            "walls_built": 3,
+            "openings_read": 2,
+            "openings_built": 2,
+            "skipped": [{"id": "w4"}, {"id": "w5"}],
+        },
+    )
+    assert "стен построено 3 из 5" in summary and "исключено 2" in summary
+    assert _domain_summary(("system", "pid"), None, {"read_failed": True}).startswith(
+        "Лист не прочитан"
+    )

@@ -2660,6 +2660,71 @@ def _revalidated_spec(spec: dict) -> dict:
     return assign_stable_feature_ids(revalidated)
 
 
+# Тип оцифровки → (домен, профиль ридера): строительные — план этажа
+# (`construction_reader`), схемы — `system_reader` со своим профилем.
+_DOMAIN_READERS: dict[str, tuple[str, str | None]] = {
+    "construction_structure": ("construction", None),
+    "architectural_drawing": ("construction", None),
+    "mep_systems": ("system", "mep"),
+    "electrical_scheme": ("system", "electrical"),
+    "hydraulic_scheme": ("system", "hydraulic"),
+    "pid_scheme": ("system", "pid"),
+}
+
+
+async def _read_domain_model(content: bytes, reader: tuple[str, str | None]):
+    domain, profile = reader
+    if domain == "construction":
+        from app.ai.construction_reader import read_construction_drawing
+
+        return await read_construction_drawing(content)
+    from app.ai.system_reader import read_system_diagram
+
+    return await read_system_diagram(content, profile=profile)
+
+
+def _domain_summary(reader: tuple[str, str | None], model: Any, report: dict) -> str:
+    """Итог чтения словами — что построено и что исключено (не угадано)."""
+    if report.get("read_failed"):
+        return "Лист не прочитан: модель не вернула разбор"
+    skipped = len(report.get("skipped") or [])
+    if reader[0] == "construction":
+        text = (
+            f"План этажа: стен построено {report.get('walls_built', 0)} из "
+            f"{report.get('walls_read', 0)}, проёмов {report.get('openings_built', 0)} из "
+            f"{report.get('openings_read', 0)}"
+        )
+    else:
+        counts = {
+            key: len(getattr(model, key, []) or [])
+            for key in ("equipment", "connections")
+            if model is not None
+        }
+        text = f"Схема: оборудования {counts.get('equipment', 0)}, связей {counts.get('connections', 0)}"
+    if skipped:
+        text += f"; исключено {skipped} (не угадывается)"
+    if report.get("blocked"):
+        text += f"; модель не собрана: {report.get('blocked_reason')}"
+    return text
+
+
+async def _store_domain_reading(factory, gen_uuid, reading: dict) -> None:
+    """Модель здания или системы — в параметры прогона; прогон завершён."""
+    from app.db.models import ImageGeneration, ImageGenStatus
+    from app.services import studio_queue
+
+    async with factory() as db:
+        gen = await db.get(ImageGeneration, gen_uuid)
+        if gen is None:
+            return
+        gen.params = {**(gen.params or {}), "domain_reading": reading}
+        gen.status = ImageGenStatus.done
+        gen.error = None
+        job = await studio_queue.job_for_generation(db, gen_uuid)
+        await studio_queue.mark_job_done(db, job)
+        await db.commit()
+
+
 async def _store_assembly_reading(factory, gen_uuid, assembly: dict) -> None:
     """Состав сборки — в параметры прогона; прогон завершён, не провален."""
     from app.db.models import ImageGeneration, ImageGenStatus
@@ -3494,6 +3559,36 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 {"terminal": True},
             )
             return {"assembly": assembly}
+        domain_reader = _DOMAIN_READERS.get(digitization_type.normalized)
+        if vectorize_method == "spec" and domain_reader is not None:
+            # Строительные и схемы (план, X5/Ф7): у них не B-Rep, а модель
+            # здания или системы (EMG). Ридеры `construction_reader` и
+            # `system_reader` были, но в /cad не подключены — прогон отказывал.
+            try:
+                model, report = await _read_domain_model(content, domain_reader)
+            except Exception as exc:  # noqa: BLE001 — чтение не валит прогон
+                return await _fail(f"Чтение листа не удалось: {str(exc)[:200]}")
+            summary = _domain_summary(domain_reader, model, report)
+            await _record(
+                f"{domain_reader[0]}.read",
+                "failed" if report.get("read_failed") or report.get("blocked") else "completed",
+                summary,
+                {key: value for key, value in report.items() if key != "skipped"}
+                | {"skipped": (report.get("skipped") or [])[:50]},
+            )
+            await _store_domain_reading(
+                factory,
+                gen_uuid,
+                {
+                    "domain": domain_reader[0],
+                    "profile": domain_reader[1],
+                    "model": model.model_dump(mode="json") if model is not None else None,
+                    "report": report,
+                    "summary": summary,
+                },
+            )
+            await _record("pipeline", "completed", summary, {"terminal": True})
+            return {"domain_model": domain_reader[0]}
         if vectorize_method in ("spec", "graph", "text_spec"):
             if vectorize_method == "spec" and not digitization_type.spec_redraw_supported:
                 return await _fail(

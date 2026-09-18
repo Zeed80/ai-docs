@@ -35,7 +35,10 @@ _POSITIONS_SCHEMA = {
 _ROWS_PROMPT = (
     "Это спецификация сборки (ГОСТ 2.106): таблица с колонками «Поз.», "
     "«Обозначение», «Наименование», «Кол.». Выпиши КАЖДУЮ строку с номером "
-    "позиции — разделы «Документация» без позиции пропусти. ОДНОЙ строкой JSON:\n"
+    "позиции во ВСЕХ разделах — «Сборочные единицы», «Детали», «Стандартные "
+    "изделия», «Прочие изделия», «Материалы»; у стандартных изделий "
+    'наименование длинное ("Винт А.М4-6g×14 ГОСТ 1476-93") — выпиши его '
+    "целиком. Раздел «Документация» без позиции пропусти. ОДНОЙ строкой JSON:\n"
     '{"rows":[{"position":1,"designation":"","name":"","quantity":1}]}\n'
     "Кириллицу пиши буквами. Только JSON."
 )
@@ -126,6 +129,15 @@ async def _default_ask(prompt: str, image: Any, schema: dict) -> dict:
     from app.ai.cad_recognize.spec_fragments import _ask, _overview
     from app.ai.router import ai_router
 
+    # Мелкий лист (спецификация лубрикатора — 425 × 600 px) модель читает с
+    # пропусками: увеличить до ~1600 px по длинной стороне.
+    longest = max(image.size)
+    if longest < 1400:
+        factor = 1600 / longest
+        image = image.resize(
+            (round(image.size[0] * factor), round(image.size[1] * factor)),
+            resample=3,  # BICUBIC
+        )
     return await _ask(
         prompt,
         _overview(image, side=1800),

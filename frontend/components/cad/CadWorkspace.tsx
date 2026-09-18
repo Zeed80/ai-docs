@@ -39,6 +39,9 @@ import AssemblyCompositionPanel, {
   type AssemblyComposition,
 } from "@/components/cad/AssemblyCompositionPanel";
 import AssurancePanel from "@/components/cad/AssurancePanel";
+import DomainReadingPanel, {
+  type DomainReading,
+} from "@/components/cad/DomainReadingPanel";
 import ProfileHolesEditor from "@/components/cad/ProfileHolesEditor";
 import CadModelTracePanel from "@/components/cad/CadModelTracePanel";
 import type {
@@ -1265,6 +1268,8 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
     SpecVerification | undefined;
   const assemblyComposition = gen.params?.assembly as
     AssemblyComposition | undefined;
+  const domainReading = gen.params?.domain_reading as
+    DomainReading | undefined;
   const specDimensionCheck = gen.params?.spec_dimension_check as
     SpecDimensionCheck | undefined;
   const specAssumptions = (gen.params?.spec_assumptions ??
@@ -1545,6 +1550,8 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
       )}
 
       <AssemblyCompositionPanel assembly={assemblyComposition} t={t} />
+
+      <DomainReadingPanel reading={domainReading} t={t} />
 
       <AssurancePanel
         crosscheck={specCrosscheck}
