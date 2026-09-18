@@ -221,6 +221,11 @@ async def main() -> int:
     parser.add_argument(
         "--tiles", action="store_true", help="отметки — по вырезам областей с рисунком"
     )
+    parser.add_argument(
+        "--marks",
+        action="store_true",
+        help="отметки — только у найденных знаков отметки (рендер 12 000 px)",
+    )
     args = parser.parse_args()
     rows = []
     with tempfile.TemporaryDirectory() as tmp:
@@ -253,6 +258,42 @@ async def main() -> int:
             )
             read_axes = sorted({normalize_axis(a) for a in (answer or {}).get("axes") or []})
             read_levels = sorted({normalize_level(v) for v in (answer or {}).get("levels") or []})
+            if args.marks:
+                import numpy as np
+
+                from app.ai.construction_levels import (
+                    LEVEL_AT_MARK_PROMPT,
+                    LEVEL_AT_MARK_SCHEMA,
+                    level_marks,
+                    mark_crop_box,
+                )
+
+                Image.MAX_IMAGE_PIXELS = None
+                at_marks: set[str] = set()
+                # Два масштаба: на обычном листе знак при 5000 px в самый раз,
+                # на сборном листе фасадов он там мельче 12 px и находится
+                # только при 12 000 px — где у обычного листа вырез уже не
+                # вмещает полку с числом (единый 12 000 — 13 из 28).
+                marks_at: list = []
+                for long_side in (5000, 12000):
+                    sheet = Image.open(io.BytesIO(render_sheet(doc, long_side))).convert("RGB")
+                    marks_at += [
+                        (sheet, mark) for mark in level_marks(np.asarray(sheet.convert("L")))
+                    ]
+                for sheet, mark in marks_at:
+                    part = await _ask(
+                        LEVEL_AT_MARK_PROMPT,
+                        sheet.crop(mark_crop_box(mark, sheet.size)),
+                        router=ai_router,
+                        confidential=True,
+                        num_predict=120,
+                        schema=LEVEL_AT_MARK_SCHEMA,
+                        timeout_seconds=60.0,
+                    )
+                    value = (part or {}).get("level")
+                    if value:
+                        at_marks.add(normalize_level(str(value)))
+                read_levels = sorted(at_marks)
             if big:
                 full = Image.open(io.BytesIO(big)).convert("RGB")
                 tiled: set[str] = set()
