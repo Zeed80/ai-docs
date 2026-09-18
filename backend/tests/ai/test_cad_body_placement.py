@@ -81,3 +81,34 @@ def test_the_placement_survives_the_round_trip_through_the_graph():
 
     placed = [f for f in rebuilt.features if f.kind == "revolve" and "placement" in f.params]
     assert [f.params["placement"]["position_mm"] for f in placed] == [[0.0, 0.0, 60.0]]
+
+
+def test_the_chain_against_the_overall_length_is_a_constraint_in_the_graph():
+    """P2.3: «сумма ступеней = габарит» считался на словаре спека, в графе его
+    не было. Теперь — узел Constraint с вердиктом системы на ступенях."""
+    from app.ai.cad_emg_compat import spec_feature_tree_as_graph
+
+    def spec_with(overall: str) -> dict:
+        return {
+            "part": "Вал",
+            "main_view": {
+                "type": "тело вращения",
+                "outer": [
+                    {"id": "0:outer:0", "diameter_mm": 30, "length_mm": 40},
+                    {"id": "0:outer:1", "diameter_mm": 20, "length_mm": 30},
+                ],
+            },
+            "dimensions": [{"value": overall, "applies_to": "габарит"}],
+        }
+
+    for overall, assurance in (("70", "constraint_validated"), ("75", "contradicted")):
+        spec = spec_with(overall)
+        graph = spec_feature_tree_as_graph(spec, feature_tree_from_spec(spec), graph_id="g")
+        [node] = [n for n in graph.nodes if n.type == "Constraint"]
+        verdict = next(
+            a
+            for a in graph.assertions
+            if a.subject_id == node.id and a.predicate == "constraint.satisfied"
+        )
+        assert verdict.assurance == assurance
+        assert sum(1 for e in graph.edges if e.type == "constrains" and e.source_id == node.id) == 2

@@ -834,6 +834,92 @@ def projection_comparison_patch(
     )
 
 
+def dimension_constraint_additions(
+    spec: dict[str, Any], known_feature_ids: set[str]
+) -> tuple[list[GraphNode], list[GraphEdge], list[Assertion]]:
+    """Размерные ограничения — узлами графа (план, P2.3).
+
+    `build_dimension_graph` считал «сумма ступеней = габарит» и «расточка в
+    пределах длины» на словаре спека, и в графе их не было: ошибка, которую
+    ловит только ограничение (153 против 195), граф не видел. Узел
+    ``Constraint`` связан ``constrains`` с узлами ступеней; вердикт — от
+    системы: выполнено → ``constraint_validated``, нет → ``contradicted``.
+    """
+    from app.ai.cad_dimension_graph import build_dimension_graph
+
+    try:
+        found = build_dimension_graph(spec)
+    except Exception:  # noqa: BLE001 — ограничение не валит сборку графа
+        return [], [], []
+    outer = ((spec.get("main_view") or {}).get("outer")) or []
+    step_ids = [
+        f"feature:{item.get('id')}"
+        for item in outer
+        if isinstance(item, dict) and f"feature:{item.get('id')}" in known_feature_ids
+    ]
+    nodes: list[GraphNode] = []
+    edges: list[GraphEdge] = []
+    assertions: list[Assertion] = []
+    for index, item in enumerate(found.get("constraints") or []):
+        kind = item.get("kind")
+        if kind not in ("equal", "less_or_equal"):
+            continue
+        node_id = f"constraint:dimension:{index}"
+        names = {
+            ("equal", "stated_overall_length_mm"): "сумма ступеней = габаритная длина",
+            ("less_or_equal", "outer_total_length_mm"): "расточка в пределах длины детали",
+        }
+        nodes.append(
+            GraphNode(
+                id=node_id,
+                type="Constraint",
+                name=names.get((kind, item.get("right")), str(kind)),
+            )
+        )
+        for target in step_ids:
+            edges.append(
+                GraphEdge(
+                    id=f"constrains:{node_id}:{target}",
+                    type="constrains",
+                    source_id=node_id,
+                    target_id=target,
+                )
+            )
+        relation = {
+            "kind": kind,
+            "left": item.get("left"),
+            "right": item.get("right"),
+            "left_value_mm": item.get("left_value_mm"),
+            "right_value_mm": item.get("right_value_mm"),
+        }
+        assertions.append(
+            Assertion(
+                id=f"assertion:{node_id}:relation",
+                subject_id=node_id,
+                predicate="constraint.relation",
+                value=ExactValue(kind="exact", value=relation),
+                origin="derived",
+                assurance="observed",
+                confidence=1.0,
+                impacts=["base_topology"],
+            )
+        )
+        satisfied = bool(item.get("ok"))
+        assertions.append(
+            Assertion(
+                id=f"assertion:{node_id}:satisfied",
+                subject_id=node_id,
+                predicate="constraint.satisfied",
+                value=ExactValue(kind="exact", value=satisfied),
+                origin="derived",
+                assurance="constraint_validated" if satisfied else "contradicted",
+                confidence=1.0,
+                impacts=["base_topology"],
+            )
+        )
+    return nodes, edges, assertions
+
+
 def spec_feature_tree_as_graph(
     spec: Any,
     candidate: FeatureTreeCandidate,
@@ -1014,6 +1100,12 @@ def spec_feature_tree_as_graph(
                 )
             )
             operation_assertion_ids.append(assertion_id)
+    constraint_nodes, constraint_edges, constraint_assertions = dimension_constraint_additions(
+        spec_payload, known_feature_ids
+    )
+    nodes.extend(constraint_nodes)
+    edges.extend(constraint_edges)
+    assertions.extend(constraint_assertions)
     for index, item in enumerate(candidate.missing_data):
         assertion_id = f"assertion:unresolved:{index}"
         assertions.append(

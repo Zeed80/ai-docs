@@ -476,6 +476,24 @@ TEMPLATED_PREDICATES: dict[str, PredicateDef] = _predicates(
         "Record of one assertion a correction rebuild superseded, by index.",
     ),
     PredicateDef(
+        "constraint.relation",
+        "mechanical",
+        ("Constraint",),
+        ("exact",),
+        None,
+        "Размерное ограничение между прочитанными величинами (план, P2.3): "
+        "вид (равенство цепочки габариту, «не больше») и обе стороны в мм.",
+    ),
+    PredicateDef(
+        "constraint.satisfied",
+        "mechanical",
+        ("Constraint",),
+        ("exact",),
+        None,
+        "Выполнено ли ограничение на прочитанных числах — вердикт системы "
+        "(constraint_validated / contradicted), не модели.",
+    ),
+    PredicateDef(
         "feature.param.",
         "mechanical",
         ("Feature",),
