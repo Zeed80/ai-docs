@@ -61,6 +61,9 @@ class SheetPlan:
     # Views that stand to the RIGHT of the main view whatever their kind (the
     # thickness view of a plate is the kernel's `top`, which would go below).
     right_views: set[int] = field(default_factory=set)
+    # Виды ПОД главным, когда по направлению они ушли бы вправо: вид спереди
+    # корпуса стоит под планом в проекционной связи по ширине.
+    below_views: set[int] = field(default_factory=set)
     # The view the others are laid out around, when the kind alone does not
     # say it: a hollow shaft's main view is its SECTION, and «first non-section
     # view» picked its end view (or the keyway view) instead.
@@ -125,6 +128,19 @@ def classify_part(spec: dict, report: dict) -> str:
 _MAX_KERNEL_VIEWS = 8
 
 
+_FRONT_WALL_PLANES = ("front", "back")
+
+
+def _has_front_wall_features(spec: dict) -> bool:
+    """Есть ли у детали карманы/приливы на передней или задней стенке."""
+    body = spec.get("main_view") or {}
+    profile = body.get("profile") or {}
+    return any(
+        isinstance(item, dict) and item.get("on_plane") in _FRONT_WALL_PLANES
+        for item in (profile.get("wall_features") or [])
+    )
+
+
 def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
     """The views to ask for, in the order the sheet will carry them.
 
@@ -135,6 +151,11 @@ def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
     source_views = [view for view in (spec.get("views") or []) if isinstance(view, dict)]
     source_sections = [view for view in source_views if view.get("kind") == "section"]
     views: list[dict[str, Any]] = [{"kind": "front"}]
+    # Корпус (X2): у детали есть элементы на передних стенках — тогда вид
+    # спереди идёт на лист, и ширина на нём должна лежать горизонтально
+    # (по умолчанию ядро кладёт её вертикально — это годится только валу).
+    if _has_front_wall_features(spec):
+        views[0] = {"kind": "front", "x_direction": [1.0, 0.0, 0.0]}
     if part_class == "hollow_rotation":
         source = source_sections[0] if source_sections else {}
         section = {
@@ -382,6 +403,9 @@ def _estimate_layout_mm(part_class: str, report: dict, views: list[dict]) -> tup
         # Справа от плана — разрез фланца или вид на толщину пластины (`top`).
         if any(kind in kinds for kind in ("section", "removed_section", "top")):
             width += VIEW_GAP_MM + max(length, 1.0)
+        # Под планом — вид спереди корпуса (ширина × толщина).
+        if any(view.get("kind") == "front" and view.get("x_direction") for view in views):
+            height += VIEW_GAP_MM + max(length, 1.0)
     else:
         width, height = length, diameter
         if "side" in kinds:
@@ -456,6 +480,7 @@ def plan_sheet(
     # 2.305): showing the plain outline beside it draws the same body twice.
     scaffold: set[int] = set()
     right: set[int] = set()
+    below: set[int] = set()
     anchor: int | None = None
     if part_class == "hollow_rotation" and any(v["kind"] == "section" for v in views):
         scaffold = {index for index, view in enumerate(views) if view["kind"] == "front"}
@@ -465,8 +490,25 @@ def plan_sheet(
         scaffold = {index for index, view in enumerate(views) if view["kind"] == "front"}
     elif part_class in ("flange", "plate"):
         # Главный вид плоской детали — план; вид на ребро `front` нужен ядру
-        # как основа, а на листе стоял бы с перекошенными осями.
-        scaffold = {index for index, view in enumerate(views) if view["kind"] == "front"}
+        # как основа, а на листе стоял бы с перекошенными осями — кроме
+        # корпуса, где на передних стенках есть элементы и вид спереди
+        # запрошен с горизонтальной шириной.
+        scaffold = {
+            index
+            for index, view in enumerate(views)
+            if view["kind"] == "front" and not view.get("x_direction")
+        }
+        # Корпус: план — главный вид, вид спереди — под ним.
+        front_on_sheet = [
+            index
+            for index, view in enumerate(views)
+            if view["kind"] == "front" and view.get("x_direction")
+        ]
+        if front_on_sheet:
+            below = set(front_on_sheet)
+            anchor = next(
+                (index for index, view in enumerate(views) if view["kind"] == "side"), None
+            )
         # `top` пластины делит с планом вертикальную ось — его место справа.
         right = {index for index, view in enumerate(views) if view["kind"] == "top"}
     return SheetPlan(
@@ -480,6 +522,7 @@ def plan_sheet(
         layout_h_mm=layout_h,
         scaffold_views=scaffold,
         right_views=right,
+        below_views=below,
         anchor_view=anchor,
         geometry_only=geometry_only,
         view_reasons=_view_reasons(views, part_class, spec),
@@ -1021,7 +1064,356 @@ def _closest(value: float, pool: list[float], *, tolerance: float = 0.01) -> flo
     return best
 
 
-def _hole_dimensions(drawing: dict, plan: SheetPlan) -> None:
+def _body_rect_mm(spec: dict, ratio: float) -> tuple[float, float] | None:
+    """Прямоугольник тела в плане (в мм листа) — когда у детали есть элементы
+    стенок: их выступы уводят крайние линии вида за габарит детали."""
+    profile = ((spec.get("main_view") or {}).get("profile")) or {}
+    if not profile.get("wall_features") or profile.get("shape") != "rectangle":
+        return None
+    width = float(profile.get("width_mm") or 0.0)
+    height = float(profile.get("height_mm") or 0.0)
+    if not (width and height):
+        return None
+    return width * ratio, height * ratio
+
+
+def _wall_feature_dimensions(drawing: dict, spec: dict, plan: SheetPlan) -> None:
+    """Карманы и приливы на гранях корпуса: размер, положение и глубина (X2).
+
+    Лист корпуса нёс только габарит и крепёж: полость, приливы и карманы стенок
+    стояли без единого размера (полнота 0,25). Числа из спека сюда класть
+    нельзя — у видов ядра на каждой грани свой порядок осей и свой знак;
+    поэтому элемент ищется в НАРИСОВАННОЙ геометрии своего вида (круг нужного
+    радиуса, прямоугольник нужного размера), а координаты меряются от кромок
+    тела на том же виде, как у отверстий плана.
+
+    Глубина и вылет — на виде, где грань видна с ребра: прилив выходит за
+    кромку тела, карман уходит внутрь штриховой линией.
+    """
+    profiles_source = (spec.get("main_view") or {}).get("profile") or {}
+    walls = [
+        item for item in (profiles_source.get("wall_features") or []) if isinstance(item, dict)
+    ]
+    if not walls or plan.part_class != "plate":
+        return
+    width = float(profiles_source.get("width_mm") or 0.0)
+    height = float(profiles_source.get("height_mm") or 0.0)
+    thickness = float(profiles_source.get("thickness_mm") or 0.0)
+    if not (width and height and thickness):
+        return
+    ratio = plan.ratio or 1.0
+    views = drawing.get("views") or []
+
+    def view_index(kind: str, *, front_on_sheet: bool = False) -> int | None:
+        for index, view in enumerate(views):
+            if index in plan.scaffold_views or view.get("kind") != kind:
+                continue
+            if kind == "front" and front_on_sheet and index in plan.scaffold_views:
+                continue
+            return index
+        return None
+
+    plan_view = view_index("side")
+    front_view = view_index("front", front_on_sheet=True)
+    side_view = view_index("top")
+    # Грань → (вид лицом, размеры тела на нём, вид с ребра, ось глубины на нём).
+    faces = {
+        "top": (plan_view, (width, height), front_view, "v"),
+        "bottom": (plan_view, (width, height), front_view, "v"),
+        "front": (front_view, (width, thickness), plan_view, "v"),
+        "back": (front_view, (width, thickness), plan_view, "v"),
+        "left": (side_view, (thickness, height), plan_view, "u"),
+        "right": (side_view, (thickness, height), plan_view, "u"),
+    }
+    dimensions = drawing.setdefault("dimensions", [])
+    _housing_overall(dimensions, plan_view, front_view, (width, height), thickness, ratio)
+    # Один нарисованный элемент — одному элементу спека: два одинаковых прилива
+    # на левой и правой стенке видны на одном виде, и без этого оба размера
+    # вставали на одну и ту же окружность.
+    taken: list[tuple[int, float, float]] = []
+    for item in walls:
+        face = faces.get(str(item.get("on_plane")))
+        if face is None:
+            continue
+        face_index, body, edge_index, depth_axis = face
+        if face_index is None:
+            continue
+        drawn = _wall_feature_shape(views[face_index], item, ratio, body, taken, face_index)
+        if drawn is not None:
+            taken.append((face_index, drawn["u"], drawn["v"]))
+            _wall_feature_size(dimensions, face_index, item, drawn, ratio)
+            _wall_feature_position(dimensions, face_index, drawn, body, ratio)
+        if edge_index is not None:
+            _wall_feature_depth(
+                dimensions,
+                views[edge_index],
+                edge_index,
+                item,
+                ratio,
+                depth_axis,
+                _edge_body_extent(faces, item, width, height, thickness),
+            )
+
+
+def _edge_body_extent(
+    faces: dict, item: dict, width: float, height: float, thickness: float
+) -> float:
+    """Размер тела вдоль оси глубины на виде с ребра."""
+    plane = str(item.get("on_plane"))
+    if plane in ("top", "bottom"):
+        return thickness
+    if plane in ("front", "back"):
+        return height
+    return width
+
+
+def _housing_overall(
+    dimensions: list[dict],
+    plan_view: int | None,
+    front_view: int | None,
+    body: tuple[float, float],
+    thickness: float,
+    ratio: float,
+) -> None:
+    """Габарит корпуса — по кромкам ТЕЛА.
+
+    Габаритный размер ставится между крайними рёбрами вида, а у корпуса за
+    габарит выходят приливы: размер не признавался своим (116 против 100) и на
+    листе не появлялся вовсе.
+    """
+    width, height = body
+    half_u, half_v = width * ratio / 2.0, height * ratio / 2.0
+    half_t = thickness * ratio / 2.0
+    wanted = []
+    if plan_view is not None:
+        wanted += [
+            (plan_view, "DistanceX", width, [[-half_u, half_v], [half_u, half_v]]),
+            (plan_view, "DistanceY", height, [[-half_u, -half_v], [-half_u, half_v]]),
+        ]
+    if front_view is not None:
+        wanted.append((front_view, "DistanceY", thickness, [[half_u, -half_t], [half_u, half_t]]))
+    for view_index, kind, value, anchors in wanted:
+        if any(
+            isinstance(item.get("value_mm"), (int, float))
+            and abs(float(item["value_mm"]) - value) <= 0.05
+            and item.get("view_index") == view_index
+            and item.get("kind") == kind
+            for item in dimensions
+        ):
+            continue
+        dimensions.append(
+            {
+                "view_index": view_index,
+                "kind": kind,
+                "label": f"{value:g}",
+                "anchors_mm": anchors,
+                "value_mm": round(value, 3),
+                "measured_by": "housing_overall",
+                "ir_kind": "linear",
+            }
+        )
+
+
+def _wall_feature_shape(
+    view: dict,
+    item: dict,
+    ratio: float,
+    body: tuple[float, float],
+    taken: list[tuple[int, float, float]] | None = None,
+    view_index: int = -1,
+) -> dict[str, Any] | None:
+    """Элемент на своём виде: круг нужного радиуса или прямоугольник нужного размера."""
+    tolerance = 0.3 * ratio
+    used = taken or []
+
+    def free(u: float, v: float) -> bool:
+        return not any(
+            index == view_index and abs(u - ou) <= tolerance and abs(v - ov) <= tolerance
+            for index, ou, ov in used
+        )
+
+    if item.get("profile") == "circle":
+        radius = float(item.get("diameter_mm") or 0.0) / 2.0 * ratio
+        # Прилив на дальней стенке виден на своём виде штриховой окружностью:
+        # при поиске только по видимым второй Ø25 корпуса терялся.
+        for entry in (view.get("visible") or []) + (view.get("hidden") or []):
+            if entry.get("type") != "circle" or not entry.get("center"):
+                continue
+            if abs(float(entry.get("radius") or 0.0) - radius) <= tolerance:
+                cu, cv = (float(value) for value in entry["center"])
+                if not free(cu, cv):
+                    continue
+                return {"kind": "circle", "u": cu, "v": cv, "radius": float(entry["radius"])}
+        return None
+    sizes = sorted(
+        (float(item.get("width_mm") or 0.0) * ratio, float(item.get("height_mm") or 0.0) * ratio)
+    )
+    horizontals: list[tuple[float, float, float]] = []
+    verticals: list[tuple[float, float, float]] = []
+    for entry in (view.get("visible") or []) + (view.get("hidden") or []):
+        if entry.get("type") != "line" or len(entry.get("points") or []) != 2:
+            continue
+        (au, av), (bu, bv) = ((float(p[0]), float(p[1])) for p in entry["points"])
+        if abs(av - bv) <= 1e-6 and abs(bu - au) > 1e-6:
+            horizontals.append((min(au, bu), max(au, bu), av))
+        elif abs(au - bu) <= 1e-6 and abs(bv - av) > 1e-6:
+            verticals.append((min(av, bv), max(av, bv), au))
+    for u0, u1, v_a in horizontals:
+        for u2, u3, v_b in horizontals:
+            if v_b <= v_a or abs(u0 - u2) > tolerance or abs(u1 - u3) > tolerance:
+                continue
+            pair = sorted((u1 - u0, v_b - v_a))
+            if (
+                abs(pair[0] - sizes[0]) <= tolerance
+                and abs(pair[1] - sizes[1]) <= tolerance
+                and free((u0 + u1) / 2.0, (v_a + v_b) / 2.0)
+            ):
+                return {
+                    "kind": "rectangle",
+                    "u": (u0 + u1) / 2.0,
+                    "v": (v_a + v_b) / 2.0,
+                    "width": u1 - u0,
+                    "height": v_b - v_a,
+                }
+    return None
+
+
+def _wall_feature_size(
+    dimensions: list[dict], view_index: int, item: dict, drawn: dict, ratio: float
+) -> None:
+    import math
+
+    if drawn["kind"] == "circle":
+        angle = math.radians(45.0)
+        du, dv = drawn["radius"] * math.cos(angle), drawn["radius"] * math.sin(angle)
+        dimensions.append(
+            {
+                "view_index": view_index,
+                "kind": "Diameter",
+                "label": "",
+                "anchors_mm": [
+                    [drawn["u"] - du, drawn["v"] - dv],
+                    [drawn["u"] + du, drawn["v"] + dv],
+                ],
+                "value_mm": round(2.0 * drawn["radius"] / ratio, 3),
+                "measured_by": "wall_feature",
+                "_centre": [round(drawn["u"], 3), round(drawn["v"], 3)],
+            }
+        )
+        return
+    half_u, half_v = drawn["width"] / 2.0, drawn["height"] / 2.0
+    for kind, value, anchors in (
+        (
+            "DistanceX",
+            drawn["width"],
+            [
+                [drawn["u"] - half_u, drawn["v"] + half_v],
+                [drawn["u"] + half_u, drawn["v"] + half_v],
+            ],
+        ),
+        (
+            "DistanceY",
+            drawn["height"],
+            [
+                [drawn["u"] + half_u, drawn["v"] - half_v],
+                [drawn["u"] + half_u, drawn["v"] + half_v],
+            ],
+        ),
+    ):
+        dimensions.append(
+            {
+                "view_index": view_index,
+                "kind": kind,
+                "label": f"{value / ratio:g}",
+                "anchors_mm": anchors,
+                "value_mm": round(value / ratio, 3),
+                "measured_by": "wall_feature",
+                "ir_kind": "linear",
+            }
+        )
+
+
+def _wall_feature_position(
+    dimensions: list[dict], view_index: int, drawn: dict, body: tuple[float, float], ratio: float
+) -> None:
+    """Координаты центра от кромок тела на том же виде (ГОСТ 2.307, от баз)."""
+    body_u, body_v = body[0] * ratio / 2.0, body[1] * ratio / 2.0
+    for kind, edge, centre, anchors in (
+        ("DistanceX", -body_u, drawn["u"], [[-body_u, drawn["v"]], [drawn["u"], drawn["v"]]]),
+        ("DistanceY", -body_v, drawn["v"], [[drawn["u"], -body_v], [drawn["u"], drawn["v"]]]),
+    ):
+        value = (centre - edge) / ratio
+        if value <= 0.05:
+            continue
+        dimensions.append(
+            {
+                "view_index": view_index,
+                "kind": kind,
+                "label": f"{value:g}",
+                "anchors_mm": anchors,
+                "value_mm": round(value, 3),
+                "measured_by": "wall_feature_position",
+                "ir_kind": "linear",
+            }
+        )
+
+
+def _wall_feature_depth(
+    dimensions: list[dict],
+    view: dict,
+    view_index: int,
+    item: dict,
+    ratio: float,
+    axis: str,
+    body_extent: float,
+) -> None:
+    """Вылет прилива (за кромку тела) или глубина кармана (внутрь от кромки).
+
+    Ищется линия вида, отстоящая от кромки тела ровно на глубину элемента:
+    у прилива — снаружи, у кармана — внутри (штриховая линия дна).
+    """
+    depth = float(item.get("depth_mm") or 0.0) * ratio
+    half = body_extent * ratio / 2.0
+    if depth <= 0 or half <= 0:
+        return
+    outward = item.get("kind") == "boss"
+    tolerance = 0.3 * ratio
+    lines = []
+    for entry in (view.get("visible") or []) + (view.get("hidden") or []):
+        if entry.get("type") != "line" or len(entry.get("points") or []) != 2:
+            continue
+        (au, av), (bu, bv) = ((float(p[0]), float(p[1])) for p in entry["points"])
+        if axis == "v" and abs(av - bv) <= 1e-6:
+            lines.append((av, min(au, bu), max(au, bu)))
+        elif axis == "u" and abs(au - bu) <= 1e-6:
+            lines.append((au, min(av, bv), max(av, bv)))
+    for level, low, high in lines:
+        for edge in (-half, half):
+            wanted = edge + depth * (1.0 if (edge > 0) == outward else -1.0)
+            if abs(level - wanted) > tolerance:
+                continue
+            if outward and abs(level) <= half + tolerance:
+                continue  # прилив выходит ЗА кромку
+            if not outward and abs(level) >= half - tolerance:
+                continue  # дно кармана лежит внутри тела
+            middle = (low + high) / 2.0
+            first = [middle, level] if axis == "v" else [level, middle]
+            second = [middle, edge] if axis == "v" else [edge, middle]
+            dimensions.append(
+                {
+                    "view_index": view_index,
+                    "kind": "DistanceY" if axis == "v" else "DistanceX",
+                    "label": f"{depth / ratio:g}",
+                    "anchors_mm": [first, second],
+                    "value_mm": round(depth / ratio, 3),
+                    "measured_by": "wall_feature_depth",
+                    "ir_kind": "linear",
+                }
+            )
+            return
+
+
+def _hole_dimensions(drawing: dict, plan: SheetPlan, spec: dict | None = None) -> None:
     """Где стоят отверстия плоской детали — координаты и окружность центров (X1).
 
     На листе пластины и фланца стояли только диаметры отверстий: где они,
@@ -1049,6 +1441,7 @@ def _hole_dimensions(drawing: dict, plan: SheetPlan) -> None:
     dimensions = drawing.setdefault("dimensions", [])
     ratio = plan.ratio or 1.0
     near = 0.05 * ratio  # 0.05 mm of the part, on the sheet
+    body = _body_rect_mm(spec or {}, ratio)
     for index, view in enumerate(drawing.get("views") or []):
         if view.get("kind") != "side" or index in plan.scaffold_views:
             continue
@@ -1057,6 +1450,12 @@ def _hole_dimensions(drawing: dict, plan: SheetPlan) -> None:
             continue
         u_min, v_min = float(bounds["u_min"]), float(bounds["v_min"])
         v_max = float(bounds["v_max"])
+        if body is not None:
+            # Кромки ТЕЛА, а не крайние линии вида: у корпуса за габарит
+            # выходят приливы стенок, и координаты отверстий мерились от них
+            # (корпус G2: 15,5 вместо 7,5, габарит 100,5 вместо 100).
+            u_min, v_min = -body[0] / 2.0, -body[1] / 2.0
+            v_max = body[1] / 2.0
         cu = (float(bounds["u_min"]) + float(bounds["u_max"])) / 2.0
         cv = (v_min + v_max) / 2.0
         circles = [
@@ -1824,7 +2223,8 @@ async def build_sheet_from_solid(
         )
     drawing["dimensions"] = measured
     _label_dimensions(measured, requests, spec)
-    _hole_dimensions(drawing, plan)
+    _hole_dimensions(drawing, plan, spec)
+    _wall_feature_dimensions(drawing, spec, plan)
     _shaft_feature_dimensions(drawing, spec, plan)
     _turned_detail_dimensions(drawing, spec, plan)
     _keyway_section_dimensions(drawing, spec, plan)
@@ -1897,6 +2297,7 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
         px_per_mm=PAPER_PX_PER_MM,
         skip=plan.scaffold_views,
         right=plan.right_views,
+        below=plan.below_views,
         anchor=plan.anchor_view,
     )
     extent_w, extent_h = sheet_extent_mm(views, placements)
@@ -1909,6 +2310,7 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
         origin_v_mm=offset_v,
         skip=plan.scaffold_views,
         right=plan.right_views,
+        below=plan.below_views,
         anchor=plan.anchor_view,
     )
     entities += dimensions_from_kernel(

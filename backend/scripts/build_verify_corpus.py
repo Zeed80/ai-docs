@@ -19,6 +19,7 @@ import json
 import pathlib
 import sys
 import time
+from typing import Any
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
@@ -56,6 +57,7 @@ def needed_dimensions(spec: dict) -> dict[str, list[float]]:
             if p.get("kind", "bolt_circle") == "bolt_circle" and p.get("bolt_circle_diameter_mm")
         }
         lengths = [profile["thickness_mm"]]
+        lengths += _wall_feature_values(profile, diameters)
         if profile.get("shape") == "circle":
             diameters.add(profile["diameter_mm"])
         else:
@@ -66,7 +68,11 @@ def needed_dimensions(spec: dict) -> dict[str, list[float]]:
             for slot in profile.get("slots") or []:
                 # Межцентровое расстояние и радиус конца — как их ставит лист.
                 lengths += [slot["length_mm"] - slot["width_mm"], slot["width_mm"] / 2.0]
-        return {"diameters": sorted(diameters), "lengths": sorted(lengths), "overall": []}
+        return {
+            "diameters": sorted(diameters),
+            "lengths": sorted(lengths, key=lambda v: v[0] if isinstance(v, tuple) else v),
+            "overall": [],
+        }
     outer = body["outer"]
     diameters = sorted(
         {s["diameter_mm"] for s in outer} | {s["diameter_mm"] for s in body.get("bore") or []}
@@ -149,6 +155,47 @@ def _hole_coordinates(profile: dict) -> list[float]:
     return xs + ys
 
 
+def _wall_feature_values(profile: dict, diameters: set[float]) -> list[float]:
+    """Карманы и приливы на гранях корпуса (X2): размер, глубина, координаты.
+
+    Изготовить элемент можно, только если лист несёт его размер, глубину (для
+    прилива — вылет) и положение на своей грани. Координаты — от кромок тела на
+    том же виде, как их ставит лист.
+    """
+    width = float(profile.get("width_mm") or 0.0)
+    height = float(profile.get("height_mm") or 0.0)
+    thickness = float(profile.get("thickness_mm") or 0.0)
+    faces = {
+        "top": (width, height),
+        "bottom": (width, height),
+        "front": (width, thickness),
+        "back": (width, thickness),
+        "left": (height, thickness),
+        "right": (height, thickness),
+    }
+    values: list[float] = []
+    for item in profile.get("wall_features") or []:
+        face = faces.get(str(item.get("on_plane")))
+        if not face:
+            continue
+        face_u, face_v = face
+        values.append(float(item["depth_mm"]))
+        if item.get("profile") == "rectangle":
+            values += [float(item["width_mm"]), float(item["height_mm"])]
+        else:
+            diameters.add(float(item["diameter_mm"]))
+        for centre, extent in (
+            (float(item.get("center_u_mm") or 0.0), face_u),
+            (float(item.get("center_v_mm") or 0.0), face_v),
+        ):
+            coordinate = round(extent / 2.0 + centre, 3)
+            if coordinate > 0.05:
+                # От любой из двух кромок грани: база — выбор конструктора
+                # (ГОСТ 2.307), а оси вида ядра на разных гранях зеркальны.
+                values.append((coordinate, round(extent - coordinate, 3)))
+    return values
+
+
 def coverage(spec: dict, truth: dict) -> dict[str, float]:
     needed = needed_dimensions(spec)
     shown_d = [
@@ -162,11 +209,17 @@ def coverage(spec: dict, truth: dict) -> dict[str, float]:
         if d["kind"] == "dimension" and d["dimension_kind"] != "diameter"
     ]
 
-    def found(wanted: list[float], shown: list[float]) -> int:
+    def found(wanted: list[Any], shown: list[float]) -> int:
+        """Значение засчитано, если оно есть на листе. Кортеж — равноправные
+        варианты одного размера (координата от левой или от правой кромки)."""
         pool = list(shown)
         hits = 0
         for value in wanted:
-            match = next((s for s in pool if s is not None and abs(s - value) <= 0.05), None)
+            options = value if isinstance(value, tuple) else (value,)
+            match = next(
+                (s for s in pool if s is not None and any(abs(s - v) <= 0.05 for v in options)),
+                None,
+            )
             if match is not None:
                 pool.remove(match)
                 hits += 1

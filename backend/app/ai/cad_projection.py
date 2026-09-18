@@ -208,6 +208,7 @@ def place_sheet_views(
     gap_mm: float = VIEW_GAP_MM,
     skip: set[int] | None = None,
     right: set[int] | None = None,
+    below: set[int] | None = None,
     anchor: int | None = None,
 ) -> tuple[list[Any], list[dict[str, float] | None]]:
     """Lay out the views ``/drawing`` returned, in the order it returned them.
@@ -236,6 +237,10 @@ def place_sheet_views(
     # is the kernel's ``top`` — it shares the plan's vertical axis and belongs
     # to its right, not below.
     to_right = right or set()
+    # ``below`` — то же для вида, который по своему направлению ушёл бы вправо,
+    # а на листе стоит ПОД главным: у корпуса это вид спереди под планом
+    # (ГОСТ 2.305, проекционная связь по ширине).
+    to_below = below or set()
 
     def bounds(view: dict[str, Any]) -> dict[str, float] | None:
         value = view.get("bounds_mm")
@@ -276,7 +281,7 @@ def place_sheet_views(
         if box is None:
             continue
         kind = view.get("kind")
-        if kind in ("top", "bottom") and index not in to_right:
+        if index in to_below or (kind in ("top", "bottom") and index not in to_right):
             # Directly below the anchor, sharing its u — first-angle.
             placements[index] = {
                 "offset_u": origin_u_mm - box["u_min"],

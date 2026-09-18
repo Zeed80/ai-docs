@@ -2708,6 +2708,12 @@ class SheetViewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["front", "side", "top", "bottom", "section", "detail"] = "front"
+    # Куда смотрит горизонтальная ось вида (X2, корпуса). По умолчанию у
+    # `front`/`bottom` это ось детали (0, 0, 1) — так у вала длина ложится
+    # горизонтально. У призматической детали от этого ширина встаёт
+    # ВЕРТИКАЛЬНО, и вид спереди на лист выводить нельзя; (1, 0, 0) кладёт
+    # ширину по горизонтали, как рисует конструктор.
+    x_direction: tuple[float, float, float] | None = None
     # Geometry may be a regular section while the sheet presents it away from
     # the parent view as a removed section. Keeping construction and
     # presentation separate avoids teaching OpenCascade a fake fifth camera.
@@ -3087,7 +3093,9 @@ def build_drawing(request: DrawingRequest) -> dict[str, Any]:
                 view.Source = [body]
                 direction = _VIEW_FRAMES[wanted.kind][0]
                 view.Direction = App.Vector(*direction)
-                if wanted.kind in ("front", "bottom"):
+                if wanted.x_direction is not None:
+                    view.XDirection = App.Vector(*wanted.x_direction)
+                elif wanted.kind in ("front", "bottom"):
                     view.XDirection = App.Vector(0.0, 0.0, 1.0)
                 if base_view is None:
                     base_view = view

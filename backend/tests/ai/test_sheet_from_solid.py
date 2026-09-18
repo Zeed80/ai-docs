@@ -1438,3 +1438,91 @@ def test_no_cutting_plane_without_an_axial_section():
         )
         == []
     )
+
+
+_HOUSING = {
+    "part": "Корпус",
+    "main_view": {
+        "type": "корпус",
+        "profile": {
+            "shape": "rectangle",
+            "width_mm": 100.0,
+            "height_mm": 80.0,
+            "thickness_mm": 40.0,
+            "wall_features": [
+                {
+                    "kind": "pocket",
+                    "on_plane": "top",
+                    "profile": "rectangle",
+                    "width_mm": 70.0,
+                    "height_mm": 50.0,
+                    "depth_mm": 32.0,
+                },
+                {
+                    "kind": "boss",
+                    "on_plane": "front",
+                    "profile": "circle",
+                    "diameter_mm": 25.0,
+                    "depth_mm": 8.0,
+                    "center_u_mm": 10.0,
+                    "center_v_mm": 0.0,
+                },
+            ],
+        },
+    },
+}
+
+
+def test_a_housing_shows_its_front_view_with_the_width_horizontal():
+    """У призматической детали ядро кладёт ширину вертикально: вид спереди на
+    лист выводить было нельзя, а элементы передних стенок видны только на нём."""
+    views = plan_views("plate", _HOUSING)
+
+    front = next(view for view in views if view["kind"] == "front")
+    assert front["x_direction"] == [1.0, 0.0, 0.0]
+    # У пластины без элементов стенок вид спереди остаётся служебным.
+    plain = {"main_view": {"profile": {"shape": "rectangle", "width_mm": 50, "height_mm": 40}}}
+    assert "x_direction" not in next(v for v in plan_views("plate", plain) if v["kind"] == "front")
+
+
+def test_a_housing_dimensions_its_wall_features_from_the_drawn_geometry():
+    from app.ai.cad_ir.sheet_from_solid import _wall_feature_dimensions
+
+    ratio = 1.0
+    plan = _plan("plate")
+    plan.ratio = ratio
+    plan.scaffold_views = set()
+    drawing = {
+        "views": [
+            {
+                # Вид спереди: ширина по u, толщина по v; прилив Ø25 нарисован.
+                "kind": "front",
+                "x_direction": [1.0, 0.0, 0.0],
+                "bounds_mm": {"u_min": -50, "u_max": 50, "v_min": -20, "v_max": 28},
+                "visible": [{"type": "circle", "center": [10.0, 0.0], "radius": 12.5}],
+            },
+            {
+                # План: ширина × высота, полость прямоугольником.
+                "kind": "side",
+                "bounds_mm": {"u_min": -50, "u_max": 58, "v_min": -40, "v_max": 40},
+                "visible": [
+                    {"type": "line", "points": [[-35.0, -25.0], [35.0, -25.0]]},
+                    {"type": "line", "points": [[-35.0, 25.0], [35.0, 25.0]]},
+                    {"type": "line", "points": [[10.0, 40.0], [10.0, 48.0]]},
+                    {"type": "line", "points": [[-2.5, 48.0], [22.5, 48.0]]},
+                ],
+            },
+            {"kind": "top", "bounds_mm": {"u_min": -20, "u_max": 20, "v_min": -40, "v_max": 40}},
+        ]
+    }
+
+    _wall_feature_dimensions(drawing, _HOUSING, plan)
+
+    by_measure = {}
+    for dim in drawing["dimensions"]:
+        by_measure.setdefault(dim["measured_by"], []).append(round(dim["value_mm"], 2))
+    assert 25.0 in by_measure["wall_feature"]  # Ø прилива
+    assert sorted(by_measure["wall_feature"])[:2] == [25.0, 50.0]  # полость 70 × 50
+    assert 8.0 in by_measure["wall_feature_depth"]  # вылет прилива за кромку
+    # Габарит — по кромкам ТЕЛА: за крайние линии вида выходят приливы.
+    assert sorted(by_measure["housing_overall"]) == [40.0, 80.0, 100.0]
