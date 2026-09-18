@@ -328,6 +328,53 @@ _ASSIGN_PROMPT = (
     "сбоку или разреза. corner_radius_mm — радиус скругления углов прямоугольной "
     "пластины (надпись R…), нет — null. Только JSON."
 )
+_WALL_FEATURES_PROMPT = (
+    "С чертежа уже прочитаны размерные надписи:\n{callouts}\n\n"
+    "Это корпус: кроме контура и отверстий, на его гранях есть КАРМАНЫ "
+    "(углубления) и ПРИЛИВЫ (выступы). Полость сверху — тоже карман на верхней "
+    "грани. Для КАЖДОГО такого элемента укажи:\n"
+    "- face: на какой грани он стоит — top (сверху, вид в плане), bottom "
+    "(снизу), front (передняя стенка), back (задняя), left (левая), right "
+    "(правая);\n"
+    "- kind: pocket (углубление) или boss (выступ);\n"
+    "- shape: circle или rectangle;\n"
+    "- размер: diameter_mm для круга, width_mm и height_mm для прямоугольника;\n"
+    "- depth_mm: глубина кармана или вылет прилива;\n"
+    "- положение центра на своей грани: u_from_edge_mm — от левой кромки грани "
+    "на её виде, v_from_edge_mm — от нижней.\n"
+    "Числа бери ТОЛЬКО из списка выше; чего на листе нет — null. ОДНОЙ строкой "
+    "JSON:\n"
+    '{{"features":[{{"face":"front","kind":"boss","shape":"circle",'
+    '"diameter_mm":0,"width_mm":null,"height_mm":null,"depth_mm":0,'
+    '"u_from_edge_mm":0,"v_from_edge_mm":0}}]}}\n'
+    "Только JSON."
+)
+
+_WALL_FEATURES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "features": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "face": {"type": ["string", "null"]},
+                    "kind": {"type": ["string", "null"]},
+                    "shape": {"type": ["string", "null"]},
+                    "diameter_mm": {"type": ["number", "null"]},
+                    "width_mm": {"type": ["number", "null"]},
+                    "height_mm": {"type": ["number", "null"]},
+                    "depth_mm": {"type": ["number", "null"]},
+                    "u_from_edge_mm": {"type": ["number", "null"]},
+                    "v_from_edge_mm": {"type": ["number", "null"]},
+                },
+            },
+        }
+    },
+    "required": ["features"],
+}
+
 _PLATE_HOLES_PROMPT = (
     "С чертежа уже прочитаны размерные надписи:\n{callouts}\n\n"
     "На виде в плане пластины есть отверстия. Для КАЖДОГО отверстия укажи его "
@@ -4371,7 +4418,87 @@ async def _profile_by_assignment(
         # координаты — это больше половины выносок листа.
         every = ", ".join(f"{value:g}" for value in candidates)
         profile["holes"] += await _plate_holes(image, every, stated, profile, ask=ask, notes=notes)
+        # Корпус: карманы и приливы на гранях — их лист несёт, а роли не спрашивают.
+        walls = await _wall_features(image, every, stated, profile, ask=ask, notes=notes)
+        if walls:
+            profile["wall_features"] = walls
     return profile
+
+
+async def _wall_features(
+    image: Any,
+    listed: str,
+    taken: Any,
+    profile: dict[str, Any],
+    *,
+    ask: dict[str, Any],
+    notes: list[str] | None,
+) -> list[dict[str, Any]]:
+    """Карманы и приливы на гранях корпуса — с листа (X2).
+
+    Базовая линия на корпусах: элементы стенок 0 из 11 — путь назначения ролей
+    спрашивал только контур, толщину и отверстия, а полость, приливы и карманы
+    стенок не читались вовсе. Каждое число обязано стоять на листе (``taken``);
+    элемент без размера, глубины или положения не строится и уходит замечанием.
+    """
+    width, height = profile.get("width_mm"), profile.get("height_mm")
+    thickness = profile.get("thickness_mm")
+    if not width or not height or not thickness:
+        return []
+    faces = {
+        "top": (float(width), float(height)),
+        "bottom": (float(width), float(height)),
+        "front": (float(width), float(thickness)),
+        "back": (float(width), float(thickness)),
+        "left": (float(height), float(thickness)),
+        "right": (float(height), float(thickness)),
+    }
+    answer = await _ask(
+        _WALL_FEATURES_PROMPT.format(callouts=listed),
+        image,
+        num_predict=1400,
+        schema=_WALL_FEATURES_SCHEMA,
+        **ask,
+    )
+    features: list[dict[str, Any]] = []
+    dropped: list[str] = []
+    for item in (answer or {}).get("features") or []:
+        if not isinstance(item, dict):
+            continue
+        face = str(item.get("face") or "").strip().lower()
+        kind = str(item.get("kind") or "").strip().lower()
+        shape = str(item.get("shape") or "circle").strip().lower()
+        if face not in faces or kind not in ("pocket", "boss"):
+            continue
+        face_u, face_v = faces[face]
+        depth = taken_value(item.get("depth_mm"), taken)
+        entry: dict[str, Any] = {"kind": kind, "on_plane": face}
+        if shape == "rectangle":
+            size_u = taken_value(item.get("width_mm"), taken)
+            size_v = taken_value(item.get("height_mm"), taken)
+            if not size_u or not size_v:
+                dropped.append(f"{face}: размер не проставлен")
+                continue
+            entry.update({"profile": "rectangle", "width_mm": size_u, "height_mm": size_v})
+        else:
+            diameter = taken_value(item.get("diameter_mm"), taken)
+            if not diameter:
+                dropped.append(f"{face}: Ø не проставлен")
+                continue
+            entry.update({"profile": "circle", "diameter_mm": diameter})
+        u = taken_value(item.get("u_from_edge_mm"), taken)
+        v = taken_value(item.get("v_from_edge_mm"), taken)
+        if not depth or u is None or v is None or not (0 < u < face_u and 0 < v < face_v):
+            dropped.append(f"{face}: глубина или положение не проставлены")
+            continue
+        entry["depth_mm"] = depth
+        entry["center_u_mm"] = round(u - face_u / 2.0, 3)
+        entry["center_v_mm"] = round(v - face_v / 2.0, 3)
+        if entry not in features:
+            features.append(entry)
+    if dropped and notes is not None:
+        notes.append("элементы граней не построены (" + "; ".join(sorted(set(dropped))) + ")")
+    return features
 
 
 async def _plate_holes(

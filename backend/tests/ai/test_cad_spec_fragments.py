@@ -1841,3 +1841,118 @@ def test_a_tolerance_zone_diameter_is_not_a_cross_hole():
 
     holes = [issue for issue in issues if "поперечное отверстие" in issue]
     assert holes == ["поперечное отверстие Ø10 указано, но не локализовано"]
+
+
+_HOUSING_CALLOUTS = {
+    "dimensions": [
+        {"value": v}
+        for v in ("100", "80", "40", "Ø25", "70", "50", "32", "8", "20", "10", "6", "15")
+    ]
+}
+
+
+async def _read_housing(monkeypatch, answer: dict):
+    """Тот же путь ролей, что у пластины, но лист — корпуса."""
+    from app.ai.cad_recognize import spec_fragments as fragments
+
+    async def fake_ask(prompt, *_a, **_k):
+        if prompt is fragments._SHAPE_PROMPT:
+            return {"shape": "rectangle"}
+        if "x_from_left_mm" in prompt:
+            return {"holes": []}
+        if "u_from_edge_mm" in prompt:
+            return answer
+        return {"width_mm": 100, "height_mm": 80, "thickness_mm": 40}
+
+    monkeypatch.setattr(fragments, "_ask", fake_ask)
+    notes: list[str] = []
+    profile = await fragments._profile_by_assignment(
+        object(), _HOUSING_CALLOUTS, router=object(), confidential=True, notes=notes
+    )
+    return profile, notes
+
+
+@pytest.mark.asyncio
+async def test_wall_features_are_read_from_their_face_edges(monkeypatch):
+    """Базовая линия на корпусах: элементы стенок 0 из 11 — их не спрашивали."""
+    profile, notes = await _read_housing(
+        monkeypatch,
+        {
+            "features": [
+                {
+                    "face": "top",
+                    "kind": "pocket",
+                    "shape": "rectangle",
+                    "width_mm": 70,
+                    "height_mm": 50,
+                    "depth_mm": 32,
+                    "u_from_edge_mm": 50,
+                    "v_from_edge_mm": 40,
+                },
+                {
+                    "face": "front",
+                    "kind": "boss",
+                    "shape": "circle",
+                    "diameter_mm": 25,
+                    "depth_mm": 8,
+                    "u_from_edge_mm": 20,
+                    "v_from_edge_mm": 20,
+                },
+                # Глубины на листе нет — элемент не строится.
+                {
+                    "face": "left",
+                    "kind": "pocket",
+                    "shape": "rectangle",
+                    "width_mm": 20,
+                    "height_mm": 10,
+                    "depth_mm": None,
+                    "u_from_edge_mm": 15,
+                    "v_from_edge_mm": 6,
+                },
+                # Число не с листа (77) — элемент не строится.
+                {
+                    "face": "right",
+                    "kind": "boss",
+                    "shape": "circle",
+                    "diameter_mm": 77,
+                    "depth_mm": 6,
+                    "u_from_edge_mm": 20,
+                    "v_from_edge_mm": 10,
+                },
+            ]
+        },
+    )
+
+    assert profile["wall_features"] == [
+        {
+            "kind": "pocket",
+            "on_plane": "top",
+            "profile": "rectangle",
+            "width_mm": 70.0,
+            "height_mm": 50.0,
+            "depth_mm": 32.0,
+            "center_u_mm": 0.0,
+            "center_v_mm": 0.0,
+        },
+        {
+            "kind": "boss",
+            "on_plane": "front",
+            "profile": "circle",
+            "diameter_mm": 25.0,
+            "depth_mm": 8.0,
+            "center_u_mm": -30.0,
+            "center_v_mm": 0.0,
+        },
+    ]
+    assert notes == [
+        "элементы граней не построены (left: глубина или положение не проставлены; "
+        "right: Ø не проставлен)"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_plate_without_wall_features_keeps_its_profile_clean(monkeypatch):
+    profile, notes = await _read_housing(monkeypatch, {"features": []})
+
+    assert "wall_features" not in profile
+    assert notes == []
