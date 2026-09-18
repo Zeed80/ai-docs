@@ -432,6 +432,43 @@ class SpecSketchSegment(BaseModel):
         return self
 
 
+class SpecWallFeature(BaseModel):
+    """Карман или прилив на грани призматической детали (корпус, X2).
+
+    Плоскость размещения — грань габарита: ``top`` (по толщине сверху),
+    ``bottom``, ``front``/``back`` (стенки по высоте) и ``left``/``right``.
+    Координаты центра — в плоскости этой грани от её центра, как отверстия
+    контура; глубина (для прилива — вылет) отсчитывается по нормали грани.
+    Крышка part_05: приливы и карманы на стенках — ни контуром, ни отверстиями
+    их описать нельзя.
+    """
+
+    id: str | None = None  # см. SpecChamfer.id
+    kind: Literal["pocket", "boss"]
+    on_plane: Literal["top", "bottom", "front", "back", "left", "right"]
+    profile: Literal["circle", "rectangle"] = "circle"
+    diameter_mm: float | None = Field(default=None, gt=0)
+    width_mm: float | None = Field(default=None, gt=0)
+    height_mm: float | None = Field(default=None, gt=0)
+    center_u_mm: float = 0.0
+    center_v_mm: float = 0.0
+    depth_mm: float = Field(gt=0)
+    tolerance: str | None = None
+    evidence: list[SpecEvidence] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _require_profile_dimensions(self) -> SpecWallFeature:
+        if self.profile == "circle" and self.diameter_mm is None:
+            raise ValueError("circle requires diameter_mm")
+        if self.profile == "rectangle" and (self.width_mm is None or self.height_mm is None):
+            raise ValueError("rectangle requires width_mm and height_mm")
+        if self.profile == "circle" and (self.width_mm or self.height_mm):
+            raise ValueError("width_mm/height_mm are valid only for rectangle")
+        if self.profile == "rectangle" and self.diameter_mm is not None:
+            raise ValueError("diameter_mm is valid only for circle")
+        return self
+
+
 class SpecPrismaticProfile(BaseModel):
     shape: Literal["rectangle", "circle", "sketch"]
     width_mm: float | None = Field(default=None, gt=0)
@@ -450,6 +487,8 @@ class SpecPrismaticProfile(BaseModel):
     holes: list[SpecHole] = Field(default_factory=list)
     hole_patterns: list[SpecHolePattern] = Field(default_factory=list)
     slots: list[SpecSlot] = Field(default_factory=list)
+    # Корпуса (X2): карманы и приливы на гранях, а не только сквозные отверстия.
+    wall_features: list[SpecWallFeature] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _require_shape_dimensions(self) -> SpecPrismaticProfile:
@@ -469,6 +508,10 @@ class SpecPrismaticProfile(BaseModel):
             raise ValueError("sketch requires at least one segment")
         if self.shape != "sketch" and self.sketch is not None:
             raise ValueError("sketch is valid only for shape='sketch'")
+        if self.wall_features and self.shape != "rectangle":
+            # Грани габарита определены у прямоугольного контура; у круга и
+            # эскиза «стенки» пришлось бы угадывать.
+            raise ValueError("wall_features are valid only for shape='rectangle'")
         return self
 
 

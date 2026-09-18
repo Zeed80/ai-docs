@@ -581,7 +581,7 @@ def _profile_consensus(
             return None, "проходы не сошлись на эскизе контура", []
         merged["sketch"] = sketch
     notes: list[str] = []
-    for field in ("holes", "hole_patterns", "slots"):
+    for field in ("holes", "hole_patterns", "slots", "wall_features"):
         reads = [p.get(field) or [] for p in same_shape]
         accepted, dropped = _vote_feature_list(reads, minimum=minimum)
         merged[field] = accepted

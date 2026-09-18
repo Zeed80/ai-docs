@@ -435,6 +435,59 @@ def _rotated_capsule_sketch(
     return a[0], a[1], segments
 
 
+# X2 (корпуса): грань габарита → (оси спека → оси грани ядра, размеры грани).
+# У ядра свой порядок осей на каждой грани; в спеке u/v — вдоль детали:
+# top/bottom — ширина и высота, front/back — ширина и толщина, left/right —
+# высота и толщина.
+_WALL_PLANES = {
+    "top": ("uv", "width", "height"),
+    "bottom": ("uv", "width", "height"),
+    "front": ("uv", "width", "depth"),
+    "back": ("vu", "depth", "width"),
+    "left": ("vu", "depth", "height"),
+    "right": ("uv", "height", "depth"),
+}
+
+
+def _wall_feature_params(
+    item: dict, *, width: float, height: float, thickness: float
+) -> dict[str, Any] | None:
+    """Параметры кармана/прилива на грани в системе ядра (от угла грани)."""
+    plane = str(item.get("on_plane") or "")
+    if plane not in _WALL_PLANES:
+        return None
+    order, first, second = _WALL_PLANES[plane]
+    sizes = {"width": width, "height": height, "depth": thickness}
+    face_x, face_y = sizes[first], sizes[second]
+    u, v = _num(item.get("center_u_mm")) or 0.0, _num(item.get("center_v_mm")) or 0.0
+    local_x, local_y = (u, v) if order == "uv" else (v, u)
+    depth = _num(item.get("depth_mm"))
+    if not depth:
+        return None
+    params: dict[str, Any] = {
+        "on_plane": plane,
+        "depth_mm": depth,
+        "center_x_mm": face_x / 2.0 + local_x,
+        "center_y_mm": face_y / 2.0 + local_y,
+    }
+    if item.get("profile") == "rectangle":
+        feature_width, feature_height = _num(item.get("width_mm")), _num(item.get("height_mm"))
+        if not feature_width or not feature_height:
+            return None
+        params["profile"] = "rectangle"
+        # Прямоугольник задан по осям детали — как и центр.
+        params["width_mm"], params["height_mm"] = (
+            (feature_width, feature_height) if order == "uv" else (feature_height, feature_width)
+        )
+    else:
+        diameter = _num(item.get("diameter_mm"))
+        if not diameter:
+            return None
+        params["profile"] = "circle"
+        params["diameter_mm"] = diameter
+    return params
+
+
 def _prismatic_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
     """A plate or flange: the read outline given its read thickness.
 
@@ -592,6 +645,37 @@ def _prismatic_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
                     "through": ParamProvenance(
                         origin="standard", detail="отверстие без глубины на листе — сквозное"
                     ),
+                },
+                confidence=0.85,
+            )
+        )
+
+    # Карманы и приливы на гранях (X2): только у прямоугольного контура —
+    # грани габарита у круга и эскиза пришлось бы угадывать.
+    for item in profile.get("wall_features") or []:
+        if not isinstance(item, dict) or shape != "rectangle":
+            continue
+        params = _wall_feature_params(
+            item,
+            width=_num(profile.get("width_mm")) or 0.0,
+            height=_num(profile.get("height_mm")) or 0.0,
+            thickness=thickness,
+        )
+        kind = str(item.get("kind") or "")
+        if params is None or kind not in ("pocket", "boss"):
+            return None
+        features.append(
+            Feature3D(
+                kind=kind,
+                source_feature_ids=_source_feature_ids(item),
+                params=params,
+                param_provenance={
+                    name: ParamProvenance(
+                        origin="stated",
+                        detail=f"{'карман' if kind == 'pocket' else 'прилив'} на грани "
+                        f"{params['on_plane']} по чертежу",
+                    )
+                    for name in params
                 },
                 confidence=0.85,
             )
