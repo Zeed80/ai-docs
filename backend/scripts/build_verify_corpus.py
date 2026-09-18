@@ -46,6 +46,23 @@ def needed_dimensions(spec: dict) -> dict[str, list[float]]:
     метрика мерит то, что лист обязан нести уже сейчас, а не мечту.
     """
     body = spec["main_view"]
+    if spec.get("welds"):
+        # Сварной узел (X3): основание (ширина, глубина, толщина), каждое
+        # ребро (высота, толщина, положение от кромки основания).
+        from app.ai.cad_solid import _body_box
+
+        boxes = [_body_box(part) for part in spec["parts"]]
+        (blo, bhi) = boxes[0]
+        lengths = [bhi[0] - blo[0], bhi[1] - blo[1], bhi[2] - blo[2]]
+        for lo, hi in boxes[1:]:
+            lengths += [hi[2] - lo[2], hi[1] - lo[1]]
+            if lo[1] - blo[1] > 1e-6:
+                lengths.append(lo[1] - blo[1])
+        return {
+            "diameters": [],
+            "lengths": sorted(round(value, 3) for value in lengths),
+            "overall": [],
+        }
     sheet = body.get("sheet_metal")
     if isinstance(sheet, dict):
         # Гнутая деталь (X4): полки по наружной поверхности, толщина, радиус

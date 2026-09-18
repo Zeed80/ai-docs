@@ -1637,3 +1637,74 @@ def test_the_sheet_metal_metric_requires_the_flat_length():
     # 15 + 40 + 12 + 2 · π/2 · (2 + 0,5 · 2) = 76,4
     assert 76.4 in needed["lengths"]
     assert {19.0, 48.0, 16.0, 2.0, 50.0} <= set(needed["lengths"])
+
+
+# ── Сварной узел (X3) ────────────────────────────────────────────────────────
+
+
+def _weldment() -> dict:
+    from app.ai.verify_corpus.synth import synth_spec
+
+    return synth_spec("weldment", 9)  # основание 80×120×8, два ребра Т3 △4
+
+
+def test_a_welded_part_is_drawn_front_plan_and_left_view():
+    """Раньше узел шёл классом «пластина» по первому телу: рёбра без размеров,
+    швов на листе нет, а вид `side` ядра смотрит СНИЗУ — рёбер не видно."""
+    from app.ai.cad_ir.sheet_from_solid import classify_part, plan_views
+
+    spec = _weldment()
+    assert classify_part(spec, {}) == "weldment"
+    views = plan_views("weldment", spec)
+    assert [view["kind"] for view in views] == ["front", "plan", "top"]
+
+
+def test_every_plate_of_the_weldment_is_dimensioned_on_its_view():
+    from app.ai.cad_ir.sheet_from_solid import plan_sheet
+    from app.ai.cad_ir.weldment_sheet import weldment_dimensions
+
+    spec = _weldment()
+    plan = plan_sheet(spec, {"bounds_mm": {"x": 80, "y": 120, "z": 38}})
+    ratio = plan.ratio
+    box = {"u_min": 0.0, "u_max": 0.0, "v_min": 0.0, "v_max": 0.0}
+    drawing = {
+        "views": [
+            {"bounds_mm": {**box, "u_max": 80 * ratio, "v_max": 38 * ratio}},
+            {"bounds_mm": {**box, "u_max": 80 * ratio, "v_max": 120 * ratio}},
+            {"bounds_mm": {**box, "u_max": 120 * ratio, "v_max": 38 * ratio}},
+        ],
+        "dimensions": [],
+    }
+
+    weldment_dimensions(drawing, spec, plan)
+
+    by = {}
+    for item in drawing["dimensions"]:
+        by.setdefault(item["measured_by"], []).append(item["value_mm"])
+    assert by["weldment_width"] == [80.0]
+    assert by["weldment_depth"] == [120.0]
+    assert by["weldment_thickness"] == [8.0]
+    assert sorted(by["weldment_rib_height"]) == [30.0, 30.0]
+    assert sorted(by["weldment_rib_thickness"]) == [5.0, 6.0]
+    # Положение ребра — от кромки основания до его ближней стенки.
+    assert sorted(by["weldment_rib_position"]) == [26.0, 65.0]
+    # Размер лежит на своём виде в масштабе листа: глубина основания на виде слева.
+    depth = next(i for i in drawing["dimensions"] if i["measured_by"] == "weldment_depth")
+    (u1, _), (u2, _) = depth["anchors_mm"]
+    assert abs(u2 - u1) == pytest.approx(120 * ratio)
+
+
+def test_a_weld_is_designated_by_standard_type_and_leg():
+    from app.ai.cad_ir.weldment_sheet import weld_designation
+
+    assert (
+        weld_designation({"standard": "ГОСТ 5264-80", "designation": "Т3", "leg_mm": 4.0})
+        == "ГОСТ 5264-80-Т3-△4"
+    )
+
+
+def test_the_weldment_metric_requires_every_plate_and_its_position():
+    from scripts.build_verify_corpus import needed_dimensions
+
+    needed = needed_dimensions(_weldment())
+    assert needed["lengths"] == sorted([80.0, 120.0, 8.0, 30.0, 5.0, 65.0, 30.0, 6.0, 26.0])

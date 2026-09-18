@@ -778,6 +778,19 @@ def verify_views_against_solid(
     diameter = max(float(bounds.get("x") or 0.0), float(bounds.get("y") or 0.0)) * ratio
     checks: dict[str, Any] = {"ok": True, "part_class": part_class, "scale": ratio}
 
+    if part_class == "weldment":
+        # Сварной узел (X3): вид спереди — ширина × высота узла.
+        front = (views.get("front") or {}).get("bounds_mm")
+        if front:
+            checks["front_matches_solid"] = (
+                abs((front["u_max"] - front["u_min"]) - float(bounds.get("x") or 0.0) * ratio)
+                <= 0.05 + 0.005 * float(bounds.get("x") or 0.0) * ratio
+                and abs((front["v_max"] - front["v_min"]) - float(bounds.get("z") or 0.0) * ratio)
+                <= 0.05 + 0.005 * float(bounds.get("z") or 0.0) * ratio
+            )
+            checks["ok"] = checks["front_matches_solid"]
+        return checks
+
     if part_class == "sheet_metal":
         # Гнутая деталь (X4): вид вдоль ширины — сечение, его рамка — это
         # габарит тела поперёк ширины.

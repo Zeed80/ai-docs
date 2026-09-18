@@ -748,6 +748,44 @@ def _check_axial_cross_section() -> None:
     )
 
 
+def _check_plan_view() -> None:
+    """X3: вид сверху (`plan`, наблюдатель на +Z). `side` смотрит снизу: ребро,
+    стоящее на основании, в нём скрыто, и план сварного узла был пуст."""
+    base = _feature("extrude", width_mm=120.0, height_mm=80.0, depth_mm=10.0)
+    rib = {
+        **_feature("extrude", width_mm=120.0, height_mm=40.0, depth_mm=6.0),
+        "body_index": 1,
+    }
+    rib["params"]["placement"] = {
+        "position_mm": [0.0, 80.0, 10.0],
+        "axis": [1.0, 0.0, 0.0],
+        "angle_deg": 90.0,
+    }
+    status, payload = _post(
+        "/drawing",
+        {
+            "candidate": _candidate(base, rib, label="welded bracket"),
+            "confirm_assumptions": True,
+            "views": [{"kind": "front"}, {"kind": "plan", "x_direction": [-1.0, 0.0, 0.0]}],
+            "scale": 1.0,
+        },
+    )
+    if status != 200:
+        check("plan view builds", False, f"HTTP {status}: {str(payload)[:300]}")
+        return
+    plan = payload["views"][1]
+    levels = sorted(
+        {
+            round(abs(item["points"][0][1]), 1)
+            for item in plan.get("visible") or []
+            if item.get("type") == "line"
+            and abs(item["points"][0][1] - item["points"][1][1]) < 1e-6
+        }
+    )
+    # Ребро y 74…80 при основании 0…80: сверху видна его кромка на 74 (|v| = 34).
+    check("plan view sees the rib from above", 34.0 in levels, f"levels={levels}")
+
+
 def main() -> int:
     status, health = _post("/health", {}) if False else (200, None)
     with urllib.request.urlopen(f"{KERNEL}/health", timeout=30) as response:
@@ -1286,6 +1324,7 @@ def main() -> int:
     _check_flange_on_axial_station()
     _check_face_groove()
     _check_axial_cross_section()
+    _check_plan_view()
     _check_work_plane_features()
     _check_body_placement()
 

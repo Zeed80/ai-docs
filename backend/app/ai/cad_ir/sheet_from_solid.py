@@ -28,6 +28,11 @@ from typing import Any
 import structlog
 
 from app.ai.cad_ir.schema import CadIR, SourceInfo
+from app.ai.cad_ir.weldment_sheet import (
+    weldment_dimensions,
+    weldment_entities,
+    weldment_extra_height_mm,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -111,6 +116,18 @@ def classify_part(spec: dict, report: dict) -> str:
 
     if isinstance((spec.get("main_view") or {}).get("sheet_metal"), dict):
         return "sheet_metal"
+    if (
+        spec.get("welds")
+        or len(
+            [
+                body
+                for body in spec.get("parts") or []
+                if isinstance(body, dict) and body.get("profile")
+            ]
+        )
+        > 1
+    ):
+        return "weldment"
     parts = _rotation_parts(spec)
     if parts:
         return "hollow_rotation" if parts[0].get("bore") else "solid_rotation"
@@ -196,6 +213,15 @@ def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
             }
         )
         views.append({"kind": "top"})
+    elif part_class == "weldment":
+        # Сварной узел (X3): главный вид спереди (ширина горизонтально), под
+        # ним план, справа — вид слева: на нём профиль узла и швы.
+        # Оси подобраны пробой ядра: вид спереди — u = −x, v = z (основание
+        # внизу; с x_direction +X ядро кладёт узел вверх ногами), план —
+        # наблюдатель на +Z с той же u, вид слева — u = y, v = z.
+        views[0] = {"kind": "front", "x_direction": [-1.0, 0.0, 0.0]}
+        views.append({"kind": "plan", "x_direction": [-1.0, 0.0, 0.0]})
+        views.append({"kind": "top", "x_direction": [0.0, 1.0, 0.0]})
     elif part_class == "sheet_metal":
         # Гнутая деталь (X4): главный вид — вдоль ширины (`side`), на нём
         # сечение с полками и гибами; справа `top` — ширина. `front` — основа
@@ -432,6 +458,15 @@ def _estimate_layout_mm(part_class: str, report: dict, views: list[dict]) -> tup
     diameter = max(float(bounds.get("x") or 0.0), float(bounds.get("y") or 0.0))
     kinds = [view.get("presentation_kind") or view["kind"] for view in views]
 
+    if part_class == "weldment":
+        # Вид спереди (x × z), под ним план (x × y), справа вид слева (y × z),
+        # сверху — полки швов, снизу — перечень позиций.
+        size_x, size_y = float(bounds.get("x") or 0.0), float(bounds.get("y") or 0.0)
+        size_z = length
+        return (
+            size_x + VIEW_GAP_MM + size_y + 40.0,
+            size_z + VIEW_GAP_MM + size_y + 40.0 + 40.0,
+        )
     if part_class == "sheet_metal":
         # Сечение (x × y) и справа вид на ширину (z × y).
         section_w, section_h = float(bounds.get("x") or 0.0), float(bounds.get("y") or 0.0)
@@ -532,6 +567,10 @@ def plan_sheet(
     elif part_class == "solid_rotation" and any(v["kind"] == "bottom" for v in views):
         # Вал с пазом: главный вид — `bottom`, лицом к пазу.
         scaffold = {index for index, view in enumerate(views) if view["kind"] == "front"}
+    elif part_class == "weldment":
+        anchor = 0
+        below = {index for index, view in enumerate(views) if view["kind"] == "plan"}
+        right = {index for index, view in enumerate(views) if view["kind"] == "top"}
     elif part_class == "sheet_metal":
         scaffold = {index for index, view in enumerate(views) if view["kind"] == "front"}
         right = {index for index, view in enumerate(views) if view["kind"] == "top"}
@@ -600,6 +639,10 @@ def _dimension_requests(drawing: dict, spec: dict, plan: SheetPlan) -> list[dict
     if not views:
         return requests
 
+    if plan.part_class == "weldment":
+        # Размеры узла ставит `weldment_dimensions` по всем телам; простановка
+        # пластины мерила бы одно первое тело и дублировала ширину.
+        return requests
     parts = _rotation_parts(spec)
     if not parts:
         return _prismatic_dimension_requests(views, spec, plan)
@@ -2551,6 +2594,7 @@ async def build_sheet_from_solid(
     _turned_detail_dimensions(drawing, spec, plan)
     _keyway_section_dimensions(drawing, spec, plan)
     _sheet_metal_dimensions(drawing, spec, plan)
+    weldment_dimensions(drawing, spec, plan)
 
     ir, extent = _assemble(drawing, spec, plan)
     geometry_verification = verify_views_against_solid(
@@ -2564,7 +2608,7 @@ async def build_sheet_from_solid(
             "flange"
             if plan.part_class in ("flange", "plate")
             else plan.part_class
-            if plan.part_class == "sheet_metal"
+            if plan.part_class in ("sheet_metal", "weldment")
             else "rotation"
         ),
         # The views came back already multiplied by the sheet scale; the solid
@@ -2631,7 +2675,7 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
     )
     extent_w, extent_h = sheet_extent_mm(views, placements)
     # Развёртка стоит под видами — она тоже занимает место на листе.
-    extent_h += _flat_pattern_height_mm(spec, plan)
+    extent_h += _flat_pattern_height_mm(spec, plan) + weldment_extra_height_mm(spec, plan)
     offset_u = area_x0 + max((area_w - extent_w) / 2.0, 0.0)
     offset_v = area_y0 + max((area_h - extent_h) / 2.0, 0.0)
     entities, placements = place_sheet_views(
@@ -2658,6 +2702,7 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
     )
     entities += _view_label_entities(views, placements)
     entities += _flat_pattern_entities(spec, plan, views, placements)
+    entities += weldment_entities(spec, plan, views, placements)
     entities += _cutting_plane_entities(views, placements, plan)
     if plan.geometry_only:
         entities += _annotation_entities(

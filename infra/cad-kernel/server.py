@@ -2583,6 +2583,9 @@ _VIEW_FRAMES: dict[str, tuple[tuple[float, float, float], float, float]] = {
     # Signs fixed by probing a keyed shaft: the keyway must land at the same u as
     # on `front` (no mirrored part) — see the backend test of the probe numbers.
     "bottom": ((1.0, 0.0, 0.0), -1.0, 1.0),
+    # Вид сверху на деталь (X3, сварной узел; план корпуса): наблюдатель на +Z.
+    # `side` смотрит с −Z, то есть снизу — рёбра на основании в нём скрыты.
+    "plan": ((0.0, 0.0, 1.0), 1.0, 1.0),
 }
 
 
@@ -2746,7 +2749,7 @@ def project_views(request: ProjectRequest) -> dict[str, Any]:
 class SheetViewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["front", "side", "top", "bottom", "section", "detail"] = "front"
+    kind: Literal["front", "side", "top", "bottom", "plan", "section", "detail"] = "front"
     # Куда смотрит горизонтальная ось вида (X2, корпуса). По умолчанию у
     # `front`/`bottom` это ось детали (0, 0, 1) — так у вала длина ложится
     # горизонтально. У призматической детали от этого ширина встаёт
