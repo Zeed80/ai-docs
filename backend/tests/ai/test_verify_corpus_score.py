@@ -91,3 +91,19 @@ def test_summary_counts_by_kind():
     assert summary["sheets"] == 2
     assert summary["geometry"] == 0.5
     assert summary["diameters"]["recall"] == 0.5
+
+
+def test_a_sheet_metal_part_is_scored_by_its_flanges_bends_and_sizes():
+    truth = synth_spec("sheet_metal", 4)
+    perfect = score_spec(truth, copy.deepcopy(truth))
+    assert perfect["kind"] == "sheet_metal"
+    assert all(value is True for key, value in perfect.items() if key != "kind")
+
+    # Прочитанная с другого края — та же деталь.
+    reversed_read = copy.deepcopy(truth)
+    reversed_read["main_view"]["sheet_metal"]["flanges_mm"].reverse()
+    assert score_spec(truth, reversed_read)["flanges_exact"]
+
+    # Прочитанная пластиной — класс не распознан, всё мимо.
+    missed = score_spec(truth, {"main_view": {"profile": {"shape": "rectangle"}}})
+    assert not missed["class_ok"] and not missed["flanges_exact"]

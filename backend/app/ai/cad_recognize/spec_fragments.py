@@ -34,10 +34,12 @@ logger = structlog.get_logger(__name__)
 _KIND_PROMPT = (
     "Ты — инженер-конструктор. Посмотри на чертёж и ответь ОДНОЙ строкой JSON "
     "без пояснений:\n"
-    '{"part":"название детали из штампа","kind":"rotation|plate|flange|other",'
+    '{"part":"название детали из штампа","kind":"rotation|plate|flange|sheet_metal|other",'
     '"bodies":1,"views":["front","side","top","section","detail","removed_section"]}\n'
     "kind: rotation — тело вращения (вал, шпиндель, втулка); plate — плоская "
-    "деталь с толщиной; flange — круглая пластина/фланец; other — остальное.\n"
+    "деталь с толщиной; flange — круглая пластина/фланец; sheet_metal — гнутая "
+    "деталь из листа (уголок, швеллер, скоба, есть развёртка или s толщины "
+    "листа); other — остальное.\n"
     "views — только те проекции, что реально есть на листе.\n"
     "Кириллицу пиши буквами, не экранируй. Только JSON."
 )
@@ -45,7 +47,11 @@ _KIND_PROMPT = (
 # Тип, выбранный оператором, — не догадка модели. Сузить класс он может
 # только у «тела вращения»: «произвольная деталь» не говорит, пластина это,
 # фланец или корпус.
-_OPERATOR_KIND = {"rotation_body": "rotation"}
+_OPERATOR_KIND = {"rotation_body": "rotation", "sheet_metal_part": "sheet_metal"}
+_OPERATOR_KIND_TEXT = {
+    "rotation": "тело вращения (kind=rotation)",
+    "sheet_metal": "гнутая деталь из листа (kind=sheet_metal)",
+}
 
 
 def _kind_prompt(digitization_type: str | None) -> str:
@@ -53,8 +59,8 @@ def _kind_prompt(digitization_type: str | None) -> str:
     if prior is None:
         return _KIND_PROMPT
     return (
-        _KIND_PROMPT + "\nОператор указал тип детали: тело вращения (kind=rotation). "
-        "Если на листе явно не тело вращения — всё равно ответь честно, это "
+        _KIND_PROMPT + f"\nОператор указал тип детали: {_OPERATOR_KIND_TEXT[prior]}. "
+        "Если на листе явно не такая деталь — всё равно ответь честно, это "
         "расхождение будет показано оператору."
     )
 
@@ -375,6 +381,52 @@ _WALL_FEATURES_SCHEMA = {
     "required": ["features"],
 }
 
+_SHEET_METAL_PROMPT = (
+    "С чертежа уже прочитаны размерные надписи:\n{callouts}\n\n"
+    "Это гнутая деталь из листа. На виде её сечения — полки, соединённые "
+    "гибами на 90°. Укажи:\n"
+    "- shape: angle (уголок, 2 полки), channel (швеллер/скоба, 3 полки, края "
+    "загнуты в одну сторону), z (Z-профиль, 3 полки, края в разные стороны), "
+    "hat (шляпный профиль, 5 полок) или other;\n"
+    "- flanges_mm: размеры полок ПО ПОРЯДКУ вдоль сечения, от одного края до "
+    "другого, — так, как они проставлены (обычно по наружной поверхности);\n"
+    "- turns: только для other — направление каждого гиба по ходу: left или right;\n"
+    "- radius_mm: внутренний радиус гиба (надпись R);\n"
+    "- thickness_mm: толщина листа (надпись s или размер толщины);\n"
+    "- width_mm: ширина детали (размер вдоль линии гиба на другом виде).\n"
+    "Числа бери ТОЛЬКО из списка выше; чего на листе нет — null. ОДНОЙ строкой "
+    "JSON:\n"
+    '{{"shape":"channel","flanges_mm":[0,0,0],"turns":null,"radius_mm":0,'
+    '"thickness_mm":0,"width_mm":0}}\n'
+    "Только JSON."
+)
+
+_SHEET_METAL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "shape": {"type": ["string", "null"]},
+        "flanges_mm": {"type": "array", "maxItems": 12, "items": {"type": ["number", "null"]}},
+        "turns": {
+            "type": ["array", "null"],
+            "maxItems": 11,
+            "items": {"type": "string", "enum": ["left", "right"]},
+        },
+        "radius_mm": {"type": ["number", "null"]},
+        "thickness_mm": {"type": ["number", "null"]},
+        "width_mm": {"type": ["number", "null"]},
+    },
+    "required": ["shape", "flanges_mm"],
+}
+
+# Направления гибов стандартных профилей; зеркальный профиль — та же деталь.
+_SHEET_METAL_TURNS = {
+    "angle": (1,),
+    "channel": (1, 1),
+    "z": (1, -1),
+    "hat": (-1, 1, 1, -1),
+}
+
+
 _PLATE_HOLES_PROMPT = (
     "С чертежа уже прочитаны размерные надписи:\n{callouts}\n\n"
     "На виде в плане пластины есть отверстия. Для КАЖДОГО отверстия укажи его "
@@ -552,7 +604,10 @@ _KIND_SCHEMA = {
     "type": "object",
     "properties": {
         "part": {"type": ["string", "null"]},
-        "kind": {"type": "string", "enum": ["rotation", "plate", "flange", "other"]},
+        "kind": {
+            "type": "string",
+            "enum": ["rotation", "plate", "flange", "sheet_metal", "other"],
+        },
         "bodies": {"type": ["integer", "null"]},
         # Bounded on purpose. An unbounded array under constrained decoding
         # invites repetition: on a dense spindle sheet the model emitted
@@ -4557,6 +4612,93 @@ async def _plate_holes(
     return holes
 
 
+async def _sheet_metal_by_question(
+    image: Any,
+    callouts: dict,
+    *,
+    router: Any,
+    confidential: bool,
+    audit: list[dict[str, Any]] | None = None,
+    notes: list[str] | None = None,
+) -> dict[str, Any] | None:
+    """Гнутая деталь из листа (X4): полки, гибы, радиус, толщина, ширина.
+
+    Полку на листе образмеривают по наружной поверхности; схема хранит прямой
+    участок между гибами — он получается вычитанием ``R + s`` на каждый
+    прилегающий гиб. Каждое число обязано стоять на листе; чего не хватает —
+    деталь не строится, недостающее уходит замечанием.
+    """
+    candidates = _callout_numbers(callouts)
+    if not candidates:
+        return None
+    allowed = set(candidates)
+
+    def taken(value: float) -> float | None:
+        return value if any(abs(value - c) <= max(0.05, c * 0.005) for c in allowed) else None
+
+    listed = ", ".join(f"{value:g}" for value in candidates[:24])
+    answer = await _ask(
+        _SHEET_METAL_PROMPT.format(callouts=listed),
+        image,
+        num_predict=500,
+        schema=_SHEET_METAL_SCHEMA,
+        router=router,
+        confidential=confidential,
+        audit=audit,
+    )
+    if not answer:
+        return None
+    return sheet_metal_from_answer(answer, taken, notes)
+
+
+def sheet_metal_from_answer(
+    answer: dict[str, Any], taken: Any, notes: list[str] | None = None
+) -> dict[str, Any] | None:
+    """Ответ модели → ``SpecSheetMetal`` (прямые участки полок) или None."""
+    missing: list[str] = []
+    shape = str(answer.get("shape") or "").strip().lower()
+    outer = [taken_value(value, taken) for value in answer.get("flanges_mm") or []]
+    radius = taken_value(answer.get("radius_mm"), taken)
+    thickness = taken_value(answer.get("thickness_mm"), taken)
+    width = taken_value(answer.get("width_mm"), taken)
+    turns: tuple[int, ...] | None = _SHEET_METAL_TURNS.get(shape)
+    if turns is None and isinstance(answer.get("turns"), list):
+        turns = tuple(1 if item == "left" else -1 for item in answer["turns"])
+    if not outer or any(value is None for value in outer):
+        missing.append("размеры полок")
+    if radius is None:
+        missing.append("радиус гиба")
+    if thickness is None:
+        missing.append("толщина листа")
+    if width is None:
+        missing.append("ширина")
+    if turns is None or (outer and len(turns) != len(outer) - 1):
+        missing.append("число гибов не сходится с числом полок")
+    if missing:
+        if notes is not None:
+            notes.append("листовая деталь не построена: " + ", ".join(missing))
+        return None
+    reach = radius + thickness
+    flanges: list[float] = []
+    for index, value in enumerate(outer):
+        bends = (index > 0) + (index < len(outer) - 1)
+        straight = round(value - bends * reach, 3)
+        if straight <= 0:
+            if notes is not None:
+                notes.append(
+                    f"листовая деталь не построена: полка {value:g} короче гибов (R + s = {reach:g})"
+                )
+            return None
+        flanges.append(straight)
+    return {
+        "flanges_mm": flanges,
+        "turns": list(turns),
+        "radius_mm": radius,
+        "thickness_mm": thickness,
+        "width_mm": width,
+    }
+
+
 def taken_value(value: Any, taken: Any) -> float | None:
     """Число из ответа модели, если лист его действительно несёт."""
     if not isinstance(value, (int, float)) or isinstance(value, bool):
@@ -4933,6 +5075,17 @@ async def read_spec_by_fragments(
             body["profile"] = profile
         else:
             unresolved.append("контур плоской детали не прочитан")
+    elif kind == "sheet_metal":
+        sheet = await _sheet_metal_by_question(
+            geometry_view,
+            callouts,
+            router=router,
+            confidential=confidential,
+            audit=fragment_answers,
+            notes=unresolved,
+        )
+        if sheet is not None:
+            body["sheet_metal"] = sheet
     else:
         unresolved.append(f"класс детали не определён (ответ модели: {kind or 'пусто'})")
 
@@ -4982,7 +5135,7 @@ async def read_spec_by_fragments(
         "fragments": {
             "kind": bool(kind_answer),
             "stamp": bool(stamp),
-            "geometry": bool(body.get("outer") or body.get("profile")),
+            "geometry": bool(body.get("outer") or body.get("profile") or body.get("sheet_metal")),
             "callouts": bool(callouts),
             "pmi_regions": len(pmi_evidence),
             "structured_pmi": bool(structured_pmi),
@@ -5123,6 +5276,7 @@ def _type_label(kind: str) -> str:
         "rotation": "тело вращения (вал)",
         "plate": "призматическая (пластина)",
         "flange": "фланец",
+        "sheet_metal": "листовая деталь",
     }.get(kind, kind or "")
 
 

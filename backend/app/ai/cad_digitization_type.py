@@ -8,6 +8,7 @@ DIGITIZATION_TYPES = (
     "auto",
     "rotation_body",
     "arbitrary_mechanical_part",
+    "sheet_metal_part",
     "mechanical_assembly",
     "construction_structure",
     "architectural_drawing",
@@ -21,6 +22,7 @@ _PROFILE_BY_TYPE = {
     "auto": "auto",
     "rotation_body": "mechanical",
     "arbitrary_mechanical_part": "mechanical",
+    "sheet_metal_part": "mechanical",
     "mechanical_assembly": "mechanical",
     "construction_structure": "construction",
     "architectural_drawing": "construction",
@@ -34,6 +36,7 @@ _SPEC_REDRAW_TYPES = {
     "auto",
     "rotation_body",
     "arbitrary_mechanical_part",
+    "sheet_metal_part",
 }
 
 

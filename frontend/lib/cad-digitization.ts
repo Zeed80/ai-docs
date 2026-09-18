@@ -2,6 +2,7 @@ export type DigitizationType =
   | "auto"
   | "rotation_body"
   | "arbitrary_mechanical_part"
+  | "sheet_metal_part"
   | "mechanical_assembly"
   | "construction_structure"
   | "architectural_drawing"
@@ -20,6 +21,7 @@ export const DIGITIZATION_TYPE_OPTIONS: {
     value: "arbitrary_mechanical_part",
     labelKey: "type_arbitrary_mechanical_part",
   },
+  { value: "sheet_metal_part", labelKey: "type_sheet_metal_part" },
   { value: "mechanical_assembly", labelKey: "type_mechanical_assembly" },
   {
     value: "construction_structure",
@@ -36,6 +38,7 @@ export function profileForDigitizationType(type: DigitizationType): string {
   if (
     type === "rotation_body" ||
     type === "arbitrary_mechanical_part" ||
+    type === "sheet_metal_part" ||
     type === "mechanical_assembly"
   ) {
     return "mechanical_eskd";

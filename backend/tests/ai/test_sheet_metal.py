@@ -167,3 +167,72 @@ def test_the_bent_section_survives_the_round_trip_through_the_graph():
     [extrude] = [f for f in rebuilt.features if f.kind == "extrude"]
     assert extrude.params["depth_mm"] == 50.0
     assert sum(1 for s in extrude.params["sketch_profile"] if s["kind"] == "arc") == 4
+
+
+def _taken(*numbers: float):
+    return lambda value: value if any(abs(value - n) < 1e-6 for n in numbers) else None
+
+
+def test_the_reader_turns_outer_flange_sizes_into_straight_runs():
+    """Лист ставит полку по наружной поверхности; схема хранит прямой участок
+    между гибами — минус R + s на каждый прилегающий гиб."""
+    from app.ai.cad_recognize.spec_fragments import sheet_metal_from_answer
+
+    answer = {
+        "shape": "channel",
+        "flanges_mm": [19, 48, 16],
+        "radius_mm": 2,
+        "thickness_mm": 2,
+        "width_mm": 50,
+    }
+    sheet = sheet_metal_from_answer(answer, _taken(19, 48, 16, 2, 50))
+
+    assert sheet == {
+        "flanges_mm": [15.0, 40.0, 12.0],
+        "turns": [1, 1],
+        "radius_mm": 2.0,
+        "thickness_mm": 2.0,
+        "width_mm": 50.0,
+    }
+
+
+def test_the_reader_builds_nothing_from_a_number_the_sheet_does_not_state():
+    from app.ai.cad_recognize.spec_fragments import sheet_metal_from_answer
+
+    notes: list[str] = []
+    answer = {
+        "shape": "angle",
+        "flanges_mm": [45, 25],
+        "radius_mm": 2.5,
+        "thickness_mm": 2.5,
+        "width_mm": 30,
+    }
+    assert sheet_metal_from_answer(answer, _taken(45, 25, 2.5), notes) is None
+    assert notes == ["листовая деталь не построена: ширина"]
+
+
+def test_explicit_turns_must_match_the_flanges():
+    from app.ai.cad_recognize.spec_fragments import sheet_metal_from_answer
+
+    answer = {
+        "shape": "other",
+        "flanges_mm": [20, 30, 20],
+        "turns": ["left"],
+        "radius_mm": 2,
+        "thickness_mm": 2,
+        "width_mm": 40,
+    }
+    notes: list[str] = []
+    assert sheet_metal_from_answer(answer, _taken(20, 30, 2, 40), notes) is None
+    assert "число гибов не сходится с числом полок" in notes[0]
+
+
+def test_the_operator_can_say_the_part_is_sheet_metal():
+    from app.ai.cad_digitization_type import resolve_digitization_type
+    from app.ai.cad_recognize.spec_fragments import _apply_operator_kind, _kind_prompt
+
+    decision = resolve_digitization_type("sheet_metal_part")
+    assert decision.spec_redraw_supported
+    assert "kind=sheet_metal" in _kind_prompt("sheet_metal_part")
+    kind, notes = _apply_operator_kind("plate", "sheet_metal_part")
+    assert kind == "sheet_metal" and notes

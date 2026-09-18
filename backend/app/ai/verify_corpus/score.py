@@ -114,7 +114,32 @@ def score_spec(truth_spec: dict[str, Any], read_spec: dict[str, Any] | None) -> 
     read = read_spec.get("main_view") or {}
     if truth.get("outer"):
         return {"kind": "rotation", **_score_rotation(truth, read)}
+    if isinstance(truth.get("sheet_metal"), dict):
+        return {"kind": "sheet_metal", **_score_sheet_metal(truth, read)}
     return {"kind": "profile", **_score_profile(truth, read)}
+
+
+def _score_sheet_metal(truth: dict[str, Any], read: dict[str, Any]) -> dict[str, Any]:
+    """Гнутая деталь (X4): класс, полки по порядку (или в обратном — это та же
+    деталь, прочитанная с другого края), гибы, R, s, ширина."""
+    t_sheet = truth["sheet_metal"]
+    r_sheet = read.get("sheet_metal") if isinstance(read.get("sheet_metal"), dict) else {}
+    t_flanges = list(t_sheet.get("flanges_mm") or [])
+    r_flanges = list(r_sheet.get("flanges_mm") or [])
+
+    def same_run(left: list, right: list) -> bool:
+        return len(left) == len(right) and all(
+            _agree(a, b) for a, b in zip(left, right, strict=True)
+        )
+
+    return {
+        "class_ok": bool(r_sheet),
+        "flanges_exact": same_run(t_flanges, r_flanges) or same_run(t_flanges, r_flanges[::-1]),
+        "bends_ok": len(r_sheet.get("turns") or []) == len(t_sheet.get("turns") or []),
+        "radius_ok": _agree(r_sheet.get("radius_mm"), t_sheet.get("radius_mm")),
+        "thickness_ok": _agree(r_sheet.get("thickness_mm"), t_sheet.get("thickness_mm")),
+        "width_ok": _agree(r_sheet.get("width_mm"), t_sheet.get("width_mm")),
+    }
 
 
 def _score_rotation(truth: dict[str, Any], read: dict[str, Any]) -> dict[str, Any]:
