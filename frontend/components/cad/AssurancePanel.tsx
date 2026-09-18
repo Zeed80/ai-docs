@@ -48,6 +48,27 @@ const FIELD_KEYS = new Set([
   "hole_diameter_mm",
 ]);
 
+/** Подтверждено из проверенного — по видам элементов, в порядке появления.
+ *  Одна общая строка «подтверждено 12» не говорит, что все 12 — ступени, а оба
+ *  паза остались непроверенными. */
+export function verifyByKind(
+  items: SpecVerification["items"],
+): { kind: string; confirmed: number; checked: number }[] {
+  const order: string[] = [];
+  const counts = new Map<string, { confirmed: number; checked: number }>();
+  for (const item of items) {
+    if (!VERIFY_KINDS.has(item.kind)) continue;
+    if (!counts.has(item.kind)) {
+      order.push(item.kind);
+      counts.set(item.kind, { confirmed: 0, checked: 0 });
+    }
+    const entry = counts.get(item.kind)!;
+    entry.checked += 1;
+    if (item.status === "confirmed") entry.confirmed += 1;
+  }
+  return order.map((kind) => ({ kind, ...counts.get(kind)! }));
+}
+
 /** «длина» из `length_mm`: имя поля спека — оператору не язык. */
 function fieldLabel(
   field: string,
@@ -191,6 +212,22 @@ export default function AssurancePanel({
                 unmeasurable: verification.summary.unmeasurable,
               })}
             />
+            {verifyByKind(verification.items).length > 1 ? (
+              <Row
+                neutral
+                label={t("vector.assurance_verify_by_kind", {
+                  list: verifyByKind(verification.items)
+                    .map((group) =>
+                      t("vector.assurance_verify_group", {
+                        name: t(`vector.assurance_verify_group_${group.kind}`),
+                        confirmed: group.confirmed,
+                        checked: group.checked,
+                      }),
+                    )
+                    .join(" · "),
+                })}
+              />
+            ) : null}
             {verification.items
               .filter((item) => item.status !== "confirmed")
               .map((item) => (

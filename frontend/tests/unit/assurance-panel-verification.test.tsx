@@ -297,3 +297,24 @@ describe("AssurancePanel — элементы граней корпуса", () =
     expect(screen.getByText(/Толщина/)).toBeInTheDocument();
   });
 });
+
+describe("сводка проверки по видам элементов (Ф9)", () => {
+  it("показывает, сколько подтверждено из проверенного по каждому виду", () => {
+    render(<AssurancePanel verification={VERIFICATION} t={t} />);
+    const line = screen.getByText(/^По видам:/);
+    expect(line.textContent).toContain("отверстия 1 из 2");
+    expect(line.textContent).toContain("окружности болтов");
+  });
+
+  it("не дублирует общую строку, когда вид элементов один", async () => {
+    const { verifyByKind } = await import("@/components/cad/AssurancePanel");
+    const single = VERIFICATION.items.filter((i) => i.kind === "plate_hole");
+    expect(verifyByKind(single)).toEqual([
+      { kind: "plate_hole", confirmed: 1, checked: 2 },
+    ]);
+    render(
+      <AssurancePanel verification={{ ...VERIFICATION, items: single }} t={t} />,
+    );
+    expect(screen.queryByText(/^По видам:/)).toBeNull();
+  });
+});
