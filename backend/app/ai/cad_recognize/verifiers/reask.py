@@ -62,7 +62,12 @@ def _neighbours(outer: list[dict], index: int) -> str:
 
 
 def step_crop_box(
-    report: dict[str, Any], outer: list[dict], index: int, field: str, measured_diameter: float
+    report: dict[str, Any],
+    outer: list[dict],
+    index: int,
+    field: str,
+    measured_diameter: float,
+    widen: float = 1.0,
 ) -> tuple[int, int, int, int] | None:
     """Рамка выреза вокруг ступени по системе координат проверки.
 
@@ -79,9 +84,9 @@ def step_crop_box(
         return None
     start = sum(lengths[:index])
     end = start + lengths[index]
-    reach = 0.5 * max(lengths[index], 6.0)
+    reach = 0.5 * max(lengths[index], 6.0) * widen
     radius = float(measured_diameter) / 2.0
-    rise = radius + (40.0 if field == "length_mm" else max(12.0, 0.8 * radius))
+    rise = radius + (40.0 if field == "length_mm" else max(12.0, 0.8 * radius)) * widen
     x0, axis = float(origin[0]), float(origin[1])
     return (
         int(x0 + (start - reach) / scale),
@@ -99,6 +104,7 @@ async def reask_disputed(
     *,
     ask: Asker | None = None,
     max_questions: int = 6,
+    crop_scale: float = 1.0,
 ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     """Переспросить спорные Ø и длины ступеней; принять только согласное с замером.
 
@@ -132,7 +138,7 @@ async def reask_disputed(
         index = int(match.group(1)) if match else -1
         item = items.get(decision["path"]) or {}
         measured_d = (item.get("measured") or {}).get("diameter_mm") or decision["measured"]
-        box = step_crop_box(report, outer, index, decision["field"], float(measured_d))
+        box = step_crop_box(report, outer, index, decision["field"], float(measured_d), crop_scale)
         if box is None:
             updated.append(decision)
             continue
@@ -181,6 +187,71 @@ async def reask_disputed(
     if adopted:
         spec, report = apply_reconciliation(spec, report, adopted)
     return spec, report, updated, log
+
+
+def _open_disputes(decisions: list[dict[str, Any]]) -> int:
+    return sum(
+        1
+        for decision in decisions
+        if decision.get("action") == "ask_human"
+        and decision.get("kind") == "shaft_step"
+        and decision.get("field") in _PROMPTS
+    )
+
+
+async def reask_until_settled(
+    image_bytes: bytes,
+    spec: dict[str, Any],
+    report: dict[str, Any],
+    decisions: list[dict[str, Any]],
+    *,
+    ask: Asker | None = None,
+    max_rounds: int = 2,
+    budget: int = 8,
+) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], str]:
+    """Круги переспроса с правилом остановки (план, Ф8).
+
+    Каждый следующий круг спрашивает оставшееся по вырезу шире (соседние
+    надписи и выноски попадают в кадр) и допускается, только если прошлый
+    круг УМЕНЬШИЛ число расхождений: круг, ничего не решивший, повторённый с
+    тем же вопросом, решит то же самое, а вызов модели локально — ~15 с.
+    ``budget`` — вопросов на лист всего. Возвращает ещё и причину остановки.
+    """
+    log: list[dict[str, Any]] = []
+    remaining = budget
+    reason = "расхождений не осталось"
+    for round_index in range(max_rounds):
+        before = _open_disputes(decisions)
+        if before == 0:
+            reason = "расхождений не осталось"
+            break
+        if remaining <= 0:
+            reason = f"исчерпан бюджет вопросов на лист ({budget})"
+            break
+        spec, report, decisions, asked = await reask_disputed(
+            image_bytes,
+            spec,
+            report,
+            decisions,
+            ask=ask,
+            max_questions=remaining,
+            crop_scale=1.0 + 0.6 * round_index,
+        )
+        for entry in asked:
+            entry["round"] = round_index + 1
+        log.extend(asked)
+        remaining -= len(asked)
+        after = _open_disputes(decisions)
+        if not asked:
+            reason = "спрашивать не о чем: у спорного нет выреза"
+            break
+        if after >= before:
+            reason = f"круг {round_index + 1} не уменьшил расхождений — стоп, решение человеку"
+            break
+        reason = (
+            "расхождений не осталось" if after == 0 else f"достигнут предел кругов ({max_rounds})"
+        )
+    return spec, report, decisions, log, reason
 
 
 async def _default_ask(prompt: str, crop: Any) -> dict:

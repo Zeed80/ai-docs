@@ -99,3 +99,73 @@ def test_the_crop_is_around_the_disputed_step():
     width, height = seen[0][1]
     assert 250 <= width <= 350
     assert height < 800
+
+
+def _two_disputes() -> list[dict]:
+    second = {**DECISION, "path": "main_view.outer[2]", "read": 40.0, "measured": 35.0}
+    return [DECISION, second]
+
+
+def _report_two() -> dict:
+    item = {**REPORT["items"][0], "path": "main_view.outer[2]"}
+    item["measured"] = {"diameter_mm": 35.0, "length_mm": 80.0}
+    return {**REPORT, "items": [REPORT["items"][0], item]}
+
+
+def test_a_second_round_only_follows_a_round_that_settled_something():
+    """Ф8, правило остановки: круг, ничего не решивший, не повторяется —
+    тот же вопрос даст тот же ответ, а вызов модели локально ~15 с."""
+    from app.ai.cad_recognize.verifiers.reask import reask_until_settled
+
+    answers = iter([{"value": 28}, {"value": 40}, {"value": 35}])
+    sizes = []
+
+    async def ask(prompt, crop):
+        sizes.append(crop.size)
+        return next(answers)
+
+    spec, _report, decisions, log, reason = asyncio.run(
+        reask_until_settled(_png(), SPEC, _report_two(), _two_disputes(), ask=ask)
+    )
+
+    # Круг 1: Ø28 принят, Ø35 модель повторила прочитанное → расхождений меньше.
+    # Круг 2 — по вырезу шире: Ø35 принят.
+    assert [entry["round"] for entry in log] == [1, 1, 2]
+    assert sizes[2][0] > sizes[1][0]
+    assert spec["main_view"]["outer"][2]["diameter_mm"] == 35.0
+    assert all(decision["action"] == "adopt" for decision in decisions)
+    assert reason == "расхождений не осталось"
+
+
+def test_a_round_that_settles_nothing_stops_the_questions():
+    from app.ai.cad_recognize.verifiers.reask import reask_until_settled
+
+    calls = []
+
+    async def ask(prompt, crop):
+        calls.append(prompt)
+        return {"value": 40}
+
+    *_rest, log, reason = asyncio.run(
+        reask_until_settled(_png(), SPEC, _report_two(), _two_disputes(), ask=ask)
+    )
+
+    assert len(calls) == 2 and all(entry["round"] == 1 for entry in log)
+    assert "не уменьшил" in reason
+
+
+def test_the_question_budget_per_sheet_is_kept():
+    from app.ai.cad_recognize.verifiers.reask import reask_until_settled
+
+    calls = []
+
+    async def ask(prompt, crop):
+        calls.append(prompt)
+        return {"value": 28}
+
+    *_rest, reason = asyncio.run(
+        reask_until_settled(_png(), SPEC, _report_two(), _two_disputes(), ask=ask, budget=1)
+    )
+
+    assert len(calls) == 1
+    assert "бюджет" in reason

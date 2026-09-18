@@ -4086,10 +4086,19 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         # прочитанного, ни замера; принимается только ответ,
                         # совпавший с замером (живой shaft-1: 3 из 3 спорных Ø).
                         if any(d["action"] == "ask_human" for d in decisions):
-                            from app.ai.cad_recognize.verifiers.reask import reask_disputed
+                            from app.ai.cad_recognize.verifiers.reask import (
+                                reask_until_settled,
+                            )
 
+                            reask_stop = ""
                             try:
-                                spec, verification, decisions, reask_log = await reask_disputed(
+                                (
+                                    spec,
+                                    verification,
+                                    decisions,
+                                    reask_log,
+                                    reask_stop,
+                                ) = await reask_until_settled(
                                     content, spec, verification, decisions
                                 )
                             except Exception as exc:  # noqa: BLE001 — переспрос не ломает прогон
@@ -4107,9 +4116,9 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                                     (
                                         "Переспрос по фрагменту: принято "
                                         f"{sum(1 for e in reask_log if e['outcome'].startswith('принято'))}"
-                                        f" из {len(reask_log)}"
+                                        f" из {len(reask_log)}; {reask_stop}"
                                     ),
-                                    {"questions": reask_log},
+                                    {"questions": reask_log, "stop": reask_stop},
                                 )
                         verification["reconciliation"] = decisions
                         adopted = [d for d in decisions if d["action"] == "adopt"]
