@@ -118,6 +118,7 @@ def test_wall_with_no_readable_height_is_excluded():
     assert model is None
     assert report["blocked"] is True
     assert report["blocked_reason"] == "no_orthogonal_walls_with_known_height"
+    assert report["blocked_detail"] == {"no_height": 2}
     assert {"id": "w1", "kind": "wall", "reason": "no_height"} in report["skipped"]
 
 

@@ -288,6 +288,14 @@ def construction_read_as_model(
     if not wall_elements:
         report["blocked"] = True
         report["blocked_reason"] = "no_orthogonal_walls_with_known_height"
+        # Код прежний (на него опираются вызывающие), а почему именно не
+        # построена ни одна стена — по фактическим причинам исключения:
+        # живой план упал на толщине, а код говорил про высоту.
+        detail: dict[str, int] = {}
+        for item in skipped:
+            if item.get("kind") == "wall":
+                detail[item["reason"]] = detail.get(item["reason"], 0) + 1
+        report["blocked_detail"] = detail
         return None, report
 
     try:

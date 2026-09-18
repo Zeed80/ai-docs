@@ -2704,7 +2704,18 @@ def _domain_summary(reader: tuple[str, str | None], model: Any, report: dict) ->
     if skipped:
         text += f"; исключено {skipped} (не угадывается)"
     if report.get("blocked"):
-        text += f"; модель не собрана: {report.get('blocked_reason')}"
+        reasons = {
+            "no_thickness": "нет толщины",
+            "no_height": "нет высоты",
+            "not_orthogonal_or_zero_length": "стена не вдоль осей",
+        }
+        detail = report.get("blocked_detail") or {}
+        why = (
+            ", ".join(f"{reasons.get(k, k)} — {v}" for k, v in detail.items())
+            if detail
+            else report.get("blocked_reason")
+        )
+        text += f"; модель не собрана: {why}"
     return text
 
 
