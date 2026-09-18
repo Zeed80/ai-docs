@@ -326,3 +326,55 @@ def test_a_keyway_found_without_a_position_label_is_not_added():
     spec, report = _unread_keyway_case([_at("25", 162.0, 412), _at("185", 100.4, 245)])
 
     assert keyway_additions(spec, report) == []
+
+
+def test_a_wall_feature_measurement_is_adopted_when_the_sheet_states_it():
+    """Ф5: положение элемента грани — надписанное поле (лист несёт координаты
+    от кромок грани), поэтому замер принимается по тому же правилу."""
+    from app.ai.cad_recognize.verifiers.reconcile import apply_reconciliation, reconcile
+
+    spec = {
+        "dimensions": [{"value": "150"}, {"value": "100"}, {"value": "60"}, {"value": "25"}],
+        "main_view": {
+            "profile": {
+                "shape": "rectangle",
+                "width_mm": 150.0,
+                "height_mm": 100.0,
+                "thickness_mm": 60.0,
+                "wall_features": [
+                    {
+                        "id": "0:profile.wall_features:0",
+                        "kind": "boss",
+                        "on_plane": "front",
+                        "profile": "circle",
+                        "diameter_mm": 40.0,
+                        "depth_mm": 8.0,
+                        "center_u_mm": -20.0,
+                        "center_v_mm": 0.0,
+                    }
+                ],
+            }
+        },
+    }
+    report = {
+        "items": [
+            {
+                "kind": "wall_feature",
+                "path": "main_view.profile.wall_features[0]",
+                "feature_id": "0:profile.wall_features:0",
+                "status": "refuted",
+                "read": {"diameter_mm": 40.0, "center_u_mm": -20.0, "center_v_mm": 0.0},
+                "measured": {"diameter_mm": 40.1, "center_u_mm": 25.0, "center_v_mm": 0.1},
+                "tolerance_mm": {"size": 0.5, "position": 1.0},
+            }
+        ],
+        "notes": [],
+    }
+
+    decisions = reconcile(spec, report)
+
+    (decision,) = [item for item in decisions if item["field"] == "center_u_mm"]
+    assert decision["action"] == "adopt"
+    assert decision["value"] == 25.0
+    updated, _report = apply_reconciliation(spec, report, [decision])
+    assert updated["main_view"]["profile"]["wall_features"][0]["center_u_mm"] == 25.0

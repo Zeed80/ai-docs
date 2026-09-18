@@ -32,6 +32,16 @@ ADOPTABLE: dict[str, tuple[tuple[str, str], ...]] = {
     "plate_hole": (("diameter_mm", "diameter"),),
     "concentric_hole": (("diameter_mm", "diameter"),),
     "bolt_circle": (("bolt_circle_diameter_mm", "pcd"), ("hole_diameter_mm", "diameter")),
+    # Корпуса (Ф5): размер и положение элемента грани. Положение здесь —
+    # надписанное поле: лист несёт координаты элемента от кромок его грани,
+    # и замер принимается по тому же правилу, что и размер.
+    "wall_feature": (
+        ("diameter_mm", "size"),
+        ("width_mm", "size"),
+        ("height_mm", "size"),
+        ("center_u_mm", "position"),
+        ("center_v_mm", "position"),
+    ),
 }
 # Число не после цифры и не после латинской буквы, кроме M (резьба) и R
 # (радиус): «Ø80js6» — 80, а не 80 и 6 (поле допуска посадки).
