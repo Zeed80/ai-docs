@@ -59,6 +59,7 @@ def verify_spec_against_sheet(image_bytes: bytes, spec: dict[str, Any]) -> dict[
         _plate_contour(image_bytes, spec or {}, profile, report)
     if shape == "rectangle":
         _housing_thickness(image_bytes, profile, report)
+        _wall_features_on_sheet(image_bytes, profile, report)
     _sheet_scale(image_bytes, spec or {}, report)
     return _finish(report, started, reason)
 
@@ -279,6 +280,110 @@ def _housing_thickness(image_bytes: bytes, profile: dict[str, Any], report: dict
             "reason": f"{views.reason}; прочитано {float(read):g}",
         }
     )
+
+
+def _points_at_another(
+    item: dict[str, Any], measured: dict[str, Any] | None, walls: list[dict[str, Any]]
+) -> bool:
+    """Замер ближе к другому элементу той же грани, чем к проверяемому."""
+    if not measured:
+        return False
+    found = (
+        float(measured.get("center_u_mm") or 0.0),
+        float(measured.get("center_v_mm") or 0.0),
+    )
+
+    def distance(entry: dict[str, Any]) -> float:
+        return (float(entry.get("center_u_mm") or 0.0) - found[0]) ** 2 + (
+            float(entry.get("center_v_mm") or 0.0) - found[1]
+        ) ** 2
+
+    own = distance(item)
+    return any(
+        other is not item
+        and str(other.get("on_plane")) == str(item.get("on_plane"))
+        and distance(other) < own
+        for other in walls
+    )
+
+
+def _wall_features_on_sheet(
+    image_bytes: bytes, profile: dict[str, Any], report: dict[str, Any]
+) -> None:
+    """Карманы и приливы граней — замером на своём виде (`wall_feature`, Ф5).
+
+    Ридер берёт размер с листа верно, а положение и глубину приписывает не
+    тому виду (полость корпуса: центр (−42, −42) вместо (0, 0)). Вид элемента
+    даёт проекционная связь (`housing_views`), замер — сам лист.
+    """
+    from app.ai.cad_recognize.verifiers.wall_feature import (
+        _faces,
+        measure_wall_feature,
+        wall_feature_verdict,
+    )
+
+    walls = [item for item in (profile.get("wall_features") or []) if isinstance(item, dict)]
+    views = report.get("housing_views") or {}
+    if not walls or not views.get("plan_bbox_px"):
+        return
+    width, height = profile.get("width_mm"), profile.get("height_mm")
+    thickness = views.get("thickness_mm") or profile.get("thickness_mm")
+    if not _is_number(width) or not _is_number(height) or not _is_number(thickness):
+        return
+    gray = _gray(image_bytes)
+    frame = report.get("frame") or {}
+    mm_per_px = float(frame.get("mm_per_px") or 0.0)
+    if mm_per_px <= 0:
+        plan = views["plan_bbox_px"]
+        mm_per_px = float(width) / max(plan[2] - plan[0], 1e-6)
+    from app.ai.cad_recognize.sheet_upscale import main_line_px
+
+    line_mm = max(0.0, float(main_line_px(gray))) * mm_per_px
+    faces = _faces(float(width), float(height), float(thickness))
+    boxes = {
+        "top": views.get("plan_bbox_px"),
+        "bottom": views.get("plan_bbox_px"),
+        "front": views.get("front_bbox_px"),
+        "back": views.get("front_bbox_px"),
+        "left": views.get("side_bbox_px"),
+        "right": views.get("side_bbox_px"),
+    }
+    for index, item in enumerate(walls):
+        plane = str(item.get("on_plane") or "")
+        box = boxes.get(plane)
+        face = faces.get(plane)
+        entry = {
+            "kind": "wall_feature",
+            "path": f"main_view.profile.wall_features[{index}]",
+            "feature_id": str(item.get("id") or f"profile:wall:{index}"),
+            "read": {
+                key: item[key]
+                for key in ("diameter_mm", "width_mm", "height_mm", "center_u_mm", "center_v_mm")
+                if _is_number(item.get(key))
+            },
+            "tolerance_mm": {"size": 0.5, "position": 1.0},
+        }
+        if box is None or face is None:
+            report["items"].append(
+                {
+                    **entry,
+                    "status": "unmeasurable",
+                    "measured": {},
+                    "reason": f"вида грани «{plane}» на листе не найдено",
+                }
+            )
+            continue
+        measured = measure_wall_feature(gray, tuple(box), mm_per_px, face, item)
+        verdict = wall_feature_verdict(entry["read"], measured, line_mm)
+        if verdict["status"] == "refuted" and _points_at_another(item, measured, walls):
+            # Замер указывает на СОСЕДНИЙ элемент той же грани: расхождение,
+            # указывающее на другой объект, не опровергает чтение (E28).
+            verdict = {
+                **verdict,
+                "status": "unmeasurable",
+                "reason": "замер указывает на соседний элемент той же грани",
+            }
+        report["items"].append({**entry, **verdict})
 
 
 def _plate_holes(image_bytes: bytes, profile: dict[str, Any], report: dict[str, Any]) -> str | None:

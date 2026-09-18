@@ -81,39 +81,79 @@ def locate_housing_views(sheet: Any, width_mm: float, height_mm: float) -> Housi
     x0, y0, x1, y1 = (float(v) for v in plan.bbox_px)
     plan_width, plan_height = x1 - x0, y1 - y0
 
-    front = _neighbour_below(horizontal, x0, x1, y1, plan_width, plan_height)
-    side = _neighbour_right(vertical, y0, y1, x1, plan_width, plan_height)
-    measures = []
-    if front is not None:
-        measures.append(("вид спереди", (front[1] - front[0]) * plan.scale_v))
-    if side is not None:
-        measures.append(("вид слева", (side[1] - side[0]) * plan.mm_per_px))
-    if not measures:
+    front = _levels_below(horizontal, x0, x1, y1, plan_width, plan_height)
+    side = _levels_right(vertical, y0, y1, x1, plan_width, plan_height)
+    chosen = _agreed_pair(front, side, plan.scale_v, plan.mm_per_px)
+    if chosen is None:
         return HousingViews(plan, None, None, None, "соседних видов не найдено")
-    values = [value for _name, value in measures]
-    if len(values) == 2 and abs(values[0] - values[1]) > _AGREEMENT * max(values):
+    front_pair, side_pair, thickness, names = chosen
+    if thickness is None:
         return HousingViews(
             plan,
-            None if front is None else (x0, front[0], x1, front[1]),
-            None if side is None else (side[0], y0, side[1], y1),
+            None if front_pair is None else (x0, front_pair[0], x1, front_pair[1]),
+            None if side_pair is None else (side_pair[0], y0, side_pair[1], y1),
             None,
-            f"виды не согласны о толщине: {values[0]:.2f} и {values[1]:.2f} мм",
+            names,
         )
-    thickness = sum(values) / len(values)
-    names = " и ".join(name for name, _value in measures)
     return HousingViews(
         plan,
-        None if front is None else (x0, front[0], x1, front[1]),
-        None if side is None else (side[0], y0, side[1], y1),
+        None if front_pair is None else (x0, front_pair[0], x1, front_pair[1]),
+        None if side_pair is None else (side_pair[0], y0, side_pair[1], y1),
         thickness,
         f"толщина измерена по виду ({names}): {thickness:.2f} мм",
     )
 
 
-def _neighbour_below(
+def _agreed_pair(front: list[float], side: list[float], scale_v: float, scale_u: float):
+    """Кромки тела на соседних видах, согласованные между собой.
+
+    Крайние линии вида — не всегда кромки тела: у корпуса housing-7 в вид
+    спереди попадала лишняя линия, и «толщина» выходила 90 мм при 60. Когда
+    оба вида нашлись, выбирается пара, о которой они согласны.
+    """
+    front_spans = _spans(front, scale_v)
+    side_spans = _spans(side, scale_u)
+    if front_spans and side_spans:
+        best = min(
+            (
+                (abs(a_mm - b_mm) / max(a_mm, b_mm), a_mm, b_mm, a, b)
+                for a_mm, a in front_spans
+                for b_mm, b in side_spans
+            ),
+            key=lambda item: (item[0], -min(item[1], item[2])),
+        )
+        error, a_mm, b_mm, a, b = best
+        if error <= _AGREEMENT:
+            return a, b, (a_mm + b_mm) / 2.0, "вид спереди и вид слева"
+        return (
+            None,
+            None,
+            None,
+            f"виды не согласны о толщине: {front_spans[0][0]:.2f} и {side_spans[0][0]:.2f} мм",
+        )
+    if front_spans:
+        span_mm, pair = front_spans[0]
+        return pair, None, span_mm, "вид спереди"
+    if side_spans:
+        span_mm, pair = side_spans[0]
+        return None, pair, span_mm, "вид слева"
+    return None
+
+
+def _spans(levels: list[float], scale: float) -> list[tuple[float, tuple[float, float]]]:
+    """Пары кромок вида, от самой широкой: у тела это его габарит по толщине."""
+    pairs = [
+        ((high - low) * scale, (low, high))
+        for index, low in enumerate(sorted(levels))
+        for high in sorted(levels)[index + 1 :]
+    ]
+    return sorted(pairs, key=lambda item: -item[0])
+
+
+def _levels_below(
     horizontal: list, x0: float, x1: float, plan_bottom: float, width: float, height: float
-) -> tuple[float, float] | None:
-    """Крайние горизонтали вида под планом (его верх и низ), px."""
+) -> list[float]:
+    """Горизонтали вида под планом — кандидаты в кромки тела, px."""
     gap = _MIN_GAP * height
     levels = [
         line.position
@@ -122,15 +162,13 @@ def _neighbour_below(
         and line.overlap(x0, x1) >= _ALIGNMENT * width
         and width * _ALIGNMENT <= (line.end - line.start) <= width * _MAX_SIDE
     ]
-    if len(levels) < 2:
-        return None
-    return min(levels), max(levels)
+    return levels
 
 
-def _neighbour_right(
+def _levels_right(
     vertical: list, y0: float, y1: float, plan_right: float, width: float, height: float
-) -> tuple[float, float] | None:
-    """Крайние вертикали вида справа от плана, px."""
+) -> list[float]:
+    """Вертикали вида справа от плана — кандидаты в кромки тела, px."""
     gap = _MIN_GAP * width
     columns = [
         line.position
@@ -139,6 +177,4 @@ def _neighbour_right(
         and line.overlap(y0, y1) >= _ALIGNMENT * height
         and height * _ALIGNMENT <= (line.end - line.start) <= height * _MAX_SIDE
     ]
-    if len(columns) < 2:
-        return None
-    return min(columns), max(columns)
+    return columns

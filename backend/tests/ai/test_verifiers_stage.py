@@ -767,3 +767,122 @@ def test_views_that_disagree_about_the_thickness_measure_nothing():
     item = next(entry for entry in report["items"] if entry["kind"] == "plate_thickness")
     assert item["status"] == "unmeasurable"
     assert "не согласны" in item["reason"]
+
+
+def _housing_with_features_png() -> bytes:
+    """Лист корпуса: полость на плане и прилив Ø на виде спереди."""
+    import io
+
+    from PIL import Image, ImageDraw
+
+    image = Image.new("L", (900, 700), 255)
+    draw = ImageDraw.Draw(image)
+
+    def box(x0, y0, x1, y1):
+        for a, b in (((x0, y0), (x1, y0)), ((x0, y1), (x1, y1))):
+            draw.line([a, b], fill=0, width=3)
+        for a, b in (((x0, y0), (x0, y1)), ((x1, y0), (x1, y1))):
+            draw.line([a, b], fill=0, width=3)
+
+    box(100, 100, 400, 300)  # план 300 × 200 px = 150 × 100 мм
+    box(160, 140, 340, 260)  # полость 180 × 120 px = 90 × 60 мм в центре
+    box(100, 360, 400, 480)  # вид спереди: толщина 120 px = 60 мм
+    box(460, 100, 580, 300)  # вид слева
+    # Прилив Ø40 мм = 80 px; середина вида спереди — x=250, центр на 25 мм
+    # правее неё (25 мм = 50 px при 0,5 мм/px).
+    draw.ellipse((300 - 40, 420 - 40, 300 + 40, 420 + 40), outline=0, width=3)
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+_HOUSING_PROFILE = {
+    "shape": "rectangle",
+    "width_mm": 150.0,
+    "height_mm": 100.0,
+    "thickness_mm": 60.0,
+}
+
+
+def test_wall_features_are_measured_on_their_own_view():
+    """Базовая линия на корпусах: размер модель берёт верно, а положение
+    приписывает не тому виду (полость: центр (−42, −42) вместо (0, 0))."""
+    spec = {
+        "main_view": {
+            "profile": {
+                **_HOUSING_PROFILE,
+                "wall_features": [
+                    {
+                        "kind": "pocket",
+                        "on_plane": "top",
+                        "profile": "rectangle",
+                        "width_mm": 90.0,
+                        "height_mm": 60.0,
+                        "depth_mm": 40.0,
+                        "center_u_mm": 0.0,
+                        "center_v_mm": 0.0,
+                    },
+                    {
+                        "kind": "boss",
+                        "on_plane": "front",
+                        "profile": "circle",
+                        "diameter_mm": 40.0,
+                        "depth_mm": 8.0,
+                        "center_u_mm": 25.0,
+                        "center_v_mm": 0.0,
+                    },
+                ],
+            }
+        }
+    }
+
+    report = verify_spec_against_sheet(_housing_with_features_png(), spec)
+
+    items = [item for item in report["items"] if item["kind"] == "wall_feature"]
+    assert [item["status"] for item in items] == ["confirmed", "confirmed"]
+    # Ø нарисованного эллипса меряется по середине штриха — с запасом на него.
+    assert abs(items[1]["measured"]["diameter_mm"] - 40.0) <= 2.0
+    assert abs(items[1]["measured"]["center_u_mm"] - 25.0) <= 1.5
+
+
+def test_a_wall_feature_read_in_the_wrong_place_is_refuted_with_the_measurement():
+    spec = {
+        "main_view": {
+            "profile": {
+                **_HOUSING_PROFILE,
+                "wall_features": [
+                    {
+                        "kind": "boss",
+                        "on_plane": "front",
+                        "profile": "circle",
+                        "diameter_mm": 40.0,
+                        "depth_mm": 8.0,
+                        # Ридер приписал прилив другому месту грани.
+                        "center_u_mm": -20.0,
+                        "center_v_mm": 0.0,
+                    }
+                ],
+            }
+        }
+    }
+
+    report = verify_spec_against_sheet(_housing_with_features_png(), spec)
+
+    item = next(entry for entry in report["items"] if entry["kind"] == "wall_feature")
+    assert item["status"] == "refuted"
+    assert abs(item["measured"]["center_u_mm"] - 25.0) <= 1.5
+
+
+def test_a_measurement_that_lands_on_another_feature_of_the_face_is_unmeasurable():
+    """E28: расхождение, указывающее на ДРУГОЙ объект, не опровергает чтение."""
+    from app.ai.cad_recognize.verifiers.wall_feature import wall_feature_verdict
+
+    read = {"diameter_mm": 30.0, "center_u_mm": -10.0, "center_v_mm": 0.0}
+    far = wall_feature_verdict(read, {"diameter_mm": 16.0, "center_u_mm": 20.0, "center_v_mm": 0.0})
+    assert far["status"] == "unmeasurable"
+    assert "другой элемент" in far["reason"]
+
+    near = wall_feature_verdict(
+        read, {"diameter_mm": 30.2, "center_u_mm": -9.8, "center_v_mm": 0.1}, line_mm=0.5
+    )
+    assert near["status"] == "confirmed"
