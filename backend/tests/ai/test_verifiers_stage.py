@@ -675,3 +675,95 @@ def test_a_step_whose_diameter_is_hidden_by_a_keyway_is_not_confirmed_by_its_len
     assert steps[1]["status"] == "unmeasurable", steps[1]
     assert "паз" in steps[1]["reason"]
     assert steps[0]["status"] == "confirmed" and steps[2]["status"] == "confirmed"
+
+
+def _housing_png(thickness_px: int = 120, gap: int = 60) -> bytes:
+    """Лист корпуса: план 300×200 px, под ним вид спереди, справа вид слева.
+
+    Линии рисуются поштучно: у `rectangle` с толстой обводкой середина линии
+    уходит внутрь, и «толщина» оказывалась на 0,7 мм меньше нарисованной —
+    это артефакт теста, а не замера (на листах корпуса ошибка 0,08 мм).
+    """
+    import io
+
+    from PIL import Image, ImageDraw
+
+    image = Image.new("L", (900, 700), 255)
+    draw = ImageDraw.Draw(image)
+
+    def box(x0, y0, x1, y1, width=3):
+        for a, b in (((x0, y0), (x1, y0)), ((x0, y1), (x1, y1))):
+            draw.line([a, b], fill=0, width=width)
+        for a, b in (((x0, y0), (x0, y1)), ((x1, y0), (x1, y1))):
+            draw.line([a, b], fill=0, width=width)
+
+    box(100, 100, 400, 300)
+    # Вид спереди под планом: ширина та же, высота — толщина; прилив слева
+    # делает его ШИРЕ плана, как на настоящем листе.
+    top = 360
+    box(100, top, 400, top + thickness_px)
+    box(60, top + 30, 100, top + 70)
+    # Вид слева справа от плана: высота та же, ширина — толщина.
+    left = 460
+    box(left, 100, left + thickness_px, 300)
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def test_the_thickness_of_a_housing_is_measured_by_its_views_not_read():
+    """Базовая линия на корпусах: толщина прочитана неверно на КАЖДОМ листе —
+    на листе три вида, и число приписывается не тому."""
+    # План 300 × 200 px при 150 × 100 мм — 0,5 мм/px; толщина 120 px = 60 мм.
+    profile = {"shape": "rectangle", "width_mm": 150.0, "height_mm": 100.0, "thickness_mm": 60.0}
+    png = _housing_png()
+
+    report = verify_spec_against_sheet(png, {"main_view": {"profile": profile}})
+
+    item = next(entry for entry in report["items"] if entry["kind"] == "plate_thickness")
+    assert item["status"] == "confirmed"
+    assert abs(item["measured"]["thickness_mm"] - 60.0) <= 0.5
+    assert report["housing_views"]["front_bbox_px"] and report["housing_views"]["side_bbox_px"]
+
+    wrong = verify_spec_against_sheet(
+        png, {"main_view": {"profile": {**profile, "thickness_mm": 20.0}}}
+    )
+    refuted = next(entry for entry in wrong["items"] if entry["kind"] == "plate_thickness")
+    assert refuted["status"] == "refuted"
+    assert abs(refuted["measured"]["thickness_mm"] - 60.0) <= 0.5
+    assert "прочитано 20" in refuted["reason"]
+
+
+def test_views_that_disagree_about_the_thickness_measure_nothing():
+    """Вид спереди и вид слева разной толщины — это не деталь, а совпадение."""
+    import io
+
+    from PIL import Image, ImageDraw
+
+    image = Image.new("L", (900, 700), 255)
+    draw = ImageDraw.Draw(image)
+    for x0, y0, x1, y1 in ((100, 100, 400, 300), (100, 360, 400, 480), (460, 100, 530, 300)):
+        for a, b in (((x0, y0), (x1, y0)), ((x0, y1), (x1, y1))):
+            draw.line([a, b], fill=0, width=3)
+        for a, b in (((x0, y0), (x0, y1)), ((x1, y0), (x1, y1))):
+            draw.line([a, b], fill=0, width=3)
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+
+    report = verify_spec_against_sheet(
+        buffer.getvalue(),
+        {
+            "main_view": {
+                "profile": {
+                    "shape": "rectangle",
+                    "width_mm": 150.0,
+                    "height_mm": 100.0,
+                    "thickness_mm": 60.0,
+                }
+            }
+        },
+    )
+
+    item = next(entry for entry in report["items"] if entry["kind"] == "plate_thickness")
+    assert item["status"] == "unmeasurable"
+    assert "не согласны" in item["reason"]

@@ -24,6 +24,9 @@ from typing import Any
 from app.ai.cad_recognize.verifiers.contract import Hypothesis
 from app.ai.cad_recognize.verifiers.registry import verify
 
+# Толщина по виду и надпись сходятся в пределах этого (лист рисуется в
+# масштабе, но линия имеет толщину, а замер идёт по её середине).
+_THICKNESS_TOLERANCE_MM = 0.5
 _HOLE_KEYS = ("center_x_mm", "center_y_mm", "diameter_mm")
 _PATTERN_KEYS = ("count", "bolt_circle_diameter_mm", "hole_diameter_mm", "start_angle_deg")
 
@@ -54,6 +57,8 @@ def verify_spec_against_sheet(image_bytes: bytes, spec: dict[str, Any]) -> dict[
         reason = "нет проверяемых элементов (пластина, круглая деталь, тело вращения)"
     if shape in {"rectangle", "sketch"}:
         _plate_contour(image_bytes, spec or {}, profile, report)
+    if shape == "rectangle":
+        _housing_thickness(image_bytes, profile, report)
     _sheet_scale(image_bytes, spec or {}, report)
     return _finish(report, started, reason)
 
@@ -231,6 +236,49 @@ def _gray(image_bytes: bytes) -> Any:
     from PIL import Image
 
     return np.asarray(Image.open(io.BytesIO(image_bytes)).convert("L"))
+
+
+def _housing_thickness(image_bytes: bytes, profile: dict[str, Any], report: dict[str, Any]) -> None:
+    """Толщина по видам листа (`housing_views`), а не по надписи (Ф5).
+
+    Базовая линия на корпусах: толщину ридер читает неверно на КАЖДОМ листе
+    (20 вместо 40, 16 вместо 60) — на листе три вида, и число приписывается
+    не тому. Толщина — это высота вида спереди и ширина вида слева; когда оба
+    вида согласны, замер надёжнее надписи.
+    """
+    from app.ai.cad_recognize.verifiers.housing_views import locate_housing_views
+
+    width, height = profile.get("width_mm"), profile.get("height_mm")
+    read = profile.get("thickness_mm")
+    if not _is_number(width) or not _is_number(height) or not _is_number(read):
+        return
+    views = locate_housing_views(_gray(image_bytes), float(width), float(height))
+    if views is None:
+        return
+    report["housing_views"] = views.as_dict()
+    item = {
+        "kind": "plate_thickness",
+        "path": "main_view.profile",
+        "feature_id": "profile:thickness",
+        "read": {"thickness_mm": float(read)},
+        "measured": {},
+        "tolerance_mm": {"thickness": _THICKNESS_TOLERANCE_MM},
+    }
+    if views.thickness_mm is None:
+        report["items"].append({**item, "status": "unmeasurable", "reason": views.reason})
+        return
+    measured = round(float(views.thickness_mm), 3)
+    item["measured"] = {"thickness_mm": measured}
+    if abs(measured - float(read)) <= _THICKNESS_TOLERANCE_MM:
+        report["items"].append({**item, "status": "confirmed", "reason": views.reason})
+        return
+    report["items"].append(
+        {
+            **item,
+            "status": "refuted",
+            "reason": f"{views.reason}; прочитано {float(read):g}",
+        }
+    )
 
 
 def _plate_holes(image_bytes: bytes, profile: dict[str, Any], report: dict[str, Any]) -> str | None:
