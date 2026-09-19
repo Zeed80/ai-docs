@@ -88,3 +88,37 @@ def test_the_arrow_of_a_long_vertical_dimension_is_not_a_level_mark():
     cv2.line(sheet, (400, 800), (420, 780), 0, 2)
     cv2.line(sheet, (300, 800), (500, 800), 0, 2)
     assert level_marks(sheet) == []
+
+
+def test_the_sheet_levels_come_only_from_found_marks_in_level_format():
+    import asyncio
+    import io
+
+    from PIL import Image
+
+    from app.ai.construction_levels import normalize_level, read_sheet_levels
+
+    # Лист в размер, при котором знаки ищутся без увеличения (5000 px).
+    sheet = np.full((3000, 5000), 255, np.uint8)
+    sheet[1000:1600, 2000:2900] = _boxed()
+    buffer = io.BytesIO()
+    Image.fromarray(sheet).save(buffer, format="PNG")
+    asked: list[str] = []
+
+    async def ask(prompt, image):
+        asked.append(prompt)
+        return {"level": "−1,800"}
+
+    result = asyncio.run(read_sheet_levels(buffer.getvalue(), ask=ask))
+    # Одна рамка — один вопрос; значение приведено к формату отметки.
+    assert len(asked) == 1
+    assert result["values"] == ["-1.800"]
+    x0, y0, x1, y1 = result["levels"][0]["bbox_px"]
+    assert x0 < 2300 < 2640 < x1 and y0 < 1250 < 1375 < y1
+
+    async def dimension(prompt, image):
+        return {"level": "3000"}
+
+    assert asyncio.run(read_sheet_levels(buffer.getvalue(), ask=dimension))["values"] == []
+    assert normalize_level("+0,000") == "0.000"
+    assert normalize_level("3 950") is None

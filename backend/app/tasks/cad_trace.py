@@ -3580,6 +3580,28 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             except Exception as exc:  # noqa: BLE001 — чтение не валит прогон
                 return await _fail(f"Чтение листа не удалось: {str(exc)[:200]}")
             summary = _domain_summary(domain_reader, model, report)
+            sheet_levels = None
+            if domain_reader[0] == "construction":
+                # Отметки уровня — по знакам на листе (E10), а не чтением
+                # листа целиком: оно выдаёт размеры за отметки.
+                from app.ai.construction_levels import read_sheet_levels
+
+                try:
+                    sheet_levels = await read_sheet_levels(content)
+                except Exception as exc:  # noqa: BLE001 — отметки не валят прогон
+                    sheet_levels = {"levels": [], "values": [], "error": str(exc)[:200]}
+                values = sheet_levels.get("values") or []
+                summary += (
+                    "; отметки уровня: " + ", ".join(values)
+                    if values
+                    else "; знаков отметок уровня на листе не найдено"
+                )
+                await _record(
+                    "construction.levels",
+                    "completed" if not sheet_levels.get("error") else "failed",
+                    f"Отметок по знакам листа: {len(values)}",
+                    {key: value for key, value in sheet_levels.items() if key != "levels"},
+                )
             await _record(
                 f"{domain_reader[0]}.read",
                 "failed" if report.get("read_failed") or report.get("blocked") else "completed",
@@ -3596,6 +3618,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     "model": model.model_dump(mode="json") if model is not None else None,
                     "report": report,
                     "summary": summary,
+                    "levels": sheet_levels,
                 },
             )
             await _record("pipeline", "completed", summary, {"terminal": True})

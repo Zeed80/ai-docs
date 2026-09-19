@@ -749,6 +749,7 @@
       "domain_title_construction": "План этажа — модель здания",
       "domain_title_system": "Схема — модель системы",
       "domain_skipped": "Исключено, не угадывается: {count}",
+      "domain_levels": "Отметки уровня по знакам листа: {list} (знаков и рамок найдено {found})",
       "assurance_verify_by_kind": "По видам: {list}",
       "assurance_verify_group": "{name} {confirmed} из {checked}",
       "assurance_verify_group_plate_hole": "отверстия",

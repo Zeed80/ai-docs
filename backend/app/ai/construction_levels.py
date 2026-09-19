@@ -18,6 +18,7 @@ E10 на 10 реальных DWG — 22 из 28 при 14 выдуманных. 
 from __future__ import annotations
 
 import math
+import re
 from typing import Any
 
 # Штрих стрелки — под 45° с допуском, короткий.
@@ -190,6 +191,9 @@ _BOX_ASPECT = (2.0, 5.5)
 _BOX_INK = (0.03, 0.45)
 # Наибольший разрыв угла рамки, который замыкается, px.
 _GAP = 21
+# Рамка отметки не выше этой доли длинной стороны листа (на рендере
+# 12 000 px — 125 px, ~1 %).
+_BOX_HEIGHT = 0.04
 # Доля площади рамки, которую занимает пустота внутри неё.
 _HOLE = 0.15
 
@@ -244,7 +248,11 @@ def level_boxes(gray: Any) -> list[tuple[int, int, int, int]]:
         if largest < _HOLE * w * h:
             continue
         x, y, w, h = x + grow, y + grow, w - 2 * grow, h - 2 * grow
-        if h < 14 or h > 400 or not (_BOX_ASPECT[0] <= w / max(h, 1) <= _BOX_ASPECT[1]):
+        if (
+            h < 14
+            or h > max(400.0, _BOX_HEIGHT * max(gray.shape))
+            or not (_BOX_ASPECT[0] <= w / max(h, 1) <= _BOX_ASPECT[1])
+        ):
             continue
         pad = max(2, h // 12)
         inside = ink[max(0, y + pad) : y + h - pad, max(0, x + pad) : x + w - pad]
@@ -275,4 +283,88 @@ def box_crop_box(
         max(0, y0 - reach),
         min(size[0], x1 + reach),
         min(size[1], y1 + reach),
+    )
+
+
+# Формат отметки: метры с тремя знаками, разделитель — точка или запятая.
+_LEVEL_TEXT = re.compile(r"^[+\-−±]?\d{1,3}[.,]\d{3}$")
+# Знаки мельче ~12 px не находятся: мелкий лист увеличивается до этого.
+_MIN_LONG_SIDE = 5000
+# Бюджет узких вопросов на лист.
+_MAX_ASKS = 40
+
+
+def normalize_level(text: str) -> str | None:
+    """«+3,360» → «+3.360»; ноль — «0.000»; не отметка — None."""
+    value = str(text).strip().replace(" ", "").replace("−", "-").replace(",", ".")
+    if not _LEVEL_TEXT.match(value):
+        return None
+    number = float(value.replace("±", ""))
+    return "0.000" if number == 0 else f"{number:+.3f}"
+
+
+async def read_sheet_levels(image_bytes: bytes, *, ask: Any = None) -> dict[str, Any]:
+    """Отметки уровня листа: знак находит геометрия, число читает модель у знака.
+
+    Модель, читающая лист целиком, выдаёт размеры за отметки (E10: 14
+    выдуманных на 10 листах). Здесь спрашивается только вырез у найденного
+    знака (стрелка с чертой и полкой) или рамки (отметка плана), и ответ
+    принимается только в формате отметки: 27 из 29 без выдуманных.
+    """
+    import io
+
+    import numpy as np
+    from PIL import Image
+
+    if ask is None:
+        ask = _default_ask
+    Image.MAX_IMAGE_PIXELS = None
+    sheet = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    factor = 1.0
+    if max(sheet.size) < _MIN_LONG_SIDE:
+        factor = _MIN_LONG_SIDE / max(sheet.size)
+        sheet = sheet.resize(
+            (round(sheet.size[0] * factor), round(sheet.size[1] * factor)), resample=3
+        )
+    gray = np.asarray(sheet.convert("L"))
+    places = [
+        ("mark", mark_crop_box(mark, sheet.size), LEVEL_AT_MARK_PROMPT)
+        for mark in level_marks(gray)
+    ] + [("frame", box_crop_box(box, sheet.size), LEVEL_IN_BOX_PROMPT) for box in level_boxes(gray)]
+    levels: list[dict[str, Any]] = []
+    rejected = 0
+    for kind, crop, prompt in places[:_MAX_ASKS]:
+        answer = await ask(prompt, sheet.crop(crop))
+        value = normalize_level((answer or {}).get("level") or "")
+        if value is None:
+            rejected += 1
+            continue
+        levels.append(
+            {
+                "value": value,
+                "kind": kind,
+                "bbox_px": [round(v / factor, 1) for v in crop],
+            }
+        )
+    return {
+        "levels": levels,
+        "values": sorted({item["value"] for item in levels}, key=float),
+        "places_found": len(places),
+        "places_asked": min(len(places), _MAX_ASKS),
+        "rejected": rejected,
+    }
+
+
+async def _default_ask(prompt: str, image: Any) -> dict:
+    from app.ai.cad_recognize.spec_fragments import _ask
+    from app.ai.router import ai_router
+
+    return await _ask(
+        prompt,
+        image,
+        router=ai_router,
+        confidential=True,
+        num_predict=120,
+        schema=LEVEL_AT_MARK_SCHEMA,
+        timeout_seconds=60.0,
     )

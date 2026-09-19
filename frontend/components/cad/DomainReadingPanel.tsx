@@ -16,6 +16,14 @@ export type DomainReading = {
     blocked?: boolean;
     blocked_reason?: string;
   };
+  /** Отметки уровня по знакам на листе (E10): число прочитано только у
+   *  найденного знака или рамки отметки. */
+  levels?: {
+    values?: string[];
+    places_found?: number;
+    rejected?: number;
+    error?: string;
+  } | null;
 };
 
 export default function DomainReadingPanel({
@@ -43,6 +51,14 @@ export default function DomainReadingPanel({
         )}
       </h3>
       <p className="text-zinc-300">{reading.summary}</p>
+      {reading.levels?.values?.length ? (
+        <p className="mt-1 text-zinc-400">
+          {t("vector.domain_levels", {
+            list: reading.levels.values.join(" · "),
+            found: reading.levels.places_found ?? reading.levels.values.length,
+          })}
+        </p>
+      ) : null}
       {skipped.length ? (
         <details className="mt-2 text-zinc-400">
           <summary>{t("vector.domain_skipped", { count: skipped.length })}</summary>

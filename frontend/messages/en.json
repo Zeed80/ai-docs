@@ -749,6 +749,7 @@
       "domain_title_construction": "Floor plan — building model",
       "domain_title_system": "Diagram — system model",
       "domain_skipped": "Excluded, not guessed: {count}",
+      "domain_levels": "Level marks found on the sheet: {list} ({found} marks and frames located)",
       "assurance_verify_by_kind": "By kind: {list}",
       "assurance_verify_group": "{name} {confirmed} of {checked}",
       "assurance_verify_group_plate_hole": "holes",

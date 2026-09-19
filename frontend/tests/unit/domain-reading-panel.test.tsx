@@ -31,4 +31,23 @@ describe("DomainReadingPanel — строительные и схемы (X5)", (
     expect(screen.getByText(/стен построено 3 из 5/)).toBeTruthy();
     expect(screen.getByText("Исключено, не угадывается: 1")).toBeTruthy();
   });
+
+  it("показывает отметки уровня, найденные по знакам листа", () => {
+    render(
+      <DomainReadingPanel
+        t={t}
+        reading={{
+          domain: "construction",
+          summary: "План этажа: стен построено 0 из 0",
+          report: {},
+          levels: { values: ["-1.800", "0.000"], places_found: 3 },
+        }}
+      />,
+    );
+    expect(
+      screen.getByText(
+        "Отметки уровня по знакам листа: -1.800 · 0.000 (знаков и рамок найдено 3)",
+      ),
+    ).toBeTruthy();
+  });
 });
