@@ -4213,6 +4213,8 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     thickness = sheet_thickness_decision(spec, thickness_item)
                     if thickness:
                         spec = _revalidated_spec(apply_sheet_thickness(spec, thickness))
+                        if thickness.get("action") == "adopt":
+                            thickness_item["adopted"] = True
                         await _record(
                             "reconcile.sheet_thickness",
                             "completed",
@@ -4223,6 +4225,14 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                             ),
                             {"decision": thickness},
                         )
+                if verification:
+                    # Предварительно принятые форма и толщина сечения — только
+                    # после подтверждения листом перестают блокировать сборку.
+                    from app.ai.cad_recognize.verifiers.reconcile import (
+                        settle_provisional_sheet_metal,
+                    )
+
+                    spec = settle_provisional_sheet_metal(spec, verification)
                 drops = contradicting_patterns(spec, verification) if verification else []
                 if drops:
                     spec = _revalidated_spec(apply_pattern_drops(spec, drops))

@@ -55,3 +55,22 @@ def test_without_such_a_number_on_the_sheet_it_goes_to_a_person():
 def test_flanges_that_do_not_fit_the_section_are_not_measured():
     item = {**ITEM, "measured": {**ITEM["measured"], "flanges_px": [156.0, 100.0, 116.0]}}
     assert sheet_thickness_check(_sheet(2.0), item)["status"] == "unmeasurable"
+
+
+def test_provisional_notes_are_lifted_only_by_the_sheet():
+    from app.ai.cad_recognize.spec_fragments import PROVISIONAL_THICKNESS, PROVISIONAL_TURNS
+    from app.ai.cad_recognize.verifiers.reconcile import settle_provisional_sheet_metal
+
+    spec = {"unresolved": [PROVISIONAL_TURNS, PROVISIONAL_THICKNESS, "прочее"]}
+    confirmed = {
+        "items": [
+            {"kind": "bent_section", "status": "confirmed"},
+            {"kind": "sheet_thickness", "status": "unmeasurable"},
+        ]
+    }
+    settled = settle_provisional_sheet_metal(spec, confirmed)
+    # Форма подтверждена — её пометка снята; толщина не измерена — держит сборку.
+    assert settled["unresolved"] == [PROVISIONAL_THICKNESS, "прочее"]
+
+    adopted = {"items": [{"kind": "sheet_thickness", "status": "refuted", "adopted": True}]}
+    assert PROVISIONAL_THICKNESS not in settle_provisional_sheet_metal(spec, adopted)["unresolved"]

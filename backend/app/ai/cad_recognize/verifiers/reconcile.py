@@ -1287,3 +1287,34 @@ def apply_sheet_thickness(spec: dict[str, Any], decision: dict[str, Any]) -> dic
     sheet["thickness_mm"] = new
     spec.setdefault("optional_unresolved", []).append(decision["reason"])
     return spec
+
+
+def settle_provisional_sheet_metal(spec: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
+    """Снять пометки предварительно принятого в сечении, подтверждённого листом.
+
+    Форма, названная ридером не та, и толщина, которой нет среди выписанных
+    надписей, принимаются предварительно (``spec_fragments``) и блокируют
+    сборку. Снимает пометку только лист: сечение подтверждено (или форма
+    взята с него), толщина подтверждена (или взята надпись по замеру).
+    """
+    import copy
+
+    from app.ai.cad_recognize.spec_fragments import PROVISIONAL_THICKNESS, PROVISIONAL_TURNS
+
+    settled = set()
+    for item in report.get("items") or []:
+        if item.get("kind") == "bent_section" and item.get("status") == "confirmed":
+            settled.add(PROVISIONAL_TURNS)
+        if item.get("kind") == "sheet_thickness" and (
+            item.get("status") == "confirmed" or item.get("adopted")
+        ):
+            settled.add(PROVISIONAL_THICKNESS)
+    notes = [str(n) for n in spec.get("unresolved") or []]
+    if not settled or not any(n in settled for n in notes):
+        return spec
+    spec = copy.deepcopy(spec)
+    spec["unresolved"] = [n for n in notes if n not in settled]
+    spec.setdefault("optional_unresolved", []).extend(
+        f"подтверждено по листу: {n}" for n in notes if n in settled
+    )
+    return spec

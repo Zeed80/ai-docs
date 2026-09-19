@@ -211,8 +211,14 @@ def test_the_reader_builds_nothing_from_a_number_the_sheet_does_not_state():
     assert notes == ["листовая деталь не построена: ширина"]
 
 
-def test_explicit_turns_must_match_the_flanges():
-    from app.ai.cad_recognize.spec_fragments import sheet_metal_from_answer
+def test_turns_that_do_not_match_the_flanges_are_taken_from_the_sheet():
+    """Живой Z-профиль: полки 33 / 46 / 43 прочитаны верно, форма названа
+    «уголок» — сечение выбрасывалось целиком. Теперь направления гибов —
+    предварительные, с блокирующей пометкой: их берёт проверка по листу."""
+    from app.ai.cad_recognize.spec_fragments import (
+        PROVISIONAL_TURNS,
+        sheet_metal_from_answer,
+    )
 
     answer = {
         "shape": "other",
@@ -223,8 +229,30 @@ def test_explicit_turns_must_match_the_flanges():
         "width_mm": 40,
     }
     notes: list[str] = []
-    assert sheet_metal_from_answer(answer, _taken(20, 30, 2, 40), notes) is None
-    assert "число гибов не сходится с числом полок" in notes[0]
+    sheet = sheet_metal_from_answer(answer, _taken(20, 30, 2, 40), notes)
+    assert sheet is not None and sheet["turns"] == [1, 1]
+    assert notes == [PROVISIONAL_TURNS]
+
+
+def test_a_thickness_missing_from_the_callouts_is_provisional():
+    """Живой Z-профиль: «s1.5» модель видела, но среди выписанных надписей её
+    не было — сечение выбрасывалось. Толщину проверяет ширина сечения."""
+    from app.ai.cad_recognize.spec_fragments import (
+        PROVISIONAL_THICKNESS,
+        sheet_metal_from_answer,
+    )
+
+    answer = {
+        "shape": "channel",
+        "flanges_mm": [20, 30, 20],
+        "radius_mm": 2,
+        "thickness_mm": 1.5,
+        "width_mm": 40,
+    }
+    notes: list[str] = []
+    sheet = sheet_metal_from_answer(answer, _taken(20, 30, 2, 40), notes)
+    assert sheet is not None and sheet["thickness_mm"] == 1.5
+    assert notes == [PROVISIONAL_THICKNESS]
 
 
 def test_the_operator_can_say_the_part_is_sheet_metal():

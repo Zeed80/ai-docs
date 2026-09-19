@@ -382,6 +382,11 @@ _WALL_FEATURES_SCHEMA = {
     "required": ["features"],
 }
 
+# Пометки предварительно принятого в сечении гнутой детали: блокируют сборку,
+# пока проверка по листу их не подтвердит или не исправит (cad_trace).
+PROVISIONAL_TURNS = "направления гибов не прочитаны — берутся по сечению на листе"
+PROVISIONAL_THICKNESS = "толщина листа не найдена среди надписей — проверяется по сечению"
+
 # Классы, у которых проходы «профиля тела вращения» бессмысленны.
 _NO_ROTATION_PASSES = frozenset({"sheet_metal", "weldment"})
 # Узкий вопрос о сечении/узле — с рассуждением; 75 с по умолчанию не хватало
@@ -4731,6 +4736,16 @@ def sheet_metal_from_answer(
     turns: tuple[int, ...] | None = _SHEET_METAL_TURNS.get(shape)
     if turns is None and isinstance(answer.get("turns"), list):
         turns = tuple(1 if item == "left" else -1 for item in answer["turns"])
+    provisional: list[str] = []
+    if thickness is None:
+        # Толщину модель видит («s1.5»), но среди выписанных надписей её нет —
+        # раньше из-за этого выбрасывалось всё сечение. Она проверяется по
+        # ширине сечения на листе: принимается предварительно, с блокирующей
+        # пометкой, которую снимает только подтверждение листом.
+        raw = answer.get("thickness_mm")
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool) and raw > 0:
+            thickness = float(raw)
+            provisional.append(PROVISIONAL_THICKNESS)
     if not outer or any(value is None for value in outer):
         missing.append("размеры полок")
     if radius is None:
@@ -4739,6 +4754,11 @@ def sheet_metal_from_answer(
         missing.append("толщина листа")
     if width is None:
         missing.append("ширина")
+    if (turns is None or len(turns) != len(outer) - 1) and len(outer) >= 2 and None not in outer:
+        # Полки прочитаны, а форма названа не та («уголок» при трёх полках) —
+        # направления гибов берутся по сечению на листе (bent_section).
+        turns = tuple([1] * (len(outer) - 1))
+        provisional.append(PROVISIONAL_TURNS)
     if turns is None or (outer and len(turns) != len(outer) - 1):
         missing.append("число гибов не сходится с числом полок")
     if missing:
@@ -4748,7 +4768,7 @@ def sheet_metal_from_answer(
     # Угол между полками с листа → угол гиба (отклонение полки) = 180 − угол.
     included = answer.get("angles_deg")
     bends: list[float] = [90.0] * len(turns)
-    if isinstance(included, list) and included:
+    if isinstance(included, list) and included and PROVISIONAL_TURNS not in provisional:
         stated = [taken_value(value, taken) for value in included]
         if len(stated) != len(turns) or any(
             value is None or not 0.0 < value < 180.0 for value in stated
@@ -4782,6 +4802,8 @@ def sheet_metal_from_answer(
     }
     if any(abs(angle - 90.0) > 1e-6 for angle in bends):
         sheet["bend_angles_deg"] = bends
+    if notes is not None:
+        notes.extend(provisional)
     return sheet
 
 
