@@ -336,4 +336,27 @@ describe("сводка проверки по видам элементов (Ф9)
     );
     expect(screen.queryByText(/^По видам:/)).toBeNull();
   });
+
+  it("shows a refuted reading already corrected from the sheet as corrected, not as an error", () => {
+    render(
+      <AssurancePanel
+        verification={{
+          items: [
+            {
+              kind: "weldment_part",
+              path: "parts[1]",
+              read: { width_mm: 5 },
+              status: "refuted",
+              adopted: true,
+              measured: { width_mm: 80 },
+              reason: "в перечне «Поз. 2» 80×50×5, прочитано 5×50×5",
+            },
+          ],
+          summary: { checked: 1, confirmed: 0, refuted: 1, unmeasurable: 0 },
+        }}
+        t={t}
+      />,
+    );
+    expect(screen.getByText("Деталь поз. 2: чтение исправлено по листу")).toBeTruthy();
+  });
 });

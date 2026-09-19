@@ -1318,3 +1318,120 @@ def settle_provisional_sheet_metal(spec: dict[str, Any], report: dict[str, Any])
         f"подтверждено по листу: {n}" for n in notes if n in settled
     )
     return spec
+
+
+_LISTING = re.compile(
+    r"Поз\.?\s*(\d+)\s*[—–-]\s*(?:(?!Поз).)*?(?<![\d.,])"
+    r"(\d+(?:[.,]\d+)?)\s*[×xхX]\s*(\d+(?:[.,]\d+)?)\s*[×xхX]\s*(\d+(?:[.,]\d+)?)"
+)
+
+
+def listing_sizes(spec: dict[str, Any]) -> dict[int, tuple[float, float, float]]:
+    """Размеры деталей из перечня на листе: «Поз. 2 — Ребро 1 80×50×5».
+
+    Ридер выписывает строку перечня несколько раз (как есть и в пересказе) —
+    берётся тройка, названная чаще; противоречивые тройки одной позиции —
+    позиция не берётся вовсе.
+    """
+    from collections import Counter
+
+    seen: dict[int, Counter] = {}
+    for entry in spec.get("dimensions") or []:
+        text = str((entry.get("value") if isinstance(entry, dict) else entry) or "")
+        for match in _LISTING.finditer(text):
+            triple = tuple(round(float(g.replace(",", ".")), 3) for g in match.groups()[1:])
+            seen.setdefault(int(match.group(1)), Counter())[triple] += 1
+    sizes: dict[int, tuple[float, float, float]] = {}
+    for position, counts in seen.items():
+        ranked = counts.most_common()
+        if len(ranked) == 1 or ranked[0][1] > ranked[1][1]:
+            sizes[position] = ranked[0][0]
+    return sizes
+
+
+def weldment_listing_check(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    """Пластины узла против перечня на листе (X3).
+
+    Живой узел: ребро прочитано 5 × 50 × 5 при «Поз. 2 — Ребро 1 80×50×5» в
+    перечне того же листа, и узел молча собрался не тем. Перечень и размеры
+    видов — два чтения разных мест листа: совпали — подтверждено, нет —
+    опровергнуто; строка перечня принимается, только если каждое её число
+    стоит и среди размеров на видах.
+    """
+    parts = [p for p in spec.get("parts") or [] if isinstance(p, dict)]
+    sizes = listing_sizes(spec)
+    if not parts or not sizes:
+        return []
+    numbers = set(
+        sheet_numbers(
+            {
+                "dimensions": [
+                    d
+                    for d in spec.get("dimensions") or []
+                    if "Поз" not in str((d.get("value") if isinstance(d, dict) else d) or "")
+                ]
+            }
+        )
+    )
+    items = []
+    for index, part in enumerate(parts):
+        listed = sizes.get(index + 1)
+        profile = part.get("profile") or {}
+        read = tuple(profile.get(k) for k in ("width_mm", "height_mm", "thickness_mm"))
+        if listed is None or not all(isinstance(v, (int, float)) for v in read):
+            continue
+        # Порядок в перечне («длина × ширина × толщина») и оси пластины в спеке
+        # могут не совпадать: сравниваются наборы, толщина — наименьшее, два
+        # других раскладываются по ближайшему прочитанному.
+        thickness = min(listed)
+        rest = list(listed)
+        rest.remove(thickness)
+        a, b = rest
+        width, height = float(read[0]), float(read[1])
+        if abs(width - b) + abs(height - a) < abs(width - a) + abs(height - b):
+            a, b = b, a
+        oriented = (a, b, thickness)
+        base = {
+            "kind": "weldment_part",
+            "path": f"parts[{index}]",
+            "read": dict(zip(("width_mm", "height_mm", "thickness_mm"), read, strict=True)),
+            "measured": dict(zip(("width_mm", "height_mm", "thickness_mm"), oriented, strict=True)),
+        }
+        if all(
+            abs(float(x) - y) <= 0.05 for x, y in zip(sorted(read), sorted(listed), strict=True)
+        ):
+            items.append({**base, "status": "confirmed", "reason": "совпало с перечнем на листе"})
+            continue
+        backed = all(any(abs(value - n) <= 0.05 for n in numbers) for value in listed)
+        items.append(
+            {
+                **base,
+                "status": "refuted",
+                "adopt": backed,
+                "reason": (
+                    f"в перечне «Поз. {index + 1}» {'×'.join(f'{v:g}' for v in listed)}, "
+                    f"прочитано {'×'.join(f'{float(v):g}' for v in read)}"
+                    + ("" if backed else " — чисел перечня нет на видах, решение человеку")
+                ),
+            }
+        )
+    return items
+
+
+def apply_weldment_listing(spec: dict[str, Any], items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Размеры пластин из перечня — там, где он опроверг чтение и подкреплён видами."""
+    import copy
+
+    spec = copy.deepcopy(spec)
+    for item in items:
+        if item.get("status") != "refuted":
+            continue
+        if not item.get("adopt"):
+            spec.setdefault("unresolved", []).append(item["reason"])
+            continue
+        index = int(item["path"].split("[")[1].split("]")[0])
+        profile = spec["parts"][index].setdefault("profile", {})
+        profile.update(item["measured"])
+        item["adopted"] = True
+        spec.setdefault("optional_unresolved", []).append(item["reason"] + " — принято по перечню")
+    return spec

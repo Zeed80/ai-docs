@@ -4225,6 +4225,33 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                             ),
                             {"decision": thickness},
                         )
+                if verification is not None and spec.get("parts"):
+                    # Сварной узел (X3): пластины против перечня на листе.
+                    from app.ai.cad_recognize.verifiers.reconcile import (
+                        apply_weldment_listing,
+                        weldment_listing_check,
+                    )
+
+                    listing_items = weldment_listing_check(spec)
+                    if listing_items:
+                        spec = _revalidated_spec(apply_weldment_listing(spec, listing_items))
+                        verification.setdefault("items", []).extend(listing_items)
+                        counts = {"confirmed": 0, "refuted": 0, "unmeasurable": 0}
+                        for entry in verification["items"]:
+                            counts[entry["status"]] = counts.get(entry["status"], 0) + 1
+                        verification.setdefault("summary", {}).update(
+                            {"checked": len(verification["items"]), **counts}
+                        )
+                        adopted = [i for i in listing_items if i.get("adopted")]
+                        await _record(
+                            "reconcile.weldment_listing",
+                            "completed",
+                            (
+                                f"Пластины сверены с перечнем: {len(listing_items)}, "
+                                f"исправлено по перечню {len(adopted)}"
+                            ),
+                            {"items": listing_items},
+                        )
                 if verification:
                     # Предварительно принятые форма и толщина сечения — только
                     # после подтверждения листом перестают блокировать сборку.

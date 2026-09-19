@@ -30,6 +30,8 @@ const VERIFY_KINDS = new Set([
   "bent_section",
   // Толщина листа по ширине сечения.
   "sheet_thickness",
+  // Сварной узел: пластина против перечня на листе.
+  "weldment_part",
 ]);
 
 /** Вырез листа вокруг элемента проверки с обведённой рамкой (Ф9). Индекс —
@@ -249,11 +251,14 @@ export default function AssurancePanel({
               .map(({ item, index }) => (
                 <Row
                   key={`${item.kind}-${item.path}`}
-                  ok={false}
+                  ok={Boolean(item.adopted)}
                   neutral={item.status === "unmeasurable"}
-                  label={t(`vector.assurance_verify_${item.status}`, {
-                    element: verifyElement(item, t),
-                  })}
+                  label={t(
+                    item.adopted
+                      ? "vector.assurance_verify_adopted"
+                      : `vector.assurance_verify_${item.status}`,
+                    { element: verifyElement(item, t) },
+                  )}
                   detail={item.reason}
                   overlay={
                     generationId && item.evidence_bbox_px
