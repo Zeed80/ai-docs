@@ -997,3 +997,19 @@ def test_a_front_wall_feature_is_not_measured_on_the_section_below_the_plan():
 
     front = next(i for i in report["items"] if i["path"].endswith("[1]"))
     assert front["status"] == "unmeasurable" and "разрез" in front["reason"]
+
+
+def test_a_side_view_edge_continued_by_witness_lines_is_still_an_edge():
+    """Выносные размеров над видом слева продолжают его кромку по той же
+    вертикали: линия выходила длиннее 1,6 высоты вида и отбрасывалась как рамка
+    листа — вид слева не находился на 4 корпусах из 12."""
+    from app.ai.cad_recognize.verifiers.housing_views import _levels_right
+    from app.ai.cad_recognize.verifiers.plate_frame import _Line
+
+    # План: y 100…300; вид слева: кромки x = 500 и 600.
+    edge = _Line(position=500.0, start=-250.0, end=300.0)  # кромка + выносные сверху
+    other = _Line(position=600.0, start=100.0, end=300.0)
+    frame = _Line(position=900.0, start=0.0, end=2000.0)  # рамка листа
+    columns = _levels_right([edge, other, frame], 100.0, 300.0, 400.0, 300.0, 200.0)
+
+    assert 500.0 in columns and 600.0 in columns

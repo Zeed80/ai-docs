@@ -34,6 +34,12 @@ _MAX_SIDE = 1.6
 # Зазор между видами — не меньше этой доли стороны плана: иначе соседней
 # «линией вида» становится размерная линия под самим планом.
 _MIN_GAP = 0.02
+# Длина кромки меряется только в окрестности вида (± эта доля его стороны):
+# выносные размеров над видом слева продолжают его кромку по той же
+# вертикали, и линия «длиннее 1,6 высоты» отбрасывалась как рамка листа —
+# вид слева не находился на 4 корпусах из 12. Рамку листа по-прежнему
+# отсеивает согласие видов о толщине.
+_NEAR = 0.2
 # Два вида согласны о толщине в пределах этой доли.
 _AGREEMENT = 0.05
 
@@ -160,7 +166,9 @@ def _levels_below(
         for line in horizontal
         if line.position > plan_bottom + gap
         and line.overlap(x0, x1) >= _ALIGNMENT * width
-        and width * _ALIGNMENT <= (line.end - line.start) <= width * _MAX_SIDE
+        and width * _ALIGNMENT
+        <= line.overlap(x0 - _NEAR * width, x1 + _NEAR * width)
+        <= width * _MAX_SIDE
     ]
     return levels
 
@@ -175,7 +183,9 @@ def _levels_right(
         for line in vertical
         if line.position > plan_right + gap
         and line.overlap(y0, y1) >= _ALIGNMENT * height
-        and height * _ALIGNMENT <= (line.end - line.start) <= height * _MAX_SIDE
+        and height * _ALIGNMENT
+        <= line.overlap(y0 - _NEAR * height, y1 + _NEAR * height)
+        <= height * _MAX_SIDE
     ]
     return columns
 
