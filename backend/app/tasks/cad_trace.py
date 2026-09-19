@@ -4152,6 +4152,29 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         bent = asked
                 if bent:
                     spec = _revalidated_spec(apply_bent_section(spec, bent))
+                    if bent.get("action") == "adopt":
+                        # Вердикт — уже исправленному спеку: иначе в отчёте
+                        # оставалось «опровергнуто» для формы, взятой с листа.
+                        from app.ai.cad_recognize.verifiers.bent_section import (
+                            bent_section_verdict,
+                        )
+
+                        adopted = ((spec.get("main_view") or {}).get("sheet_metal")) or {}
+                        for entry in verification.get("items") or []:
+                            if entry.get("kind") == "bent_section" and adopted:
+                                again = bent_section_verdict(adopted, entry.get("measured"))
+                                entry["read"] = {
+                                    "bends": len(adopted.get("turns") or []),
+                                    "turns": list(adopted.get("turns") or []),
+                                    "angles_deg": list(adopted.get("bend_angles_deg") or []),
+                                }
+                                entry["status"] = again["status"]
+                                entry["reason"] = again["reason"]
+                                entry["adopted"] = True
+                        counts = {"confirmed": 0, "refuted": 0, "unmeasurable": 0}
+                        for entry in verification.get("items") or []:
+                            counts[entry["status"]] = counts.get(entry["status"], 0) + 1
+                        verification.setdefault("summary", {}).update(counts)
                     await _record(
                         "reconcile.bent_section",
                         "completed",
