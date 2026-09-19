@@ -50,6 +50,7 @@ def verify_spec_against_sheet(image_bytes: bytes, spec: dict[str, Any]) -> dict[
         reason = _circular(image_bytes, profile, report)
     elif ((spec or {}).get("main_view") or {}).get("outer"):
         reason = _shaft(image_bytes, (spec or {}).get("main_view") or {}, report, spec or {})
+        _rotation_patterns(image_bytes, (spec or {}).get("main_view") or {}, report)
         _sleeve(image_bytes, spec or {}, report)
         if report.get("sleeve_confirmed"):
             reason = None
@@ -701,6 +702,81 @@ def _plate_holes(image_bytes: bytes, profile: dict[str, Any], report: dict[str, 
                 f"{_mm(measured['center_y_mm'] + half_h)}) — проверить"
             )
     return None
+
+
+def _rotation_patterns(image_bytes: bytes, body: dict[str, Any], report: dict[str, Any]) -> None:
+    """Отверстия на окружности тела вращения — по виду с торца (фланец со ступицей).
+
+    Вид с торца — круг наибольшего Ø ступени; число, окружность центров, Ø и
+    фаза меряются тем же проверяльщиком, что у фланца. Фазу лист углом не
+    задаёт — её даёт только замер.
+    """
+    from app.ai.cad_recognize.verifiers.circle_frame import locate_circle_frame
+
+    patterns = [
+        (index, pattern)
+        for index, pattern in enumerate(body.get("circular_hole_patterns") or [])
+        if isinstance(pattern, dict)
+        and _is_number(pattern.get("bolt_circle_diameter_mm"))
+        and _is_number(pattern.get("hole_diameter_mm"))
+    ]
+    diameters = [
+        float(step["diameter_mm"])
+        for step in body.get("outer") or []
+        if isinstance(step, dict) and _is_number(step.get("diameter_mm"))
+    ]
+    if not patterns or not diameters:
+        return
+    gray = _gray(image_bytes)
+    frame = locate_circle_frame(gray, max(diameters))
+    for index, pattern in patterns:
+        item = {
+            "kind": "bolt_circle",
+            "path": f"main_view.circular_hole_patterns[{index}]",
+            "feature_id": str(pattern.get("id") or f"circular_pattern:{index}"),
+            "read": {
+                "count": pattern.get("count"),
+                "bolt_circle_diameter_mm": pattern.get("bolt_circle_diameter_mm"),
+                "hole_diameter_mm": pattern.get("hole_diameter_mm"),
+                "start_angle_deg": pattern.get("start_angle_deg"),
+            },
+        }
+        if frame is None:
+            report["items"].append(
+                {
+                    **item,
+                    "status": "unmeasurable",
+                    "measured": {},
+                    "reason": "вид с торца не найден",
+                }
+            )
+            continue
+        verdict = verify(
+            Hypothesis(
+                "bolt_circle",
+                item["path"],
+                {
+                    "count": pattern.get("count"),
+                    "pcd_mm": float(pattern["bolt_circle_diameter_mm"]),
+                    "hole_diameter_mm": float(pattern["hole_diameter_mm"]),
+                    "start_angle_deg": pattern.get("start_angle_deg"),
+                },
+            ),
+            frame,
+            gray,
+        )
+        measured = {}
+        if verdict.measured:
+            measured = {
+                "count": verdict.measured["count"],
+                "bolt_circle_diameter_mm": verdict.measured["pcd_mm"],
+                "hole_diameter_mm": verdict.measured["hole_diameter_mm"],
+                "start_angle_deg": verdict.measured["start_angle_deg"],
+            }
+        entry = {**item, "status": verdict.status, "measured": measured, "reason": verdict.reason}
+        if verdict.evidence_bbox_px:
+            entry["evidence_bbox_px"] = [round(float(v), 1) for v in verdict.evidence_bbox_px]
+        report["items"].append(entry)
 
 
 def _circular(image_bytes: bytes, profile: dict[str, Any], report: dict[str, Any]) -> str | None:

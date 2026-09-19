@@ -1518,3 +1518,120 @@ def apply_weldment_placement(spec: dict[str, Any], decision: dict[str, Any]) -> 
     placement["position_mm"] = position
     spec.setdefault("optional_unresolved", []).append(decision["reason"])
     return spec
+
+
+def complete_rotation_patterns(
+    spec: dict[str, Any], report: dict[str, Any]
+) -> tuple[dict[str, Any], list[str]]:
+    """Массив отверстий на окружности тела вращения — дополнить из листа.
+
+    Живой фланец со ступицей: 6 × Ø11 на Ø90 прочитано верно, но торец входа,
+    сквозное исполнение и фазу ридер не указал — сборка заблокирована, а
+    массив ещё и выписан дважды. Фаза — только замером по виду с торца
+    (проверка подтвердила число, Ø и окружность). Торец и «насквозь» — из
+    геометрии: полоса отверстий (PCD/2 ± d/2) целиком в материале ступеней у
+    одного торца и целиком вне остальных — сверление насквозь на этом радиусе
+    и есть отверстие через диск.
+    """
+    import copy
+
+    main = spec.get("main_view") or {}
+    patterns = [p for p in main.get("circular_hole_patterns") or [] if isinstance(p, dict)]
+    if not patterns:
+        return spec, []
+    spec = copy.deepcopy(spec)
+    main = spec["main_view"]
+    notes: list[str] = []
+    unique: list[dict[str, Any]] = []
+    for pattern in main["circular_hole_patterns"]:
+        same = next(
+            (
+                kept
+                for kept in unique
+                if kept.get("count") == pattern.get("count")
+                and abs(
+                    float(kept.get("hole_diameter_mm") or 0)
+                    - float(pattern.get("hole_diameter_mm") or 0)
+                )
+                <= 0.05
+                and abs(
+                    float(kept.get("bolt_circle_diameter_mm") or 0)
+                    - float(pattern.get("bolt_circle_diameter_mm") or 0)
+                )
+                <= 0.05
+            ),
+            None,
+        )
+        if same is None:
+            unique.append(pattern)
+    if len(unique) < len(main["circular_hole_patterns"]):
+        notes.append("повтор массива отверстий снят")
+    main["circular_hole_patterns"] = unique
+    outer = [s for s in main.get("outer") or [] if isinstance(s, dict)]
+    bores = [
+        float(b.get("diameter_mm") or 0.0) for b in main.get("bore") or [] if isinstance(b, dict)
+    ]
+    confirmed = {
+        item["path"]: item
+        for item in report.get("items") or []
+        if item.get("kind") == "bolt_circle"
+        and str(item.get("path", "")).startswith("main_view.circular_hole_patterns")
+        and item.get("status") == "confirmed"
+    }
+    completed_patterns = []
+    for index, pattern in enumerate(unique):
+        item = confirmed.get(f"main_view.circular_hole_patterns[{index}]")
+        if item is None:
+            continue
+        filled = []
+        if pattern.get("axis_mode") is None:
+            pattern["axis_mode"] = "axial"
+        if (
+            pattern.get("start_angle_deg") is None
+            and item["measured"].get("start_angle_deg") is not None
+        ):
+            pattern["start_angle_deg"] = float(item["measured"]["start_angle_deg"])
+            filled.append("фаза")
+        low = (
+            float(pattern["bolt_circle_diameter_mm"]) / 2.0
+            - float(pattern["hole_diameter_mm"]) / 2.0
+        )
+        high = low + float(pattern["hole_diameter_mm"])
+        inside = [float(step.get("diameter_mm") or 0.0) / 2.0 >= high for step in outer]
+        outside = [float(step.get("diameter_mm") or 0.0) / 2.0 <= low for step in outer]
+        clean = all(a or b for a, b in zip(inside, outside, strict=True)) and all(
+            d / 2.0 <= low for d in bores
+        )
+        run = [i for i, flag in enumerate(inside) if flag]
+        contiguous = bool(run) and run == list(range(run[0], run[-1] + 1))
+        if clean and contiguous and (run[0] == 0 or run[-1] == len(outer) - 1):
+            if pattern.get("from_face") is None:
+                pattern["from_face"] = "zmin" if run[0] == 0 else "zmax"
+                filled.append("торец")
+            if pattern.get("through") is None:
+                pattern["through"] = True
+                filled.append("насквозь")
+        if filled:
+            completed_patterns.append(pattern)
+            notes.append(
+                f"массив {pattern.get('count')}×Ø{float(pattern['hole_diameter_mm']):g}: "
+                + ", ".join(filled)
+                + " — по листу"
+            )
+    if completed_patterns:
+        diameters = {round(float(p["hole_diameter_mm"]), 3) for p in unique}
+        # Пометки ридера о недостающем у массива и о «поперечном отверстии» того
+        # же Ø (это отверстия массива) — устарели.
+        main_notes = []
+        for note in spec.get("unresolved") or []:
+            text = str(note)
+            stale = ("массив" in text and "не определены" in text) or (
+                "поперечное отверстие" in text
+                and "не локализовано" in text
+                and any(f"Ø{d:g} " in text for d in diameters)
+            )
+            if not stale:
+                main_notes.append(note)
+        spec["unresolved"] = main_notes
+    spec.setdefault("optional_unresolved", []).extend(notes)
+    return spec, notes

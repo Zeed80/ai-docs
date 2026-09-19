@@ -4302,6 +4302,24 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                             + ", ".join(i["status"] for i in placement_items),
                             {"items": placement_items},
                         )
+                if verification is not None and (
+                    (spec.get("main_view") or {}).get("circular_hole_patterns")
+                ):
+                    # Массив на окружности тела вращения: фаза, торец и
+                    # «насквозь» — по листу, повтор массива снимается.
+                    from app.ai.cad_recognize.verifiers.reconcile import (
+                        complete_rotation_patterns,
+                    )
+
+                    spec, pattern_notes = complete_rotation_patterns(spec, verification)
+                    if pattern_notes:
+                        spec = _revalidated_spec(spec)
+                        await _record(
+                            "reconcile.circular_patterns",
+                            "completed",
+                            "; ".join(pattern_notes)[:300],
+                            {"notes": pattern_notes},
+                        )
                 if verification:
                     # Предварительно принятые форма и толщина сечения — только
                     # после подтверждения листом перестают блокировать сборку.

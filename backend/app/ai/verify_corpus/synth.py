@@ -409,7 +409,7 @@ def _hub_flange(rng: random.Random) -> dict[str, Any]:
                     "hole_diameter_mm": hole,
                     "bolt_circle_diameter_mm": pcd,
                     "axis_mode": "axial",
-                    "start_angle_deg": 0.0,
+                    "start_angle_deg": float(rng.choice((0, 15, 22.5, 30))),
                     "from_face": "zmin",
                     "through": True,
                 }
