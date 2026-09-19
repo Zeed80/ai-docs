@@ -104,17 +104,42 @@ def _serialize_state_dict(checkpoint: dict) -> dict:
     return checkpoint
 
 
+# Последний отказ загрузки на GPU. «CUDA error: all CUDA-capable devices are
+# busy or unavailable» при свободной карте — сломанный CUDA-контекст процесса:
+# сам он не восстанавливается (2026-09-19: три дня каждая векторизация — 500,
+# а /health отвечал ok, потому что модель не грузит). Нехватка памяти — другое
+# дело: карту держит соседний сервис, и она освободится сама.
+_LOAD_ERROR: dict | None = None
+_BROKEN_CONTEXT = ("busy or unavailable", "unknown error", "initialization error")
+
+
+def _note_load_failure(exc: BaseException) -> None:
+    global _LOAD_ERROR
+    text = str(exc)
+    broken = any(marker in text for marker in _BROKEN_CONTEXT)
+    _LOAD_ERROR = {"error": text[:300], "at": time.time(), "broken_context": broken}
+    if broken:
+        # Процесс завершается: Docker (restart: unless-stopped) поднимет его с
+        # новым контекстом. Отложенно — чтобы текущий запрос успел получить 500.
+        logger.error("technical_vectorizer_cuda_context_broken — перезапуск процесса")
+        threading.Timer(1.0, lambda: os._exit(3)).start()
+
+
 def _load_model():
     """Загрузить модель по требованию. Под замком: обработчики FastAPI без
     async выполняются в пуле потоков, и две одновременные векторизации иначе
     загрузили бы веса дважды."""
-    global _MODEL, _LAST_USED
+    global _MODEL, _LAST_USED, _LOAD_ERROR
     with _MODEL_LOCK:
         _LAST_USED = time.time()
         if _MODEL is not None:
             return _MODEL
         started = time.time()
-        model = load_model(_SPEC).to(_DEVICE)
+        try:
+            model = load_model(_SPEC).to(_DEVICE)
+        except RuntimeError as exc:
+            _note_load_failure(exc)
+            raise
         if _CHECKPOINT.exists():
             # map_location="cpu", а не на устройство: load_state_dict копирует
             # веса в уже размещённые на GPU параметры, поэтому загрузка прямо
@@ -128,6 +153,7 @@ def _load_model():
             logger.warning("technical_vectorizer_checkpoint_missing", extra={"path": str(_CHECKPOINT)})
         model.eval()
         _MODEL = model
+        _LOAD_ERROR = None
         logger.info(
             "technical_vectorizer_loaded seconds=%.1f device=%s",
             time.time() - started, _DEVICE,
@@ -181,6 +207,8 @@ def health() -> dict:
     """
     if not _CHECKPOINT.exists():
         raise HTTPException(503, f"model checkpoint missing: {_CHECKPOINT}")
+    if _LOAD_ERROR and _LOAD_ERROR.get("broken_context"):
+        raise HTTPException(503, f"CUDA context broken: {_LOAD_ERROR['error']}")
     return {
         "ok": True,
         "device": str(_DEVICE),
@@ -191,6 +219,9 @@ def health() -> dict:
         "idle_seconds": round(time.time() - _LAST_USED, 1) if _LAST_USED else None,
         # Без этого «модель висит» и «сторож умер» неотличимы снаружи.
         "idle_watcher_alive": _IDLE_THREAD.is_alive(),
+        # Последний отказ загрузки (нехватка видеопамяти и т. п.) — видно
+        # снаружи, а не только в журнале.
+        "last_load_error": _LOAD_ERROR,
     }
 
 

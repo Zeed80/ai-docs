@@ -93,3 +93,23 @@ def test_broken_insert_excludes_sheet_from_ground_truth() -> None:
 
     assert complete is False
     assert issues == ["broken_insert:MISSING_BLOCK"]
+
+
+def test_the_ground_truth_raster_has_the_requested_size():
+    """finalize() бэкенда ezdxf ужимал фигуру: при long_side 1600 растр был
+    787 × 499 — эталонные листы векторизации шли в треть заказанного размера."""
+    import io
+
+    import ezdxf
+    from PIL import Image
+
+    from scripts.eval_vectorize import _render_dxf_png
+
+    doc = ezdxf.new()
+    space = doc.modelspace()
+    space.add_line((0, 0), (400, 0))
+    space.add_line((0, 0), (0, 250))
+    space.add_circle((200, 120), 60)
+    size = Image.open(io.BytesIO(_render_dxf_png(doc, 1600))).size
+
+    assert abs(max(size) - 1600) <= 40

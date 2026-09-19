@@ -183,6 +183,12 @@ def _render_dxf_png(doc, long_side: int) -> bytes | None:
         # for a black-on-white ground-truth raster anyway.
         Frontend(RenderContext(doc), backend, config=cfg).draw_entities(msp)
         backend.finalize()
+        # finalize() бэкенда ezdxf сам ужимает фигуру до ~6 × 5 дюймов: при
+        # любом long_side растр выходил ~500 px по короткой стороне (E10 на
+        # таких листах — отметки 36 %). Размер восстанавливается после него.
+        width, height = fig.get_size_inches()
+        factor = long_side / dpi / max(width, height)
+        fig.set_size_inches(width * factor, height * factor)
         ax.set_aspect("equal")
         ax.margins(0)
         ax.autoscale_view()
