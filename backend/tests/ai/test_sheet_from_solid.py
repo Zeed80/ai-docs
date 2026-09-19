@@ -1785,3 +1785,30 @@ def test_the_view_below_is_aligned_by_the_body_not_by_its_frame():
     )
     # Тело (u = 0) на плане и на разрезе — на одной вертикали листа.
     assert placements[0]["offset_u"] == placements[1]["offset_u"]
+
+
+def test_a_section_label_stands_above_the_dimension_rows_and_out_of_other_views():
+    """«А-А» полого вала ложилась на габарит 232 (два ряда размеров над
+    контуром); у разреза корпуса под планом — поднятая, залезала бы в план."""
+    from app.ai.cad_ir.schema import Point, Segment
+    from app.ai.cad_ir.sheet_from_solid import PAPER_PX_PER_MM, _view_label_entities
+
+    section = {
+        "kind": "section",
+        "label": "А-А",
+        "bounds_mm": {"u_min": 0, "u_max": 100, "v_min": -10, "v_max": 10},
+    }
+    placement = {"offset_u": 50.0, "offset_v": 100.0}
+    # Габаритный размер 25 мм над контуром (контур сверху — на 90 мм листа).
+    overall = Segment(
+        p1=Point(x=60 * PAPER_PX_PER_MM, y=65 * PAPER_PX_PER_MM),
+        p2=Point(x=140 * PAPER_PX_PER_MM, y=65 * PAPER_PX_PER_MM),
+    )
+    (label,) = _view_label_entities([section], [placement], occupied=[overall])
+    assert label.position.y < 65 * PAPER_PX_PER_MM
+
+    plan = {"kind": "top", "bounds_mm": {"u_min": 0, "u_max": 100, "v_min": -30, "v_max": 30}}
+    (label,) = _view_label_entities(
+        [plan, section], [{"offset_u": 50.0, "offset_v": 50.0}, placement], occupied=[overall]
+    )
+    assert label.position.x < 50 * PAPER_PX_PER_MM  # слева от разреза, не в плане

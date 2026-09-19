@@ -2874,7 +2874,7 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
         list(range(len(views))),
         px_per_mm=PAPER_PX_PER_MM,
     )
-    entities += _view_label_entities(views, placements)
+    entities += _view_label_entities(views, placements, occupied=entities)
     entities += _flat_pattern_entities(spec, plan, views, placements)
     entities += weldment_entities(spec, plan, views, placements)
     entities += _cutting_plane_entities(views, placements, plan)
@@ -3061,7 +3061,10 @@ def _flat_pattern_entities(
 
 
 def _view_label_entities(
-    views: list[dict[str, Any]], placements: list[dict[str, float] | None]
+    views: list[dict[str, Any]],
+    placements: list[dict[str, float] | None],
+    *,
+    occupied: list[Any] | None = None,
 ) -> list[Any]:
     """Обозначение разреза и сечения над видом («Б-Б», ГОСТ 2.305).
 
@@ -3085,6 +3088,29 @@ def _view_label_entities(
             continue
         u = placement["offset_u"] + (float(box["u_min"]) + float(box["u_max"])) / 2.0
         v = placement["offset_v"] - float(box["v_max"]) - _VIEW_LABEL_GAP_MM
+        # Над самым верхним уже нарисованным над видом: у главного разреза вала
+        # над контуром два ряда размеров, и «А-А» на 18 мм ложилась на габарит.
+        left = (placement["offset_u"] + float(box["u_min"])) * PAPER_PX_PER_MM
+        right = (placement["offset_u"] + float(box["u_max"])) * PAPER_PX_PER_MM
+        contour_top = (placement["offset_v"] - float(box["v_max"])) * PAPER_PX_PER_MM
+        tops = [
+            y
+            for x, y in _entity_points(occupied or [])
+            if left - 1.0 <= x <= right + 1.0
+            and contour_top - _VIEW_LABEL_REACH_MM * PAPER_PX_PER_MM <= y < contour_top
+        ]
+        if tops:
+            v = min(v, min(tops) / PAPER_PX_PER_MM - DIM_TEXT_MM * 1.2)
+        # Над видом тесно — там соседний вид (разрез корпуса под планом):
+        # надпись встаёт слева от верхнего угла вида.
+        width_mm = len(label) * DIM_TEXT_MM * 1.4 * 0.7
+        label_box = (u - width_mm / 2, v - DIM_TEXT_MM * 1.4, u + width_mm / 2, v)
+        if any(
+            _boxes_overlap(label_box, other)
+            for other in _view_boxes_mm(views, placements, exclude=view, margin=_VIEW_MARGIN_MM)
+        ):
+            u = placement["offset_u"] + float(box["u_min"]) - width_mm / 2 - DIM_TEXT_MM
+            v = placement["offset_v"] - float(box["v_max"]) + DIM_TEXT_MM * 1.4
         entities.append(
             TextEntity(
                 position=Point(x=u * PAPER_PX_PER_MM, y=v * PAPER_PX_PER_MM),
@@ -3098,6 +3124,51 @@ def _view_label_entities(
             )
         )
     return entities
+
+
+_VIEW_MARGIN_MM = 4.0
+
+
+def _view_boxes_mm(
+    views: list[dict[str, Any]],
+    placements: list[dict[str, float] | None],
+    *,
+    exclude: dict[str, Any] | None = None,
+    margin: float = 0.0,
+) -> list[tuple[float, float, float, float]]:
+    """Рамки контуров видов на листе, мм (y вниз)."""
+    boxes = []
+    for view, placement in zip(views, placements, strict=False):
+        box = (view or {}).get("bounds_mm")
+        if view is exclude or not placement or not isinstance(box, dict):
+            continue
+        boxes.append(
+            (
+                placement["offset_u"] + float(box["u_min"]) - margin,
+                placement["offset_v"] - float(box["v_max"]) - margin,
+                placement["offset_u"] + float(box["u_max"]) + margin,
+                placement["offset_v"] - float(box["v_min"]) + margin,
+            )
+        )
+    return boxes
+
+
+def _boxes_overlap(a: tuple[float, ...], b: tuple[float, ...]) -> bool:
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
+def _entity_points(entities: list[Any]) -> list[tuple[float, float]]:
+    """Опорные точки нарисованного (px листа): концы отрезков, вершины, подписи."""
+    points: list[tuple[float, float]] = []
+    for item in entities:
+        for name in ("p1", "p2", "position", "center"):
+            point = getattr(item, name, None)
+            if point is not None and hasattr(point, "x"):
+                points.append((float(point.x), float(point.y)))
+        for point in getattr(item, "points", None) or []:
+            if hasattr(point, "x"):
+                points.append((float(point.x), float(point.y)))
+    return points
 
 
 def _cutting_plane_entities(
@@ -3207,6 +3278,9 @@ _CUT_HEAD_MM = 2.5
 # Надпись вида — над рядом размеров над контуром (отступ размера 8 мм + число
 # 3,5 мм + зазор): на 6 мм «Б-Б» ложилась на размерную линию глубины паза.
 _VIEW_LABEL_GAP_MM = 18.0
+# Полоса над видом, где ищутся его ряды размеров: выше — соседний вид (план
+# над разрезом корпуса), его надпись не касается.
+_VIEW_LABEL_REACH_MM = 30.0
 
 
 def _annotation_entities(spec: dict, *, x_mm: float, y_mm: float) -> list[Any]:
