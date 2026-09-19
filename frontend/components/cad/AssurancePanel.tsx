@@ -2,6 +2,8 @@
 
 import { useMemo } from "react";
 
+import { getApiBaseUrl } from "@/lib/api-base";
+
 import type {
   SpecAssumption,
   SpecConsensus,
@@ -27,6 +29,12 @@ const VERIFY_KINDS = new Set([
   // Листовая деталь (X4): форма сечения — число, направления и углы гибов.
   "bent_section",
 ]);
+
+/** Вырез листа вокруг элемента проверки с обведённой рамкой (Ф9). Индекс —
+ *  позиция в `spec_verification.items`, как её хранит сервер. */
+export function verificationOverlayUrl(generationId: string, index: number): string {
+  return `${getApiBaseUrl()}/api/image-gen/${generationId}/verification/${index}/overlay`;
+}
 
 /** «Отверстие 3» из `main_view.profile.holes[2]` — номер элемента с единицы. */
 function verifyElement(
@@ -97,6 +105,7 @@ export default function AssurancePanel({
   consensus,
   solid,
   verification,
+  generationId,
   t,
 }: {
   crosscheck?: SpecCrossCheck;
@@ -106,6 +115,8 @@ export default function AssurancePanel({
   followups?: SpecFollowup[];
   consensus?: SpecConsensus;
   solid?: Solid3dSummary;
+  /** Для выреза листа у опровергнутого и неизмеримого; без него — только текст. */
+  generationId?: string;
   t: (k: string, v?: Record<string, string | number>) => string;
 }) {
   const errors = useMemo(
@@ -231,8 +242,9 @@ export default function AssurancePanel({
               />
             ) : null}
             {verification.items
-              .filter((item) => item.status !== "confirmed")
-              .map((item) => (
+              .map((item, index) => ({ item, index }))
+              .filter(({ item }) => item.status !== "confirmed")
+              .map(({ item, index }) => (
                 <Row
                   key={`${item.kind}-${item.path}`}
                   ok={false}
@@ -241,6 +253,16 @@ export default function AssurancePanel({
                     element: verifyElement(item, t),
                   })}
                   detail={item.reason}
+                  overlay={
+                    generationId && item.evidence_bbox_px
+                      ? {
+                          src: verificationOverlayUrl(generationId, index),
+                          alt: t("vector.assurance_verify_overlay", {
+                            element: verifyElement(item, t),
+                          }),
+                        }
+                      : undefined
+                  }
                 />
               ))}
             {/* Профиль вала собран по листу вместо прочитанного целиком. */}
@@ -493,11 +515,14 @@ function Row({
   neutral,
   label,
   detail,
+  overlay,
 }: {
   ok?: boolean;
   neutral?: boolean;
   label: string;
   detail?: string;
+  /** Где на листе проверка это нашла — миниатюра выреза, по клику крупно. */
+  overlay?: { src: string; alt: string };
 }) {
   const mark = neutral ? "•" : ok ? "✓" : "✕";
   const colour = neutral
@@ -511,6 +536,22 @@ function Row({
       <span className="text-zinc-300">
         {label}
         {detail ? <span className="text-zinc-400"> — {detail}</span> : null}
+        {overlay ? (
+          <a
+            href={overlay.src}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-1 block w-fit"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={overlay.src}
+              alt={overlay.alt}
+              loading="lazy"
+              className="max-h-32 max-w-full rounded border border-white/10 bg-white"
+            />
+          </a>
+        ) : null}
       </span>
     </li>
   );

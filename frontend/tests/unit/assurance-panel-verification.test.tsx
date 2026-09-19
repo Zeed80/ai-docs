@@ -34,6 +34,7 @@ const VERIFICATION: SpecVerification = {
       status: "refuted",
       measured: { center_x_mm: 12.01, center_y_mm: 7.01, diameter_mm: 6.7 },
       reason: "y 32.006 мм, прочитано 26",
+      evidence_bbox_px: [400, 300, 440, 340],
     },
     {
       kind: "bolt_circle",
@@ -48,6 +49,24 @@ const VERIFICATION: SpecVerification = {
 };
 
 describe("AssurancePanel — проверка прочитанного по листу", () => {
+  it("shows where on the sheet the check found a refuted element, by its index in items", () => {
+    render(
+      <AssurancePanel verification={VERIFICATION} generationId="gen-1" t={t} />,
+    );
+    const image = screen.getByAltText(
+      "Отверстие 3: где на листе это нашла проверка",
+    ) as HTMLImageElement;
+    // Индекс 1 — позиция в items, не в отфильтрованном списке.
+    expect(image.src).toContain("/api/image-gen/gen-1/verification/1/overlay");
+    // У неизмеримого без рамки миниатюры нет.
+    expect(screen.getAllByRole("img")).toHaveLength(1);
+  });
+
+  it("shows no sheet crop without a generation id", () => {
+    render(<AssurancePanel verification={VERIFICATION} t={t} />);
+    expect(screen.queryAllByRole("img")).toHaveLength(0);
+  });
+
   it("shows the summary and names every refuted or unmeasurable element with its reason", () => {
     render(<AssurancePanel verification={VERIFICATION} t={t} />);
 

@@ -736,6 +736,7 @@
       "assurance_verify": "Прочитанное проверено по самому листу: подтверждено {confirmed}, опровергнуто {refuted}, не измеримо {unmeasurable}",
       "assurance_verify_refuted": "{element}: чтение опровергнуто замером по листу",
       "assurance_verify_unmeasurable": "{element}: проверить по листу не удалось",
+      "assurance_verify_overlay": "{element}: где на листе это нашла проверка",
       "assembly_title": "Состав сборки",
       "assembly_summary": "Позиций на чертеже {positions}, строк спецификации {rows}, связано {linked}. 3D сборки по чертежу не строится.",
       "assembly_positions_without_row": "Позиции без строки спецификации: {list}",

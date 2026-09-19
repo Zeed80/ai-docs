@@ -1266,6 +1266,68 @@ def _assertion_source_crop(gen, graph, assertion, *, full_sheet: bool = False):
     return evidence, buffer.getvalue()
 
 
+def verification_overlay_png(image_bytes: bytes, bbox: list[float], *, pad: float = 0.6) -> bytes:
+    """Вырез листа вокруг рамки вердикта проверки с обведённой рамкой (Ф9).
+
+    Оператор видит, ГДЕ на листе проверка нашла элемент и что замерила, а не
+    только число в панели: «опровергнуто» без картинки не проверить глазами.
+    """
+    from PIL import Image, ImageDraw
+
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    x0, y0, x1, y1 = (float(value) for value in bbox)
+    reach = max(40.0, pad * max(x1 - x0, y1 - y0))
+    box = (
+        max(0, int(x0 - reach)),
+        max(0, int(y0 - reach)),
+        min(image.width, int(x1 + reach)),
+        min(image.height, int(y1 + reach)),
+    )
+    if box[0] >= box[2] or box[1] >= box[3]:
+        raise ValueError("рамка вне листа")
+    crop = image.crop(box)
+    draw = ImageDraw.Draw(crop)
+    width = max(2, round(0.004 * max(crop.size)))
+    draw.rectangle(
+        (x0 - box[0], y0 - box[1], x1 - box[0], y1 - box[1]), outline=(220, 38, 38), width=width
+    )
+    if max(crop.size) > 900:
+        crop.thumbnail((900, 900))
+    buffer = io.BytesIO()
+    crop.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+@router.get("/{generation_id}/verification/{index}/overlay")
+async def get_generation_verification_overlay(
+    generation_id: uuid.UUID,
+    index: int,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> Response:
+    """Вырез листа вокруг элемента, проверенного по листу (``spec_verification``)."""
+    gen = await db.get(ImageGeneration, generation_id)
+    if not _owns(gen, user):
+        raise HTTPException(404, "Не найдено")
+    params = gen.params or {}
+    items = ((params.get("spec_verification") or {}).get("items")) or []
+    if index < 0 or index >= len(items):
+        raise HTTPException(404, "Такого элемента проверки нет")
+    bbox = items[index].get("evidence_bbox_px")
+    if not bbox or len(bbox) != 4:
+        raise HTTPException(404, "У этого элемента нет места на листе: проверка его не нашла")
+    path = params.get("normalized_source_path")
+    if not path:
+        raise HTTPException(404, "Лист, по которому шла проверка, не сохранён")
+    try:
+        content = verification_overlay_png(download_file(path), bbox)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return Response(
+        content=content, media_type="image/png", headers={"Cache-Control": "private, no-store"}
+    )
+
+
 @router.get("/{generation_id}/model-graph/assertions/{assertion_id}/source-overlay")
 async def get_generation_assertion_source_overlay(
     generation_id: uuid.UUID,

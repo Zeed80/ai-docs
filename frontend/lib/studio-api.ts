@@ -1050,6 +1050,8 @@ export interface SpecVerification {
     status: "confirmed" | "refuted" | "unmeasurable";
     measured: Record<string, number | null>;
     reason: string;
+    /** Где на нормализованном листе проверка нашла элемент, px. */
+    evidence_bbox_px?: [number, number, number, number] | null;
     /** Допуски сравнения стадии: position/diameter у отверстия пластины,
      * count/pcd/diameter/phase у окружности болтов. */
     tolerance_mm?: Record<string, number>;

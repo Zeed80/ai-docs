@@ -1556,6 +1556,7 @@ export default function CadWorkspace({ gen, onChanged }: Props) {
       <AssurancePanel
         crosscheck={specCrosscheck}
         verification={specVerification}
+        generationId={gen.id}
         dimensionCheck={specDimensionCheck}
         assumptions={specAssumptions}
         followups={specFollowups}
