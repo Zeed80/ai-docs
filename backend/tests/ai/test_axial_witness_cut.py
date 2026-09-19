@@ -127,3 +127,14 @@ def test_a_short_dimension_with_its_label_on_a_shelf_is_measured_between_its_wit
 
     assert line is not None
     assert abs((line[2] - line[0]) - 25) <= 2
+
+
+def test_a_short_dimension_with_arrows_outside_is_the_gap_between_its_witnesses():
+    """b паза на вынесенном сечении: 24 px между выносными при цифре 31 px,
+    стрелки снаружи, подпись над зазором. Мерилось всей линией со стрелками
+    (~150 px): короткий пролёт отбрасывался порогом «не меньше цифры»."""
+    ink = _chain([388, 412], outside={(388, 412)})
+    line = _span_from_ink(ink, _label(388, 412), UNIT)
+
+    assert line is not None
+    assert abs((line[2] - line[0]) - 24) <= 2

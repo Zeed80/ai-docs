@@ -49,6 +49,8 @@ _WITNESS_MIN = 0.3
 # стрелка ближе к подписи и выигрывала; «15» мерилось как 94 px вместо 177.
 _WITNESS_LONG = 1.2
 _WITNESS_MIN_SPAN = 1.0
+# Линия за выносной у стрелки снаружи — не меньше этой доли высоты текста.
+_OUTSIDE_ARROW = 1.0
 
 
 def _matches(value: float, candidates: list[float], relative: float = 0.005) -> bool:
@@ -434,6 +436,18 @@ def _cut_at_witness_lines(
     # С порогом прогона (3 высоты текста) короткий размер 6 мм — 71 px при
     # цифре 31 px — молча мерился всей линией вместе с выносом за стрелки.
     if new_right - new_left < _WITNESS_MIN_SPAN * unit:
+        # Короткий размер со стрелками снаружи (ГОСТ 2.307): подпись над
+        # зазором, линия продолжается за ОБЕ выносные на длину стрелки. Так
+        # стоят b и t1 паза на вынесенном сечении — 8 мм при цифре 31 px
+        # мерились всей линией со стрелками (24 px как 150, корпус v10).
+        if (
+            before.size
+            and after.size
+            and line[0] <= new_left - _OUTSIDE_ARROW * unit
+            and line[2] >= new_right + _OUTSIDE_ARROW * unit
+            and new_right - new_left >= 2.0
+        ):
+            return [new_left, line[1], new_right, line[3]]
         return line
     return [new_left, line[1], new_right, line[3]]
 
