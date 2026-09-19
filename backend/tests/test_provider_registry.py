@@ -339,3 +339,21 @@ async def test_thinking_level_auto_derived_for_anthropic_without_curation(
         )
     )
     assert stub.last_request.thinking_level == "high"
+
+
+# ── API key normalization on save ───────────────────────────────────────────
+
+
+def test_api_key_is_trimmed_and_rejects_inner_whitespace():
+    from pydantic import ValidationError
+
+    from app.api.providers_api import ProviderInstanceCreate, ProviderInstanceUpdate
+
+    assert ProviderInstanceUpdate(api_key="  sk-abc123\n").api_key == "sk-abc123"
+    assert ProviderInstanceUpdate(api_key="").api_key == ""  # "" still clears
+    assert ProviderInstanceUpdate().api_key is None  # None leaves it unchanged
+    # A key pasted together with its label used to be stored verbatim → 401.
+    for model in (ProviderInstanceCreate, ProviderInstanceUpdate):
+        kwargs = {"kind": "deepseek", "name": "x"} if model is ProviderInstanceCreate else {}
+        with pytest.raises(ValidationError, match="пробел"):
+            model(api_key="sk-abc123   my deepseek key", **kwargs)

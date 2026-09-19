@@ -56,7 +56,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     try {
       const body = await res.json();
       const d = body?.detail ?? body;
-      detail = typeof d === "string" ? d : (d?.message ?? JSON.stringify(d));
+      if (typeof d === "string") detail = d;
+      else if (Array.isArray(d) && d.every((e) => typeof e?.msg === "string")) {
+        // 422 от pydantic: [{loc, msg, type}] — показываем только тексты.
+        detail = d
+          .map((e) => String(e.msg).replace(/^Value error, /, ""))
+          .join("; ");
+      } else detail = d?.message ?? JSON.stringify(d);
     } catch {
       /* тело не JSON — оставляем статус */
     }
@@ -79,7 +85,11 @@ export const createProvider = (body: {
   name: string;
   base_url?: string | null;
   api_key?: string;
-}) => request<ProviderInstance>("/api/providers", { method: "POST", body: JSON.stringify(body) });
+}) =>
+  request<ProviderInstance>("/api/providers", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 
 export const updateProvider = (
   id: string,
@@ -129,7 +139,8 @@ export const pruneRouting = () =>
 
 // ── Слоты и назначения ───────────────────────────────────────────────────────
 
-export const listSlots = () => request<{ slots: Slot[] }>("/api/providers/slots");
+export const listSlots = () =>
+  request<{ slots: Slot[] }>("/api/providers/slots");
 
 export const getAssignmentDraft = () =>
   request<AssignmentDraft>("/api/providers/assignment-draft");
@@ -150,9 +161,12 @@ export const applyAssignmentDraft = (
   });
 
 export const rollbackAssignment = (revisionId: string) =>
-  request<AssignmentDraft>(`/api/providers/assignments/${revisionId}/rollback`, {
-    method: "POST",
-  });
+  request<AssignmentDraft>(
+    `/api/providers/assignments/${revisionId}/rollback`,
+    {
+      method: "POST",
+    },
+  );
 
 export const setSlotThinking = (
   slot: string,
@@ -192,10 +206,13 @@ export const setModelPreferredInstance = (
   modelKey: string,
   instance: string | null,
 ) =>
-  request<CatalogModel>(`/api/providers/models/${modelKey}/preferred-instance`, {
-    method: "PATCH",
-    body: JSON.stringify({ preferred_instance: instance }),
-  });
+  request<CatalogModel>(
+    `/api/providers/models/${modelKey}/preferred-instance`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ preferred_instance: instance }),
+    },
+  );
 
 export const setModelThinking = (
   modelKey: string,

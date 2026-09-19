@@ -24,7 +24,7 @@ from typing import Any, Literal
 import httpx
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -88,6 +88,23 @@ class ProvidersListOut(BaseModel):
     known_kinds: list[KnownKind]
 
 
+def _normalize_api_key(value: str | None) -> str | None:
+    """Trim a pasted key and refuse one with inner whitespace.
+
+    A key copied together with its label ("sk-… my key") used to be stored
+    verbatim and every request then failed with an opaque 401.
+    """
+    if value is None:
+        return None
+    key = value.strip()
+    if any(ch.isspace() for ch in key):
+        raise ValueError(
+            "API-ключ содержит пробел или перенос строки — похоже, вместе с ключом "
+            "скопирован лишний текст. Вставьте только сам ключ."
+        )
+    return key
+
+
 class ProviderInstanceCreate(BaseModel):
     kind: str
     name: str
@@ -96,6 +113,8 @@ class ProviderInstanceCreate(BaseModel):
     is_local: bool | None = None
     api_key: str | None = None
 
+    _check_api_key = field_validator("api_key")(_normalize_api_key)
+
 
 class ProviderInstanceUpdate(BaseModel):
     name: str | None = None
@@ -103,6 +122,8 @@ class ProviderInstanceUpdate(BaseModel):
     enabled: bool | None = None
     api_key: str | None = None  # "" clears the key; None leaves it unchanged
     extra: dict | None = None  # {headers: {...}, body: {...}}; replaces if provided
+
+    _check_api_key = field_validator("api_key")(_normalize_api_key)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
