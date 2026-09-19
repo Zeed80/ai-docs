@@ -36,6 +36,9 @@ _SEARCH_MARGIN = 0.15
 # Сторона прямоугольника считается найденной, если линия накрывает её на эту
 # долю: угол элемента на листе может быть скруглён или перекрыт размерной.
 _SIDE_COVERAGE = 0.7
+# Столько сторон, идущих насквозь за оба угла, делают прямоугольник случайной
+# клеткой из чужих линий.
+_THROUGH_SIDES = 3
 
 
 # Грань → как её оси лежат НА ЛИСТЕ: (меняются ли u и v местами, знак u,
@@ -227,6 +230,16 @@ def _rectangle(
             for line in lines
         )
 
+    def passes_through(lines: list, position: float, low: float, high: float) -> bool:
+        """Сторона — часть линии, что идёт насквозь за ОБА угла элемента."""
+        reach = 2.0 * tolerance
+        return any(
+            abs(line.position - position) <= tolerance
+            and line.start < low - reach
+            and line.end > high + reach
+            for line in lines
+        )
+
     best = None
     for top in horizontal:
         for bottom in horizontal:
@@ -241,6 +254,21 @@ def _rectangle(
                     covers(horizontal, top.position, left.position, right_x)
                     and covers(horizontal, bottom.position, left.position, right_x)
                 ):
+                    continue
+                # Контур элемента кончается в своих углах. Квадрат, у которого
+                # стороны — сквозные линии (выносные, контур полости, кромки
+                # соседнего элемента), — случайное пересечение, а не элемент:
+                # корпус seed 4 — сдвинутый на 12 мм карман «подтверждался» в
+                # такой клетке 15 × 15.
+                through = sum(
+                    (
+                        passes_through(horizontal, top.position, left.position, right_x),
+                        passes_through(horizontal, bottom.position, left.position, right_x),
+                        passes_through(vertical, left.position, top.position, bottom.position),
+                        passes_through(vertical, right_x, top.position, bottom.position),
+                    )
+                )
+                if through >= _THROUGH_SIDES:
                     continue
                 middle_x = (left.position + right_x) / 2.0 + left_edge
                 distance = (middle_x - centre[0]) ** 2 + (middle_y + top_edge - centre[1]) ** 2

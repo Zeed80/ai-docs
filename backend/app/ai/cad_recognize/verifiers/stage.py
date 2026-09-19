@@ -568,6 +568,11 @@ def _frame_fits(box: Any, mm_per_px: float, thickness: float) -> bool:
     return any(abs(side - thickness) <= 0.08 * thickness for side in (height_mm, width_mm))
 
 
+# Сколько разных параллельных штрихов делает вид разрезом (корпуса: у
+# разрезов 57–91, у видов с окружностями и диагональными размерными ≤ 8).
+_HATCH_LINES = 20
+
+
 def _hatched(gray: Any, box: Any) -> bool:
     """Вид — разрез: внутри рамки много параллельных штрихов под 45° (ГОСТ 2.306)."""
     import cv2
@@ -588,10 +593,18 @@ def _hatched(gray: Any, box: Any) -> bool:
         np.degrees(np.arctan2(segments[:, 3] - segments[:, 1], segments[:, 2] - segments[:, 0]))
         + 180.0
     ) % 180.0
-    diagonal = ((np.abs(angles - 45.0) < 8.0) | (np.abs(angles - 135.0) < 8.0)) & (
-        lengths >= 0.03 * max(crop.shape)
-    )
-    return int(diagonal.sum()) >= 8
+    # Штриховка — много РАЗНЫХ параллельных линий одного направления. Счёт
+    # штрихов под 45° в обоих направлениях путал вид спереди с разрезом:
+    # окружность прилива, диагональная размерная Ø и стрелки дают 8–11
+    # коротких отрезков (корпуса seed 0, 4, 6, 9), у разреза их 57–91 разных.
+    long_enough = lengths >= 0.03 * max(crop.shape)
+    middle_x = (segments[:, 0] + segments[:, 2]) / 2.0
+    middle_y = (segments[:, 1] + segments[:, 3]) / 2.0
+    for angle, offset in ((45.0, middle_x - middle_y), (135.0, middle_x + middle_y)):
+        chosen = np.sort(offset[(np.abs(angles - angle) < 8.0) & long_enough] / np.sqrt(2.0))
+        if chosen.size and int(np.sum(np.diff(chosen) > 3.0)) + 1 >= _HATCH_LINES:
+            return True
+    return False
 
 
 def _plate_holes(image_bytes: bytes, profile: dict[str, Any], report: dict[str, Any]) -> str | None:
