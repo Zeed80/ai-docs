@@ -442,3 +442,38 @@ def test_short_feature_dimensions_whose_labels_would_touch_go_to_separate_rows()
     ]
     tiers = _length_tiers(dimensions)
     assert tiers[0] != tiers[1]
+
+
+def _chain_labels(links: list[tuple[float, float, str]]):
+    from app.ai.cad_ir.schema import TextEntity
+
+    entities = dimensions_from_kernel(
+        [
+            {
+                "view_index": 0,
+                "kind": "DistanceX",
+                "label": label,
+                "anchors_mm": [[left, 0.0], [right, 0.0]],
+                "value_mm": right - left,
+            }
+            for left, right, label in links
+        ],
+        {"front": {"offset_u": 100.0, "offset_v": 100.0, "bounds_mm": {"v_max": 10.0}}},
+        ["front"],
+        px_per_mm=1.0,
+    )
+    return {item.text: item.position.x - 100.0 for item in entities if isinstance(item, TextEntity)}
+
+
+def test_a_short_link_between_neighbours_keeps_its_label_over_itself():
+    """Полка «15» короткого звена ложилась на строку соседнего и читалась его
+    подписью (корпус v10: 44 px мерились как 236)."""
+    labels = _chain_labels([(0.0, 40.0, "40"), (40.0, 43.0, "15.5"), (43.0, 90.0, "47")])
+
+    assert 40.0 <= labels["15.5"] <= 43.0
+
+
+def test_a_short_link_at_the_end_of_the_chain_still_takes_the_free_side():
+    labels = _chain_labels([(0.0, 40.0, "40"), (40.0, 43.0, "15.5")])
+
+    assert labels["15.5"] > 43.0

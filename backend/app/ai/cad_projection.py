@@ -523,6 +523,7 @@ def dimensions_from_kernel(
     entities: list[Any] = []
     tiers = _length_tiers(dimensions)
     witnesses = _witness_lines(dimensions, placements, view_order, tiers)
+    dimension_rows = _dimension_rows(dimensions, placements, view_order, tiers)
     for position, item in enumerate(dimensions):
         anchors = item.get("anchors_mm") or []
         if len(anchors) < 2:
@@ -682,6 +683,7 @@ def dimensions_from_kernel(
             # then read the hole as Ø15 (baseline v3, plate-0). Such a label
             # goes onto the shelf too.
             room = 0.5 * span if through_centre else span
+            start = None
             if not vertical and label_mm > room:
                 start = carry
                 reach = start + DIM_EXTENSION_MM + label_mm
@@ -693,10 +695,24 @@ def dimensions_from_kernel(
                 row_v = v2 + ov
                 forward = (u2 + ou + tu * start, u2 + ou + tu * reach)
                 backward = (u1 + ou - tu * reach, u1 + ou - tu * start)
-                if _crossings(witnesses, index, position, row_v, forward) > _crossings(
-                    witnesses, index, position, row_v, backward
+                # Полка на строке соседнего звена цепочки лежит поверх его
+                # размерной линии: подпись «15» короткого звена читалась
+                # подписью соседа (корпус v10: 44 px мерились как 236).
+                blocked_forward = _on_dimension_row(dimension_rows, index, position, row_v, forward)
+                blocked_backward = _on_dimension_row(
+                    dimension_rows, index, position, row_v, backward
+                )
+                if blocked_forward and blocked_backward:
+                    # Звено в середине цепочки: полке некуда — подпись над своим
+                    # размером, ближе всего к нему.
+                    start = None
+                elif blocked_forward or (
+                    not blocked_backward
+                    and _crossings(witnesses, index, position, row_v, forward)
+                    > _crossings(witnesses, index, position, row_v, backward)
                 ):
                     end_u, end_v, sign = u1, v1, -1.0
+            if not vertical and label_mm > room and start is not None:
                 entities.append(
                     Segment(
                         p1=to_point(end_u + ou + sign * tu * start, end_v + ov + sign * tv * start),
@@ -774,6 +790,63 @@ def _witness_lines(
             end_v = base_v + offset + (-DIM_EXTENSION_MM if item.get("below") else DIM_EXTENSION_MM)
             lines.append((index, position, anchor_u, min(anchor_v, end_v), max(anchor_v, end_v)))
     return lines
+
+
+def _dimension_rows(
+    dimensions: list[dict[str, Any]],
+    placements: dict[str, dict[str, float]],
+    view_order: list[str],
+    tiers: dict[int, int],
+) -> list[tuple[int, int, float, float, float]]:
+    """Размерные линии горизонтальных размеров: (вид, размер, u от, u до, v), мм вида."""
+    rows: list[tuple[int, int, float, float, float]] = []
+    for position, item in enumerate(dimensions):
+        anchors = item.get("anchors_mm") or []
+        kind = str(item.get("kind") or "")
+        index = int(item.get("view_index") or 0)
+        if len(anchors) < 2 or kind != "DistanceX" or index >= len(view_order):
+            continue
+        placement = placements.get(view_order[index]) or {}
+        bounds = placement.get("bounds_mm") or {}
+        points = _projected_dimension_points(
+            kind,
+            (float(anchors[0][0]), float(anchors[0][1])),
+            (float(anchors[1][0]), float(anchors[1][1])),
+            top=float(bounds["v_max"]) if "v_max" in bounds else None,
+            bottom=float(bounds["v_min"]) if item.get("below") and "v_min" in bounds else None,
+            tier=tiers.get(position, 0),
+            place_u=_placed_u(item, tiers.get(position, 0)),
+        )
+        offset = -DIM_OFFSET_MM if item.get("below") else DIM_OFFSET_MM
+        (_a, (u1, v1)), (_b, (u2, _v2)) = points
+        low, high = min(u1, u2), max(u1, u2)
+        # Стрелки короткого размера — снаружи, и линия продолжена за выносные.
+        if high - low < 2.0 * DIM_ARROW_MM + DIM_ARROW_GAP_MM:
+            low -= DIM_ARROW_MM + DIM_EXTENSION_MM
+            high += DIM_ARROW_MM + DIM_EXTENSION_MM
+        rows.append((index, position, low, high, v1 + offset))
+    return rows
+
+
+def _on_dimension_row(
+    rows: list[tuple[int, int, float, float, float]],
+    view: int,
+    own: int,
+    row_v: float,
+    span: tuple[float, float],
+) -> bool:
+    """Ложится ли полка на размерную линию другого размера той же строки —
+    или подходит к ней ближе длины стрелки: такой зазор на листе читается
+    разрывом одной линии (полка «15» у выноса стрелок соседнего размера — 33 px,
+    и подпись мерилась до его выносной)."""
+    low, high = min(span) - DIM_ARROW_MM, max(span) + DIM_ARROW_MM
+    return any(
+        index == view
+        and position != own
+        and abs(v - row_v) < 0.5
+        and min(high, u_high) - max(low, u_low) > 0.5
+        for index, position, u_low, u_high, v in rows
+    )
 
 
 def _crossings(
