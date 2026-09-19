@@ -148,6 +148,10 @@ def _shaft_feature_values(body: dict, lengths: list[float]) -> dict[str, list[fl
         offset = from_shoulder(keyway["axial_start_mm"])
         if offset > 0.05:
             values["lengths"].append(offset)
+    # Отверстия на окружности (фланец со ступицей): Ø окружности центров и Ø
+    # отверстия — на виде с торца (X1). Лист тела вращения их не показывал.
+    for pattern in body.get("circular_hole_patterns") or []:
+        values["diameters"] += [pattern["bolt_circle_diameter_mm"], pattern["hole_diameter_mm"]]
     for hole in body.get("cross_holes") or []:
         values["diameters"].append(hole["diameter_mm"])
         offset = from_shoulder(hole["axial_position_mm"])

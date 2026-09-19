@@ -1831,3 +1831,53 @@ def test_the_drawing_is_moved_into_the_sheet_only_when_it_spills_out():
     assert dx == 0.0 and dy > 8.0
     # Помещается, хоть и не по центру, — не трогать.
     assert _fit_shift([segment(20.0), segment(60.0)], 10.0, 10.0, 190.0, 180.0) == (0.0, 0.0)
+
+
+def test_a_turned_part_with_holes_on_a_circle_gets_an_end_view_with_pcd_and_count():
+    """Фланец со ступицей — тело вращения: лист не показывал его отверстия под
+    болты вовсе (вида с торца не было), метрика полноты этого не требовала."""
+    from app.ai.cad_ir.sheet_from_solid import SheetPlan, _rotation_pattern_dimensions, plan_views
+
+    spec = {
+        "main_view": {
+            "outer": [{"diameter_mm": 120.0, "length_mm": 15.0}],
+            "circular_hole_patterns": [
+                {"count": 6, "hole_diameter_mm": 11.0, "bolt_circle_diameter_mm": 90.0}
+            ],
+        }
+    }
+    assert any(view["kind"] == "side" for view in plan_views("solid_rotation", spec))
+
+    import math
+
+    circles = [{"type": "circle", "center": [0.0, 0.0], "radius": 60.0}] + [
+        {
+            "type": "circle",
+            "center": [45.0 * math.cos(math.radians(a)), 45.0 * math.sin(math.radians(a))],
+            "radius": 5.5,
+        }
+        for a in range(0, 360, 60)
+    ]
+    drawing = {
+        "views": [
+            {"kind": "front"},
+            {
+                "kind": "side",
+                "bounds_mm": {"u_min": -60, "u_max": 60, "v_min": -60, "v_max": 60},
+                "visible": circles,
+            },
+        ]
+    }
+    plan = SheetPlan(
+        part_class="solid_rotation",
+        views=[],
+        sheet_format="A4",
+        landscape=True,
+        ratio=1.0,
+        scale_label="1:1",
+        layout_w_mm=0.0,
+        layout_h_mm=0.0,
+    )
+    _rotation_pattern_dimensions(drawing, plan)
+    labels = sorted(item["label"] for item in drawing["dimensions"])
+    assert labels == ["6 отв. Ø11", "Ø90"]

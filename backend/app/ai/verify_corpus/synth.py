@@ -37,6 +37,7 @@ def synth_spec(kind: str, seed: int) -> dict[str, Any]:
         "shaft": _shaft,
         "plate": _plate,
         "flange": _flange,
+        "hub_flange": _hub_flange,
         "housing": _housing,
         "sheet_metal": _sheet_metal,
         "weldment": _weldment,
@@ -381,6 +382,46 @@ def _flange(rng: random.Random) -> dict[str, Any]:
         "slots": [],
     }
     return _prismatic_spec(rng, profile, rng.choice(_NAMES_PLATE_CIRCLE), "фланец")
+
+
+def _hub_flange(rng: random.Random) -> dict[str, Any]:
+    """Фланец со ступицей — тело вращения: диск, ступица, расточка насквозь,
+    отверстия на окружности через диск (X1: такой фланец не «круглая пластина»)."""
+    diameter = float(rng.choice((100, 120, 140, 160, 200)))
+    disk = float(rng.choice((10, 12, 15, 20)))
+    hub = float(round(diameter * rng.uniform(0.4, 0.55)))
+    hub_length = float(rng.choice((20, 25, 30, 40)))
+    bore = float(round(hub * rng.uniform(0.4, 0.6)))
+    hole = rng.choice(_HOLES)
+    pcd = float(round((hub + diameter) / 2.0))
+    spec = {
+        "schema_version": "3.0",
+        "main_view": {
+            "type": "тело вращения",
+            "outer": [
+                {"diameter_mm": diameter, "length_mm": disk},
+                {"diameter_mm": hub, "length_mm": hub_length},
+            ],
+            "bore": [{"diameter_mm": bore, "length_mm": disk + hub_length}],
+            "circular_hole_patterns": [
+                {
+                    "count": rng.choice((4, 6, 8)),
+                    "hole_diameter_mm": hole,
+                    "bolt_circle_diameter_mm": pcd,
+                    "axis_mode": "axial",
+                    "start_angle_deg": 0.0,
+                    "from_face": "zmin",
+                    "through": True,
+                }
+            ],
+        },
+        "views": [],
+        "dimensions": [],
+        "annotations": [],
+        "title_block": {"name": "Фланец", "material": "Сталь 20", "scale": "1:2"},
+        "unresolved": [],
+    }
+    return spec
 
 
 # Корпус (X2): коробка с полостью, приливы и карманы на стенках.

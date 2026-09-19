@@ -254,6 +254,16 @@ def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
             views.append({"kind": "side"})
             views.append({"kind": "top"})
 
+    main = spec.get("main_view") or {}
+    if part_class in ("solid_rotation", "hollow_rotation") and (
+        main.get("circular_hole_patterns") or main.get("axial_holes")
+    ):
+        # Отверстия на окружности (фланец со ступицей, торцевой крепёж) видны
+        # только с торца: без этого вида лист не показывал ни отверстий, ни
+        # окружности центров, ни их числа — а метрика полноты их не требовала.
+        if not any(v["kind"] == "side" for v in views):
+            views.append({"kind": "side"})
+
     requested = {str(view.get("kind")) for view in source_views}
     # A view the reader saw on the source sheet is reproduced. "top" used to be
     # read, validated and then silently never drawn.
@@ -2589,6 +2599,81 @@ def _corner_radii(
         )
 
 
+def _rotation_pattern_dimensions(drawing: dict, plan: SheetPlan) -> None:
+    """Отверстия на окружности тела вращения — на виде с торца (X1).
+
+    Фланец со ступицей — тело вращения: его отверстия под болты лист не
+    показывал вовсе (вида с торца не было), а когда показал — без размеров.
+    Как у фланца: окружность центров с Ø (штрихпунктиром) и диаметр одного
+    отверстия с их числом — «6 отв. Ø11».
+    """
+    import math
+
+    if plan.part_class not in ("solid_rotation", "hollow_rotation"):
+        return
+    dimensions = drawing.setdefault("dimensions", [])
+    ratio = plan.ratio or 1.0
+    near = 0.05 * ratio
+    for index, view in enumerate(drawing.get("views") or []):
+        if view.get("kind") != "side" or index in plan.scaffold_views:
+            continue
+        bounds = view.get("bounds_mm") or {}
+        if not bounds:
+            continue
+        cu = (float(bounds["u_min"]) + float(bounds["u_max"])) / 2.0
+        cv = (float(bounds["v_min"]) + float(bounds["v_max"])) / 2.0
+        holes = [
+            (float(item["center"][0]), float(item["center"][1]), float(item["radius"]))
+            for item in view.get("visible") or []
+            if item.get("type") == "circle"
+            and item.get("center")
+            and item.get("radius")
+            and math.hypot(float(item["center"][0]) - cu, float(item["center"][1]) - cv) > near
+        ]
+        groups: dict[tuple[int, int], list[tuple[float, float, float]]] = {}
+        for hole in holes:
+            key = (round(math.hypot(hole[0] - cu, hole[1] - cv) / near), round(hole[2] / near))
+            groups.setdefault(key, []).append(hole)
+        for members in groups.values():
+            if not _is_bolt_circle(members, cu, cv, "flange"):
+                continue
+            radius = math.hypot(members[0][0] - cu, members[0][1] - cv)
+            angle = math.radians(_CONCENTRIC_ANGLES[1])
+            du, dv = radius * math.cos(angle), radius * math.sin(angle)
+            pcd = round(2.0 * radius / ratio, 3)
+            dimensions.append(
+                {
+                    "view_index": index,
+                    "kind": "Diameter",
+                    "label": f"Ø{pcd:g}",
+                    "anchors_mm": [[cu - du, cv - dv], [cu + du, cv + dv]],
+                    "value_mm": pcd,
+                    "measured_by": "pitch_circle",
+                    "pitch_circle": True,
+                    "ir_kind": "diameter",
+                    "_centre": [round(cu, 3), round(cv, 3)],
+                }
+            )
+            # Диаметр одного отверстия — у самого верхнего, с числом отверстий.
+            hu, hv, hr = max(members, key=lambda hole: hole[1])
+            hole_d = round(2.0 * hr / ratio, 3)
+            tilt = math.radians(45.0)
+            dimensions.append(
+                {
+                    "view_index": index,
+                    "kind": "Diameter",
+                    "label": f"{len(members)} отв. Ø{hole_d:g}",
+                    "anchors_mm": [
+                        [hu - hr * math.cos(tilt), hv - hr * math.sin(tilt)],
+                        [hu + hr * math.cos(tilt), hv + hr * math.sin(tilt)],
+                    ],
+                    "value_mm": hole_d,
+                    "measured_by": "hole_circle",
+                    "ir_kind": "diameter",
+                }
+            )
+
+
 def _is_bolt_circle(
     members: list[tuple[float, float, float]], cu: float, cv: float, part_class: str
 ) -> bool:
@@ -2726,6 +2811,7 @@ async def build_sheet_from_solid(
     drawing["dimensions"] = measured
     _label_dimensions(measured, requests, spec)
     _hole_dimensions(drawing, plan, spec)
+    _rotation_pattern_dimensions(drawing, plan)
     _wall_feature_dimensions(drawing, spec, plan)
     _shaft_feature_dimensions(drawing, spec, plan)
     _turned_detail_dimensions(drawing, spec, plan)
