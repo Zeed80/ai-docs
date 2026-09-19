@@ -46,7 +46,9 @@ class _Line:
         return max(0.0, min(self.end, high) - max(self.start, low))
 
 
-def locate_plate_frame(sheet: Any, width_mm: float, height_mm: float) -> ViewFrame | None:
+def locate_plate_frame(
+    sheet: Any, width_mm: float, height_mm: float, *, full_sides_first: bool = False
+) -> ViewFrame | None:
     """Прямоугольник плана ``width_mm × height_mm`` на листе; ``None`` — не найден.
 
     ``sheet`` — серое изображение (numpy, 0 — чернила).
@@ -100,9 +102,18 @@ def locate_plate_frame(sheet: Any, width_mm: float, height_mm: float) -> ViewFra
     # Толщина — в долях самой толстой найденной: у контура все четыре стороны
     # основные (≈ 1), у прямоугольника с размерной или выносной — ≈ 0,5.
     heaviest = max(item[0] for item in scored) or 1.0
+    # Покрытие сторон — раньше пропорции (``full_sides_first``, корпус): под планом стоят два
+    # вида одной ширины, и прямоугольник из их верхних кромок (стороны
+    # прерваны промежутком между видами, покрытие ~0,6) проходил за план
+    # той же пропорции (seed 5).
     best = min(
         scored,
-        key=lambda item: (-round(item[0] / heaviest, 1), round(item[1], 3), -item[2]),
+        key=lambda item: (
+            -round(item[0] / heaviest, 1),
+            full_sides_first and item[2] < 0.85,
+            round(item[1], 3),
+            -item[2],
+        ),
     )
     top, bottom, left, right = best[3:]
     dx = right.position - left.position

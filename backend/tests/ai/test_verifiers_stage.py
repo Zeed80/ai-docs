@@ -1013,3 +1013,25 @@ def test_a_side_view_edge_continued_by_witness_lines_is_still_an_edge():
     columns = _levels_right([edge, other, frame], 100.0, 300.0, 400.0, 300.0, 200.0)
 
     assert 500.0 in columns and 600.0 in columns
+
+
+def test_the_plan_is_not_assembled_from_two_stacked_views_below_it():
+    """Корпус seed 5: под планом 100 × 100 — разрез и вид спереди одной ширины;
+    верхние кромки двух видов с их боковыми сторонами (прерванными
+    промежутком) складывались в «план» той же пропорции."""
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    from app.ai.cad_recognize.verifiers.plate_frame import locate_plate_frame
+
+    image = Image.new("L", (900, 1500), 255)
+    draw = ImageDraw.Draw(image)
+    # План на скане чуть неточен по пропорции (400 × 412), а кромки видов под
+    # ним случайно дают точный квадрат 400 × 400.
+    for box in ((100, 100, 500, 512), (100, 600, 500, 900), (100, 1000, 500, 1300)):
+        draw.rectangle(box, outline=0, width=4)
+    frame = locate_plate_frame(np.asarray(image), 100.0, 100.0, full_sides_first=True)
+
+    assert frame is not None and frame.bbox_px[1] < 150 and frame.bbox_px[3] < 560
+    fooled = locate_plate_frame(np.asarray(image), 100.0, 100.0)
+    assert fooled is not None and fooled.bbox_px[1] > 550

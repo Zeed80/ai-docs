@@ -73,13 +73,15 @@ class HousingViews:
         }
 
 
-def locate_housing_views(sheet: Any, width_mm: float, height_mm: float) -> HousingViews | None:
+def locate_housing_views(
+    sheet: Any, width_mm: float, height_mm: float, *, full_sides_first: bool = False
+) -> HousingViews | None:
     """Три вида корпуса и толщина по ним; ``None`` — план на листе не найден."""
     import numpy as np
 
     from app.ai.cad_recognize.verifiers.plate_frame import _ink, _lines, locate_plate_frame
 
-    plan = locate_plate_frame(sheet, width_mm, height_mm)
+    plan = locate_plate_frame(sheet, width_mm, height_mm, full_sides_first=full_sides_first)
     if plan is None:
         return None
     gray = np.asarray(sheet)

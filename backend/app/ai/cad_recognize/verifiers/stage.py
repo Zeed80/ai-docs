@@ -367,7 +367,14 @@ def _housing_thickness(image_bytes: bytes, profile: dict[str, Any], report: dict
     read = profile.get("thickness_mm")
     if not _is_number(width) or not _is_number(height) or not _is_number(read):
         return
-    views = locate_housing_views(_gray(image_bytes), float(width), float(height))
+    # Корпус с элементами граней: под планом стопка видов одной ширины —
+    # план выбирается с полными сторонами (у пластины — прежний порядок).
+    views = locate_housing_views(
+        _gray(image_bytes),
+        float(width),
+        float(height),
+        full_sides_first=bool(profile.get("wall_features")),
+    )
     if views is None:
         return
     report["housing_views"] = views.as_dict()
