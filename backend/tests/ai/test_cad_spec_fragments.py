@@ -1989,3 +1989,24 @@ async def test_a_sheet_metal_read_never_falls_back_to_the_whole_sheet_reader(mon
     assert "whole" not in called
     assert result["main_view"]["type"] == "листовая деталь"
     assert any("толщина листа" in note for note in result["unresolved"])
+
+
+@pytest.mark.asyncio
+async def test_the_sheet_metal_question_gets_time_to_reason(monkeypatch):
+    """Живой Z-профиль: узкий вопрос о сечении упирался в 75 с по умолчанию,
+    а перед ним «скрипт профиля тела вращения» съедал 150 с бюджета."""
+    from app.ai.cad_recognize import spec_fragments as fragments
+
+    seen: dict = {}
+
+    async def fake_ask(prompt, image, **kwargs):
+        seen.update(kwargs)
+        return None
+
+    monkeypatch.setattr(fragments, "_ask", fake_ask)
+    await fragments._sheet_metal_by_question(
+        object(), {"dimensions": [{"value": "40"}]}, router=object(), confidential=True
+    )
+
+    assert seen["timeout_seconds"] >= 150.0
+    assert {"sheet_metal", "weldment"} <= fragments._NO_ROTATION_PASSES

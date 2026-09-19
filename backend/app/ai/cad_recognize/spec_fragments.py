@@ -382,6 +382,12 @@ _WALL_FEATURES_SCHEMA = {
     "required": ["features"],
 }
 
+# Классы, у которых проходы «профиля тела вращения» бессмысленны.
+_NO_ROTATION_PASSES = frozenset({"sheet_metal", "weldment"})
+# Узкий вопрос о сечении/узле — с рассуждением; 75 с по умолчанию не хватало
+# (живой Z-профиль: таймаут, деталь не построена).
+_STRUCTURE_QUESTION_SECONDS = 150.0
+
 _SHEET_METAL_PROMPT = (
     "С чертежа уже прочитаны размерные надписи:\n{callouts}\n\n"
     "Это гнутая деталь из листа. На виде её сечения — полки, соединённые "
@@ -4701,6 +4707,7 @@ async def _sheet_metal_by_question(
         _SHEET_METAL_PROMPT.format(callouts=listed),
         image,
         num_predict=500,
+        timeout_seconds=_STRUCTURE_QUESTION_SECONDS,
         schema=_SHEET_METAL_SCHEMA,
         router=router,
         confidential=confidential,
@@ -4801,6 +4808,7 @@ async def _weldment_by_question(
         _WELDMENT_PROMPT.format(callouts=listed),
         image,
         num_predict=900,
+        timeout_seconds=_STRUCTURE_QUESTION_SECONDS,
         schema=_WELDMENT_SCHEMA,
         router=router,
         confidential=confidential,
@@ -5085,7 +5093,12 @@ async def read_spec_by_fragments(
     # description above, not a second source of truth: every diameter/length
     # it computes still has to be geometry-confirmed by diameter_dimensions
     # .py before becoming an outer[]/bore[] value.
-    if shared_layers is not None and "geometry_code" in shared_layers:
+    if kind in _NO_ROTATION_PASSES:
+        # Скрипт считает профиль ТЕЛА ВРАЩЕНИЯ: у гнутой детали и сварного узла
+        # он только съедал бюджет (живой Z-профиль: 150 с до таймаута, и на
+        # сам вопрос о сечении времени уже не оставалось).
+        geometry_code_result = None
+    elif shared_layers is not None and "geometry_code" in shared_layers:
         geometry_code_result = shared_layers["geometry_code"]
     else:
         geometry_code_result = await _run_geometry_code_pass(
