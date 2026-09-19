@@ -4162,6 +4162,44 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         ),
                         {"decision": bent},
                     )
+                # Толщина листа — по ширине сечения (после того, как форма
+                # согласована: масштаб берётся по полкам спека).
+                sheet_metal = ((spec.get("main_view") or {}).get("sheet_metal")) or {}
+                bent_item = next(
+                    (
+                        i
+                        for i in (verification or {}).get("items") or []
+                        if i.get("kind") == "bent_section"
+                    ),
+                    None,
+                )
+                if sheet_metal and bent_item is not None:
+                    from app.ai.cad_recognize.verifiers.bent_section import sheet_thickness_check
+                    from app.ai.cad_recognize.verifiers.reconcile import (
+                        apply_sheet_thickness,
+                        sheet_thickness_decision,
+                    )
+
+                    thickness_item = sheet_thickness_check(sheet_metal, bent_item)
+                    verification["items"].append(thickness_item)
+                    summary_counts = verification.setdefault("summary", {})
+                    summary_counts["checked"] = len(verification["items"])
+                    summary_counts[thickness_item["status"]] = (
+                        summary_counts.get(thickness_item["status"], 0) + 1
+                    )
+                    thickness = sheet_thickness_decision(spec, thickness_item)
+                    if thickness:
+                        spec = _revalidated_spec(apply_sheet_thickness(spec, thickness))
+                        await _record(
+                            "reconcile.sheet_thickness",
+                            "completed",
+                            (
+                                "Толщина листа принята по сечению"
+                                if thickness["action"] == "adopt"
+                                else "Толщина листа расходится с сечением — решение человеку"
+                            ),
+                            {"decision": thickness},
+                        )
                 drops = contradicting_patterns(spec, verification) if verification else []
                 if drops:
                     spec = _revalidated_spec(apply_pattern_drops(spec, drops))

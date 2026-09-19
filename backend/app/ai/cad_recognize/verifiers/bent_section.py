@@ -93,6 +93,10 @@ def measure_bent_section(gray: Any) -> dict[str, Any] | None:
     thin = cv2.ximgproc.thinning(filled * 255) > 0
     distance = cv2.distanceTransform(filled, cv2.DIST_L2, 3)
     band = float(2 * np.median(distance[thin]))
+    # Толщина по точному расстоянию — для сверки толщины листа: приближённая
+    # маска 3 × 3 квантует его на ~1 px, а это 0,2 мм на листе 1:2.
+    precise = cv2.distanceTransform(filled, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+    band_precise = float(2 * np.median(precise[thin]))
     path = _longest_path(thin)
     if path is None or len(path) < 10:
         return None
@@ -140,6 +144,10 @@ def measure_bent_section(gray: Any) -> dict[str, Any] | None:
         # условными вершинами точна (±0,1 мм на корпусе), у прочих — нет.
         "fitted": [line["fit"] is not None for line in lines],
         "band_px": round(band, 2),
+        # Полоса сечения по точному расстоянию и толщина основной линии листа:
+        # обводка лежит по краям сечения, и полоса шире s на толщину линии.
+        "band_precise_px": round(band_precise, 2),
+        "line_px": round(main_w, 2),
         "bbox_px": [
             float(points[:, 0].min()),
             float(points[:, 1].min()),
@@ -249,6 +257,8 @@ def bent_section_verdict(read: dict[str, Any], measured: dict[str, Any] | None) 
         # Длины полок по осевой между условными вершинами, px: по ним
         # переспрос проверяет ответ модели о недостающей полке.
         "flanges_px": measured.get("flanges_px") or [],
+        "band_precise_px": measured.get("band_precise_px"),
+        "line_px": measured.get("line_px"),
     }
     if len(read_turns) != len(measured["turns"]):
         return {
@@ -287,3 +297,115 @@ def bent_section_verdict(read: dict[str, Any], measured: dict[str, Any] | None) 
             "measured": shown,
         }
     return {"status": "confirmed", "reason": "", "measured": shown}
+
+
+# Толщина листа по сечению: ширина зачернённой полосы минус обводка, в мм по
+# масштабу полок. Корпус 24 листов: ошибка ≤ 0,40 мм (≤ 10 %), обычно ±0,15.
+THICKNESS_TOLERANCE_MM = 0.35
+THICKNESS_TOLERANCE_SHARE = 0.12
+# Стандартные толщины листа (ГОСТ 19903/19904), мм.
+_STANDARD_THICKNESS_MM = (
+    0.5,
+    0.6,
+    0.7,
+    0.8,
+    1.0,
+    1.2,
+    1.4,
+    1.5,
+    1.6,
+    1.8,
+    2.0,
+    2.5,
+    3.0,
+    3.5,
+    4.0,
+    5.0,
+    6.0,
+    8.0,
+    10.0,
+)
+
+
+def sheet_thickness_check(sheet: dict[str, Any], item: dict[str, Any] | None) -> dict[str, Any]:
+    """Толщина листа, прочитанная ридером, — против ширины сечения на листе.
+
+    Масштаб — по полкам спека против длин полок по осевой (размер полки по
+    наружной поверхности длиннее осевой на полтолщины у гиба), поэтому
+    проверка годится и после того, как форма восстановлена переспросом.
+    """
+    from app.ai.cad_recognize.verifiers.reask import _outer_flanges
+
+    base = {"kind": "sheet_thickness", "path": "main_view.sheet_metal.thickness_mm"}
+    read = sheet.get("thickness_mm")
+    measured = (item or {}).get("measured") or {}
+    flanges_px = [float(v) for v in measured.get("flanges_px") or []]
+    band = measured.get("band_precise_px")
+    line = measured.get("line_px")
+    if not isinstance(read, (int, float)) or not flanges_px or band is None or line is None:
+        return {
+            **base,
+            "status": "unmeasurable",
+            "read": {"thickness_mm": read},
+            "measured": {},
+            "reason": "сечение на листе не измерено",
+        }
+    outer = _outer_flanges(sheet)
+    if len(outer) != len(flanges_px):
+        return {
+            **base,
+            "status": "unmeasurable",
+            "read": {"thickness_mm": read},
+            "measured": {},
+            "reason": "число полок не сходится с сечением на листе",
+        }
+    best = None
+    for order in (outer, list(reversed(outer))):
+        centre = [
+            value - 0.5 * float(read) * ((i > 0) + (i < len(order) - 1))
+            for i, value in enumerate(order)
+        ]
+        ratios = sorted(c / p for c, p in zip(centre, flanges_px, strict=True) if p > 0)
+        if not ratios:
+            continue
+        scale = ratios[len(ratios) // 2]
+        spread = max(
+            abs(c - scale * p) / max(c, 1e-6) for c, p in zip(centre, flanges_px, strict=True)
+        )
+        if best is None or spread < best[0]:
+            best = (spread, scale)
+    if best is None or best[0] > 0.08:
+        return {
+            **base,
+            "status": "unmeasurable",
+            "read": {"thickness_mm": read},
+            "measured": {},
+            "reason": "полки не ложатся на сечение одним масштабом",
+        }
+    thickness = round((float(band) - float(line)) * best[1], 2)
+    tolerance = max(THICKNESS_TOLERANCE_MM, THICKNESS_TOLERANCE_SHARE * float(read))
+    status = "confirmed" if abs(thickness - float(read)) <= tolerance else "refuted"
+    rivals = [
+        value
+        for value in _STANDARD_THICKNESS_MM
+        if abs(value - float(read)) > 1e-6 and abs(value - thickness) < abs(float(read) - thickness)
+    ]
+    if status == "confirmed" and rivals:
+        # Соседний стандарт к замеру ближе прочитанного (1 и 1,2 мм в пределах
+        # точности): «подтверждено» могло бы быть ложным.
+        return {
+            **base,
+            "status": "unmeasurable",
+            "read": {"thickness_mm": float(read)},
+            "measured": {"thickness_mm": thickness},
+            "reason": f"по сечению {thickness:g} мм — не отличить от {rivals[0]:g}",
+        }
+    return {
+        **base,
+        "status": status,
+        "read": {"thickness_mm": float(read)},
+        "measured": {"thickness_mm": thickness},
+        "reason": ""
+        if status == "confirmed"
+        else (f"толщина по сечению {thickness:g} мм, прочитано {float(read):g}"),
+    }

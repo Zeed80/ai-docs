@@ -48,6 +48,7 @@ ADOPTABLE: dict[str, tuple[tuple[str, str], ...]] = {
 # Число не после цифры и не после латинской буквы, кроме M (резьба) и R
 # (радиус): «Ø80js6» — 80, а не 80 и 6 (поле допуска посадки).
 _NUMBER = re.compile(r"(?<![\d.,A-LN-QS-Za-z])(\d+(?:[.,]\d+)?)(?!\s*отв)")
+_THICKNESS_LABEL = re.compile(r"(?<![A-Za-zА-Яа-я])[sS]\s*=?\s*(\d+(?:[.,]\d+)?)")
 _ENUMERATION = re.compile(r"^\s*\d+[.)]\s+")
 
 
@@ -1211,3 +1212,78 @@ def _profile_text(steps: list[dict[str, Any]]) -> str:
         head = thread.get("designation") if thread else f"Ø{number(step.get('diameter_mm'))}"
         parts.append(f"{head}×{number(step.get('length_mm'))}")
     return " · ".join(parts)
+
+
+def sheet_thickness_decision(spec: dict[str, Any], item: dict[str, Any]) -> dict[str, Any] | None:
+    """Толщина листа по сечению — принимается, только если это число с листа.
+
+    Живой Z-профиль: s прочитано 2 при 2,5 на листе — все полки вышли на
+    0,5 мм мимо (прямой участок = размер − (R + s) у гиба). Ширина сечения
+    даёт толщину с точностью ~0,15 мм; принимается ближайшая к ней надпись,
+    если она одна в допуске, иначе — человеку.
+    """
+    from app.ai.cad_recognize.verifiers.bent_section import (
+        THICKNESS_TOLERANCE_MM,
+        THICKNESS_TOLERANCE_SHARE,
+    )
+
+    if item.get("status") != "refuted":
+        return None
+    measured = float(item["measured"]["thickness_mm"])
+    tolerance = max(THICKNESS_TOLERANCE_MM, THICKNESS_TOLERANCE_SHARE * measured)
+    # «s2.5» — обозначение толщины листа; общий разбор надписей букву перед
+    # числом не пропускает (чтобы «R2» не шло размером), здесь она своя.
+    stated = set(sheet_numbers(spec))
+    for entry in spec.get("dimensions") or []:
+        text = entry.get("value") if isinstance(entry, dict) else entry
+        for match in _THICKNESS_LABEL.finditer(str(text or "")):
+            stated.add(round(float(match.group(1).replace(",", ".")), 3))
+    near = sorted(v for v in stated if abs(v - measured) <= tolerance)
+    base = {
+        "kind": "sheet_thickness",
+        "path": "main_view.sheet_metal",
+        "field": "thickness_mm",
+        "read": item["read"]["thickness_mm"],
+        "measured": measured,
+    }
+    if len(near) != 1:
+        return {
+            **base,
+            "action": "ask_human",
+            "reason": f"{item['reason']}: надписи с такой толщиной на листе "
+            + ("нет" if not near else "не одна")
+            + " — решение человеку",
+        }
+    return {
+        **base,
+        "action": "adopt",
+        "value": near[0],
+        "reason": f"{item['reason']}: принята толщина {near[0]:g} с листа",
+    }
+
+
+def apply_sheet_thickness(spec: dict[str, Any], decision: dict[str, Any]) -> dict[str, Any]:
+    """Толщина с листа; прямые участки полок пересчитаны под неё (размеры полок
+    на листе те же — по наружной поверхности)."""
+    import copy
+    import math
+
+    spec = copy.deepcopy(spec)
+    if decision.get("action") != "adopt":
+        spec.setdefault("optional_unresolved", []).append(decision["reason"])
+        return spec
+    sheet = spec["main_view"]["sheet_metal"]
+    old, new = float(sheet["thickness_mm"]), float(decision["value"])
+    angles = sheet.get("bend_angles_deg") or [90.0] * len(sheet.get("turns") or [])
+    shift = [(new - old) * math.tan(math.radians(angle) / 2.0) for angle in angles]
+    count = len(sheet["flanges_mm"])
+    sheet["flanges_mm"] = [
+        round(
+            float(value) - (shift[i - 1] if i > 0 else 0.0) - (shift[i] if i < count - 1 else 0.0),
+            3,
+        )
+        for i, value in enumerate(sheet["flanges_mm"])
+    ]
+    sheet["thickness_mm"] = new
+    spec.setdefault("optional_unresolved", []).append(decision["reason"])
+    return spec

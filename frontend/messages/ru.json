@@ -764,6 +764,8 @@
       "assurance_verify_group_plate_thickness": "толщина",
       "assurance_verify_kind_bent_section": "Сечение гнутой детали",
       "assurance_verify_group_bent_section": "сечение",
+      "assurance_verify_kind_sheet_thickness": "Толщина листа",
+      "assurance_verify_group_sheet_thickness": "толщина листа",
       "assurance_verify_kind_plate_hole": "Отверстие {index}",
       "assurance_verify_kind_bolt_circle": "Окружность болтов {index}",
       "assurance_verify_kind_concentric_hole": "Центральное отверстие",
