@@ -477,3 +477,33 @@ def test_a_short_link_at_the_end_of_the_chain_still_takes_the_free_side():
     labels = _chain_labels([(0.0, 40.0, "40"), (40.0, 43.0, "15.5")])
 
     assert labels["15.5"] > 43.0
+
+
+def test_rows_under_a_view_with_cutting_plane_traces_stand_below_the_traces():
+    """Подписи первого ряда под видом стояли в полосе следов секущих: «17» и
+    «19» на стрелках следов Б и В (shaft-29)."""
+    from app.ai.cad_ir.schema import TextEntity
+
+    def label_y(reserve: float) -> float:
+        bounds = {"v_min": -10.0, "v_max": 10.0, "u_min": 0.0, "u_max": 100.0}
+        if reserve:
+            bounds["below_reserve_mm"] = reserve
+        entities = dimensions_from_kernel(
+            [
+                {
+                    "view_index": 0,
+                    "kind": "DistanceX",
+                    "label": "17",
+                    "below": True,
+                    "anchors_mm": [[20.0, -10.0], [37.0, -10.0]],
+                    "value_mm": 17.0,
+                }
+            ],
+            {"front": {"offset_u": 100.0, "offset_v": 100.0, "bounds_mm": bounds}},
+            ["front"],
+            px_per_mm=1.0,
+        )
+        return next(e for e in entities if isinstance(e, TextEntity)).position.y
+
+    # Ниже на ширину полосы следа (y листа растёт вниз).
+    assert abs(label_y(6.5) - label_y(0.0) - 6.5) < 1e-6

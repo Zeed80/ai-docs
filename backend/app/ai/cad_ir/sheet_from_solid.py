@@ -2852,6 +2852,8 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
     offset_u = area_x0 + max((area_w - extent_w) / 2.0, 0.0)
     offset_v = area_y0 + max((area_h - extent_h) / 2.0, 0.0)
 
+    traced = _traced_view(views, plan)
+
     def draw(origin_u: float, origin_v: float) -> tuple[list[Any], list[Any]]:
         drawn, placed = place_sheet_views(
             views,
@@ -2869,7 +2871,13 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
             {
                 # Границы вида едут вместе с размещением: без них длину некуда
                 # вынести за контур, и она ложится внутрь детали.
-                index: {**placement, "bounds_mm": (views[index] or {}).get("bounds_mm") or {}}
+                index: {
+                    **placement,
+                    "bounds_mm": {
+                        **((views[index] or {}).get("bounds_mm") or {}),
+                        **({"below_reserve_mm": _cut_trace_band_mm()} if index == traced else {}),
+                    },
+                }
                 for index, placement in enumerate(placed)
                 if placement
             },
@@ -3208,6 +3216,30 @@ def _entity_points(entities: list[Any]) -> list[tuple[float, float]]:
             if hasattr(point, "x"):
                 points.append((float(point.x), float(point.y)))
     return points
+
+
+def _traced_view(views: list[dict[str, Any]], plan: SheetPlan) -> int | None:
+    """Главный вид вала, на котором стоят следы секущих плоскостей, или None."""
+    if not any(
+        (view or {}).get("section_station_mm") is not None
+        and "-" in str((view or {}).get("label") or "")
+        for view in views
+    ):
+        return None
+    return next(
+        (
+            index
+            for kind in ("bottom", "front")
+            for index, view in enumerate(views)
+            if (view or {}).get("kind") == kind and index not in plan.scaffold_views
+        ),
+        None,
+    )
+
+
+def _cut_trace_band_mm() -> float:
+    """Полоса под видом, занятая следом секущей (зазор + штрих)."""
+    return _CUT_GAP_MM + _CUT_STROKE_MM
 
 
 def _cutting_plane_entities(

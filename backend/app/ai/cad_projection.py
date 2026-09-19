@@ -547,7 +547,7 @@ def dimensions_from_kernel(
             (float(anchors[0][0]), float(anchors[0][1])),
             (float(anchors[1][0]), float(anchors[1][1])),
             top=float(bounds["v_max"]) if "v_max" in bounds else None,
-            bottom=float(bounds["v_min"]) if item.get("below") and "v_min" in bounds else None,
+            bottom=_below_level(bounds) if item.get("below") and "v_min" in bounds else None,
             tier=tiers.get(position, 0),
             place_u=_placed_u(item, tiers.get(position, 0)),
         )
@@ -781,7 +781,7 @@ def _witness_lines(
             (float(anchors[0][0]), float(anchors[0][1])),
             (float(anchors[1][0]), float(anchors[1][1])),
             top=float(bounds["v_max"]) if "v_max" in bounds else None,
-            bottom=float(bounds["v_min"]) if item.get("below") and "v_min" in bounds else None,
+            bottom=_below_level(bounds) if item.get("below") and "v_min" in bounds else None,
             tier=tiers.get(position, 0),
             place_u=_placed_u(item, tiers.get(position, 0)),
         )
@@ -813,7 +813,7 @@ def _dimension_rows(
             (float(anchors[0][0]), float(anchors[0][1])),
             (float(anchors[1][0]), float(anchors[1][1])),
             top=float(bounds["v_max"]) if "v_max" in bounds else None,
-            bottom=float(bounds["v_min"]) if item.get("below") and "v_min" in bounds else None,
+            bottom=_below_level(bounds) if item.get("below") and "v_min" in bounds else None,
             tier=tiers.get(position, 0),
             place_u=_placed_u(item, tiers.get(position, 0)),
         )
@@ -847,6 +847,14 @@ def _on_dimension_row(
         and min(high, u_high) - max(low, u_low) > 0.5
         for index, position, u_low, u_high, v in rows
     )
+
+
+def _below_level(bounds: dict) -> float:
+    """Низ вида для рядов под ним — ниже полосы, занятой следами секущих
+    плоскостей (``below_reserve_mm``): подписи первого ряда стоят над своей
+    линией, как раз в полосе штрихов, стрелок и букв следа (shaft-29: «17» и
+    «19» на стрелках следов Б и В)."""
+    return float(bounds["v_min"]) - float(bounds.get("below_reserve_mm") or 0.0)
 
 
 def _crossings(
