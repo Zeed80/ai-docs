@@ -198,7 +198,7 @@ _BOX_HEIGHT = 0.04
 _HOLE = 0.15
 
 
-def level_boxes(gray: Any) -> list[tuple[int, int, int, int]]:
+def level_boxes(gray: Any, scale: float = 1.0) -> list[tuple[int, int, int, int]]:
     """Отметки планов в прямоугольной рамке (ГОСТ 21.101): (x0, y0, x1, y1), px.
 
     На плане знак отметки — не стрелка, а число в тонкой рамке. Рамка —
@@ -215,7 +215,11 @@ def level_boxes(gray: Any) -> list[tuple[int, int, int, int]]:
     # Контуры — только по линиям вдоль осей: выноска, пересекающая рамку
     # (план «на отм. 0 и −6780», −1.800), делила её на куски, и рамка не
     # находилась. Текст внутри остаётся в ``ink`` для доли чернил.
-    stroke = 8
+    # Постоянные подобраны на рендере 12 000 px (рамка ~125 px); ``scale`` —
+    # во сколько раз лист мельче: на 5000 px утолщение 21 px заливало рамку
+    # текстом изнутри, и из 7 рамок плана не находилось ни одной.
+    stroke = max(3, round(8 * scale))
+    gap = max(5, round(_GAP * scale) | 1)
     axial = cv2.morphologyEx(
         ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (stroke, 1))
     ) | cv2.morphologyEx(
@@ -225,8 +229,8 @@ def level_boxes(gray: Any) -> list[tuple[int, int, int, int]]:
     # −1.800): замыкание такой «Г»-разрыв не закрывает — эрозия снимает
     # заполненный угол. Линии утолщаются, рамкой служит внутренний край
     # утолщённой, расширенный обратно на половину утолщения.
-    axial = cv2.dilate(axial, cv2.getStructuringElement(cv2.MORPH_RECT, (_GAP, _GAP)))
-    grow = _GAP // 2
+    axial = cv2.dilate(axial, cv2.getStructuringElement(cv2.MORPH_RECT, (gap, gap)))
+    grow = gap // 2
     # Рамка — внешний контур утолщённых линий, у которого внутри ДЫРА заметной
     # площади: утолщённые дуги и полосы тоже прямоугольны снаружи, но пусты
     # внутри. Сама дыра формой не годится: текст вплотную к рамке после
@@ -249,7 +253,7 @@ def level_boxes(gray: Any) -> list[tuple[int, int, int, int]]:
             continue
         x, y, w, h = x + grow, y + grow, w - 2 * grow, h - 2 * grow
         if (
-            h < 14
+            h < max(8, 14 * scale)
             or h > max(400.0, _BOX_HEIGHT * max(gray.shape))
             or not (_BOX_ASPECT[0] <= w / max(h, 1) <= _BOX_ASPECT[1])
         ):
@@ -330,7 +334,10 @@ async def read_sheet_levels(image_bytes: bytes, *, ask: Any = None) -> dict[str,
     places = [
         ("mark", mark_crop_box(mark, sheet.size), LEVEL_AT_MARK_PROMPT)
         for mark in level_marks(gray)
-    ] + [("frame", box_crop_box(box, sheet.size), LEVEL_IN_BOX_PROMPT) for box in level_boxes(gray)]
+    ] + [
+        ("frame", box_crop_box(box, sheet.size), LEVEL_IN_BOX_PROMPT)
+        for box in _boxes_at_scales(gray)
+    ]
     levels: list[dict[str, Any]] = []
     rejected = 0
     for kind, crop, prompt in places[:_MAX_ASKS]:
@@ -353,6 +360,28 @@ async def read_sheet_levels(image_bytes: bytes, *, ask: Any = None) -> dict[str,
         "places_asked": min(len(places), _MAX_ASKS),
         "rejected": rejected,
     }
+
+
+# Размер рамки на растре заранее неизвестен: поиск на нескольких масштабах
+# постоянных (1 — рендер 12 000 px, 0,42 — 5000 px), совпавшие рамки — одна.
+_BOX_SCALES = (1.0, 0.6, 0.42, 0.3)
+
+
+def _boxes_at_scales(gray: Any) -> list[tuple[int, int, int, int]]:
+    found: list[tuple[int, int, int, int]] = []
+    for scale in _BOX_SCALES:
+        for box in level_boxes(gray, scale):
+            if not any(_overlap(box, other) > 0.5 for other in found):
+                found.append(box)
+    return found
+
+
+def _overlap(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
+    width = max(0, min(a[2], b[2]) - max(a[0], b[0]))
+    height = max(0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = width * height
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union if union > 0 else 0.0
 
 
 async def _default_ask(prompt: str, image: Any) -> dict:

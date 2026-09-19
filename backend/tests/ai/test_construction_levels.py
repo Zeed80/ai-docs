@@ -122,3 +122,15 @@ def test_the_sheet_levels_come_only_from_found_marks_in_level_format():
     assert asyncio.run(read_sheet_levels(buffer.getvalue(), ask=dimension))["values"] == []
     assert normalize_level("+0,000") == "0.000"
     assert normalize_level("3 950") is None
+
+
+def test_a_small_frame_on_a_coarse_sheet_is_found_at_a_smaller_scale():
+    """Рендер 5000 px: рамка ~52 px, утолщение на 21 px заливало её текстом."""
+    from app.ai.construction_levels import _boxes_at_scales
+
+    sheet = np.full((600, 900), 255, np.uint8)
+    cv2.rectangle(sheet, (300, 250), (442, 302), 0, 1)
+    cv2.putText(sheet, "-1.800", (308, 288), cv2.FONT_HERSHEY_SIMPLEX, 0.9, 0, 2)
+    assert level_boxes(sheet) == []
+    boxes = _boxes_at_scales(sheet)
+    assert len(boxes) == 1 and abs(boxes[0][0] - 300) <= 3
