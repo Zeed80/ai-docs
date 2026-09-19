@@ -28,6 +28,10 @@ _CORE = (0.2, 0.8)
 _MIN_LINE_PX = 4.5
 
 
+# Запас вокруг вертикалей поперечного отверстия, px (толщина линии).
+_HOLE_MARGIN_PX = 1.0
+
+
 def shaft_tolerances(mm_per_px: float) -> tuple[float, float]:
     """Допуски длины и Ø, мм: не меньше пары пикселей листа."""
     return max(0.5, 2.0 * mm_per_px), max(0.3, 1.5 * mm_per_px)
@@ -67,8 +71,29 @@ def verify_shaft_profile(hypothesis: Hypothesis, frame: ViewFrame | None, sheet:
     frame = chain_frame(frame, profile, [step.get("length_mm") for step in steps])
     scale_u, scale_v = frame.mm_per_px, frame.scale_v
     length_tol, diameter_tol = shaft_tolerances(frame.scale_mean)
+    # Сквозное поперечное отверстие на виде сбоку — две вертикали через весь
+    # диаметр: они покрывают скачок радиуса и шли уступом (holdout shaft-24:
+    # Ø6 на 47,8 у уступа 55 — «длина 11,5 при 15»). Отверстия известны из
+    # прочитанного — их вертикали уступом не считаются.
+    hole_spans = [
+        (
+            frame.origin_px[0]
+            + (float(item["axial_position_mm"]) - float(item["diameter_mm"]) / 2.0) / scale_u
+            - _HOLE_MARGIN_PX,
+            frame.origin_px[0]
+            + (float(item["axial_position_mm"]) + float(item["diameter_mm"]) / 2.0) / scale_u
+            + _HOLE_MARGIN_PX,
+        )
+        for item in hypothesis.expected.get("cross_holes") or []
+        if isinstance(item, dict)
+        and isinstance(item.get("axial_position_mm"), (int, float))
+        and isinstance(item.get("diameter_mm"), (int, float))
+    ]
     shoulders = _shoulders(
-        profile, jump_px=max(2.0, 0.5 / scale_v), min_plateau_px=max(4.0, 1.5 / scale_u)
+        profile,
+        jump_px=max(2.0, 0.5 / scale_v),
+        min_plateau_px=max(4.0, 1.5 / scale_u),
+        excluded_px=hole_spans,
     )
     measured_steps = []
     problems = []
@@ -247,7 +272,11 @@ def chain_frame(frame: ViewFrame | None, profile: Any, lengths_mm: list[Any]) ->
 
 
 def _shoulders(
-    profile: Any, *, jump_px: float, min_plateau_px: float = 1.0
+    profile: Any,
+    *,
+    jump_px: float,
+    min_plateau_px: float = 1.0,
+    excluded_px: list[tuple[float, float]] | None = None,
 ) -> list[tuple[float, float]]:
     """Уступы профиля: ``(столбец грани уступа, скачок полувысоты в px со знаком)``.
 
@@ -301,8 +330,22 @@ def _shoulders(
             for face in profile.faces_px
             if abs(face[0] - middle) <= window and cover(face) >= 0.5
         ]
+
+        def on_hole(face: tuple[float, float, float]) -> bool:
+            return any(low <= face[0] <= high for low, high in excluded_px or [])
+
         if nearby:
-            best = max(nearby, key=lambda face: (round(cover(face), 1), -abs(face[0] - anchor)))
+            # Вертикаль отверстия проигрывает любой другой грани, но не
+            # исключается: отверстие вплотную к уступу (shaft-17: Ø8 до 119 при
+            # уступе 120) — их вертикали в 2 px друг от друга.
+            best = max(
+                nearby,
+                key=lambda face: (
+                    not on_hole(face),
+                    round(cover(face), 1),
+                    -abs(face[0] - anchor),
+                ),
+            )
             result.append((best[0], b_level - a_level))
         else:
             result.append((middle, b_level - a_level))

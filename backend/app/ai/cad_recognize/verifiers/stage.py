@@ -559,6 +559,19 @@ def _wall_features_on_sheet(
         report["items"].append({**entry, **verdict})
 
 
+def profile_view(gray: Any, views: list[tuple[Any, Any]]) -> tuple[Any, Any]:
+    """Вид вала для проверки наружного профиля: без штриховки, если такой есть.
+
+    У полого вала главный вид — разрез: штриховка и расточка дают десятки
+    ложных «граней», и уступы уезжали (корпус v10, shaft-12: длины 51,7 / 9,8
+    / 50,8 при 50 / 12 / 50). Наружный контур тот же на виде без штриховки.
+    """
+    for view in views:
+        if not _hatched(gray, view[0].bbox_px):
+            return view
+    return views[0]
+
+
 def _frame_fits(box: Any, mm_per_px: float, thickness: float) -> bool:
     """Рамка вида с ребра: её высота — толщина корпуса (± 8 %)."""
     if not box or mm_per_px <= 0 or thickness <= 0:
@@ -597,7 +610,9 @@ def _hatched(gray: Any, box: Any) -> bool:
     # штрихов под 45° в обоих направлениях путал вид спереди с разрезом:
     # окружность прилива, диагональная размерная Ø и стрелки дают 8–11
     # коротких отрезков (корпуса seed 0, 4, 6, 9), у разреза их 57–91 разных.
-    long_enough = lengths >= 0.03 * max(crop.shape)
+    # Доля длинной стороны — у корпусов; у вытянутого вала (691 × 137 px)
+    # штрихи тонкой стенки разреза короче, и разрез не узнавался (shaft-12).
+    long_enough = lengths >= min(0.03 * max(crop.shape), 0.1 * min(crop.shape))
     middle_x = (segments[:, 0] + segments[:, 2]) / 2.0
     middle_y = (segments[:, 1] + segments[:, 3]) / 2.0
     for angle, offset in ((45.0, middle_x - middle_y), (135.0, middle_x + middle_y)):
@@ -831,7 +846,7 @@ def _shaft(
     # неверное звено иначе уводит всё — и ступени, и пазы.
     lengths = [float(step["length_mm"]) for _, step in steps]
     views = [(chain_frame(view, shape, lengths), shape) for view, shape in views]
-    frame, profile = views[0]
+    frame, profile = profile_view(gray, views)
     spans = _keyways(gray, [view_frame for view_frame, _profile in views], body, report)
     _unclaimed_keyways(gray, [view_frame for view_frame, _profile in views], body, spans, report)
     _cross_holes(gray, [view_frame for view_frame, _profile in views], body, report)
@@ -851,6 +866,7 @@ def _shaft(
                 # Пролёты пазов — по проверке пазов, а не как прочитаны:
                 # несуществующий паз прятал неверный Ø ступени под собой.
                 "keyways": spans,
+                "cross_holes": body.get("cross_holes") or [],
             },
         ),
         frame,

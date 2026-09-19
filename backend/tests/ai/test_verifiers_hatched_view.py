@@ -33,3 +33,24 @@ def test_a_hatched_wall_is_a_section():
         draw.line((100 + offset, 500, 500 + offset, 100), fill=0, width=1)
     draw.rectangle((180, 180, 620, 500), fill=255, outline=0, width=4)
     assert _hatched(np.asarray(image), BOX) is True
+
+
+def test_a_long_shaft_section_with_short_hatch_strokes_is_a_section_and_the_plain_view_profiles():
+    """Полый вал (shaft-12): разрез 690 × 137 px, штрихи тонкой стенки короче
+    3 % длинной стороны — разрез не узнавался, и профиль мерился по штриховке."""
+    from types import SimpleNamespace
+
+    from app.ai.cad_recognize.verifiers.stage import profile_view
+
+    image = Image.new("L", (900, 700), 255)
+    draw = ImageDraw.Draw(image)
+    section, plain = (100, 100, 790, 237), (100, 400, 790, 500)
+    for box in (section, plain):
+        draw.rectangle(box, outline=0, width=4)
+    for x in range(110, 780, 9):  # стенки разреза: штрихи ~14 px
+        for top in (104, 215):
+            draw.line((x, top + 10, x + 10, top), fill=0, width=1)
+    gray = np.asarray(image)
+    assert _hatched(gray, section) is True
+    views = [(SimpleNamespace(bbox_px=section), "разрез"), (SimpleNamespace(bbox_px=plain), "вид")]
+    assert profile_view(gray, views)[1] == "вид"

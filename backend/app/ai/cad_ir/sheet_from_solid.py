@@ -1207,10 +1207,19 @@ def _separated_place(
             cursor = max(cursor, u1)
         if cursor < hi:
             free.append((cursor, hi))
-        margin = 0.5 * DIM_TEXT_MM
-        roomy = [(a, b) for a, b in free if b - a >= 2.0 * margin]
+        # Подпись Ø повёрнута и стоит СЛЕВА от своей линии на высоту текста
+        # (ГОСТ 2.307): промежуток должен вместить и её. Считая подпись
+        # симметричной, Ø первой ступени ставился в 2 мм от торца — «Ø20» ложился
+        # на сам торец, и проверка профиля принимала глифы за торец: весь вид
+        # уезжал (корпус v10, shaft-28: уступы 85,2 и 166,7 при 80 и 160).
+        left = 1.2 * DIM_TEXT_MM
+        right = 0.3 * DIM_TEXT_MM
+        roomy = [(a, b) for a, b in free if b - a >= left + right]
         if roomy:
-            options = [(a + b) / 2.0 for a, b in sorted(roomy, key=lambda f: -(f[1] - f[0]))]
+            options = [
+                min(max((a + b) / 2.0, a + left), b - right)
+                for a, b in sorted(roomy, key=lambda f: -(f[1] - f[0]))
+            ]
     for option in options:
         if all(abs(option - other) >= gap for other in placed):
             return option

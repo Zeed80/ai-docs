@@ -473,6 +473,15 @@ def eval_concentric_hole(png: bytes, truth: dict) -> list[dict[str, Any]]:
     return outcomes
 
 
+def _profile_view_located(gray: Any, total_mm: float):
+    """Как в продукте: из видов вала — вид без штриховки (``stage.profile_view``)."""
+    from app.ai.cad_recognize.verifiers.shaft_frame import locate_shaft_views
+    from app.ai.cad_recognize.verifiers.stage import profile_view
+
+    views = locate_shaft_views(gray, total_mm)
+    return profile_view(gray, views) if views else None
+
+
 def eval_shaft_profile(png: bytes, truth: dict) -> list[dict[str, Any]]:
     """Наружный профиль вала: система координат и профиль — по листу.
 
@@ -485,7 +494,6 @@ def eval_shaft_profile(png: bytes, truth: dict) -> list[dict[str, Any]]:
     from PIL import Image
 
     from app.ai.cad_recognize.verifiers import Hypothesis, verify
-    from app.ai.cad_recognize.verifiers.shaft_frame import locate_shaft_frame
     from app.ai.cad_recognize.verifiers.shaft_profile import shaft_tolerances
 
     steps = [
@@ -511,7 +519,7 @@ def eval_shaft_profile(png: bytes, truth: dict) -> list[dict[str, Any]]:
     (ax, _ay), (bx, _by) = overall["anchors_px"]
     ref_scale = total / abs(bx - ax)
     gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))
-    located = locate_shaft_frame(gray, total)
+    located = _profile_view_located(gray, total)
     frame, profile = located if located else (None, None)
     frame_error = None
     if frame is not None:
@@ -568,7 +576,7 @@ def eval_shaft_profile(png: bytes, truth: dict) -> list[dict[str, Any]]:
         read_total = sum(item["length_mm"] for item in read)
         if abs(read_total - total) > 1e-6:
             # Как в продукте: система координат — из прочитанной суммы.
-            located = locate_shaft_frame(gray, read_total)
+            located = _profile_view_located(gray, read_total)
             frame, profile = located if located else (None, None)
         verdict = verify(
             Hypothesis(
@@ -578,6 +586,7 @@ def eval_shaft_profile(png: bytes, truth: dict) -> list[dict[str, Any]]:
                     "steps": read,
                     # Пазы — из прочитанного спека, как в продукте.
                     "keyways": (truth["spec"].get("main_view") or {}).get("keyways") or [],
+                    "cross_holes": (truth["spec"].get("main_view") or {}).get("cross_holes") or [],
                 },
             ),
             frame,
