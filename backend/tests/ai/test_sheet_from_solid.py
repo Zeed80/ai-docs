@@ -1761,3 +1761,27 @@ def test_a_shelf_turns_away_from_a_witness_line_of_a_lower_row():
     entities = dimensions_from_kernel([short, long, wide], placements, ["v"], px_per_mm=1.0)
     label = next(e for e in entities if isinstance(e, TextEntity) and e.text == "4.3")
     assert label.position.x < 50.0
+
+
+def test_the_view_below_is_aligned_by_the_body_not_by_its_frame():
+    """Прилив, видный только на плане, расширял его рамку: разрез корпуса под
+    планом стоял на 5 мм левее, проекционная связь рвалась."""
+    from app.ai.cad_projection import place_sheet_views
+
+    plan = {
+        "kind": "side",
+        "bounds_mm": {"u_min": -80.0, "u_max": 75.0, "v_min": -40.0, "v_max": 40.0},
+    }
+    section = {
+        "kind": "section",
+        "bounds_mm": {"u_min": -75.0, "u_max": 75.0, "v_min": -25.0, "v_max": 25.0},
+    }
+    _entities, placements = place_sheet_views(
+        [plan, section],
+        px_per_mm=1.0,
+        below={1},
+        anchor=0,
+        axis_u={0: 0.0, 1: 0.0},
+    )
+    # Тело (u = 0) на плане и на разрезе — на одной вертикали листа.
+    assert placements[0]["offset_u"] == placements[1]["offset_u"]

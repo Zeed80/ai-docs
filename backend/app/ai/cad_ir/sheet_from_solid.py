@@ -2741,6 +2741,40 @@ async def build_sheet_from_solid(
     )
 
 
+def _body_axes(views: list[dict], spec: dict, plan: SheetPlan) -> dict[int, float]:
+    """Середина тела по u на плане корпуса и видах под ним — по кромкам тела.
+
+    Ядро центрует вид по его рамке; приливы, видные на одном виде и не видные
+    на другом, сдвигают рамки по-разному, и выравнивание по рамкам ломало
+    проекционную связь (разрез корпуса на 5 мм левее плана, живой замер
+    элементов стенок уезжал на столько же).
+    """
+    if plan.part_class not in ("flange", "plate") or not _has_wall_features(spec):
+        return {}
+    profile = ((spec.get("main_view") or {}).get("profile")) or {}
+    width, height = profile.get("width_mm"), profile.get("height_mm")
+    thickness = profile.get("thickness_mm")
+    if not all(isinstance(v, (int, float)) for v in (width, height, thickness)):
+        return {}
+    ratio = plan.ratio or 1.0
+    wanted = {}
+    if plan.anchor_view is not None:
+        wanted[plan.anchor_view] = (float(width), float(height))
+    for index in plan.below_views:
+        wanted[index] = (float(width), float(thickness))
+    axes: dict[int, float] = {}
+    for index, body in wanted.items():
+        if index >= len(views):
+            continue
+        frame = _body_frame(views[index] or {}, body, ratio)
+        if frame is not None:
+            axes[index] = (frame[0] + frame[1]) / 2.0
+    # Выравнивать можно, только если найдено у главного и у вида под ним.
+    if plan.anchor_view not in axes:
+        return {}
+    return axes
+
+
 def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[float, float]]:
     """Views and dimensions, with sheet furniture only when explicitly asked."""
     from app.ai.cad_projection import (
@@ -2768,6 +2802,7 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
         reserve_notes_mm=notes_mm,
     )
 
+    axis_u = _body_axes(views, spec, plan)
     # Lay the views out at the origin first, measure them, then centre.
     entities, placements = place_sheet_views(
         views,
@@ -2776,6 +2811,7 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
         right=plan.right_views,
         below=plan.below_views,
         anchor=plan.anchor_view,
+        axis_u=axis_u,
     )
     extent_w, extent_h = sheet_extent_mm(views, placements)
     # Развёртка стоит под видами — она тоже занимает место на листе.
@@ -2791,6 +2827,7 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
         right=plan.right_views,
         below=plan.below_views,
         anchor=plan.anchor_view,
+        axis_u=axis_u,
     )
     entities += dimensions_from_kernel(
         drawing.get("dimensions") or [],

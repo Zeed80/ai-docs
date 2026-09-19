@@ -2836,6 +2836,7 @@ class DrawingRequest(BaseModel):
 def _cut_face_outlines(
     shape: Part.Shape, depth_mm: float, scale: float, samples: int,
     path: list[tuple[float, float, float]] | None = None,
+    x_direction: tuple[float, float, float] | None = None,
 ) -> list[list[tuple[float, float]]]:
     """Closed outlines of the material a section plane cuts through.
 
@@ -2854,7 +2855,40 @@ def _cut_face_outlines(
     # TechDraw centres a view on the shape, so the hatch must be centred the
     # same way — in raw model coordinates the outline lands beside the view and
     # the alignment check throws it away.
-    centre_u, centre_v = box.Center.z, box.Center.x
+    centre = box.Center
+    if not path:
+        # Разрез показывает половину за плоскостью (y ≥ depth), и TechDraw
+        # центрует вид по ЕЁ рамке: у корпуса передний прилив уходит со
+        # снятой половиной, центр смещается, и контур по центру всего тела
+        # выпадал из рамки вида — разрез без штриховки.
+        try:
+            size = max(box.XLength, box.YLength, box.ZLength) * 4.0 + 10.0
+            beyond = Part.makeBox(
+                size, size, size,
+                App.Vector(box.Center.x - size / 2.0, depth_mm, box.Center.z - size / 2.0),
+            )
+            remaining = shape.common(beyond)
+            if remaining.Volume > 1e-6:
+                centre = remaining.BoundBox.Center
+        except Exception:  # noqa: BLE001 — центр всего тела как был
+            pass
+    # Оси вида: u — вдоль XDirection разреза, v = XDirection × направление
+    # взгляда (0, −1, 0). Для вала (XDirection = +Z) это прежние u = z, v = x;
+    # у разреза корпуса (XDirection = +X) жёсткие «u = z, v = x» клали
+    # штриховку мимо вида, и проверка рамки выбрасывала её — разрез без
+    # штриховки (ГОСТ 2.306).
+    ux, uy, uz = x_direction or (0.0, 0.0, 1.0)
+    norm = math.sqrt(ux * ux + uy * uy + uz * uz) or 1.0
+    ux, uy, uz = ux / norm, uy / norm, uz / norm
+    dx, dy, dz = 0.0, -1.0, 0.0
+    vx, vy, vz = uy * dz - uz * dy, uz * dx - ux * dz, ux * dy - uy * dx
+
+    def to_view(point) -> tuple[float, float]:
+        px, py, pz = point.x - centre.x, point.y - centre.y, point.z - centre.z
+        return (
+            round((px * ux + py * uy + pz * uz) * scale, 6),
+            round((px * vx + py * vy + pz * vz) * scale, 6),
+        )
     reach = max(box.XLength, box.YLength, box.ZLength) * 2.0 + 10.0
     if path:
         # A stepped or broken section does not cut along a PLANE, so the cut
@@ -2894,10 +2928,7 @@ def _cut_face_outlines(
                 sampled = []
                 for index in range(samples + 1):
                     point = edge.valueAt(first + (last - first) * index / samples)
-                    sampled.append((
-                        round((point.z - centre_u) * scale, 6),
-                        round((point.x - centre_v) * scale, 6),
-                    ))
+                    sampled.append(to_view(point))
             except Exception:  # noqa: BLE001
                 continue
             # OrderedEdges walks the wire in connection order, but each edge
@@ -3186,6 +3217,7 @@ def build_drawing(request: DrawingRequest) -> dict[str, Any]:
                     shape, shape.BoundBox.Center.y, request.scale,
                     max(4, request.curve_samples // 4),
                     path=list(wanted.section_path_mm) or None,
+                    x_direction=wanted.x_direction,
                 )
                 # Fail closed on misalignment: a hatch drawn next to the view
                 # instead of inside it is worse than none, and the only honest

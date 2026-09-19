@@ -462,6 +462,7 @@ def _wall_features_on_sheet(
         "left": views.get("side_bbox_px"),
         "right": views.get("side_bbox_px"),
     }
+    sectioned: bool | None = None
     for index, item in enumerate(walls):
         plane = str(item.get("on_plane") or "")
         box = boxes.get(plane)
@@ -487,6 +488,38 @@ def _wall_features_on_sheet(
                 }
             )
             continue
+        if plane in ("front", "back", "left", "right") and not _frame_fits(
+            box, mm_per_px, float(thickness)
+        ):
+            # Рамка вида не сходится с толщиной корпуса по масштабу плана —
+            # локатор видов взял не те линии (корпус seed 8: 47 px вместо
+            # ~295 у разреза, замер уехал на соседний элемент).
+            report["items"].append(
+                {
+                    **entry,
+                    "status": "unmeasurable",
+                    "measured": {},
+                    "reason": f"рамка вида грани «{plane}» не сходится с толщиной корпуса",
+                }
+            )
+            continue
+        if plane == "front" and sectioned is None:
+            sectioned = _hatched(gray, views.get("front_bbox_px"))
+        if plane == "front" and sectioned:
+            # Под планом — разрез: он снимает переднюю половину корпуса, и
+            # элементов передней стенки на нём нет (разрез — вид со штриховкой,
+            # ГОСТ 2.306; под планом бывает и вид спереди). Замер находил зеркальный
+            # элемент задней стенки и «опровергал» верное чтение (корпус
+            # seed 8: прилив (50; 10) «найден» в (−56; −8)).
+            report["items"].append(
+                {
+                    **entry,
+                    "status": "unmeasurable",
+                    "measured": {},
+                    "reason": "под планом разрез — передняя стенка им снята",
+                }
+            )
+            continue
         measured = measure_wall_feature(gray, tuple(box), mm_per_px, face, item)
         # Глубина элемента пока не меряется: на виде с ребра нужно отличить
         # дно кармана от любой другой линии внутри тела, а поиск ближайшей
@@ -502,6 +535,41 @@ def _wall_features_on_sheet(
                 "reason": "замер указывает на соседний элемент той же грани",
             }
         report["items"].append({**entry, **verdict})
+
+
+def _frame_fits(box: Any, mm_per_px: float, thickness: float) -> bool:
+    """Рамка вида с ребра: её высота — толщина корпуса (± 8 %)."""
+    if not box or mm_per_px <= 0 or thickness <= 0:
+        return False
+    height_mm = (float(box[3]) - float(box[1])) * mm_per_px
+    width_mm = (float(box[2]) - float(box[0])) * mm_per_px
+    return any(abs(side - thickness) <= 0.08 * thickness for side in (height_mm, width_mm))
+
+
+def _hatched(gray: Any, box: Any) -> bool:
+    """Вид — разрез: внутри рамки много параллельных штрихов под 45° (ГОСТ 2.306)."""
+    import cv2
+    import numpy as np
+
+    if not box:
+        return False
+    x0, y0, x1, y1 = (int(round(float(v))) for v in box)
+    crop = np.asarray(gray)[max(0, y0) : max(0, y1), max(0, x0) : max(0, x1)]
+    if crop.size == 0:
+        return False
+    found = cv2.createLineSegmentDetector(cv2.LSD_REFINE_STD).detect(crop)[0]
+    if found is None:
+        return False
+    segments = found.reshape(-1, 4)
+    lengths = np.hypot(segments[:, 2] - segments[:, 0], segments[:, 3] - segments[:, 1])
+    angles = (
+        np.degrees(np.arctan2(segments[:, 3] - segments[:, 1], segments[:, 2] - segments[:, 0]))
+        + 180.0
+    ) % 180.0
+    diagonal = ((np.abs(angles - 45.0) < 8.0) | (np.abs(angles - 135.0) < 8.0)) & (
+        lengths >= 0.03 * max(crop.shape)
+    )
+    return int(diagonal.sum()) >= 8
 
 
 def _plate_holes(image_bytes: bytes, profile: dict[str, Any], report: dict[str, Any]) -> str | None:

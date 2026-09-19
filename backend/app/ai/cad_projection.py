@@ -210,6 +210,7 @@ def place_sheet_views(
     right: set[int] | None = None,
     below: set[int] | None = None,
     anchor: int | None = None,
+    axis_u: dict[int, float] | None = None,
 ) -> tuple[list[Any], list[dict[str, float] | None]]:
     """Lay out the views ``/drawing`` returned, in the order it returned them.
 
@@ -286,8 +287,16 @@ def place_sheet_views(
             # проекционную связь, когда у видов разные выступы (корпус: разрез
             # уезжал на 8 мм относительно плана, и элементы на нём искались не
             # там).
-            anchor_axis_u = origin_u_mm + anchor_width / 2.0
-            box_axis_u = (box["u_max"] + box["u_min"]) / 2.0
+            # Ось — середина ТЕЛА, если она известна (`axis_u`): ядро центрует
+            # каждый вид по его собственной рамке, а прилив, видный только на
+            # плане, расширял её — разрез корпуса стоял на 5 мм левее плана.
+            centres = axis_u or {}
+            anchor_axis_u = (
+                origin_u_mm - anchor["u_min"] + centres[anchor_index]
+                if anchor_index in centres
+                else origin_u_mm + anchor_width / 2.0
+            )
+            box_axis_u = centres.get(index, (box["u_max"] + box["u_min"]) / 2.0)
             placements[index] = {
                 "offset_u": anchor_axis_u - box_axis_u,
                 "offset_v": bottom_edge_mm + gap_mm + box["v_max"],

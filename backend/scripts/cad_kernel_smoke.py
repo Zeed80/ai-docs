@@ -748,6 +748,43 @@ def _check_axial_cross_section() -> None:
     )
 
 
+def _check_housing_section_hatch() -> None:
+    """Ф5: разрез корпуса (ось вида +X) — со штриховкой. Контур сечения
+    переводился в координаты вида по осям вала и выбрасывался проверкой рамки:
+    разрез А-А корпуса выходил без штриховки."""
+    box = _feature("extrude", width_mm=100.0, height_mm=60.0, depth_mm=40.0)
+    cavity = _feature(
+        "pocket",
+        profile="rectangle",
+        width_mm=80.0,
+        height_mm=40.0,
+        depth_mm=30.0,
+        center_x_mm=50.0,
+        center_y_mm=30.0,
+    )
+    status, payload = _post(
+        "/drawing",
+        {
+            "candidate": _candidate(box, cavity, label="housing"),
+            "confirm_assumptions": True,
+            "views": [
+                {"kind": "front", "x_direction": [1.0, 0.0, 0.0]},
+                {"kind": "section", "label": "А-А", "x_direction": [1.0, 0.0, 0.0]},
+            ],
+            "scale": 1.0,
+        },
+    )
+    if status != 200:
+        check("housing section builds", False, f"HTTP {status}: {str(payload)[:300]}")
+        return
+    section = payload["views"][1]
+    check(
+        "housing section is hatched",
+        len(section.get("hatch") or []) >= 1,
+        f"hatch={len(section.get('hatch') or [])}",
+    )
+
+
 def _check_plan_view() -> None:
     """X3: вид сверху (`plan`, наблюдатель на +Z). `side` смотрит снизу: ребро,
     стоящее на основании, в нём скрыто, и план сварного узла был пуст."""
@@ -1325,6 +1362,7 @@ def main() -> int:
     _check_face_groove()
     _check_axial_cross_section()
     _check_plan_view()
+    _check_housing_section_hatch()
     _check_work_plane_features()
     _check_body_placement()
 

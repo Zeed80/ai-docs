@@ -935,3 +935,65 @@ def test_a_confirmed_wall_feature_is_shown_on_both_of_its_views():
     _nodes, edges, _assertions = native_feature_graph_additions(placed)
     same = [edge for edge in edges if edge.type == "same_object_across_views"]
     assert len(same) == 1
+
+
+def test_a_front_wall_feature_is_not_measured_on_the_section_below_the_plan():
+    """Под планом корпуса с полостью — разрез: он снимает переднюю стенку, и
+    замер находил зеркальный прилив задней, «опровергая» верное чтение
+    (корпус seed 8: (50; 10) «найден» в (−56; −8))."""
+    import io
+
+    from PIL import Image
+
+    from app.ai.cad_recognize.verifiers.stage import _wall_features_on_sheet
+
+    buffer = io.BytesIO()
+    Image.new("L", (400, 300), 255).save(buffer, format="PNG")
+    profile = {
+        "width_mm": 150.0,
+        "height_mm": 80.0,
+        "thickness_mm": 50.0,
+        "wall_features": [
+            {
+                "kind": "pocket",
+                "on_plane": "top",
+                "profile": "rectangle",
+                "width_mm": 120.0,
+                "height_mm": 50.0,
+                "depth_mm": 42.0,
+                "center_u_mm": 0.0,
+                "center_v_mm": 0.0,
+            },
+            {
+                "kind": "boss",
+                "on_plane": "front",
+                "profile": "circle",
+                "diameter_mm": 20.0,
+                "depth_mm": 10.0,
+                "center_u_mm": 50.0,
+                "center_v_mm": 10.0,
+            },
+        ],
+    }
+    # Под планом — разрез: штриховка под 45°.
+    from PIL import ImageDraw
+
+    image = Image.new("L", (400, 300), 255)
+    draw = ImageDraw.Draw(image)
+    for x in range(20, 300, 12):
+        draw.line([(x, 280), (x + 80, 200)], fill=0, width=1)
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    report = {
+        "items": [],
+        "frame": {"mm_per_px": 0.5},
+        "housing_views": {
+            "plan_bbox_px": [10, 10, 310, 170],
+            "front_bbox_px": [10, 190, 310, 290],
+            "side_bbox_px": [330, 10, 390, 170],
+        },
+    }
+    _wall_features_on_sheet(buffer.getvalue(), profile, report)
+
+    front = next(i for i in report["items"] if i["path"].endswith("[1]"))
+    assert front["status"] == "unmeasurable" and "разрез" in front["reason"]
