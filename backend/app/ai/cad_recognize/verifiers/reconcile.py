@@ -671,6 +671,9 @@ def apply_bent_section(spec: dict[str, Any], decision: dict[str, Any]) -> dict[s
     spec = copy.deepcopy(spec)
     sheet = spec["main_view"]["sheet_metal"]
     sheet["turns"] = [int(t) for t in decision["value"]["turns"]]
+    if decision["value"].get("flanges_mm"):
+        # Полки — переспросом по вырезу (reask_bent_section), согласованным с листом.
+        sheet["flanges_mm"] = [float(v) for v in decision["value"]["flanges_mm"]]
     angles = [float(round(a)) for a in decision["value"]["bend_angles_deg"]]
     if all(abs(a - 90.0) <= 5.0 for a in angles):
         sheet.pop("bend_angles_deg", None)

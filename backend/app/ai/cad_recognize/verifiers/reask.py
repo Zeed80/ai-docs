@@ -266,3 +266,180 @@ async def _default_ask(prompt: str, crop: Any) -> dict:
         num_predict=200,
         schema=_SCHEMA,
     )
+
+
+_BENT_PROMPT = (
+    "На фрагменте — сечение гнутой детали из листа: {flanges} полок и {bends} "
+    "гибов между ними. Выпиши размеры полок, проставленные на листе, по порядку "
+    "от одного конца сечения к другому — как они стоят на листе (до наружной "
+    "поверхности). Только числа с листа. ОДНОЙ строкой JSON: "
+    '{{"flanges_mm": [40, 60, 40]}}. Только JSON.'
+)
+_BENT_SCHEMA = {
+    "type": "object",
+    "properties": {"flanges_mm": {"type": "array", "items": {"type": "number"}}},
+}
+
+
+def _outer_flanges(sheet: dict[str, Any]) -> list[float]:
+    """Полки спека (прямые участки) → размеры, как они стоят на листе."""
+    import math
+
+    flanges = [float(v) for v in sheet.get("flanges_mm") or []]
+    turns = sheet.get("turns") or []
+    angles = sheet.get("bend_angles_deg") or [90.0] * len(turns)
+    reach = [
+        (float(sheet["radius_mm"]) + float(sheet["thickness_mm"])) * math.tan(math.radians(a) / 2)
+        for a in angles
+    ]
+    return [
+        value + (reach[i - 1] if i > 0 else 0.0) + (reach[i] if i < len(flanges) - 1 else 0.0)
+        for i, value in enumerate(flanges)
+    ]
+
+
+def bent_flanges_fit(
+    answer: list[float],
+    flanges_px: list[float],
+    thickness_mm: float,
+    already_read: list[float],
+) -> list[float] | None:
+    """Ответ о полках — в порядке листа, если он согласен с листом, иначе None.
+
+    Согласие — одним масштабом с длинами по осевой (размер по наружной
+    поверхности длиннее осевой на полтолщины у каждого гиба), и в ответе все
+    полки, которые ридер уже прочитал с листа: иначе масштаб подогнался бы
+    под любые пропорциональные числа.
+    """
+    count = len(flanges_px)
+    if len(answer) != count or count < 2 or any(v <= 0 for v in answer + flanges_px):
+        return None
+    left = list(answer)
+    for value in already_read:
+        match = next((i for i, v in enumerate(left) if abs(v - value) <= 0.05), None)
+        if match is None:
+            return None
+        left.pop(match)
+    for order in (list(answer), list(reversed(answer))):
+        centre = [
+            value - 0.5 * thickness_mm * ((index > 0) + (index < count - 1))
+            for index, value in enumerate(order)
+        ]
+        ratios = sorted(c / px for c, px in zip(centre, flanges_px, strict=True))
+        scale = ratios[len(ratios) // 2]
+        if all(
+            abs(c - scale * px) <= max(0.5, 0.04 * c) + 0.5 * thickness_mm
+            for c, px in zip(centre, flanges_px, strict=True)
+        ):
+            return order
+    return None
+
+
+async def reask_bent_section(
+    image_bytes: bytes,
+    spec: dict[str, Any],
+    report: dict[str, Any],
+    *,
+    ask: Any = None,
+) -> dict[str, Any] | None:
+    """Недостающая полка гнутой детали — переспрос по вырезу сечения (X4, Ф8).
+
+    Ридер терял полку Z-профиля («уголок» вместо Z): число гибов по листу
+    другое, и раньше это уходило человеку — размеров полки лист замером не
+    даёт. Но форма и пропорции видны: модель спрашивается ещё раз по вырезу,
+    уже зная число полок, и ответ принимается, только если согласен с листом.
+    """
+    import io
+
+    from PIL import Image
+
+    item = next((i for i in report.get("items") or [] if i.get("kind") == "bent_section"), None)
+    sheet = ((spec.get("main_view") or {}).get("sheet_metal")) or {}
+    if (
+        item is None
+        or item.get("status") != "refuted"
+        or not sheet
+        or not item.get("evidence_bbox_px")
+    ):
+        return None
+    measured = item.get("measured") or {}
+    flanges_px = [float(v) for v in measured.get("flanges_px") or []]
+    turns = list(measured.get("turns") or [])
+    angles = list(measured.get("angles_deg") or [])
+    if len(flanges_px) != len(turns) + 1 or len(turns) == len(sheet.get("turns") or []):
+        return None
+    if None in angles:
+        return None
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    x0, y0, x1, y1 = item["evidence_bbox_px"]
+    reach = 0.6 * max(x1 - x0, y1 - y0)
+    crop = image.crop(
+        (
+            max(0, int(x0 - reach)),
+            max(0, int(y0 - reach)),
+            min(image.width, int(x1 + reach)),
+            min(image.height, int(y1 + reach)),
+        )
+    )
+    answer = await (ask or _default_bent_ask)(
+        _BENT_PROMPT.format(flanges=len(flanges_px), bends=len(turns)), crop
+    )
+    values = [
+        float(v)
+        for v in (answer or {}).get("flanges_mm") or []
+        if isinstance(v, (int, float)) and not isinstance(v, bool)
+    ]
+    thickness = float(sheet["thickness_mm"])
+    order = bent_flanges_fit(values, flanges_px, thickness, _outer_flanges(sheet))
+    if order is None:
+        return {
+            "kind": "bent_section",
+            "path": "main_view.sheet_metal",
+            "action": "ask_human",
+            "asked": values,
+            "reason": "переспрос о полках не согласуется с сечением на листе — решение человеку",
+        }
+    import math
+
+    # Углы — так же, как их положит в спек согласование (целые, 90° ± 5 — 90°):
+    # по углу с десятыми прямые участки уходили на 0,5 мм (корпус, лист 5).
+    angles = [90.0 if abs(a - 90.0) <= 5.0 else float(round(a)) for a in angles]
+    reach_mm = [
+        (float(sheet["radius_mm"]) + thickness) * math.tan(math.radians(a) / 2) for a in angles
+    ]
+    straight = [
+        round(
+            value
+            - (reach_mm[i - 1] if i > 0 else 0.0)
+            - (reach_mm[i] if i < len(order) - 1 else 0.0),
+            3,
+        )
+        for i, value in enumerate(order)
+    ]
+    return {
+        "kind": "bent_section",
+        "path": "main_view.sheet_metal",
+        "field": "turns",
+        "action": "adopt",
+        "read": {"flanges_mm": sheet.get("flanges_mm"), "turns": sheet.get("turns")},
+        "value": {"flanges_mm": straight, "turns": turns, "bend_angles_deg": angles},
+        "reason": (
+            f"форма сечения — по листу ({len(order)} полок), размеры полок "
+            f"{', '.join(f'{v:g}' for v in order)} — переспросом по вырезу, "
+            "согласны с сечением"
+        ),
+    }
+
+
+async def _default_bent_ask(prompt: str, crop: Any) -> dict:
+    from app.ai.cad_recognize.spec_fragments import _ask, _overview
+    from app.ai.router import ai_router
+
+    return await _ask(
+        prompt,
+        _overview(crop),
+        router=ai_router,
+        confidential=True,
+        num_predict=300,
+        schema=_BENT_SCHEMA,
+    )

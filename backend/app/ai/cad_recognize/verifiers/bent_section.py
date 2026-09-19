@@ -246,6 +246,9 @@ def bent_section_verdict(read: dict[str, Any], measured: dict[str, Any] | None) 
         "bends": len(measured["turns"]),
         "turns": measured["turns"],
         "angles_deg": measured["angles_deg"],
+        # Длины полок по осевой между условными вершинами, px: по ним
+        # переспрос проверяет ответ модели о недостающей полке.
+        "flanges_px": measured.get("flanges_px") or [],
     }
     if len(read_turns) != len(measured["turns"]):
         return {

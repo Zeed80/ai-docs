@@ -4135,6 +4135,21 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 )
 
                 bent = bent_section_decision(spec, verification) if verification else None
+                if bent and bent.get("action") == "ask_human":
+                    # Другое число гибов — ридер потерял полку. Форма видна на
+                    # листе: переспрос о полках по вырезу сечения, принятый
+                    # только при согласии с листом.
+                    from app.ai.cad_recognize.verifiers.reask import reask_bent_section
+
+                    try:
+                        asked = await reask_bent_section(content, spec, verification)
+                    except Exception as exc:  # noqa: BLE001 — переспрос не валит прогон
+                        asked = None
+                        await _record(
+                            "reconcile.bent_section", "failed", f"Переспрос о полках: {exc}"[:200]
+                        )
+                    if asked is not None:
+                        bent = asked
                 if bent:
                     spec = _revalidated_spec(apply_bent_section(spec, bent))
                     await _record(
