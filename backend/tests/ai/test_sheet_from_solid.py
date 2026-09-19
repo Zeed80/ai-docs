@@ -1812,3 +1812,22 @@ def test_a_section_label_stands_above_the_dimension_rows_and_out_of_other_views(
         [plan, section], [{"offset_u": 50.0, "offset_v": 50.0}, placement], occupied=[overall]
     )
     assert label.position.x < 50 * PAPER_PX_PER_MM  # слева от разреза, не в плане
+
+
+def test_the_drawing_is_moved_into_the_sheet_only_when_it_spills_out():
+    """Ряды размеров над планом корпуса уходили за верхний край листа (3 из
+    12): раскладка центровала только контуры видов."""
+    from app.ai.cad_ir.schema import Point, Segment
+    from app.ai.cad_ir.sheet_from_solid import PAPER_PX_PER_MM, _fit_shift
+
+    def segment(y_mm: float) -> Segment:
+        return Segment(
+            p1=Point(x=50 * PAPER_PX_PER_MM, y=y_mm * PAPER_PX_PER_MM),
+            p2=Point(x=150 * PAPER_PX_PER_MM, y=y_mm * PAPER_PX_PER_MM),
+        )
+
+    # Сверху вылезло на 8 мм — сдвиг вниз, в середину области.
+    dx, dy = _fit_shift([segment(2.0), segment(120.0)], 10.0, 10.0, 190.0, 180.0)
+    assert dx == 0.0 and dy > 8.0
+    # Помещается, хоть и не по центру, — не трогать.
+    assert _fit_shift([segment(20.0), segment(60.0)], 10.0, 10.0, 190.0, 180.0) == (0.0, 0.0)

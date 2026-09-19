@@ -2851,33 +2851,44 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
     extent_h += _flat_pattern_height_mm(spec, plan) + weldment_extra_height_mm(spec, plan)
     offset_u = area_x0 + max((area_w - extent_w) / 2.0, 0.0)
     offset_v = area_y0 + max((area_h - extent_h) / 2.0, 0.0)
-    entities, placements = place_sheet_views(
-        views,
-        px_per_mm=PAPER_PX_PER_MM,
-        origin_u_mm=offset_u,
-        origin_v_mm=offset_v,
-        skip=plan.scaffold_views,
-        right=plan.right_views,
-        below=plan.below_views,
-        anchor=plan.anchor_view,
-        axis_u=axis_u,
-    )
-    entities += dimensions_from_kernel(
-        drawing.get("dimensions") or [],
-        {
-            # Границы вида едут вместе с размещением: без них длину некуда
-            # вынести за контур, и она ложится внутрь детали.
-            index: {**placement, "bounds_mm": (views[index] or {}).get("bounds_mm") or {}}
-            for index, placement in enumerate(placements)
-            if placement
-        },
-        list(range(len(views))),
-        px_per_mm=PAPER_PX_PER_MM,
-    )
-    entities += _view_label_entities(views, placements, occupied=entities)
-    entities += _flat_pattern_entities(spec, plan, views, placements)
-    entities += weldment_entities(spec, plan, views, placements)
-    entities += _cutting_plane_entities(views, placements, plan)
+
+    def draw(origin_u: float, origin_v: float) -> tuple[list[Any], list[Any]]:
+        drawn, placed = place_sheet_views(
+            views,
+            px_per_mm=PAPER_PX_PER_MM,
+            origin_u_mm=origin_u,
+            origin_v_mm=origin_v,
+            skip=plan.scaffold_views,
+            right=plan.right_views,
+            below=plan.below_views,
+            anchor=plan.anchor_view,
+            axis_u=axis_u,
+        )
+        drawn += dimensions_from_kernel(
+            drawing.get("dimensions") or [],
+            {
+                # Границы вида едут вместе с размещением: без них длину некуда
+                # вынести за контур, и она ложится внутрь детали.
+                index: {**placement, "bounds_mm": (views[index] or {}).get("bounds_mm") or {}}
+                for index, placement in enumerate(placed)
+                if placement
+            },
+            list(range(len(views))),
+            px_per_mm=PAPER_PX_PER_MM,
+        )
+        drawn += _view_label_entities(views, placed, occupied=drawn)
+        drawn += _flat_pattern_entities(spec, plan, views, placed)
+        drawn += weldment_entities(spec, plan, views, placed)
+        drawn += _cutting_plane_entities(views, placed, plan)
+        return drawn, placed
+
+    entities, placements = draw(offset_u, offset_v)
+    # Центровать по НАРИСОВАННОМУ, а не по контурам видов: ряды размеров над
+    # планом корпуса уходили за верхний край листа («93» обрезан, габарит над
+    # ним не виден), а метрика полноты этого не видит — размер в IR есть.
+    shift = _fit_shift(entities, area_x0, area_y0, area_w, area_h)
+    if shift != (0.0, 0.0):
+        entities, placements = draw(offset_u + shift[0], offset_v + shift[1])
     if plan.geometry_only:
         entities += _annotation_entities(
             spec,
@@ -2909,6 +2920,34 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
 
 
 _FLAT_TITLE_MM = 20.0
+
+
+def _fit_shift(
+    entities: list[Any], x0: float, y0: float, width: float, height: float
+) -> tuple[float, float]:
+    """Сдвиг (мм), ставящий нарисованное в середину области листа, если оно из
+    неё выходит; (0, 0) — трогать не надо."""
+    from app.ai.cad_projection import DIM_TEXT_MM
+
+    points = _entity_points(entities)
+    if not points:
+        return 0.0, 0.0
+    pad = DIM_TEXT_MM  # подписи — центром: полвысоты текста и запас
+    left = min(x for x, _y in points) / PAPER_PX_PER_MM - pad
+    right = max(x for x, _y in points) / PAPER_PX_PER_MM + pad
+    top = min(y for _x, y in points) / PAPER_PX_PER_MM - pad
+    bottom = max(y for _x, y in points) / PAPER_PX_PER_MM + pad
+
+    def axis(low: float, high: float, start: float, size: float) -> float:
+        span = high - low
+        target = start + (size - span) / 2.0 if span <= size else start
+        delta = target - low
+        # Помещается — не трогать: сдвиг меняет фазу растеризации, и
+        # пограничные замеры на уже верных листах переключались.
+        inside = low >= start and high <= start + size
+        return 0.0 if inside else delta
+
+    return axis(left, right, x0, width), axis(top, bottom, y0, height)
 
 
 def _flat_pattern_height_mm(spec: dict, plan: SheetPlan) -> float:
