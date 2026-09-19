@@ -129,6 +129,12 @@ def main() -> int:
     parser.add_argument("--update", action="store_true", help="переписать базу текущим прогоном")
     parser.add_argument("--report", type=pathlib.Path)
     parser.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) // 2))
+    parser.add_argument(
+        "--split",
+        default="dev",
+        choices=("dev", "holdout"),
+        help="holdout — однократный замер для шлюза фазы: только отчёт, база не трогается",
+    )
     args = parser.parse_args()
 
     rows = [
@@ -136,7 +142,17 @@ def main() -> int:
         for line in (args.corpus / "manifest.jsonl").read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    rows = [row for row in rows if row.get("split") == "dev"]
+    rows = [row for row in rows if row.get("split") == args.split]
+    if args.split == "holdout":
+        # Holdout для подбора не используется (принцип 5 плана): ни базы, ни
+        # сравнения — только счётчики «найдено / верно» в отчёт.
+        current = measure(args.corpus, rows, args.workers)
+        text = json.dumps({"split": "holdout", "counts": current}, ensure_ascii=False, indent=1)
+        if args.report:
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            args.report.write_text(text, encoding="utf-8")
+        print(text)
+        return 0
     corpus_print = fingerprint(args.corpus, rows)
     baseline = (
         json.loads(args.baseline.read_text(encoding="utf-8")) if args.baseline.exists() else None
