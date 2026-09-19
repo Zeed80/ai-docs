@@ -269,6 +269,33 @@ _THICKNESSES = (5, 6, 8, 10, 12, 16, 20, 25)
 _HOLES = (5.5, 6.6, 9, 11, 13.5, 17.5)  # под крепёж М5..М16, ГОСТ 11284
 
 
+_TAPPED = {5.5: "M5", 6.6: "M6", 9: "M8", 11: "M10", 13.5: "M12", 17.5: "M16"}
+
+
+def _hole_kind(hole: dict[str, Any], thickness: float) -> dict[str, Any]:
+    """Сквозное, резьбовое или глухое (X1). Свой генератор от места отверстия:
+    прежние пластины корпуса не меняются (общий поток случайных чисел — тот же)."""
+    rng = random.Random(f"hole:{hole['center_x_mm']}:{hole['center_y_mm']}:{hole['diameter_mm']}")
+    roll = rng.random()
+    if roll < 0.25 and hole["diameter_mm"] in _TAPPED:
+        designation = _TAPPED[hole["diameter_mm"]]
+        nominal = float(designation[1:])
+        tapped = {**hole, "diameter_mm": nominal}
+        tapped["thread"] = {
+            "designation": designation,
+            "nominal_diameter_mm": nominal,
+            "internal": True,
+        }
+        if thickness >= 12:
+            depth = float(round(thickness * 0.7))
+            tapped["depth_mm"] = depth
+            tapped["thread"]["length_mm"] = float(round(depth * 0.8))
+        return tapped
+    if roll < 0.45 and thickness >= 8:
+        return {**hole, "depth_mm": float(round(thickness * 0.6))}
+    return hole
+
+
 def _plate(rng: random.Random) -> dict[str, Any]:
     """Прямоугольная пластина: отверстия по координатам, массивы, прорези.
 
@@ -328,7 +355,12 @@ def _plate(rng: random.Random) -> dict[str, Any]:
             x = round(rng.uniform(-width / 2, width / 2), 0)
             y = round(rng.uniform(-height / 2, height / 2), 0)
             if free(x, y, hole / 2 + 2):
-                profile["holes"].append({"center_x_mm": x, "center_y_mm": y, "diameter_mm": hole})
+                profile["holes"].append(
+                    _hole_kind(
+                        {"center_x_mm": x, "center_y_mm": y, "diameter_mm": hole},
+                        profile["thickness_mm"],
+                    )
+                )
                 occupied.append((x, y, hole / 2 + 2))
                 break
     if rng.random() < 0.35:

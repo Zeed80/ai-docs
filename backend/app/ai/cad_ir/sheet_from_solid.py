@@ -788,7 +788,7 @@ def _diameters_from_circles(drawing: dict, requests: list[dict], plan: SheetPlan
             {
                 "view_index": request["view_index"],
                 "kind": "Diameter",
-                "label": "",
+                "label": request.get("label") or "",
                 "anchors_mm": [[cu - dx, cv - dy], [cu + dx, cv + dy]],
                 "value_mm": round(2.0 * radius / ratio, 3),
                 "measured_by": "view_circle",
@@ -821,9 +821,16 @@ def _prismatic_dimension_requests(
     wanted_diameters: list[float] = []
     if profile.get("shape") == "circle" and profile.get("diameter_mm"):
         wanted_diameters.append(float(profile["diameter_mm"]))
+    # Подпись по смыслу отверстия (X1): резьбовое — обозначением резьбы, на
+    # окружности Ø впадин (её ядро и режет), глухое — с глубиной.
+    hole_texts: dict[float, str] = {}
     for hole in profile.get("holes") or []:
-        if hole.get("diameter_mm"):
-            wanted_diameters.append(float(hole["diameter_mm"]))
+        if not hole.get("diameter_mm"):
+            continue
+        cut, text = _hole_cut_and_text(hole)
+        wanted_diameters.append(cut)
+        if text:
+            hole_texts[round(cut, 3)] = text
     for pattern in profile.get("hole_patterns") or []:
         if pattern.get("hole_diameter_mm"):
             wanted_diameters.append(float(pattern["hole_diameter_mm"]))
@@ -853,7 +860,7 @@ def _prismatic_dimension_requests(
                     "view_index": view_index,
                     "edge_index": int(index),
                     "kind": "Diameter",
-                    "label": "",
+                    "label": hole_texts.get(round(match, 3), ""),
                     "_nominal_mm": match,
                     "_is_diameter": True,
                     # Окружность уже измерена ядром при проекции вида — если
@@ -884,6 +891,25 @@ def _prismatic_dimension_requests(
                 )
                 break
     return requests
+
+
+def _hole_cut_and_text(hole: dict) -> tuple[float, str]:
+    """Ø окружности, которую нарисует ядро, и подпись к ней (пусто — «Ød»)."""
+    from app.ai.cad_solid import metric_thread_geometry
+
+    diameter = float(hole["diameter_mm"])
+    thread = hole.get("thread") if isinstance(hole.get("thread"), dict) else None
+    depth = hole.get("depth_mm")
+    if thread is not None:
+        geometry = metric_thread_geometry(thread)
+        if geometry is not None:
+            text = str(thread.get("designation") or "")
+            if isinstance(depth, (int, float)):
+                text += f" гл.{float(depth):g}"
+            return round(float(geometry["minor_diameter_mm"]), 3), text
+    if isinstance(depth, (int, float)):
+        return diameter, f"Ø{diameter:g} гл.{float(depth):g}"
+    return diameter, ""
 
 
 def _chain_lengths(outer: list[dict]) -> list[float]:
@@ -2728,7 +2754,9 @@ def _label_dimensions(dimensions: list[dict], requests: list[dict], spec: dict) 
             continue
         unclaimed.remove(match)
         is_diameter = bool(match.get("_is_diameter"))
-        dimension["label"] = _dimension_text(
+        # Подпись, которую лист знает по смыслу элемента («M8», «Ø10 гл.12»),
+        # не заменяется числом: иначе резьба на листе шла «Ø6.647» (X1).
+        dimension["label"] = match.get("label") or _dimension_text(
             index, float(match["_nominal_mm"]), diameter=is_diameter
         )
         # A diameter on a longitudinal view is MEASURED as a DistanceY between

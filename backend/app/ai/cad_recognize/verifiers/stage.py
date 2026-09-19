@@ -623,6 +623,13 @@ def _hatched(gray: Any, box: Any) -> bool:
     return False
 
 
+def _drawn_hole_diameter(hole: dict[str, Any]) -> float:
+    """Ø окружности отверстия на плане: у резьбового — по впадинам резьбы."""
+    from app.ai.cad_ir.sheet_from_solid import _hole_cut_and_text
+
+    return float(_hole_cut_and_text(hole)[0])
+
+
 def _plate_holes(image_bytes: bytes, profile: dict[str, Any], report: dict[str, Any]) -> str | None:
     from app.ai.cad_recognize.verifiers.contract import Verdict
     from app.ai.cad_recognize.verifiers.plate_frame import locate_plate_frame
@@ -659,7 +666,8 @@ def _plate_holes(image_bytes: bytes, profile: dict[str, Any], report: dict[str, 
                 {
                     "x_mm": float(hole["center_x_mm"]) + half_w,
                     "y_mm": float(hole["center_y_mm"]) + half_h,
-                    "diameter_mm": float(hole["diameter_mm"]),
+                    # Резьбовое отверстие нарисовано окружностью Ø впадин (X1).
+                    "diameter_mm": _drawn_hole_diameter(hole),
                 },
             ),
             frame,
@@ -684,7 +692,13 @@ def _plate_holes(image_bytes: bytes, profile: dict[str, Any], report: dict[str, 
             measured = {
                 "center_x_mm": round(verdict.measured["x_mm"] - half_w, 3),
                 "center_y_mm": round(verdict.measured["y_mm"] - half_h, 3),
-                "diameter_mm": verdict.measured["diameter_mm"],
+                # В системе прочитанного: у резьбового — номинал, как в спеке.
+                "diameter_mm": round(
+                    float(verdict.measured["diameter_mm"])
+                    + float(hole["diameter_mm"])
+                    - _drawn_hole_diameter(hole),
+                    3,
+                ),
             }
         item = _hole_item(index, hole, verdict.status, measured, verdict.reason)
         item["tolerance_mm"] = {

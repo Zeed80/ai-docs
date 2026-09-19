@@ -916,29 +916,80 @@ def _one_prismatic_tree(spec: dict, profile: dict) -> FeatureTreeCandidate | Non
         if not diameter or x is None or y is None:
             return None
         cx, cy = to_base(x, y)
+        depth = _num(hole.get("depth_mm"))
+        thread = hole.get("thread") if isinstance(hole.get("thread"), dict) else None
+        cut = diameter
+        cut_provenance = ParamProvenance(origin="stated", detail="Ø отверстия с чертежа")
+        if thread is not None:
+            # Резьбовое (X1): режется Ø по впадинам резьбы, сама резьба —
+            # косметическая (ГОСТ 2.311), как у вала.
+            geometry = metric_thread_geometry(thread)
+            if geometry is None:
+                return None
+            cut = float(geometry["minor_diameter_mm"])
+            cut_provenance = ParamProvenance(
+                origin="standard",
+                detail=f"Ø по впадинам {thread.get('designation')} (ГОСТ, шаг — "
+                + ("с листа" if geometry["pitch_source"] == "stated" else "крупный по ГОСТ")
+                + ")",
+            )
+        params: dict[str, Any] = {"diameter_mm": cut, "center_x_mm": cx, "center_y_mm": cy}
+        provenance_map = {
+            "diameter_mm": cut_provenance,
+            "center_x_mm": ParamProvenance(origin="stated", detail="координата от центра"),
+            "center_y_mm": ParamProvenance(origin="stated", detail="координата от центра"),
+        }
+        if depth is not None:
+            # Глухое — от лицевой грани плана. План (`side` ядра) смотрит на
+            # грань zmin: с zmax отверстие выходило на плане штриховым, и лист
+            # его не образмеривал (корпус пластин: 0 из 6 глухих).
+            params.update({"through": False, "depth_mm": depth, "from_face": "zmin"})
+            provenance_map["through"] = ParamProvenance(origin="stated", detail="глубина на листе")
+            provenance_map["depth_mm"] = ParamProvenance(
+                origin="stated", detail="глубина с чертежа"
+            )
+            provenance_map["from_face"] = ParamProvenance(
+                origin="standard", detail="глухое отверстие — с лицевой грани плана"
+            )
+        else:
+            # A plate hole is through unless the sheet said otherwise.
+            params["through"] = True
+            provenance_map["through"] = ParamProvenance(
+                origin="standard", detail="отверстие без глубины на листе — сквозное"
+            )
         features.append(
             Feature3D(
                 kind="hole",
                 source_feature_ids=_source_feature_ids(hole),
-                params={
-                    "diameter_mm": diameter,
-                    "center_x_mm": cx,
-                    "center_y_mm": cy,
-                    # A plate hole is through unless the sheet said otherwise; a
-                    # blind hole needs a depth the reader did not provide.
-                    "through": True,
-                },
-                param_provenance={
-                    "diameter_mm": ParamProvenance(origin="stated", detail="Ø отверстия с чертежа"),
-                    "center_x_mm": ParamProvenance(origin="stated", detail="координата от центра"),
-                    "center_y_mm": ParamProvenance(origin="stated", detail="координата от центра"),
-                    "through": ParamProvenance(
-                        origin="standard", detail="отверстие без глубины на листе — сквозное"
-                    ),
-                },
+                params=params,
+                param_provenance=provenance_map,
                 confidence=0.85,
             )
         )
+        if thread is not None:
+            thread_params: dict[str, Any] = {
+                "spec": str(thread.get("designation")),
+                "diameter_mm": diameter,
+                "center_x_mm": cx,
+                "center_y_mm": cy,
+                "internal": True,
+                "from_face": "zmin",
+            }
+            length = _num(thread.get("length_mm")) or depth
+            if length is not None:
+                thread_params["length_mm"] = length
+            features.append(
+                Feature3D(
+                    kind="thread",
+                    source_feature_ids=_source_feature_ids(hole),
+                    params=thread_params,
+                    param_provenance={
+                        key: ParamProvenance(origin="stated", detail="резьба с чертежа")
+                        for key in thread_params
+                    },
+                    confidence=0.8,
+                )
+            )
 
     # Карманы и приливы на гранях (X2): только у прямоугольного контура —
     # грани габарита у круга и эскиза пришлось бы угадывать.

@@ -308,12 +308,19 @@ class SpecSection(BaseModel):
 
 
 class SpecHole(BaseModel):
-    """Through-hole position relative to the profile centre, in millimetres."""
+    """Hole position relative to the profile centre, in millimetres.
+
+    Сквозное, пока глубины нет (X1). ``depth_mm`` — глухое на эту глубину от
+    лицевой грани; ``thread`` — резьбовое: ``diameter_mm`` тогда номинальный
+    Ø резьбы, а режется Ø по впадинам (ГОСТ, `metric_thread_geometry`).
+    """
 
     id: str | None = None  # see SpecChamfer.id
     center_x_mm: float
     center_y_mm: float
     diameter_mm: float = Field(gt=0)
+    depth_mm: float | None = Field(default=None, gt=0)
+    thread: SpecThread | None = None
     tolerance: str | None = None
     evidence: list[SpecEvidence] = Field(default_factory=list)
 

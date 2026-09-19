@@ -85,7 +85,11 @@ def needed_dimensions(spec: dict) -> dict[str, list[float]]:
         return {"diameters": [], "lengths": sorted(lengths), "overall": []}
     profile = body.get("profile")
     if isinstance(profile, dict):
-        diameters = {h["diameter_mm"] for h in profile.get("holes") or []}
+        # Резьбовое отверстие нарисовано окружностью Ø впадин (её режет ядро),
+        # подпись — обозначение резьбы (X1).
+        from app.ai.cad_ir.sheet_from_solid import _hole_cut_and_text
+
+        diameters = {_hole_cut_and_text(h)[0] for h in profile.get("holes") or []}
         diameters |= {p["hole_diameter_mm"] for p in profile.get("hole_patterns") or []}
         # Окружность центров (PCD) — где стоят болтовые отверстия (X1).
         diameters |= {
