@@ -154,6 +154,18 @@ catalog, sheets publish fail-closed. Контракт не менялся; не�
 production не заявлен. Отчёт:
 `docs/agent-employee-delivery/E05-2-7-db-write-adapters.md`. E05.2 остаётся
 IN PROGRESS; далее нужен новый отдельно проверенный срез E05.2.
+E05.2.8 REVIEWED добавляет только `invoices.update` и
+`tool_catalog.create_supplier` через точные уникальные маршруты
+`PATCH /api/invoices/{invoice_id}` и `POST /api/tool-catalog/suppliers`:
+cumulative allowlist равен 24 операциям. У обоих handler-ов один прямой
+безусловный commit на success path; `update_invoice` вызывает flush-only
+`log_action`/`add_timeline_event`, а `InvoiceFieldUpdate` не принимает `status`;
+`create_supplier` — DB-only. AI/network/enqueue нет; обе операции
+`admin_only=false` и не approval-gated. Контракт не менялся; независимый полный
+набор из корня: 230 passed с известным предупреждением `asyncio_loop_scope`;
+production не заявлен. Отчёт:
+`docs/agent-employee-delivery/E05-2-8-db-write-adapters.md`. E05.2 остаётся
+IN PROGRESS; далее нужен новый отдельно проверенный срез E05.2.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя
 в WorkEvent, проверяет владельца/аргументы/попытку/lease. Детали журнала и UI

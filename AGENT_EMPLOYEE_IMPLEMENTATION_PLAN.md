@@ -134,6 +134,18 @@ commit, `payments.mark_paid` — как approval-gated; notification/settings н
 полный набор из корня: 225 passed с известным предупреждением
 `asyncio_loop_scope`; production не заявлен. Отчёт:
 `docs/agent-employee-delivery/E05-2-7-db-write-adapters.md`.
+E05.2.8 REVIEWED: восьмой узкий DB write-срез добавляет только
+`invoices.update` и `tool_catalog.create_supplier` через точные уникальные
+соответственно `PATCH /api/invoices/{invoice_id}` и
+`POST /api/tool-catalog/suppliers`. Cumulative allowlist содержит 24 операции.
+У обоих handler-ов один прямой безусловный commit на success path;
+`update_invoice` вызывает flush-only `log_action`/`add_timeline_event`, а
+`InvoiceFieldUpdate` не принимает `status`; `create_supplier` — DB-only.
+AI/network/enqueue нет; обе операции `admin_only=false` и не approval-gated.
+Контракт E05.2.1, public API, RBAC и approval policy не менялись. Независимый
+полный набор из корня: 230 passed с известным предупреждением
+`asyncio_loop_scope`; production не заявлен. Отчёт:
+`docs/agent-employee-delivery/E05-2-8-db-write-adapters.md`.
 E05.2 остаётся IN PROGRESS: остальные `one-db-commit` операции не мигрированы.
 Следующий шаг — новый отдельно выбранный и независимо проверенный срез E05.2,
 не E05.3.

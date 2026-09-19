@@ -349,16 +349,18 @@
 - E05.1 REVIEWED: операции, для которых `retry_safe()` подтверждает catalog
   `effect=read`, получают ToolResult v1 на HTTP agent boundary. Исходный ответ
   сохраняется в `data`; публичные business API не менялись.
-- E05.2 IN PROGRESS; E05.2.1–E05.2.7 REVIEWED: cumulative allowlist класса
-  `one-db-commit` содержит ровно 22 операции —
+- E05.2 IN PROGRESS; E05.2.1–E05.2.8 REVIEWED: cumulative allowlist класса
+  `one-db-commit` содержит ровно 24 операции —
   `analytics.calendar_create_reminder`, `analytics.collection_add_item`,
   `analytics.collection_close`, `analytics.collection_create`,
   `analytics.compare_align`, `analytics.compare_create`,
   `analytics.table_create_view`, `analytics.table_inline_edit`, `documents.link`,
   `email.draft`, `email.templates.create`, `email.templates.update`,
+  `invoices.update`,
   `normalization.create_norm_card`, `normalization.update_canonical_item`,
   `normalization.update_norm_card`, `payments.create_schedule`,
-  `procurement.create_request`, `suppliers.update` и `warehouse.adjust_stock`,
+  `procurement.create_request`, `suppliers.update`, `tool_catalog.create_supplier`
+  и `warehouse.adjust_stock`,
   `warehouse.create_item`, `warehouse.create_receipt` и `warehouse.update_item`.
   E05.2.3 добавила три
   новые `warehouse.*` операции; E05.2.4 добавила три операции email/suppliers;
@@ -417,6 +419,16 @@
   notification/settings не являются active catalog operations, sheets publish
   fail-closed. Контракт не менялся; независимый полный набор из корня: 225
   passed с известным предупреждением `asyncio_loop_scope`; production не заявлен.
+  E05.2.8 добавила `invoices.update` и `tool_catalog.create_supplier`: точные
+  уникальные соответственно `PATCH /api/invoices/{invoice_id}` и
+  `POST /api/tool-catalog/suppliers`; у каждого handler-а один прямой
+  безусловный commit. `update_invoice` использует flush-only
+  `log_action`/`add_timeline_event`, а `InvoiceFieldUpdate` не содержит `status`;
+  `create_supplier` — DB-only. AI/network/enqueue нет, обе операции
+  `admin_only=false` и не approval-gated. Контракт не менялся; независимый
+  полный набор из корня: 230 passed с известным предупреждением
+  `asyncio_loop_scope`; production не заявлен. См.
+  `docs/agent-employee-delivery/E05-2-8-db-write-adapters.md`.
 - Остальные `one-db-commit` строки не мигрированы и продолжают прежний контракт
   до отдельных срезов E05.2. E05.3 async jobs и E05.4 external/MCP handlers
   также TODO. Наличие строки в этой матрице не означает её миграцию.
