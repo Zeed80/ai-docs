@@ -705,6 +705,10 @@ def _plate_holes(image_bytes: bytes, profile: dict[str, Any], report: dict[str, 
             "position": round(position_tol, 3),
             "diameter": round(diameter_tol, 3),
         }
+        # Место на листе — для выреза в панели (Ф9) и переспроса по вырезу:
+        # у отверстий пластины его не было вовсе.
+        if verdict.evidence_bbox_px:
+            item["evidence_bbox_px"] = [round(float(v), 1) for v in verdict.evidence_bbox_px]
         report["items"].append(item)
         if verdict.status == "refuted" and measured:
             report["notes"].append(
@@ -854,6 +858,8 @@ def _circular(image_bytes: bytes, profile: dict[str, Any], report: dict[str, Any
                 "start_angle_deg": verdict.measured["start_angle_deg"],
             }
         item = _pattern_item(index, pattern, verdict.status, measured, verdict.reason)
+        if verdict.evidence_bbox_px:
+            item["evidence_bbox_px"] = [round(float(v), 1) for v in verdict.evidence_bbox_px]
         item["tolerance_mm"] = {
             "count": 0,
             "pcd": round(2.0 * position_tol, 3),
@@ -882,6 +888,8 @@ def _circular(image_bytes: bytes, profile: dict[str, Any], report: dict[str, Any
             gray,
         )
         item = _central_item(index, hole, verdict.status, dict(verdict.measured), verdict.reason)
+        if verdict.evidence_bbox_px:
+            item["evidence_bbox_px"] = [round(float(v), 1) for v in verdict.evidence_bbox_px]
         item["tolerance_mm"] = {"diameter": round(diameter_tol, 3)}
         report["items"].append(item)
         if verdict.status == "refuted" and verdict.measured:

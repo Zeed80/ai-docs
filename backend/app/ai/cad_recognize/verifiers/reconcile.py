@@ -1717,3 +1717,29 @@ def apply_threads(spec: dict[str, Any], decisions: list[dict[str, Any]]) -> dict
         }
         spec.setdefault("optional_unresolved", []).append(decision["reason"])
     return spec
+
+
+def settle_phantom_wall_features(spec: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
+    """Пометка ридера о «незастроенных элементах граней» у детали без видов корпуса.
+
+    Живая пластина с глухими отверстиями: вопрос об элементах граней принимал
+    отверстия за «карманы на верхней грани» без глубины, и пометка блокировала
+    сборку. Корпус на листе — план, вид спереди и вид слева; если вида спереди
+    стадия не нашла (у пластины — план и толщина), граней корпуса на листе нет,
+    и пометка — не про эту деталь.
+    """
+    import copy
+
+    views = report.get("housing_views") or {}
+    if not views or views.get("front_bbox_px"):
+        return spec
+    notes = [str(n) for n in spec.get("unresolved") or []]
+    phantom = [n for n in notes if n.startswith("элементы граней не построены")]
+    if not phantom:
+        return spec
+    spec = copy.deepcopy(spec)
+    spec["unresolved"] = [n for n in notes if n not in phantom]
+    spec.setdefault("optional_unresolved", []).extend(
+        f"{n} — на листе нет вида спереди, граней корпуса нет" for n in phantom
+    )
+    return spec

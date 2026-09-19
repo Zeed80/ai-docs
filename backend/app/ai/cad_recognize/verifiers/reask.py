@@ -443,3 +443,112 @@ async def _default_bent_ask(prompt: str, crop: Any) -> dict:
         num_predict=300,
         schema=_BENT_SCHEMA,
     )
+
+
+_HOLE_THREAD_PROMPT = (
+    "В центре фрагмента — отверстие детали. Если оно резьбовое, рядом стоит "
+    "обозначение резьбы (M6, M8, M10×1, иногда с числом отверстий «2 отв. M8»). "
+    "Выпиши обозначение резьбы ЭТОГО отверстия ровно как на листе; если "
+    "отверстие не резьбовое — null. ОДНОЙ строкой JSON: "
+    '{"thread": "M8"} или {"thread": null}. Только JSON.'
+)
+_HOLE_THREAD_SCHEMA = {"type": "object", "properties": {"thread": {"type": ["string", "null"]}}}
+
+
+def _thread_by_minor(drawn_mm: float, tolerance_mm: float) -> tuple[str, float] | None:
+    """Единственная стандартная резьба (крупный шаг), чей Ø впадин — это окружность."""
+    from app.ai.cad_solid import _METRIC_COARSE_PITCH_MM
+
+    fits = [
+        (f"M{nominal:g}", nominal)
+        for nominal, pitch in _METRIC_COARSE_PITCH_MM.items()
+        if abs(nominal - 1.082532 * pitch - drawn_mm) <= tolerance_mm
+    ]
+    return fits[0] if len(fits) == 1 else None
+
+
+async def reask_hole_threads(
+    image_bytes: bytes, spec: dict[str, Any], report: dict[str, Any], *, ask: Any = None
+) -> list[dict[str, Any]]:
+    """Резьба отверстия, прочитанного гладким, — переспросом по вырезу (X1, Ф8).
+
+    Живая пластина: «M8» прочитано как «M6» и Ø6, замер окружности 6,69 —
+    Ø впадин M8. Если замер указывает ровно на одну стандартную резьбу, модель
+    спрашивается по вырезу у отверстия; ответ принимается, только если его
+    номинал — эта резьба.
+    """
+    import io
+    import re
+
+    from PIL import Image
+
+    holes = (((spec.get("main_view") or {}).get("profile")) or {}).get("holes") or []
+    image = None
+    decisions: list[dict[str, Any]] = []
+    for item in report.get("items") or []:
+        if item.get("kind") != "plate_hole" or item.get("status") != "refuted":
+            continue
+        index = int(item["path"].split("[")[1].split("]")[0])
+        measured, read = item.get("measured") or {}, item.get("read") or {}
+        tolerance = item.get("tolerance_mm") or {}
+        if index >= len(holes) or holes[index].get("thread") or not item.get("evidence_bbox_px"):
+            continue
+        if any(
+            abs(float(measured.get(k, 1e9)) - float(read.get(k, -1e9)))
+            > float(tolerance.get("position") or 0.5)
+            for k in ("center_x_mm", "center_y_mm")
+        ):
+            continue
+        if not isinstance(measured.get("diameter_mm"), (int, float)):
+            continue
+        expected = _thread_by_minor(
+            float(measured["diameter_mm"]), max(0.25, float(tolerance.get("diameter") or 0.3))
+        )
+        if expected is None:
+            continue
+        if image is None:
+            image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        x0, y0, x1, y1 = item["evidence_bbox_px"]
+        reach = 4.0 * max(x1 - x0, y1 - y0)
+        crop = image.crop(
+            (
+                max(0, int(x0 - reach)),
+                max(0, int(y0 - reach)),
+                min(image.width, int(x1 + reach)),
+                min(image.height, int(y1 + reach)),
+            )
+        )
+        answer = await (ask or _default_thread_ask)(_HOLE_THREAD_PROMPT, crop)
+        text = str((answer or {}).get("thread") or "").replace("М", "M")
+        match = re.search(r"M\s*(\d+(?:[.,]\d+)?)", text)
+        if not match or abs(float(match.group(1).replace(",", ".")) - expected[1]) > 0.05:
+            continue
+        decisions.append(
+            {
+                "kind": "plate_hole",
+                "path": item["path"],
+                "field": "thread",
+                "action": "adopt",
+                "read": read.get("diameter_mm"),
+                "value": {"designation": expected[0], "nominal_diameter_mm": expected[1]},
+                "reason": (
+                    f"окружность Ø{float(measured['diameter_mm']):g} — Ø впадин {expected[0]}, "
+                    f"переспрос по вырезу: «{text.strip()}» — отверстие резьбовое {expected[0]}"
+                ),
+            }
+        )
+    return decisions
+
+
+async def _default_thread_ask(prompt: str, crop: Any) -> dict:
+    from app.ai.cad_recognize.spec_fragments import _ask, _overview
+    from app.ai.router import ai_router
+
+    return await _ask(
+        prompt,
+        _overview(crop),
+        router=ai_router,
+        confidential=True,
+        num_predict=200,
+        schema=_HOLE_THREAD_SCHEMA,
+    )

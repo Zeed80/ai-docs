@@ -41,3 +41,39 @@ def test_without_the_designation_on_the_sheet_nothing_is_guessed():
 def test_a_plain_hole_of_another_size_is_not_turned_into_a_thread():
     spec, report = _case(["80", "M8"], measured_d=7.4)
     assert threads_from_sheet(spec, report) == []
+
+
+def test_a_misread_thread_is_asked_again_and_taken_only_if_it_fits_the_circle():
+    import asyncio
+    import io
+
+    from PIL import Image
+
+    from app.ai.cad_recognize.verifiers.reask import reask_hole_threads
+
+    spec, report = _case(["80", "M6"], measured_d=6.69)  # ридер: «M6», Ø6
+    report["items"][0]["evidence_bbox_px"] = [100, 100, 120, 120]
+    buffer = io.BytesIO()
+    Image.new("RGB", (400, 400), "white").save(buffer, format="PNG")
+
+    async def says(value):
+        async def ask(prompt, crop):
+            return {"thread": value}
+
+        return await reask_hole_threads(buffer.getvalue(), spec, report, ask=ask)
+
+    (decision,) = asyncio.run(says("M8"))
+    assert decision["value"]["designation"] == "M8"
+    # Ответ, не совпавший с замером, и «не резьбовое» — ничего.
+    assert asyncio.run(says("M10")) == [] and asyncio.run(says(None)) == []
+
+
+def test_a_face_feature_note_without_a_front_view_is_not_about_this_part():
+    from app.ai.cad_recognize.verifiers.reconcile import settle_phantom_wall_features
+
+    note = "элементы граней не построены (top: глубина или положение не проставлены)"
+    spec = {"unresolved": [note, "другое"]}
+    plate = {"housing_views": {"plan_bbox_px": [0, 0, 1, 1], "side_bbox_px": [2, 0, 3, 1]}}
+    assert settle_phantom_wall_features(spec, plate)["unresolved"] == ["другое"]
+    housing = {"housing_views": {**plate["housing_views"], "front_bbox_px": [0, 2, 1, 3]}}
+    assert settle_phantom_wall_features(spec, housing)["unresolved"] == [note, "другое"]

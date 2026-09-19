@@ -4328,6 +4328,11 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     )
 
                     spec = settle_provisional_sheet_metal(spec, verification)
+                    from app.ai.cad_recognize.verifiers.reconcile import (
+                        settle_phantom_wall_features,
+                    )
+
+                    spec = settle_phantom_wall_features(spec, verification)
                 drops = contradicting_patterns(spec, verification) if verification else []
                 if drops:
                     spec = _revalidated_spec(apply_pattern_drops(spec, drops))
@@ -4468,6 +4473,19 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     )
 
                     thread_decisions = threads_from_sheet(spec, verification)
+                    # Надпись ридер прочёл не ту («M6» вместо M8) — переспрос по
+                    # вырезу у отверстия, ответ сверяется с замером.
+                    from app.ai.cad_recognize.verifiers.reask import reask_hole_threads
+
+                    try:
+                        asked_threads = await reask_hole_threads(content, spec, verification)
+                    except Exception as exc:  # noqa: BLE001 — переспрос не валит прогон
+                        asked_threads = []
+                        await _record(
+                            "reconcile.threads", "failed", f"Переспрос резьбы: {exc}"[:200]
+                        )
+                    known = {d["path"] for d in thread_decisions}
+                    thread_decisions += [d for d in asked_threads if d["path"] not in known]
                     if thread_decisions:
                         spec = _revalidated_spec(apply_threads(spec, thread_decisions))
                         adopted_paths = {d["path"] for d in thread_decisions}
