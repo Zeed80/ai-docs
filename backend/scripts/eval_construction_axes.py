@@ -26,7 +26,10 @@ import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-LEVEL = re.compile(r"^[+\-±]?\d{1,3}[.,]\d{3}$")
+# Разделитель — точка, запятая или пробел: на «Фасаде в осях» отметки
+# записаны текстом «3 950» (в эталон они не попадали, чтение «3,950» шло
+# лишним).
+LEVEL = re.compile(r"^[+\-±]?\d{1,3}[., ]\d{3}$")
 AXIS = re.compile(r"^[0-9А-ЯЁA-Z]{1,2}\d?'?$")
 # Машиностроительные листы в наборе: их «отметки» — это поля допусков.
 _NOT_CONSTRUCTION = {"Дизель", "Деталировка"}
@@ -62,7 +65,7 @@ def normalize_axis(text: str) -> str:
 
 
 def normalize_level(text: str) -> str:
-    value = text.strip().replace(",", ".").replace("±", "")
+    value = text.strip().replace(",", ".").replace(" ", ".").replace("±", "")
     try:
         return f"{float(value):+.3f}".replace("+0.000", "0.000").replace("-0.000", "0.000")
     except ValueError:
@@ -98,7 +101,16 @@ def truth_from_dxf(doc) -> dict[str, list[str]]:
             continue
         if any(math.hypot(x - cx, y - cy) <= 1.2 * r for cx, cy, r in circles if r < 2000):
             axes.add(normalize_axis(text))
-    levels = {normalize_level(text) for text, _ in texts if LEVEL.match(text)}
+    # Текст отметки без знака: знак бывает нарисован отдельной линией («−» у
+    # «0,150» на фасаде в осях), и по тексту DXF он неизвестен. Такая
+    # отметка — «~0.150»: засчитывается чтение с любым знаком.
+    levels = {
+        normalize_level(text)
+        if text.lstrip()[:1] in "+-±" or normalize_level(text) == "0.000"
+        else "~" + normalize_level(text).lstrip("+")
+        for text, _ in texts
+        if LEVEL.match(text)
+    }
     return {"axes": sorted(axes), "levels": sorted(levels)}
 
 
@@ -198,7 +210,12 @@ def content_regions(image, *, max_regions: int = 12) -> list[tuple[int, int, int
 
 
 def score(truth: list[str], read: list[str]) -> dict[str, int]:
-    truth_set, read_set = set(truth), set(read)
+    truth_set = set(truth)
+    # Чтение со знаком совпадает с отметкой эталона без знака («~0.150»).
+    read_set = {
+        "~" + value.lstrip("+-") if "~" + value.lstrip("+-") in truth_set else value
+        for value in read
+    }
     return {
         "found": len(truth_set & read_set),
         "expected": len(truth_set),
@@ -264,6 +281,9 @@ async def main() -> int:
                 from app.ai.construction_levels import (
                     LEVEL_AT_MARK_PROMPT,
                     LEVEL_AT_MARK_SCHEMA,
+                    LEVEL_IN_BOX_PROMPT,
+                    box_crop_box,
+                    level_boxes,
                     level_marks,
                     mark_crop_box,
                 )
@@ -275,8 +295,10 @@ async def main() -> int:
                 # только при 12 000 px — где у обычного листа вырез уже не
                 # вмещает полку с числом (единый 12 000 — 13 из 28).
                 marks_at: list = []
+                large = None
                 for long_side in (5000, 12000):
                     sheet = Image.open(io.BytesIO(render_sheet(doc, long_side))).convert("RGB")
+                    large = sheet
                     marks_at += [
                         (sheet, mark) for mark in level_marks(np.asarray(sheet.convert("L")))
                     ]
@@ -291,8 +313,25 @@ async def main() -> int:
                         timeout_seconds=60.0,
                     )
                     value = (part or {}).get("level")
-                    if value:
+                    # Число не в формате отметки («+3950.000») — не отметка.
+                    if value and LEVEL.match(str(value).replace(" ", "")):
                         at_marks.add(normalize_level(str(value)))
+                # Отметки планов — число в рамке: рамки ищутся на крупном
+                # рендере, число принимается только в формате отметки.
+                for sheet in [large] if large is not None else []:
+                    for box in level_boxes(np.asarray(sheet.convert("L"))):
+                        part = await _ask(
+                            LEVEL_IN_BOX_PROMPT,
+                            sheet.crop(box_crop_box(box, sheet.size)),
+                            router=ai_router,
+                            confidential=True,
+                            num_predict=120,
+                            schema=LEVEL_AT_MARK_SCHEMA,
+                            timeout_seconds=60.0,
+                        )
+                        value = (part or {}).get("level")
+                        if value and LEVEL.match(str(value).replace(" ", "")):
+                            at_marks.add(normalize_level(str(value)))
                 read_levels = sorted(at_marks)
             if big:
                 full = Image.open(io.BytesIO(big)).convert("RGB")
