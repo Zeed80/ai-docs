@@ -213,6 +213,11 @@ def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
             }
         )
         views.append({"kind": "top"})
+        if any(item.get("on_plane") == "front" for item in _wall_features(spec)):
+            # Разрез снимает переднюю стенку: её приливы и карманы без вида
+            # спереди остаются без размеров (полнота корпусов 0,99 → 0,89) и
+            # их нечем проверить. Вид спереди — под разрезом, по оси.
+            views.append({"kind": "front", "x_direction": [1.0, 0.0, 0.0], "role": "front_wall"})
     elif part_class == "weldment":
         # Сварной узел (X3): главный вид спереди (ширина горизонтально), под
         # ним план, справа — вид слева: на нём профиль узла и швы.
@@ -478,13 +483,13 @@ def _estimate_layout_mm(part_class: str, report: dict, views: list[dict]) -> tup
         # Справа от плана — разрез фланца или вид на толщину пластины (`top`).
         if any(kind in kinds for kind in ("section", "removed_section", "top")):
             width += VIEW_GAP_MM + max(length, 1.0)
-        # Под планом — вид спереди корпуса или его разрез (ширина × толщина).
-        if any(
-            (view.get("kind") == "front" and view.get("x_direction"))
-            or view.get("kind") == "section"
-            for view in views
-        ):
-            height += VIEW_GAP_MM + max(length, 1.0)
+        # Под планом — вид спереди корпуса и/или его разрез (ширина × толщина),
+        # каждый своей высотой: второй вид под разрезом не учитывался, и лист
+        # корпуса выходил за формат — верхние размеры плана обрезались.
+        stacked = sum(
+            1 for view in views if view.get("role") == "front_wall" or view.get("kind") == "section"
+        ) or int(any(view.get("kind") == "front" and view.get("x_direction") for view in views))
+        height += stacked * (VIEW_GAP_MM + max(length, 1.0))
     else:
         width, height = length, diameter
         if "side" in kinds:
@@ -595,9 +600,14 @@ def plan_sheet(
             anchor = next(
                 (index for index, view in enumerate(views) if view["kind"] == "side"), None
             )
-            # Разрез строится от вида спереди — сам он на лист не идёт.
+            # Разрез строится от вида спереди — сам он на лист не идёт; вид
+            # передней стенки (`role`) — идёт, под разрезом.
             scaffold |= (
-                {index for index, view in enumerate(views) if view["kind"] == "front"}
+                {
+                    index
+                    for index, view in enumerate(views)
+                    if view["kind"] == "front" and view.get("role") != "front_wall"
+                }
                 if any(view["kind"] == "section" for view in views)
                 else set()
             )
@@ -1273,19 +1283,28 @@ def _wall_feature_dimensions(drawing: dict, spec: dict, plan: SheetPlan) -> None
         return None
 
     plan_view = view_index("side")
-    # У корпуса с полостью вид спереди заменён разрезом (ГОСТ 2.305): элементы
-    # передних стенок и полость показывает он.
+    # У корпуса с полостью вид спереди заменён разрезом (ГОСТ 2.305): полость
+    # и заднюю стенку показывает он; переднюю стенку разрез снимает — её
+    # элементы на отдельном виде спереди под разрезом, если он есть.
     front_view = (
         view_index("section")
         if view_index("section") is not None
         else view_index("front", front_on_sheet=True)
+    )
+    front_wall_view = next(
+        (
+            index
+            for index, view in enumerate(getattr(plan, "views", None) or [])
+            if view.get("role") == "front_wall" and index not in plan.scaffold_views
+        ),
+        front_view,
     )
     side_view = view_index("top")
     # Грань → (вид лицом, размеры тела на нём, вид с ребра, ось глубины на нём).
     faces = {
         "top": (plan_view, (width, height), front_view, "v", (width, thickness)),
         "bottom": (plan_view, (width, height), front_view, "v", (width, thickness)),
-        "front": (front_view, (width, thickness), plan_view, "v", (width, height)),
+        "front": (front_wall_view, (width, thickness), plan_view, "v", (width, height)),
         "back": (front_view, (width, thickness), plan_view, "v", (width, height)),
         "left": (side_view, (thickness, height), plan_view, "u", (width, height)),
         "right": (side_view, (thickness, height), plan_view, "u", (width, height)),
@@ -2627,6 +2646,11 @@ def _label_dimensions(dimensions: list[dict], requests: list[dict], spec: dict) 
             dimension["place_u"] = float(match["_place_u"])
 
 
+def _kernel_views(views: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Запрос видов ядру — без служебных меток листа (ядро их не принимает)."""
+    return [{key: value for key, value in view.items() if key != "role"} for view in views]
+
+
 async def build_sheet_from_solid(
     candidate: Any,
     spec: dict,
@@ -2655,7 +2679,7 @@ async def build_sheet_from_solid(
         geometry_only=geometry_only,
     )
     drawing = await draw_candidate_sheet(
-        candidate, views=plan.views, scale=plan.ratio, hidden_lines=True
+        candidate, views=_kernel_views(plan.views), scale=plan.ratio, hidden_lines=True
     )
     if not drawing or not (drawing.get("views") or []):
         return None
@@ -2666,7 +2690,7 @@ async def build_sheet_from_solid(
         # A second pass, because an edge can only be named once the view exists.
         dimensioned = await draw_candidate_sheet(
             candidate,
-            views=plan.views,
+            views=_kernel_views(plan.views),
             scale=plan.ratio,
             hidden_lines=True,
             dimensions=[

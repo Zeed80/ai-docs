@@ -506,6 +506,21 @@ def _wall_features_on_sheet(
         if plane == "front" and sectioned is None:
             sectioned = _hatched(gray, views.get("front_bbox_px"))
         if plane == "front" and sectioned:
+            # Передняя стенка — на виде спереди под разрезом, если он есть:
+            # вид без штриховки той же толщины.
+            plain = next(
+                (
+                    other
+                    for other in views.get("below_bboxes_px") or []
+                    if other != views.get("front_bbox_px")
+                    and _frame_fits(other, mm_per_px, float(thickness))
+                    and not _hatched(gray, other)
+                ),
+                None,
+            )
+            if plain is not None:
+                box = plain
+        if plane == "front" and sectioned and box == views.get("front_bbox_px"):
             # Под планом — разрез: он снимает переднюю половину корпуса, и
             # элементов передней стенки на нём нет (разрез — вид со штриховкой,
             # ГОСТ 2.306; под планом бывает и вид спереди). Замер находил зеркальный

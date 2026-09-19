@@ -51,9 +51,12 @@ class HousingViews:
     side_bbox_px: tuple[float, float, float, float] | None
     thickness_mm: float | None
     reason: str
+    # Все виды под планом той же толщины, сверху вниз (разрез и вид спереди).
+    below_bboxes_px: tuple[tuple[float, float, float, float], ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
+            "below_bboxes_px": [[round(float(v), 1) for v in box] for box in self.below_bboxes_px],
             "plan_bbox_px": [round(float(v), 1) for v in self.plan.bbox_px],
             "front_bbox_px": (
                 None
@@ -101,12 +104,24 @@ def locate_housing_views(sheet: Any, width_mm: float, height_mm: float) -> Housi
             None,
             names,
         )
+    # Все пары уровней под планом с той же толщиной — виды под планом
+    # (у корпуса с полостью: разрез, ниже — вид спереди передней стенки).
+    stacked: list[tuple[float, float, float, float]] = []
+    for low in sorted(front):
+        for high in sorted(front):
+            if high <= low:
+                continue
+            if abs((high - low) * plan.scale_v - thickness) <= _AGREEMENT * thickness and all(
+                high <= box[1] or low >= box[3] for box in stacked
+            ):
+                stacked.append((x0, low, x1, high))
     return HousingViews(
         plan,
         None if front_pair is None else (x0, front_pair[0], x1, front_pair[1]),
         None if side_pair is None else (side_pair[0], y0, side_pair[1], y1),
         thickness,
         f"толщина измерена по виду ({names}): {thickness:.2f} мм",
+        tuple(sorted(stacked, key=lambda box: box[1])),
     )
 
 
@@ -305,6 +320,11 @@ def discover_housing_views(
         "side_bbox_px": (
             None if not right else [round(float(v), 1) for v in min(right, key=lambda b: b[0])]
         ),
+        # Все виды под планом сверху вниз: у корпуса с полостью первым идёт
+        # разрез, передняя стенка — на виде спереди под ним.
+        "below_bboxes_px": [
+            [round(float(v), 1) for v in box] for box in sorted(below, key=lambda b: b[1])
+        ],
         "mm_per_px": round(scale, 6),
         "width_mm": stated(width_px),
         "height_mm": stated(height_px),
