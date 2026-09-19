@@ -2672,6 +2672,16 @@ _DOMAIN_READERS: dict[str, tuple[str, str | None]] = {
 }
 
 
+def _gray_sheet(content: bytes):
+    """Серое изображение листа (numpy) для проверяльщиков."""
+    import io
+
+    import numpy as np
+    from PIL import Image
+
+    return np.asarray(Image.open(io.BytesIO(content)).convert("L"))
+
+
 async def _read_domain_model(content: bytes, reader: tuple[str, str | None]):
     domain, profile = reader
     if domain == "construction":
@@ -4251,6 +4261,46 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                                 f"исправлено по перечню {len(adopted)}"
                             ),
                             {"items": listing_items},
+                        )
+                if verification is not None and len(spec.get("parts") or []) > 1:
+                    # Размещение приваренных деталей — по плану узла (X3): ребро в
+                    # любом месте основания габарита не меняет, и сверка тела его
+                    # не ловит.
+                    from app.ai.cad_recognize.verifiers.reconcile import (
+                        apply_weldment_placement,
+                        weldment_placement_decision,
+                    )
+                    from app.ai.cad_recognize.verifiers.weldment_placement import (
+                        verify_weldment_placement,
+                    )
+
+                    try:
+                        placement_items = verify_weldment_placement(_gray_sheet(content), spec)
+                    except Exception as exc:  # noqa: BLE001 — проверка не валит прогон
+                        placement_items = []
+                        await _record(
+                            "verify.weldment_placement", "failed", f"Размещение: {exc}"[:200]
+                        )
+                    for placement_item in placement_items:
+                        decision = weldment_placement_decision(spec, placement_item)
+                        if decision:
+                            spec = _revalidated_spec(apply_weldment_placement(spec, decision))
+                            if decision["action"] == "adopt":
+                                placement_item["adopted"] = True
+                    if placement_items:
+                        verification.setdefault("items", []).extend(placement_items)
+                        counts = {"confirmed": 0, "refuted": 0, "unmeasurable": 0}
+                        for entry in verification["items"]:
+                            counts[entry["status"]] = counts.get(entry["status"], 0) + 1
+                        verification.setdefault("summary", {}).update(
+                            {"checked": len(verification["items"]), **counts}
+                        )
+                        await _record(
+                            "verify.weldment_placement",
+                            "completed",
+                            "Размещение деталей узла по плану: "
+                            + ", ".join(i["status"] for i in placement_items),
+                            {"items": placement_items},
                         )
                 if verification:
                     # Предварительно принятые форма и толщина сечения — только

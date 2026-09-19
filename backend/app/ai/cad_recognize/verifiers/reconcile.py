@@ -1435,3 +1435,86 @@ def apply_weldment_listing(spec: dict[str, Any], items: list[dict[str, Any]]) ->
         item["adopted"] = True
         spec.setdefault("optional_unresolved", []).append(item["reason"] + " — принято по перечню")
     return spec
+
+
+def weldment_placement_decision(
+    spec: dict[str, Any], item: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Размещение детали узла по плану — принимается, если его объясняет надпись.
+
+    Замер даёт место следа на плане; число, которым лист это место задаёт,
+    должно стоять среди надписей: от ближнего края основания до ближней
+    кромки детали, до дальней или от дальнего края (живой узел: «115»).
+    """
+    if item.get("status") != "refuted":
+        return None
+    from app.ai.cad_solid import _body_box
+
+    index = int(item["path"].split("[")[1].split("]")[0])
+    part = (spec.get("parts") or [])[index]
+    # Размеры самих деталей и катеты швов положения не задают: при катете,
+    # равном толщине ребра, ложное место «объяснялось» числом 5 (толщиной).
+    sizes = {
+        round(float(value), 3)
+        for body in spec.get("parts") or []
+        for value in (
+            (body.get("profile") or {}).get(k) for k in ("width_mm", "height_mm", "thickness_mm")
+        )
+        if isinstance(value, (int, float))
+    } | {round(float(w["leg_mm"]), 3) for w in spec.get("welds") or [] if w.get("leg_mm")}
+    numbers = [n for n in sheet_numbers(spec) if n not in sizes]
+    box = _body_box(part)
+    explained = []
+    for option in item["measured"].get("options") or [item["measured"]]:
+        axis = "xyz".index(option["axis"])
+        span = box[1][axis] - box[0][axis] if box is not None else None
+        candidates = [option["from_edge_mm"], option["to_far_edge_mm"]]
+        if span is not None:
+            candidates += [option["from_edge_mm"] + span, option["to_far_edge_mm"] + span]
+        stated = [c for c in candidates if any(abs(c - n) <= 0.3 for n in numbers)]
+        if stated:
+            explained.append((option, stated[0]))
+    measured = explained[0][0] if len(explained) == 1 else item["measured"]
+    base = {
+        "kind": "weldment_placement",
+        "path": item["path"],
+        "field": "placement",
+        "read": item["read"]["position_mm"],
+        "measured": measured,
+    }
+    if len(explained) != 1:
+        return {
+            **base,
+            "action": "ask_human",
+            "reason": f"{item['reason']}: "
+            + (
+                "положения нет среди надписей"
+                if not explained
+                else "надписи объясняют не одно место"
+            )
+            + " — решение человеку",
+        }
+    return {
+        **base,
+        "measured": measured,
+        "action": "adopt",
+        "value": measured["shift_mm"],
+        "reason": f"{item['reason']}: принято по плану (надпись {explained[0][1]:g})",
+    }
+
+
+def apply_weldment_placement(spec: dict[str, Any], decision: dict[str, Any]) -> dict[str, Any]:
+    import copy
+
+    spec = copy.deepcopy(spec)
+    if decision.get("action") != "adopt":
+        spec.setdefault("unresolved", []).append(decision["reason"])
+        return spec
+    index = int(decision["path"].split("[")[1].split("]")[0])
+    placement = spec["parts"][index].setdefault("placement", {})
+    position = list(placement.get("position_mm") or [0.0, 0.0, 0.0])
+    axis = "xyz".index(decision["measured"]["axis"])
+    position[axis] = round(float(position[axis]) + float(decision["value"]), 3)
+    placement["position_mm"] = position
+    spec.setdefault("optional_unresolved", []).append(decision["reason"])
+    return spec

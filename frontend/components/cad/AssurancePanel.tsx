@@ -32,6 +32,7 @@ const VERIFY_KINDS = new Set([
   "sheet_thickness",
   // Сварной узел: пластина против перечня на листе.
   "weldment_part",
+  "weldment_placement",
 ]);
 
 /** Вырез листа вокруг элемента проверки с обведённой рамкой (Ф9). Индекс —

@@ -769,6 +769,8 @@
       "assurance_verify_group_sheet_thickness": "sheet thickness",
       "assurance_verify_kind_weldment_part": "Part item {index}",
       "assurance_verify_group_weldment_part": "assembly parts",
+      "assurance_verify_kind_weldment_placement": "Place of part item {index}",
+      "assurance_verify_group_weldment_placement": "part places",
       "assurance_verify_kind_plate_hole": "Hole {index}",
       "assurance_verify_kind_bolt_circle": "Bolt circle {index}",
       "assurance_verify_kind_concentric_hole": "Central hole",

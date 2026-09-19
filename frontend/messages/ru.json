@@ -769,6 +769,8 @@
       "assurance_verify_group_sheet_thickness": "толщина листа",
       "assurance_verify_kind_weldment_part": "Деталь поз. {index}",
       "assurance_verify_group_weldment_part": "детали узла",
+      "assurance_verify_kind_weldment_placement": "Место детали поз. {index}",
+      "assurance_verify_group_weldment_placement": "места деталей",
       "assurance_verify_kind_plate_hole": "Отверстие {index}",
       "assurance_verify_kind_bolt_circle": "Окружность болтов {index}",
       "assurance_verify_kind_concentric_hole": "Центральное отверстие",
