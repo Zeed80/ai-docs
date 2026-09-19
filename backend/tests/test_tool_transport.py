@@ -581,6 +581,31 @@ def test_e05_2_8_direct_routes_resolve_to_exact_catalog_operations(skill, args, 
     assert operation.name == expected
 
 
+@pytest.mark.parametrize(
+    "skill,args,expected",
+    [
+        (
+            {"method": "POST", "path": "/api/invoices/{invoice_id}/validate"},
+            {"invoice_id": "invoice-1"},
+            "invoices.validate",
+        ),
+        (
+            {"method": "POST", "path": "/api/memory/sources/propose"},
+            {
+                "title": "Supplier catalog",
+                "url": "https://supplier.example.test/catalog",
+                "source_type": "supplier_catalog",
+            },
+            "memory.source_propose",
+        ),
+    ],
+)
+def test_e05_2_9_direct_routes_resolve_to_exact_catalog_operations(skill, args, expected):
+    operation = one_db_commit_operation(skill, args)
+    assert operation is not None
+    assert operation.name == expected
+
+
 def test_one_db_commit_resolution_fails_closed_for_other_operations_and_routes():
     assert (
         one_db_commit_operation(
@@ -664,6 +689,29 @@ def test_one_db_commit_resolution_fails_closed_for_other_operations_and_routes()
         one_db_commit_operation(
             {"method": "POST", "path": "/api/agent/cap/payments"},
             {"action": "mark_paid", "schedule_id": "schedule-1"},
+        )
+        is None
+    )
+    # Approval/status transitions and source discovery have a different
+    # effect boundary, so E05.2.9 must not widen the two reviewed operations.
+    assert (
+        one_db_commit_operation(
+            {"method": "POST", "path": "/api/invoices/{invoice_id}/approve"},
+            {"invoice_id": "invoice-1"},
+        )
+        is None
+    )
+    assert (
+        one_db_commit_operation(
+            {"method": "POST", "path": "/api/invoices/{invoice_id}/receive"},
+            {"invoice_id": "invoice-1"},
+        )
+        is None
+    )
+    assert (
+        one_db_commit_operation(
+            {"method": "POST", "path": "/api/memory/sources/discover"},
+            {"query": "supplier catalogs"},
         )
         is None
     )
@@ -1112,6 +1160,63 @@ async def test_e05_2_8_preserves_raw_success_response_and_original_body(
     assert result["evidence"]["operation"] == operation
     getattr(client, method).assert_awaited_once()
     assert getattr(client, method).call_args.kwargs["json"] == expected_body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "skill,args,expected_body,raw_response,operation",
+    [
+        (
+            {"method": "POST", "path": "/api/invoices/{invoice_id}/validate"},
+            {"invoice_id": "invoice-1"},
+            {},
+            {
+                "invoice_id": "invoice-1",
+                "is_valid": True,
+                "errors": [],
+                "overall_confidence": 0.98,
+            },
+            "invoices.validate",
+        ),
+        (
+            {"method": "POST", "path": "/api/memory/sources/propose"},
+            {
+                "title": "Supplier catalog",
+                "url": "https://supplier.example.test/catalog",
+                "source_type": "supplier_catalog",
+            },
+            {
+                "title": "Supplier catalog",
+                "url": "https://supplier.example.test/catalog",
+                "source_type": "supplier_catalog",
+            },
+            {
+                "id": "source-1",
+                "title": "Supplier catalog",
+                "kind": "web_source",
+            },
+            "memory.source_propose",
+        ),
+    ],
+)
+async def test_e05_2_9_preserves_raw_success_response_and_original_body(
+    monkeypatch, skill, args, expected_body, raw_response, operation
+):
+    from app.ai import agent_loop
+
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.post.return_value = httpx.Response(200, json=raw_response)
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", MagicMock(return_value=client))
+    monkeypatch.setattr(agent_loop, "internal_headers", lambda: {})
+
+    result = await execute_skill(skill, args, BuiltinAgentConfig())
+
+    assert result["status"] == "succeeded"
+    assert result["data"] == raw_response
+    assert result["evidence"]["operation"] == operation
+    client.post.assert_awaited_once()
+    assert client.post.call_args.kwargs["json"] == expected_body
 
 
 @pytest.mark.asyncio

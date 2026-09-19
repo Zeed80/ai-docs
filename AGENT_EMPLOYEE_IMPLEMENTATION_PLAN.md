@@ -146,6 +146,21 @@ AI/network/enqueue нет; обе операции `admin_only=false` и не ap
 полный набор из корня: 230 passed с известным предупреждением
 `asyncio_loop_scope`; production не заявлен. Отчёт:
 `docs/agent-employee-delivery/E05-2-8-db-write-adapters.md`.
+E05.2.9 REVIEWED: девятый узкий DB write-срез добавляет только
+`invoices.validate` и `memory.source_propose` через точные уникальные
+соответственно `POST /api/invoices/{invoice_id}/validate` и
+`POST /api/memory/sources/propose`. Cumulative allowlist содержит 26 операций.
+У каждого handler-а один прямой безусловный commit на success path;
+`validate_invoice` — детерминированная локальная арифметическая проверка с
+flush-only `log_action`, а `propose_web_source` сохраняет только reviewable
+proposal без network/AI/enqueue. Обе операции `admin_only=false` и не
+approval-gated. `invoices.approve`/`invoices.receive` исключены из-за
+status/approval semantics, `memory.source_discover` — из-за effects discovery,
+promotion остаётся human-only, `memory.promotion_evaluate` — из-за identity-path
+mismatch, sheets publish fail-closed. Контракт E05.2.1, public API, RBAC и
+approval policy не менялись. Независимый полный набор из корня: 234 passed с
+известным предупреждением `asyncio_loop_scope`; production не заявлен. Отчёт:
+`docs/agent-employee-delivery/E05-2-9-db-write-adapters.md`.
 E05.2 остаётся IN PROGRESS: остальные `one-db-commit` операции не мигрированы.
 Следующий шаг — новый отдельно выбранный и независимо проверенный срез E05.2,
 не E05.3.

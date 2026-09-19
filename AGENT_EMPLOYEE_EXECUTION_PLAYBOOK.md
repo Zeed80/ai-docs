@@ -416,8 +416,8 @@ scope/time/action и запреты replay/resume, но нельзя выдум�
 
 ### E05 — Перевод адаптеров на ToolResult по одной группе
 
-**Статус:** IN PROGRESS: E05.1 REVIEWED; E05.2.1–E05.2.8 REVIEWED как
-восемь узких срезов; E05.2 в целом и E05.3–E05.4 не завершены. Отчёты:
+**Статус:** IN PROGRESS: E05.1 REVIEWED; E05.2.1–E05.2.9 REVIEWED как
+девять узких срезов; E05.2 в целом и E05.3–E05.4 не завершены. Отчёты:
 `docs/agent-employee-delivery/E05-1-read-adapters.md`,
 `docs/agent-employee-delivery/E05-2-1-db-write-adapters.md`,
 `docs/agent-employee-delivery/E05-2-2-db-write-adapters.md`,
@@ -426,7 +426,8 @@ scope/time/action и запреты replay/resume, но нельзя выдум�
 `docs/agent-employee-delivery/E05-2-5-db-write-adapters.md`,
 `docs/agent-employee-delivery/E05-2-6-db-write-adapters.md`,
 `docs/agent-employee-delivery/E05-2-7-db-write-adapters.md`,
-`docs/agent-employee-delivery/E05-2-8-db-write-adapters.md`. **После:** E04.
+`docs/agent-employee-delivery/E05-2-8-db-write-adapters.md`,
+`docs/agent-employee-delivery/E05-2-9-db-write-adapters.md`. **После:** E04.
 **Файлы:** `ai/agent_loop.py::execute_skill`, `api/capability_router.py`,
 `ai/tool_transport.py`, адаптеры из E03, тесты транспорта/gateway.
 
@@ -537,6 +538,22 @@ E05.2.8 добавляет только `invoices.update` и `tool_catalog.creat
 API, RBAC и approval policy не менялись. Независимый полный набор из корня:
 230 passed с известным предупреждением `asyncio_loop_scope`; production не
 заявлен. Отчёт: `docs/agent-employee-delivery/E05-2-8-db-write-adapters.md`.
+
+E05.2.9 добавляет только `invoices.validate` и `memory.source_propose` через
+точные уникальные соответственно `POST /api/invoices/{invoice_id}/validate` и
+`POST /api/memory/sources/propose`; cumulative allowlist содержит 26 операций.
+У каждого handler-а один прямой безусловный `db.commit()` на success path;
+`validate_invoice` выполняет детерминированную локальную арифметическую проверку
+и вызывает только flush-only `log_action`, а `propose_web_source` сохраняет
+только reviewable proposal без network/AI/enqueue. Обе операции
+`admin_only=false` и не approval-gated. `invoices.approve`/`invoices.receive`
+исключены из-за status/approval semantics, `memory.source_discover` — из-за
+effects discovery, promotion остаётся human-only,
+`memory.promotion_evaluate` — из-за identity-path mismatch, sheets publish
+fail-closed. Контракт E05.2.1, public API, RBAC и approval policy не менялись.
+Независимый полный набор из корня: 234 passed с известным предупреждением
+`asyncio_loop_scope`; production не заявлен. Отчёт:
+`docs/agent-employee-delivery/E05-2-9-db-write-adapters.md`.
 
 **Негативные тесты:** 200 + error, job SUCCESS + built=false, read timeout,
 write timeout после commit, MCP exception, double wrapping. **Готово:** каждая

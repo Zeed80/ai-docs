@@ -134,6 +134,22 @@ approval policy не менялись. Независимый полный на�
 известным предупреждением `asyncio_loop_scope`; production не заявлен. Отчёт:
 `docs/agent-employee-delivery/E05-2-8-db-write-adapters.md`. E05.2 остаётся
 IN PROGRESS; далее нужен новый отдельно проверенный срез E05.2.
+E05.2.9 REVIEWED добавляет только `invoices.validate` и
+`memory.source_propose` через точные уникальные маршруты
+`POST /api/invoices/{invoice_id}/validate` и `POST /api/memory/sources/propose`;
+cumulative allowlist содержит 26 операций. У каждого handler-а один прямой
+безусловный commit на success path; `validate_invoice` выполняет
+детерминированную локальную арифметическую проверку с flush-only `log_action`,
+`propose_web_source` сохраняет только reviewable proposal без network/AI/enqueue.
+Обе операции `admin_only=false` и не approval-gated. `invoices.approve`/
+`invoices.receive` исключены из-за status/approval semantics,
+`memory.source_discover` — из-за effects discovery, promotion остаётся
+human-only, `memory.promotion_evaluate` — из-за identity-path mismatch, sheets
+publish fail-closed. Контракт E05.2.1, public API, RBAC и approval policy не
+менялись. Независимый полный набор из корня: 234 passed с известным
+предупреждением `asyncio_loop_scope`; production не заявлен. Отчёт:
+`docs/agent-employee-delivery/E05-2-9-db-write-adapters.md`. E05.2 остаётся
+IN PROGRESS; далее нужен новый отдельно проверенный срез E05.2.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при
 сетевой ошибке/HTTP 5xx дают outcome_unknown и блокируют durable-цикл после

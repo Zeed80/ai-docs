@@ -349,14 +349,14 @@
 - E05.1 REVIEWED: операции, для которых `retry_safe()` подтверждает catalog
   `effect=read`, получают ToolResult v1 на HTTP agent boundary. Исходный ответ
   сохраняется в `data`; публичные business API не менялись.
-- E05.2 IN PROGRESS; E05.2.1–E05.2.8 REVIEWED: cumulative allowlist класса
-  `one-db-commit` содержит ровно 24 операции —
+- E05.2 IN PROGRESS; E05.2.1–E05.2.9 REVIEWED: cumulative allowlist класса
+  `one-db-commit` содержит ровно 26 операций —
   `analytics.calendar_create_reminder`, `analytics.collection_add_item`,
   `analytics.collection_close`, `analytics.collection_create`,
   `analytics.compare_align`, `analytics.compare_create`,
   `analytics.table_create_view`, `analytics.table_inline_edit`, `documents.link`,
   `email.draft`, `email.templates.create`, `email.templates.update`,
-  `invoices.update`,
+  `invoices.update`, `invoices.validate`, `memory.source_propose`,
   `normalization.create_norm_card`, `normalization.update_canonical_item`,
   `normalization.update_norm_card`, `payments.create_schedule`,
   `procurement.create_request`, `suppliers.update`, `tool_catalog.create_supplier`
@@ -429,6 +429,20 @@
   полный набор из корня: 230 passed с известным предупреждением
   `asyncio_loop_scope`; production не заявлен. См.
   `docs/agent-employee-delivery/E05-2-8-db-write-adapters.md`.
+  E05.2.9 добавила `invoices.validate` и `memory.source_propose`: точные
+  уникальные соответственно `POST /api/invoices/{invoice_id}/validate` и
+  `POST /api/memory/sources/propose`; у каждого handler-а один прямой
+  безусловный commit. `validate_invoice` выполняет детерминированную локальную
+  арифметическую проверку и вызывает только flush-only `log_action`,
+  `propose_web_source` сохраняет только reviewable proposal без
+  network/AI/enqueue. Обе операции `admin_only=false` и не approval-gated.
+  `invoices.approve`/`invoices.receive` исключены из-за status/approval
+  semantics, `memory.source_discover` — из-за effects discovery, promotion
+  остаётся human-only, `memory.promotion_evaluate` — из-за identity-path
+  mismatch, sheets publish fail-closed. Контракт не менялся; независимый полный
+  набор из корня: 234 passed с известным предупреждением `asyncio_loop_scope`;
+  production не заявлен. См.
+  `docs/agent-employee-delivery/E05-2-9-db-write-adapters.md`.
 - Остальные `one-db-commit` строки не мигрированы и продолжают прежний контракт
   до отдельных срезов E05.2. E05.3 async jobs и E05.4 external/MCP handlers
   также TODO. Наличие строки в этой матрице не означает её миграцию.

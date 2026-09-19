@@ -29,6 +29,8 @@ ONE_DB_COMMIT_OPERATIONS = frozenset(
         "email.templates.create",
         "email.templates.update",
         "invoices.update",
+        "invoices.validate",
+        "memory.source_propose",
         "normalization.create_norm_card",
         "normalization.update_canonical_item",
         "normalization.update_norm_card",
