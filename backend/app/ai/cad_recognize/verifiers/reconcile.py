@@ -1635,3 +1635,85 @@ def complete_rotation_patterns(
         spec["unresolved"] = main_notes
     spec.setdefault("optional_unresolved", []).extend(notes)
     return spec, notes
+
+
+def threads_from_sheet(spec: dict[str, Any], report: dict[str, Any]) -> list[dict[str, Any]]:
+    """Резьбовое отверстие пластины, прочитанное гладким, — по замеру и надписи.
+
+    Живая пластина: «M8» прочитано как Ø6, проверка опровергла по размеру —
+    на плане окружность Ø впадин M8 (6,65). Если замер совпал с Ø впадин
+    резьбы, чьё обозначение стоит среди надписей листа, и такая резьба одна —
+    это резьбовое отверстие; положение при этом должно было подтвердиться.
+    """
+    from app.ai.cad_solid import metric_thread_geometry
+
+    texts = " ".join(
+        str((d.get("value") or d.get("text")) if isinstance(d, dict) else d or "")
+        for d in (spec.get("dimensions") or []) + (spec.get("annotations") or [])
+    ).replace("М", "M")
+    designations = sorted(set(re.findall(r"M\s*(\d+(?:[.,]\d+)?)", texts)))
+    decisions = []
+    holes = (((spec.get("main_view") or {}).get("profile")) or {}).get("holes") or []
+    for item in report.get("items") or []:
+        if item.get("kind") != "plate_hole" or item.get("status") != "refuted":
+            continue
+        measured = item.get("measured") or {}
+        read = item.get("read") or {}
+        index = int(item["path"].split("[")[1].split("]")[0])
+        if index >= len(holes) or holes[index].get("thread"):
+            continue
+        tolerance = item.get("tolerance_mm") or {}
+        position_ok = all(
+            abs(float(measured.get(k, 1e9)) - float(read.get(k, -1e9)))
+            <= float(tolerance.get("position") or 0.5)
+            for k in ("center_x_mm", "center_y_mm")
+        )
+        if not position_ok or not isinstance(measured.get("diameter_mm"), (int, float)):
+            continue
+        drawn = float(measured["diameter_mm"])
+        fits = []
+        for raw in designations:
+            nominal = float(raw.replace(",", "."))
+            geometry = metric_thread_geometry(
+                {"designation": f"M{raw}", "nominal_diameter_mm": nominal}
+            )
+            if geometry and abs(float(geometry["minor_diameter_mm"]) - drawn) <= max(
+                0.25, float(tolerance.get("diameter") or 0.3)
+            ):
+                fits.append((f"M{raw}", nominal))
+        if len(fits) != 1:
+            continue
+        designation, nominal = fits[0]
+        decisions.append(
+            {
+                "kind": "plate_hole",
+                "path": item["path"],
+                "field": "thread",
+                "action": "adopt",
+                "read": read.get("diameter_mm"),
+                "value": {"designation": designation, "nominal_diameter_mm": nominal},
+                "reason": (
+                    f"окружность Ø{drawn:g} — Ø впадин {designation}, обозначение на листе: "
+                    f"отверстие резьбовое {designation}"
+                ),
+            }
+        )
+    return decisions
+
+
+def apply_threads(spec: dict[str, Any], decisions: list[dict[str, Any]]) -> dict[str, Any]:
+    import copy
+
+    spec = copy.deepcopy(spec)
+    holes = spec["main_view"]["profile"]["holes"]
+    for decision in decisions:
+        index = int(decision["path"].split("[")[1].split("]")[0])
+        value = decision["value"]
+        holes[index]["diameter_mm"] = value["nominal_diameter_mm"]
+        holes[index]["thread"] = {
+            "designation": value["designation"],
+            "nominal_diameter_mm": value["nominal_diameter_mm"],
+            "internal": True,
+        }
+        spec.setdefault("optional_unresolved", []).append(decision["reason"])
+    return spec

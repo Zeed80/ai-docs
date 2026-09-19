@@ -505,8 +505,12 @@ _PLATE_HOLES_PROMPT = (
     "кромки — так, как их проставляет лист (размеры от баз, выносные идут к "
     "центру отверстия). Числа бери ТОЛЬКО из списка выше. Отверстия массива "
     "(«4 отв.») перечисли по одному. Если положение отверстия на листе не "
-    "проставлено — поставь null. ОДНОЙ строкой JSON:\n"
-    '{{"holes":[{{"diameter_mm":0,"x_from_left_mm":0,"y_from_bottom_mm":0}}]}}\n'
+    "проставлено — поставь null. Резьбовое отверстие подписано обозначением "
+    "резьбы («M8», «2 отв. M10») — укажи thread как на листе, diameter_mm — "
+    "номинал резьбы; иначе thread null. Глухое подписано глубиной («гл.12») — "
+    "укажи depth_mm; сквозное — null. ОДНОЙ строкой JSON:\n"
+    '{{"holes":[{{"diameter_mm":0,"x_from_left_mm":0,"y_from_bottom_mm":0,'
+    '"thread":null,"depth_mm":null}}]}}\n'
     "Только JSON."
 )
 
@@ -522,6 +526,8 @@ _PLATE_HOLES_SCHEMA = {
                     "diameter_mm": {"type": ["number", "null"]},
                     "x_from_left_mm": {"type": ["number", "null"]},
                     "y_from_bottom_mm": {"type": ["number", "null"]},
+                    "thread": {"type": ["string", "null"]},
+                    "depth_mm": {"type": ["number", "null"]},
                 },
             },
         }
@@ -4543,7 +4549,14 @@ async def _profile_by_assignment(
         # Весь список, а не первые 24: у пластины с десятком отверстий
         # координаты — это больше половины выносок листа.
         every = ", ".join(f"{value:g}" for value in candidates)
-        profile["holes"] += await _plate_holes(image, every, stated, profile, ask=ask, notes=notes)
+        # Надписи текстом: обозначение резьбы («M8») числом не выписывается.
+        callout_text = " ".join(
+            str((item.get("value") or item.get("text") if isinstance(item, dict) else item) or "")
+            for item in (callouts.get("dimensions") or []) + (callouts.get("annotations") or [])
+        )
+        profile["holes"] += await _plate_holes(
+            image, every, stated, profile, ask=ask, notes=notes, texts=callout_text
+        )
         # Корпус: карманы и приливы на гранях — их лист несёт, а роли не спрашивают.
         walls = await _wall_features(image, every, stated, profile, ask=ask, notes=notes)
         if walls:
@@ -4635,6 +4648,7 @@ async def _plate_holes(
     *,
     ask: dict[str, Any],
     notes: list[str] | None,
+    texts: str = "",
 ) -> list[dict[str, Any]]:
     """Отверстия пластины — диаметр и центр от левой и нижней кромки, с листа.
 
@@ -4673,6 +4687,15 @@ async def _plate_holes(
             "center_y_mm": round(y - height / 2.0, 3),
             "diameter_mm": diameter,
         }
+        # Глубина и резьба (X1) — только если стоят на листе: глубина — среди
+        # выписанных чисел, обозначение резьбы — в выписанных надписях.
+        depth = taken_value(item.get("depth_mm"), taken)
+        thickness = profile.get("thickness_mm")
+        if depth and (not thickness or depth < float(thickness)):
+            hole["depth_mm"] = depth
+        thread = _plate_hole_thread(item.get("thread"), diameter, texts)
+        if thread is not None:
+            hole["thread"] = thread
         if hole not in holes:
             holes.append(hole)
     if unplaced and notes is not None:
@@ -4681,6 +4704,29 @@ async def _plate_holes(
             f"отверстия {listed_unplaced}: положение на листе не проставлено — не построены"
         )
     return holes
+
+
+def _plate_hole_thread(raw: Any, diameter: float, listed: str) -> dict[str, Any] | None:
+    """«M8», «M10×1» → резьба отверстия, если обозначение есть в надписях листа
+    и номинал совпадает с Ø отверстия."""
+    text = str(raw or "").strip().replace("М", "M").replace("х", "×").replace("x", "×")
+    match = re.match(r"^M\s*(\d+(?:[.,]\d+)?)(?:\s*×\s*(\d+(?:[.,]\d+)?))?", text)
+    if not match:
+        return None
+    nominal = float(match.group(1).replace(",", "."))
+    if abs(nominal - float(diameter)) > 0.05:
+        return None
+    normalized_listed = listed.replace("М", "M").replace(" ", "")
+    if f"M{match.group(1)}" not in normalized_listed:
+        return None
+    thread: dict[str, Any] = {
+        "designation": text.split()[0],
+        "nominal_diameter_mm": nominal,
+        "internal": True,
+    }
+    if match.group(2):
+        thread["pitch_mm"] = float(match.group(2).replace(",", "."))
+    return thread
 
 
 async def _sheet_metal_by_question(

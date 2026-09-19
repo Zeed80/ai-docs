@@ -4457,11 +4457,31 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     # которое ридер выписал с листа, а прочитанного на листе
                     # нет (живой shaft-1: длина 98 → 80); остальное — решение
                     # человеку с обоими вариантами. Принятое — в спек до сборки.
+                    # Резьбовое отверстие, прочитанное гладким (X1): замер = Ø
+                    # впадин резьбы с обозначением на листе — резьба принимается
+                    # до общего согласования (иначе оно отдало бы Ø человеку).
                     from app.ai.cad_recognize.verifiers.reconcile import (
                         apply_reconciliation,
+                        apply_threads,
                         reconcile,
+                        threads_from_sheet,
                     )
 
+                    thread_decisions = threads_from_sheet(spec, verification)
+                    if thread_decisions:
+                        spec = _revalidated_spec(apply_threads(spec, thread_decisions))
+                        adopted_paths = {d["path"] for d in thread_decisions}
+                        for entry in verification.get("items") or []:
+                            if entry.get("path") in adopted_paths:
+                                entry["status"] = "confirmed"
+                                entry["adopted"] = True
+                                entry["reason"] = "резьбовое — по замеру и обозначению на листе"
+                        await _record(
+                            "reconcile.threads",
+                            "completed",
+                            f"Резьбовых отверстий по листу: {len(thread_decisions)}",
+                            {"decisions": thread_decisions},
+                        )
                     decisions = reconcile(spec, verification)
                     if decisions:
                         spec, verification = apply_reconciliation(spec, verification, decisions)
