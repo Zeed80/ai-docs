@@ -387,22 +387,27 @@ async def test_catalog_read_checks_and_dispatch_receive_original_arguments(monke
 
 
 @pytest.mark.asyncio
-async def test_unknown_handler_failure_is_explicit_and_not_retried():
+async def test_legacy_mcp_handler_is_rejected_before_dispatch():
     handler = AsyncMock(side_effect=TimeoutError("private"))
     result = await execute_skill({"_method": "mcp", "_handler": handler}, {}, BuiltinAgentConfig())
-    handler.assert_awaited_once()
-    assert result["status"] == "outcome_unknown"
+    handler.assert_not_awaited()
+    assert result["version"] == 1
+    assert result["status"] == "failed"
+    assert result["error_code"] == "direct_mcp_handler_disabled"
+    assert result["retryable"] is False
 
 
 @pytest.mark.asyncio
-async def test_successful_mcp_handler_result_remains_unchanged():
+async def test_legacy_mcp_success_payload_cannot_bypass_gateway():
     payload = {"job_id": "job-1", "status": "running"}
     handler = AsyncMock(return_value=payload)
 
     result = await execute_skill({"_method": "mcp", "_handler": handler}, {}, BuiltinAgentConfig())
 
-    handler.assert_awaited_once_with({})
-    assert result is payload
+    handler.assert_not_awaited()
+    assert result["version"] == 1
+    assert result["status"] == "failed"
+    assert result["evidence"] == {"reason": "mcp_capability_gateway_required"}
 
 
 @pytest.mark.asyncio

@@ -165,8 +165,8 @@ fail-closed. Контракт E05.2.1, public API, RBAC и approval policy не 
 Независимый полный набор из корня: 238 passed с известным предупреждением
 `asyncio_loop_scope`; production не заявлен. Отчёт:
 `docs/agent-employee-delivery/E05-2-10-db-write-adapters.md`. E05.2 SCOPED
-COMPLETE / REVIEWED: E03 содержит 124 `one-db-commit` операций; ровно 28
-мигрированы, 96 полностью классифицированы, пропущенных простых DB-only
+COMPLETE / REVIEWED: E03 после коррекции E05.4.0 содержит 125 `one-db-commit`
+операций; ровно 28 мигрированы, 97 полностью классифицированы, пропущенных простых DB-only
 кандидатов нет. Полный реестр и safety-corrections:
 `docs/agent-employee-delivery/E05-2-closure.md`. E05 остаётся IN PROGRESS;
 E05.3 остаётся IN PROGRESS. E05.3.1 REVIEWED переводит только
@@ -187,6 +187,11 @@ operations, 5 явно отложены, пропущенных подходящ
 252 focused/catalog + 43 boundary/router теста. Отчёт:
 `docs/agent-employee-delivery/E05-3-2-async-job-adapter.md`. Следующий этап —
 E05.4 external/MCP handlers; E05 остаётся IN PROGRESS.
+E05.4.0 REVIEWED переводит Chat MCP на единую `/api/agent/cap/mcp` границу с
+wildcard approval, RBAC, audit и digest исходных args; direct callable
+fail-closed. Исправлена E03-классификация двух procurement routes. Независимо:
+219 passed. Отчёт: `docs/agent-employee-delivery/E05-4-0-mcp-boundary.md`.
+E05.4 остаётся IN PROGRESS; следующая карточка — E05.4.1 `tool_search_mcp`.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при
 сетевой ошибке/HTTP 5xx дают outcome_unknown и блокируют durable-цикл после

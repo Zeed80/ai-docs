@@ -1,13 +1,4 @@
-"""execute_skill's MCP/builtin handler branch, and the mcp capability's
-process-level tool registry (mcp_capability.py).
-
-Regression guard: MCP-derived skill_map entries (``{"_method": "mcp"/
-"builtin", "_handler": callable}``, no "method"/"path" keys — see
-mcp_client.load_mcp_tools) previously hit ``skill["method"]`` unconditionally
-in execute_skill and KeyError'd on the first real MCP tool call. The tool
-schema and gate wiring worked; only invocation was broken, so nothing
-exercised it until now.
-"""
+"""Chat MCP gateway routing and the process-level MCP tool registry."""
 
 from __future__ import annotations
 
@@ -25,8 +16,19 @@ def _config() -> BuiltinAgentConfig:
     )
 
 
+def test_mcp_approval_reuse_key_binds_action_and_arguments():
+    first = {"action": "mcp_acme_ping", "arguments": {"target": "machine-1"}}
+    changed_args = {"action": "mcp_acme_ping", "arguments": {"target": "machine-2"}}
+    changed_action = {"action": "mcp_acme_stop", "arguments": {"target": "machine-1"}}
+
+    first_key = agent_loop.AgentSession._approval_key("mcp", first)
+
+    assert first_key != agent_loop.AgentSession._approval_key("mcp", changed_args)
+    assert first_key != agent_loop.AgentSession._approval_key("mcp", changed_action)
+
+
 @pytest.mark.asyncio
-async def test_execute_skill_calls_mcp_handler_directly():
+async def test_execute_skill_rejects_direct_mcp_handler():
     calls: list[dict] = []
 
     async def handler(args: dict) -> dict:
@@ -36,30 +38,52 @@ async def test_execute_skill_calls_mcp_handler_directly():
     skill = {"name": "acme__ping", "_method": "mcp", "_handler": handler}
     result = await agent_loop.execute_skill(skill, {"target": "x"}, _config())
 
-    assert calls == [{"target": "x"}]
-    assert result == {"ok": True, "echo": {"target": "x"}}
+    assert calls == []
+    assert result == {
+        "version": 1,
+        "status": "failed",
+        "data": None,
+        "error_code": "direct_mcp_handler_disabled",
+        "retryable": False,
+        "evidence": {"reason": "mcp_capability_gateway_required"},
+        "checkpoint": None,
+    }
 
 
 @pytest.mark.asyncio
-async def test_execute_skill_calls_builtin_mcp_handler():
+async def test_execute_skill_rejects_direct_builtin_mcp_handler():
+    calls = 0
+
     async def handler(args: dict) -> dict:
+        nonlocal calls
+        calls += 1
         return {"drawing_id": args.get("drawing_id"), "status": "analyzed"}
 
     skill = {"name": "drawing_analysis_mcp", "_method": "builtin", "_handler": handler}
     result = await agent_loop.execute_skill(skill, {"drawing_id": "d1"}, _config())
 
-    assert result == {"drawing_id": "d1", "status": "analyzed"}
+    assert calls == 0
+    assert result["version"] == 1
+    assert result["status"] == "failed"
+    assert result["error_code"] == "direct_mcp_handler_disabled"
 
 
 @pytest.mark.asyncio
-async def test_execute_skill_mcp_handler_exception_becomes_error_dict():
+async def test_execute_skill_does_not_enter_failing_mcp_handler():
+    calls = 0
+
     async def handler(args: dict) -> dict:
+        nonlocal calls
+        calls += 1
         raise RuntimeError("upstream MCP server unreachable")
 
     skill = {"name": "acme__ping", "_method": "mcp", "_handler": handler}
     result = await agent_loop.execute_skill(skill, {}, _config())
 
-    assert result == {"error": "upstream MCP server unreachable"}
+    assert calls == 0
+    assert result["version"] == 1
+    assert result["status"] == "failed"
+    assert result["retryable"] is False
 
 
 @pytest.mark.asyncio
@@ -92,8 +116,116 @@ async def test_execute_skill_still_does_http_for_regular_skills(monkeypatch):
     skill = {"name": "documents", "method": "POST", "path": "/api/agent/cap/documents"}
     result = await agent_loop.execute_skill(skill, {"action": "list"}, _config())
 
-    assert result == {"status": "ok"}
+    assert result == {
+        "version": 1,
+        "status": "succeeded",
+        "data": {"status": "ok"},
+        "error_code": None,
+        "retryable": False,
+        "evidence": {"adapter_contract": "http_read_response_v1"},
+        "checkpoint": None,
+    }
     assert posted[0][0].endswith("/api/agent/cap/documents")
+
+
+@pytest.mark.asyncio
+async def test_execute_skill_routes_named_mcp_tool_through_gateway(monkeypatch):
+    sent: dict = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"ok": True}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None, headers=None):  # noqa: A002
+            sent.update(url=url, json=json, headers=headers)
+            return FakeResponse()
+
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", FakeClient)
+    skill = {
+        "name": "mcp",
+        "method": "POST",
+        "path": "/api/agent/cap/mcp",
+        "gate_actions": ["*"],
+        "_mcp_action": "mcp_acme_ping",
+    }
+    result = await agent_loop.execute_skill(
+        skill,
+        {"target": "machine-1"},
+        _config(),
+        approval_granted=True,
+    )
+
+    expected_body = {
+        "action": "mcp_acme_ping",
+        "arguments": {"target": "machine-1"},
+    }
+    assert result == {"ok": True}  # result normalization belongs to E05.4.1
+    assert sent["url"] == "http://backend/api/agent/cap/mcp"
+    assert sent["json"] == expected_body
+    assert sent["headers"]["X-Agent-Approval"] == "granted"
+    assert sent["headers"]["X-Agent-Approval-Digest"] == (
+        agent_loop.capability_args_digest(expected_body)
+    )
+
+
+@pytest.mark.asyncio
+async def test_init_mcp_installs_gateway_descriptors_without_handlers(monkeypatch):
+    async def direct_handler(args: dict) -> dict:
+        raise AssertionError("chat must never receive this callable")
+
+    async def fake_load_mcp_tools(servers):
+        assert servers == [{"name": "acme", "transport": "http"}]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "mcp_acme_ping",
+                    "description": "ping",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ]
+        handlers = {
+            "mcp_acme_ping": {
+                "name": "mcp_acme_ping",
+                "_method": "mcp",
+                "_handler": direct_handler,
+            }
+        }
+        return tools, handlers
+
+    monkeypatch.setattr("app.ai.mcp_client.load_mcp_tools", fake_load_mcp_tools)
+    session = object.__new__(agent_loop.AgentSession)
+    session._mcp_initialised = False
+    session._config = _config().model_copy(
+        update={"mcp_servers": [{"name": "acme", "transport": "http"}]}
+    )
+    session._tools = []
+    session._skill_map = {}
+
+    await session._init_mcp()
+
+    assert [tool["function"]["name"] for tool in session._tools] == ["mcp_acme_ping"]
+    assert session._skill_map["mcp_acme_ping"] == {
+        "name": "mcp",
+        "method": "POST",
+        "path": "/api/agent/cap/mcp",
+        "gate_actions": ["*"],
+        "_mcp_action": "mcp_acme_ping",
+    }
 
 
 class _FakeMCPClientModule:

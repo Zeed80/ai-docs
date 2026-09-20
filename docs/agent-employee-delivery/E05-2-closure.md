@@ -4,10 +4,10 @@
 
 ## Граница закрытия
 
-E03 обнаружила 124 операции класса `one-db-commit`. В E05.2 на агентской
-HTTP-границе мигрированы ровно 28 простых, доказанных операций; остальные 96
+E03 после E05.4.0 содержит 125 операций класса `one-db-commit`. В E05.2 на агентской
+HTTP-границе мигрированы ровно 28 простых, доказанных операций; остальные 97
 полностью классифицированы и намеренно не входят в этот этап. Пропущенных
-простых DB-only кандидатов нет. Это не означает, что 96 операций безопасны для
+простых DB-only кандидатов нет. Это не означает, что 97 операций безопасны для
 универсальной миграции: у каждой ниже сохранён fail-closed прежний контракт до
 отдельной карточки.
 
@@ -28,9 +28,9 @@ HTTP-границе мигрированы ровно 28 простых, док�
 domain-ошибка и 4xx дают `failed`; ошибка после возможного dispatch —
 `outcome_unknown`; автоматического retry нет. Публичные business API не меняются.
 
-## Реестр остатка E03 (96)
+## Реестр остатка E03 (97)
 
-Категории взаимоисключающие: `3 + 4 + 27 + 6 + 16 + 2 + 3 + 35 = 96`.
+Категории взаимоисключающие: `3 + 4 + 28 + 6 + 16 + 2 + 3 + 35 = 97`.
 
 ### Только администратор (3)
 
@@ -42,7 +42,7 @@ domain-ошибка и 4xx дают `failed`; ошибка после возмо
 `agent_control.task_decide`, `memory.promote`, `memory.promotion_decide`,
 `memory.source_decide`.
 
-### Approval/lifecycle/status/decision/delete (27)
+### Approval/lifecycle/status/decision/delete (28)
 
 `analytics.compare_decide`, `analytics.table_apply_diff`,
 `analytics.table_export_1c`, `documents.bulk_delete`, `documents.delete`,
@@ -51,7 +51,7 @@ domain-ошибка и 4xx дают `failed`; ошибка после возмо
 `invoices.delete`, `invoices.export_1c`, `invoices.receive`, `invoices.reject`,
 `memory.prune`, `normalization.activate_rule`, `payments.mark_paid`,
 `procurement.create_contract`, `procurement.update_contract`,
-`procurement.update_request`, `sheets.delete`, `tool_catalog.approve`,
+`procurement.update_request`, `procurement.send_rfq`, `sheets.delete`, `tool_catalog.approve`,
 `warehouse.delete_item`, `warehouse.issue_stock`, `warehouse.update_status`,
 `workspace.spec_table_cell_edit`.
 

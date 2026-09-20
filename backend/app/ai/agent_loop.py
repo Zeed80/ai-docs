@@ -80,6 +80,21 @@ def capability_args_digest(args: dict) -> str:
 _capability_args_digest = capability_args_digest
 
 
+def _skill_execution_args(skill: dict, args: dict) -> dict:
+    """Return the exact body that crosses the capability boundary.
+
+    Configured MCP tools keep their own function schema/name for model tool
+    selection, but execution is always delegated to the reviewed ``mcp``
+    capability.  Keeping this transformation in one place makes policy,
+    approval reuse and the HTTP approval digest cover the same action and raw
+    arguments.
+    """
+    mcp_action = skill.get("_mcp_action")
+    if isinstance(mcp_action, str) and mcp_action:
+        return {"action": mcp_action, "arguments": dict(args)}
+    return args
+
+
 # Max chars for a single tool result stored in the LLM message history.
 # Large lists (invoices, inventory, etc.) can easily hit 100k+ chars which
 # triggers unnecessary context compression. Keep enough for the model to
@@ -824,16 +839,21 @@ async def execute_skill(
         unknown_outcome,
     )
 
-    # MCP-derived skill entries (built-in or external-server tools loaded by
-    # _init_mcp/load_mcp_tools) carry a direct async handler instead of an
-    # HTTP method/path — call it in-process. Without this branch every MCP
-    # tool call KeyErrors on skill["method"] the first time it actually runs
-    # (the tool schema/gate wiring worked; only invocation was missing).
+    # Legacy MCP skill entries carried a callable and executed it in-process,
+    # bypassing the capability gateway's RBAC, wildcard approval gate and
+    # durable audit.  Never call such a handler from chat; current MCP entries
+    # are HTTP gateway descriptors built by AgentSession._init_mcp below.
     if skill.get("_method") in {"mcp", "builtin"} and callable(skill.get("_handler")):
-        try:
-            return await skill["_handler"](args)
-        except Exception as exc:
-            return unknown_outcome(f"Handler failed: {type(exc).__name__}")
+        from app.ai.tool_result import ToolResult
+
+        return ToolResult(
+            status="failed",
+            error_code="direct_mcp_handler_disabled",
+            retryable=False,
+            evidence={"reason": "mcp_capability_gateway_required"},
+        ).model_dump(mode="json")
+
+    args = _skill_execution_args(skill, args)
 
     method = skill["method"].upper()
     path = skill["path"]
@@ -2001,7 +2021,17 @@ class AgentSession:
 
             mcp_tools, mcp_handlers = await load_mcp_tools(servers)
             self._tools.extend(mcp_tools)
-            self._skill_map.update(mcp_handlers)
+            # load_mcp_tools must retain its live callables for the process-level
+            # mcp_capability registry.  Chat receives only gateway descriptors:
+            # no configured or built-in MCP callable is reachable directly.
+            for tool_name in mcp_handlers:
+                self._skill_map[tool_name] = {
+                    "name": "mcp",
+                    "method": "POST",
+                    "path": "/api/agent/cap/mcp",
+                    "gate_actions": ["*"],
+                    "_mcp_action": tool_name,
+                }
             if mcp_tools:
                 logger.info("mcp_tools_loaded", count=len(mcp_tools))
         except Exception as exc:
@@ -2891,6 +2921,7 @@ class AgentSession:
 
         skill = self._skill_map.get(fn_name)
         original_name = skill["name"] if skill else fn_name.replace("__", ".")
+        execution_args = _skill_execution_args(skill, args) if skill else args
 
         # Re-read approval_gates from latest config at every tool call (not cached from session start).
         from app.ai.agent_config import get_builtin_agent_config as _get_latest_config
@@ -2908,13 +2939,13 @@ class AgentSession:
         cap_gate_actions = set()
         if skill:
             cap_gate_actions = set(skill.get("gate_actions") or [])
-        action_arg = args.get("action", "")
+        action_arg = execution_args.get("action", "")
         if action_arg and (action_arg in cap_gate_actions or "*" in cap_gate_actions):
             current_gates.add(original_name)
 
         policy = check_tool_execution(
             skill_name=original_name,
-            args=args,
+            args=execution_args,
             config=self._config,
             approval_gates=current_gates,
         )
@@ -2950,8 +2981,8 @@ class AgentSession:
             try:
                 delegated = await matching_delegation(
                     get_acting_user(),
-                    f"{original_name}.{args.get('action', '')}",
-                    args,
+                    f"{original_name}.{execution_args.get('action', '')}",
+                    execution_args,
                 )
             except Exception:
                 # An unavailable grant store cannot create implicit authority.
@@ -2969,7 +3000,7 @@ class AgentSession:
             )
         elif (
             original_name in current_gates
-            and self._approval_key(original_name, args) in self._granted_approvals
+            and self._approval_key(original_name, execution_args) in self._granted_approvals
         ):
             # Это же действие человек уже одобрил в этом ходе — повторный
             # запрос был бы вопросом о том, на что уже ответили.
@@ -2988,10 +3019,10 @@ class AgentSession:
                     iteration=iteration,
                     action_type="approval_request",
                     tool_name=original_name,
-                    tool_args=args,
+                    tool_args=execution_args,
                 )
             )
-            approved = await self._request_approval(original_name, args)
+            approved = await self._request_approval(original_name, execution_args)
             asyncio.create_task(
                 self._log_action(
                     iteration=iteration,
@@ -3004,14 +3035,22 @@ class AgentSession:
                 result: dict = {"status": "rejected", "message": "Отклонено пользователем"}
                 await self._send({"type": "tool_result", "tool": fn_name, "result": result})
                 return fn_name, result, tc_id
-            self._granted_approvals.add(self._approval_key(original_name, args))
+            self._granted_approvals.add(self._approval_key(original_name, execution_args))
             approval_granted = True
 
         # Человек поправил содержимое в карточке — вызов уходит с новыми
         # аргументами (для письма это свежий expected_digest, иначе отправка
         # упрётся в 409 «черновик изменился»).
         if approval_granted and self._pending_args_override:
-            args = {**args, **self._pending_args_override}
+            if skill and skill.get("_mcp_action"):
+                override = self._pending_args_override
+                overridden_arguments = override.get("arguments")
+                if isinstance(overridden_arguments, dict):
+                    args = dict(overridden_arguments)
+                else:
+                    args = {**args, **override}
+            else:
+                args = {**args, **self._pending_args_override}
             self._pending_args_override = None
 
         if skill:
@@ -3302,6 +3341,12 @@ class AgentSession:
         и ключ, и разрешение спросят заново. А подмену содержимого уже
         одобренного черновика ловит content_digest на стороне API.
         """
+        # Dynamic MCP actions have no catalog-level identity field.  Bind reuse
+        # to the complete gateway body so approval for one tool/argument set
+        # cannot authorize another one in the same turn.
+        if skill_name == "mcp":
+            return f"mcp:{capability_args_digest(args)}"
+
         # Подтверждают КОНКРЕТНЫЙ текст: digest письма входит в ключ, поэтому
         # одобрение, данное на одно содержимое, не переносится на другое.
         # Раньше комментарий отсылал к content_digest «на стороне API», а тот

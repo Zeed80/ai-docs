@@ -236,7 +236,7 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_10_subset():
         "procurement.create_contract": "one-db-commit",
         "procurement.update_contract": "one-db-commit",
         "procurement.update_request": "one-db-commit",
-        "procurement.send_rfq": "external-dispatch",
+        "procurement.send_rfq": "one-db-commit",
         "suppliers.trust_score": "one-db-commit",
         "sheets.create": "one-db-commit",
         "analytics.auto_approval_check": "one-db-commit",

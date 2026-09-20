@@ -176,8 +176,9 @@ fail-closed. Контракт E05.2.1, public API, RBAC и approval policy не 
 Независимый полный набор: 238 passed с известным предупреждением
 `asyncio_loop_scope`; production не заявлен. Отчёт:
 `docs/agent-employee-delivery/E05-2-10-db-write-adapters.md`.
-E05.2 SCOPED COMPLETE / REVIEWED: E03 содержит 124 `one-db-commit` операций,
-из которых ровно 28 мигрированы точным allowlist; оставшиеся 96 полностью
+E05.2 SCOPED COMPLETE / REVIEWED: E03 после E05.4.0 содержит 125
+`one-db-commit` операций, из которых ровно 28 мигрированы точным allowlist;
+оставшиеся 97 полностью
 классифицированы, и пропущенных простых DB-only кандидатов нет. Реестр причин,
 включая admin/human-only, lifecycle, conditional, external, identity, catalog
 и CAD-контур, находится в `docs/agent-employee-delivery/E05-2-closure.md`.
@@ -204,6 +205,13 @@ E05.3.2 REVIEWED добавляет только `tech.generate_tp_from_drawing`
 focused/catalog + 43 boundary/router теста. Отчёт:
 `docs/agent-employee-delivery/E05-3-2-async-job-adapter.md`. E05 остаётся IN
 PROGRESS; следующий этап — E05.4 external/MCP handlers.
+E05.4.0 REVIEWED устраняет direct Chat MCP bypass: schemas сохранены, execution
+идёт только через `/api/agent/cap/mcp`, wildcard approval/RBAC/audit и digest
+исходных `{action, arguments}`. Legacy callable fail-closed. Исправлены две
+ошибки E03: `procurement.list_requests` — read-only, `send_rfq` — gated
+one-db-commit без SMTP. Независимо: 219 passed. Отчёт:
+`docs/agent-employee-delivery/E05-4-0-mcp-boundary.md`. E05.4 остаётся IN
+PROGRESS; следующая карточка — E05.4.1 `tool_search_mcp` gateway-only adapter.
 Push накопленной ветки был заблокирован автопроверкой из-за несвязанных CAD-коммитов;
 для публикации всей этой истории нужно отдельное разрешение. Не обходить запрет.
 

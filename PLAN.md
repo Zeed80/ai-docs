@@ -196,8 +196,9 @@ approval-gated. `normalization.suggest_rule`/`normalization.apply_rules`
 public API, RBAC и approval policy не менялись. Независимый полный набор из
 корня: 238 passed с известным предупреждением `asyncio_loop_scope`; production
 не заявлен. Отчёт: `docs/agent-employee-delivery/E05-2-10-db-write-adapters.md`.
-E05.2 SCOPED COMPLETE / REVIEWED: из 124 `one-db-commit` операций E03 точным
-allowlist мигрированы 28, а остаток из 96 полностью классифицирован без
+E05.2 SCOPED COMPLETE / REVIEWED: после коррекции E05.4.0 из 125
+`one-db-commit` операций E03 точным allowlist мигрированы 28, а остаток из 97
+полностью классифицирован без
 пропущенных простых DB-only кандидатов. Документ закрытия:
 `docs/agent-employee-delivery/E05-2-closure.md`. В нём также закреплены
 исключение email render aliases из read retry, approval/risk gate
@@ -221,6 +222,11 @@ async operations мигрированы, остальные 5 явно отло�
 подходящих кандидатов. Независимо: 252 focused/catalog + 43 boundary/router
 теста. Отчёт: `docs/agent-employee-delivery/E05-3-2-async-job-adapter.md`.
 E05 остаётся IN PROGRESS; следующий этап — E05.4 external/MCP handlers.
+E05.4.0 REVIEWED устраняет прямой Chat MCP bypass: все MCP-вызовы идут через
+единые wildcard approval/RBAC/audit и digest `{action, arguments}`; legacy
+callable fail-closed. E03 исправлена для двух procurement routes. Независимо:
+219 passed. Отчёт: `docs/agent-employee-delivery/E05-4-0-mcp-boundary.md`.
+E05.4 остаётся IN PROGRESS; далее E05.4.1 `tool_search_mcp` gateway-only.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя
 в WorkEvent, проверяет владельца/аргументы/попытку/lease. Детали журнала и UI

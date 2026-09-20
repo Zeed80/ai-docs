@@ -577,8 +577,9 @@ fail-closed. Контракт E05.2.1, public API, RBAC и approval policy не 
 
 **Негативные тесты:** 200 + error, job SUCCESS + built=false, read timeout,
 write timeout после commit, MCP exception, double wrapping. **Готово:** E05.2
-SCOPED COMPLETE / REVIEWED: 124 строки E03 `one-db-commit` разделены на exact
-allowlist из 28 мигрированных операций и 96 явных отказов. У остатка нет
+SCOPED COMPLETE / REVIEWED: после коррекции E05.4.0 125 строк E03
+`one-db-commit` разделены на exact allowlist из 28 мигрированных операций и 97
+явных отказов. У остатка нет
 пропущенных простых DB-only кандидатов; полный ledger и причины находятся в
 `docs/agent-employee-delivery/E05-2-closure.md`. При закрытии email render
 aliases исключены из read retry, `compare_decide` закреплён как approval/risk
@@ -606,6 +607,13 @@ SCOPED COMPLETE / REVIEWED: 4 из 9 async operations мигрированы, 5 
 нет. Независимо: 252 focused/catalog + 43 boundary/router теста. Отчёт:
 `docs/agent-employee-delivery/E05-3-2-async-job-adapter.md`. E05 остаётся IN
 PROGRESS; следующий этап — E05.4 external/MCP handlers.
+
+E05.4.0 REVIEWED унифицирует MCP policy boundary: Chat хранит schemas, но
+исполняет MCP только через `/api/agent/cap/mcp` с wildcard approval, RBAC,
+audit и digest исходных `{action, arguments}`; direct callable fail-closed.
+Также исправлена E03-классификация двух procurement routes. Независимо: 219
+passed. Отчёт: `docs/agent-employee-delivery/E05-4-0-mcp-boundary.md`. E05.4
+остаётся IN PROGRESS; следующая карточка — E05.4.1 `tool_search_mcp`.
 
 ### E06 — Consumers не принимают незавершённый результат за успех
 
