@@ -1687,14 +1687,25 @@ def test_async_job_resolution_uses_exact_documents_capability_action(action, ope
     assert resolved.name == operation
 
 
-def test_async_job_allowlist_is_exact_e05_3_1_subset():
+def test_async_job_allowlist_is_exact_reviewed_e05_3_subset():
     assert ASYNC_JOB_OPERATIONS == frozenset(
         {
             "documents.classify",
             "documents.extract",
             "documents.reprocess",
+            "tech.generate_tp_from_drawing",
         }
     )
+
+
+def test_async_job_resolution_uses_exact_tech_capability_action():
+    resolved = async_job_operation(
+        {"method": "POST", "path": "/api/agent/cap/tech"},
+        {"action": "generate_tp_from_drawing", "drawing_id": "drawing-1"},
+    )
+
+    assert resolved is not None
+    assert resolved.name == "tech.generate_tp_from_drawing"
 
 
 @pytest.mark.parametrize(
@@ -1711,6 +1722,14 @@ def test_async_job_allowlist_is_exact_e05_3_1_subset():
         (
             {"method": "POST", "path": "/api/agent/cap/documents"},
             {"action": "ingest", "document_id": "document-1"},
+        ),
+        (
+            {"method": "POST", "path": "/api/technology/process-plans/generate-from-drawing"},
+            {"drawing_id": "drawing-1"},
+        ),
+        (
+            {"method": "POST", "path": "/api/agent/cap/tech"},
+            {"action": "process_plan_list"},
         ),
     ],
 )
@@ -1784,8 +1803,64 @@ async def test_async_job_queue_acceptance_preserves_raw_response_args_and_header
 
 
 @pytest.mark.asyncio
+async def test_tech_async_job_queue_acceptance_preserves_plan_id_args_and_headers(monkeypatch):
+    from app.ai import agent_loop, tool_transport
+
+    payload = {"task_id": "task-tp", "plan_id": "plan-1", "status": "queued"}
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.post.return_value = httpx.Response(202, json=payload)
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", MagicMock(return_value=client))
+    monkeypatch.setattr(agent_loop, "internal_headers", lambda: {"Authorization": "test-context"})
+    real_resolver = tool_transport.async_job_operation
+    seen_args = []
+
+    def resolver_with_identity(received_skill, received_args):
+        seen_args.append(received_args)
+        return real_resolver(received_skill, received_args)
+
+    monkeypatch.setattr(tool_transport, "async_job_operation", resolver_with_identity)
+    args = {"action": "generate_tp_from_drawing", "drawing_id": "drawing-1"}
+    original_args = args.copy()
+
+    result = await execute_skill(
+        {"method": "POST", "path": "/api/agent/cap/tech"},
+        args,
+        BuiltinAgentConfig(),
+        idempotency_key="logical-action:attempt",
+    )
+
+    assert result["status"] == "partial"
+    assert result["error_code"] == "job_queued"
+    assert result["data"] == payload
+    assert result["evidence"]["operation"] == "tech.generate_tp_from_drawing"
+    assert result["checkpoint"] == {"task_id": "task-tp", "plan_id": "plan-1", "status": "queued"}
+    assert seen_args == [args]
+    assert seen_args[0] is args
+    assert args == original_args
+    assert client.post.call_args.kwargs["json"] == original_args
+    assert client.post.call_args.kwargs["headers"] == {
+        "Authorization": "test-context",
+        "X-Agent-Idempotency-Key": "logical-action:attempt",
+    }
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status_code", [400, 404, 422])
-async def test_async_job_4xx_is_failed_without_retry(monkeypatch, status_code):
+@pytest.mark.parametrize(
+    "skill,args",
+    [
+        (
+            {"method": "POST", "path": "/api/agent/cap/documents"},
+            {"action": "extract", "document_id": "document-1"},
+        ),
+        (
+            {"method": "POST", "path": "/api/agent/cap/tech"},
+            {"action": "generate_tp_from_drawing", "drawing_id": "drawing-1"},
+        ),
+    ],
+)
+async def test_async_job_4xx_is_failed_without_retry(monkeypatch, status_code, skill, args):
     from app.ai import agent_loop
 
     payload = {"detail": {"error_code": "rejected"}}
@@ -1799,8 +1874,8 @@ async def test_async_job_4xx_is_failed_without_retry(monkeypatch, status_code):
     monkeypatch.setattr(agent_loop, "internal_headers", lambda: {})
 
     result = await execute_skill(
-        {"method": "POST", "path": "/api/agent/cap/documents"},
-        {"action": "extract", "document_id": "document-1"},
+        skill,
+        args,
         BuiltinAgentConfig(),
     )
 
@@ -1822,8 +1897,21 @@ async def test_async_job_4xx_is_failed_without_retry(monkeypatch, status_code):
         (RuntimeError("private exception"), "exception_RuntimeError"),
     ],
 )
+@pytest.mark.parametrize(
+    "skill,args",
+    [
+        (
+            {"method": "POST", "path": "/api/agent/cap/documents"},
+            {"action": "classify", "document_id": "document-1"},
+        ),
+        (
+            {"method": "POST", "path": "/api/agent/cap/tech"},
+            {"action": "generate_tp_from_drawing", "drawing_id": "drawing-1"},
+        ),
+    ],
+)
 async def test_async_job_post_dispatch_ambiguity_is_unknown_without_retry(
-    monkeypatch, failure, reason
+    monkeypatch, failure, reason, skill, args
 ):
     from app.ai import agent_loop
 
@@ -1836,8 +1924,8 @@ async def test_async_job_post_dispatch_ambiguity_is_unknown_without_retry(
     monkeypatch.setattr(agent_loop.asyncio, "sleep", sleep)
 
     result = await execute_skill(
-        {"method": "POST", "path": "/api/agent/cap/documents"},
-        {"action": "classify", "document_id": "document-1"},
+        skill,
+        args,
         BuiltinAgentConfig(),
     )
 
@@ -1851,7 +1939,20 @@ async def test_async_job_post_dispatch_ambiguity_is_unknown_without_retry(
 
 
 @pytest.mark.asyncio
-async def test_async_job_pre_dispatch_failure_is_failed(monkeypatch):
+@pytest.mark.parametrize(
+    "skill,args",
+    [
+        (
+            {"method": "POST", "path": "/api/agent/cap/documents"},
+            {"action": "reprocess", "document_id": "document-1"},
+        ),
+        (
+            {"method": "POST", "path": "/api/agent/cap/tech"},
+            {"action": "generate_tp_from_drawing", "drawing_id": "drawing-1"},
+        ),
+    ],
+)
+async def test_async_job_pre_dispatch_failure_is_failed(monkeypatch, skill, args):
     from app.ai import agent_loop
 
     client = AsyncMock()
@@ -1864,8 +1965,8 @@ async def test_async_job_pre_dispatch_failure_is_failed(monkeypatch):
     )
 
     result = await execute_skill(
-        {"method": "POST", "path": "/api/agent/cap/documents"},
-        {"action": "reprocess", "document_id": "document-1"},
+        skill,
+        args,
         BuiltinAgentConfig(),
     )
 

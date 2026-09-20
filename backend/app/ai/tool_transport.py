@@ -4,23 +4,17 @@ from typing import Any
 
 from app.ai.tool_catalog import TOOLS, ToolDefinition, get_tool
 from app.ai.tool_result import (
+    ASYNC_JOB_IDENTITY_FIELDS,
     ToolResult,
     normalize_http_async_job_response,
     normalize_http_one_db_commit_response,
     normalize_http_read_response,
 )
 
-# First reviewed E05.3 slice. These actions share the capability endpoint and
-# return the document TaskResponse after enqueueing a Celery job. Direct route
-# aliases are intentionally excluded: classify and reprocess both own the same
-# /classify route, so only capability + original action proves the operation.
-ASYNC_JOB_OPERATIONS = frozenset(
-    {
-        "documents.classify",
-        "documents.extract",
-        "documents.reprocess",
-    }
-)
+# Reviewed E05.3 queue-acceptance operations. Direct routes are intentionally
+# excluded: only the exact capability endpoint plus the original action proves
+# which response identity contract applies.
+ASYNC_JOB_OPERATIONS = frozenset(ASYNC_JOB_IDENTITY_FIELDS)
 
 # E05.2's independently reviewed subset of E03 ``one-db-commit`` rows from
 # docs/agent-employee-delivery/tool-effect-inventory.md. Each recipient handler
@@ -110,16 +104,14 @@ def one_db_commit_operation(skill: dict, args: dict) -> ToolDefinition | None:
 def async_job_operation(skill: dict, args: dict) -> ToolDefinition | None:
     """Return an exact E05.3 async operation only at its reviewed gateway."""
 
+    operation = resolve_catalog_operation(skill, args)
+    if operation is None or operation.name not in ASYNC_JOB_OPERATIONS:
+        return None
+    capability = operation.name.split(".", 1)[0]
     if (
         str(skill.get("method", "")).upper() != "POST"
-        or str(skill.get("path", "")) != "/api/agent/cap/documents"
+        or str(skill.get("path", "")) != f"/api/agent/cap/{capability}"
     ):
-        return None
-    action = args.get("action")
-    if not isinstance(action, str):
-        return None
-    operation = get_tool("documents", action)
-    if operation is None or operation.name not in ASYNC_JOB_OPERATIONS:
         return None
     return operation
 

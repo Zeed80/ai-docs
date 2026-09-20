@@ -19,6 +19,14 @@ fail-closed и сохраняют legacy-контракт. Одна попытк
 E05.3 и E05 остаются IN PROGRESS. Отчёт:
 `docs/agent-employee-delivery/E05-3-1-async-job-adapters.md`.
 
+E05.3.2 REVIEWED добавляет `tech.generate_tp_from_drawing` со строгим
+`task_id`/`plan_id`/`queued` receipt. E05.3 SCOPED COMPLETE / REVIEWED: из 9
+`db-async-enqueue` operations четыре мигрированы, пять явно отложены из-за
+отсутствия доказанного receipt, conditional/swallowed enqueue или смешанных
+эффектов; пропущенных подходящих кандидатов нет. См.
+`docs/agent-employee-delivery/E05-3-2-async-job-adapter.md`. E05 остаётся IN
+PROGRESS; следующий этап — E05.4 external/MCP handlers.
+
 | Operation | Route / recipient | Backend RBAC | Actual effect | DB commit boundary | External effect / internal retries | Receipt | Classification / retry |
 | --- | --- | --- | --- | --- | --- | --- |
 | `agent_control.ai_config_get` | `GET /api/ai/config`; `backend/app/api/ai_settings.py:252 get_config` | gateway auth+actor; viewer=read; deps=get_current_user | direct handler source: read path | no direct commit | none detected; no handler retry | none | `read-only`; auto-retry not-authorized-by-E03 |

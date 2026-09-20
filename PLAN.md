@@ -215,6 +215,12 @@ boundary/router теста с известным предупреждением 
 production rebuild и `/health` проверены. Отчёт:
 `docs/agent-employee-delivery/E05-3-1-async-job-adapters.md`. Далее нужен
 отдельно аудируемый E05.3-срез без предположения о конкретной операции.
+E05.3.2 REVIEWED добавляет `tech.generate_tp_from_drawing` со строгим
+`task_id`/`plan_id`/`queued` receipt. E05.3 SCOPED COMPLETE / REVIEWED: 4 из 9
+async operations мигрированы, остальные 5 явно отложены без пропущенных
+подходящих кандидатов. Независимо: 252 focused/catalog + 43 boundary/router
+теста. Отчёт: `docs/agent-employee-delivery/E05-3-2-async-job-adapter.md`.
+E05 остаётся IN PROGRESS; следующий этап — E05.4 external/MCP handlers.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя
 в WorkEvent, проверяет владельца/аргументы/попытку/lease. Детали журнала и UI

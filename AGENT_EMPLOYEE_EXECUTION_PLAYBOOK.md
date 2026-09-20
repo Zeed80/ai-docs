@@ -416,9 +416,8 @@ scope/time/action и запреты replay/resume, но нельзя выдум�
 
 ### E05 — Перевод адаптеров на ToolResult по одной группе
 
-**Статус:** IN PROGRESS: E05.1 REVIEWED; E05.2 SCOPED COMPLETE / REVIEWED
-после десяти узких срезов; E05.3 IN PROGRESS, включая E05.3.1 REVIEWED; E05.4
-не завершена. Отчёты:
+**Статус:** IN PROGRESS: E05.1 REVIEWED; E05.2 и E05.3 SCOPED COMPLETE /
+REVIEWED; E05.4 не завершена. Отчёты:
 `docs/agent-employee-delivery/E05-1-read-adapters.md`,
 `docs/agent-employee-delivery/E05-2-1-db-write-adapters.md`,
 `docs/agent-employee-delivery/E05-2-2-db-write-adapters.md`,
@@ -431,7 +430,8 @@ scope/time/action и запреты replay/resume, но нельзя выдум�
 `docs/agent-employee-delivery/E05-2-9-db-write-adapters.md`,
 `docs/agent-employee-delivery/E05-2-10-db-write-adapters.md`,
 `docs/agent-employee-delivery/E05-2-closure.md`,
-`docs/agent-employee-delivery/E05-3-1-async-job-adapters.md`. **После:** E04.
+`docs/agent-employee-delivery/E05-3-1-async-job-adapters.md`,
+`docs/agent-employee-delivery/E05-3-2-async-job-adapter.md`. **Следующая:** E05.4.
 **Файлы:** `ai/agent_loop.py::execute_skill`, `api/capability_router.py`,
 `ai/tool_transport.py`, адаптеры из E03, тесты транспорта/gateway.
 
@@ -598,6 +598,14 @@ production rebuild и `/health` проверены. Отчёт:
 `docs/agent-employee-delivery/E05-3-1-async-job-adapters.md`. E05.3 и E05
 остаются IN PROGRESS; следующий шаг — отдельно аудируемый E05.3-срез без
 предположения о конкретной операции.
+
+E05.3.2 REVIEWED добавляет только `tech.generate_tp_from_drawing` через точный
+capability/action и строгий `task_id` + `plan_id` + `queued` receipt. E05.3
+SCOPED COMPLETE / REVIEWED: 4 из 9 async operations мигрированы, 5 полностью
+классифицированы и отложены; пропущенных строгих queue-acceptance кандидатов
+нет. Независимо: 252 focused/catalog + 43 boundary/router теста. Отчёт:
+`docs/agent-employee-delivery/E05-3-2-async-job-adapter.md`. E05 остаётся IN
+PROGRESS; следующий этап — E05.4 external/MCP handlers.
 
 ### E06 — Consumers не принимают незавершённый результат за успех
 

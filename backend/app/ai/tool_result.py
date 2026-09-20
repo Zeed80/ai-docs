@@ -45,6 +45,18 @@ ToolResultStatus = Literal[
 ]
 
 
+# Each reviewed asynchronous operation has one recipient-issued identity in
+# addition to its Celery task id.  Keeping this contract next to the result
+# normalizer makes the response shape explicit without creating per-route
+# transport branches.
+ASYNC_JOB_IDENTITY_FIELDS: dict[str, str] = {
+    "documents.classify": "document_id",
+    "documents.extract": "document_id",
+    "documents.reprocess": "document_id",
+    "tech.generate_tp_from_drawing": "plan_id",
+}
+
+
 class ToolResult(BaseModel):
     """The canonical version=1 result envelope for one tool invocation."""
 
@@ -274,9 +286,12 @@ def normalize_http_async_job_response(payload: Any, *, operation: str) -> ToolRe
     else:
         raw = payload
 
+    identity_field = ASYNC_JOB_IDENTITY_FIELDS.get(operation)
     contract_error: str | None = None
     recipient_error_code: str | None = None
-    if not isinstance(raw, Mapping):
+    if identity_field is None:
+        contract_error = "unknown_async_job_operation"
+    elif not isinstance(raw, Mapping):
         contract_error = "response_not_mapping"
     elif "version" in raw:
         normalized = normalize_tool_result(raw)
@@ -294,8 +309,8 @@ def normalize_http_async_job_response(payload: Any, *, operation: str) -> ToolRe
             contract_error = "recipient_domain_failure"
         elif not _nonempty_string(raw.get("task_id")):
             contract_error = "missing_task_id"
-        elif not _nonempty_string(raw.get("document_id")):
-            contract_error = "missing_document_id"
+        elif not _nonempty_string(raw.get(identity_field)):
+            contract_error = f"missing_{identity_field}"
         elif raw.get("status") != "queued":
             contract_error = "status_not_queued"
 
@@ -316,7 +331,7 @@ def normalize_http_async_job_response(payload: Any, *, operation: str) -> ToolRe
         )
 
     task_id = raw["task_id"]
-    document_id = raw["document_id"]
+    identity = raw[identity_field]
     evidence.update(
         {
             "task_id": task_id,
@@ -331,7 +346,7 @@ def normalize_http_async_job_response(payload: Any, *, operation: str) -> ToolRe
         evidence=evidence,
         checkpoint={
             "task_id": task_id,
-            "document_id": document_id,
+            identity_field: identity,
             "status": "queued",
         },
     )

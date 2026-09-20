@@ -195,6 +195,15 @@ evidence; 4xx — `failed`, неоднозначность после dispatch �
 Отчёт:
 `docs/agent-employee-delivery/E05-3-1-async-job-adapters.md`. Следующий шаг —
 отдельно аудируемый E05.3-срез, без предположения о конкретной операции.
+E05.3.2 REVIEWED добавляет только `tech.generate_tp_from_drawing` через точный
+`POST /api/agent/cap/tech`; queue receipt требует `task_id`, `plan_id` и
+`status=queued`, а общий adapter сохраняет одну попытку и nonterminal
+`partial`/`job_queued`. E05.3 SCOPED COMPLETE / REVIEWED: из 9
+`db-async-enqueue` operations мигрированы 4 со строгим receipt, остальные 5
+явно отложены без пропущенных подходящих кандидатов. Независимо: 252
+focused/catalog + 43 boundary/router теста. Отчёт:
+`docs/agent-employee-delivery/E05-3-2-async-job-adapter.md`. E05 остаётся IN
+PROGRESS; следующий этап — E05.4 external/MCP handlers.
 Push накопленной ветки был заблокирован автопроверкой из-за несвязанных CAD-коммитов;
 для публикации всей этой истории нужно отдельное разрешение. Не обходить запрет.
 

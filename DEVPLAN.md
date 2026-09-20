@@ -181,6 +181,12 @@ job отклоняется. 4xx — `failed`, неоднозначность п�
 `/health` проверены.
 Отчёт: `docs/agent-employee-delivery/E05-3-1-async-job-adapters.md`. Далее
 нужен отдельно аудируемый E05.3-срез без предположения о конкретной операции.
+E05.3.2 REVIEWED добавляет только `tech.generate_tp_from_drawing` со строгим
+queue receipt. E05.3 SCOPED COMPLETE / REVIEWED: мигрированы 4 из 9 async
+operations, 5 явно отложены, пропущенных подходящих кандидатов нет. Независимо:
+252 focused/catalog + 43 boundary/router теста. Отчёт:
+`docs/agent-employee-delivery/E05-3-2-async-job-adapter.md`. Следующий этап —
+E05.4 external/MCP handlers; E05 остаётся IN PROGRESS.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при
 сетевой ошибке/HTTP 5xx дают outcome_unknown и блокируют durable-цикл после

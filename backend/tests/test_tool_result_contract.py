@@ -400,37 +400,84 @@ def test_async_job_acceptance_is_partial_with_a_queue_checkpoint():
     }
 
 
+def test_tech_async_job_acceptance_uses_plan_id_queue_checkpoint():
+    payload = {
+        "task_id": "task-1",
+        "plan_id": "plan-1",
+        "status": "queued",
+        "recipient_metadata": {"queue": "celery"},
+    }
+
+    normalized = normalize_http_async_job_response(
+        payload, operation="tech.generate_tp_from_drawing"
+    )
+
+    assert normalized.status == "partial"
+    assert normalized.error_code == "job_queued"
+    assert normalized.retryable is False
+    assert normalized.data == payload
+    assert normalized.evidence == {
+        "adapter_contract": "http_async_job_response_v1",
+        "operation": "tech.generate_tp_from_drawing",
+        "task_id": "task-1",
+        "recipient_outcome": "accepted",
+    }
+    assert normalized.checkpoint == {
+        "task_id": "task-1",
+        "plan_id": "plan-1",
+        "status": "queued",
+    }
+
+
+@pytest.mark.parametrize(
+    "operation,identity_field,identity",
+    [
+        ("documents.extract", "document_id", "document-1"),
+        ("tech.generate_tp_from_drawing", "plan_id", "plan-1"),
+    ],
+)
 @pytest.mark.parametrize("status", ["partial", "outcome_unknown"])
-def test_async_job_valid_v1_nonterminal_is_preserved_without_double_wrapping(status):
+def test_async_job_valid_v1_nonterminal_is_preserved_without_double_wrapping(
+    operation, identity_field, identity, status
+):
     payload = {
         "version": 1,
         "status": status,
         "data": {
             "task_id": "task-1",
-            "document_id": "document-1",
+            identity_field: identity,
             "status": "queued",
         },
         "error_code": "job_queued" if status == "partial" else "recipient_unconfirmed",
         "retryable": False,
         "evidence": {"recipient": "documents"},
-        "checkpoint": {"task_id": "task-1", "status": "queued"},
+        "checkpoint": {"task_id": "task-1", identity_field: identity, "status": "queued"},
     }
 
-    normalized = normalize_http_async_job_response(payload, operation="documents.extract")
+    normalized = normalize_http_async_job_response(payload, operation=operation)
 
     assert normalized.model_dump(mode="json") == payload
 
 
 @pytest.mark.parametrize(
-    "payload,contract_error",
+    "payload,operation,contract_error",
     [
-        ("not a mapping", "response_not_mapping"),
-        ({"error": "rejected"}, "recipient_domain_failure"),
-        ({"built": False}, "recipient_domain_failure"),
-        ({"task_id": "", "document_id": "document-1", "status": "queued"}, "missing_task_id"),
-        ({"task_id": "task-1", "document_id": " ", "status": "queued"}, "missing_document_id"),
+        ("not a mapping", "documents.classify", "response_not_mapping"),
+        ({"error": "rejected"}, "documents.classify", "recipient_domain_failure"),
+        ({"built": False}, "documents.classify", "recipient_domain_failure"),
+        (
+            {"task_id": "", "document_id": "document-1", "status": "queued"},
+            "documents.classify",
+            "missing_task_id",
+        ),
+        (
+            {"task_id": "task-1", "document_id": " ", "status": "queued"},
+            "documents.classify",
+            "missing_document_id",
+        ),
         (
             {"task_id": "task-1", "document_id": "document-1", "status": "running"},
+            "documents.classify",
             "status_not_queued",
         ),
         (
@@ -443,12 +490,18 @@ def test_async_job_valid_v1_nonterminal_is_preserved_without_double_wrapping(sta
                     "status": "queued",
                 },
             },
+            "documents.classify",
             "versioned_succeeded_contains_queued_job",
+        ),
+        (
+            {"task_id": "task-1", "document_id": "document-1", "status": "queued"},
+            "tech.generate_tp_from_drawing",
+            "missing_plan_id",
         ),
     ],
 )
-def test_async_job_invalid_2xx_contract_fails_closed(payload, contract_error):
-    normalized = normalize_http_async_job_response(payload, operation="documents.classify")
+def test_async_job_invalid_2xx_contract_fails_closed(payload, operation, contract_error):
+    normalized = normalize_http_async_job_response(payload, operation=operation)
 
     assert normalized.status == "failed"
     assert normalized.error_code == "invalid_async_job_contract"
