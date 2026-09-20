@@ -1149,7 +1149,7 @@ _OPERATIONS = {
     "analytics.auto_approval_create": ("POST", "/api/auto-approval-rules", [], "write", True),
     "analytics.auto_approval_check": ("POST", "/api/auto-approval-rules/check", [], "write", False),
     "agent_control.task_create": ("POST", "/api/agent/tasks", [], "write", True),
-    "agent_control.task_propose": ("POST", "/api/agent/tasks/propose", [], "write", False),
+    "agent_control.task_propose": ("POST", "/api/agent/tasks/propose", [], "write", True),
     "agent_control.task_decide": (
         "POST",
         "/api/agent/tasks/{entity_id}/decide",

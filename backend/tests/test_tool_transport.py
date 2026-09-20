@@ -34,6 +34,29 @@ def test_only_reviewed_read_routes_are_retry_safe(skill, args, expected):
     assert retry_safe(skill, args) is expected
 
 
+@pytest.mark.parametrize(
+    "skill,args",
+    [
+        (
+            {"method": "POST", "path": "/api/email-templates/{template_id}/render"},
+            {"template_id": "template-1"},
+        ),
+        (
+            {"method": "POST", "path": "/api/agent/cap/email"},
+            {"action": "render_template", "template_id": "template-1"},
+        ),
+        (
+            {"method": "POST", "path": "/api/agent/cap/email"},
+            {"action": "templates.render", "template_id": "template-1"},
+        ),
+    ],
+)
+def test_persistent_template_rendering_never_receives_read_retry(skill, args):
+    """Direct calls and both catalog aliases fail closed on retry safety."""
+    assert retry_safe(skill, args) is False
+    assert one_db_commit_operation(skill, args) is None
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", [500, 502, 503, 504, "timeout", "disconnect", "connect"])
 @pytest.mark.parametrize("read", [False, True])

@@ -416,8 +416,8 @@ scope/time/action и запреты replay/resume, но нельзя выдум�
 
 ### E05 — Перевод адаптеров на ToolResult по одной группе
 
-**Статус:** IN PROGRESS: E05.1 REVIEWED; E05.2.1–E05.2.10 REVIEWED как
-десять узких срезов; E05.2 в целом и E05.3–E05.4 не завершены. Отчёты:
+**Статус:** IN PROGRESS: E05.1 REVIEWED; E05.2 SCOPED COMPLETE / REVIEWED
+после десяти узких срезов; E05.3–E05.4 не завершены. Отчёты:
 `docs/agent-employee-delivery/E05-1-read-adapters.md`,
 `docs/agent-employee-delivery/E05-2-1-db-write-adapters.md`,
 `docs/agent-employee-delivery/E05-2-2-db-write-adapters.md`,
@@ -428,7 +428,8 @@ scope/time/action и запреты replay/resume, но нельзя выдум�
 `docs/agent-employee-delivery/E05-2-7-db-write-adapters.md`,
 `docs/agent-employee-delivery/E05-2-8-db-write-adapters.md`,
 `docs/agent-employee-delivery/E05-2-9-db-write-adapters.md`,
-`docs/agent-employee-delivery/E05-2-10-db-write-adapters.md`. **После:** E04.
+`docs/agent-employee-delivery/E05-2-10-db-write-adapters.md`,
+`docs/agent-employee-delivery/E05-2-closure.md`. **После:** E04.
 **Файлы:** `ai/agent_loop.py::execute_skill`, `api/capability_router.py`,
 `ai/tool_transport.py`, адаптеры из E03, тесты транспорта/gateway.
 
@@ -573,10 +574,15 @@ fail-closed. Контракт E05.2.1, public API, RBAC и approval policy не 
 `docs/agent-employee-delivery/E05-2-10-db-write-adapters.md`.
 
 **Негативные тесты:** 200 + error, job SUCCESS + built=false, read timeout,
-write timeout после commit, MCP exception, double wrapping. **Готово:** каждая
-переведённая группа отмечена в E03; непереведённые не скрыты за «всё готово».
-Следующая карточка — новый отдельно выбранный и независимо проверенный срез
-E05.2, а не объявление всех простых DB writes готовыми.
+write timeout после commit, MCP exception, double wrapping. **Готово:** E05.2
+SCOPED COMPLETE / REVIEWED: 124 строки E03 `one-db-commit` разделены на exact
+allowlist из 28 мигрированных операций и 96 явных отказов. У остатка нет
+пропущенных простых DB-only кандидатов; полный ledger и причины находятся в
+`docs/agent-employee-delivery/E05-2-closure.md`. При закрытии email render
+aliases исключены из read retry, `compare_decide` закреплён как approval/risk
+gate, `email.templates.delete` получил alias gate, а
+`task_propose.admin_only` исправлен. E05 остаётся IN PROGRESS: следующая
+карточка — E05.3 async jobs.
 
 ### E06 — Consumers не принимают незавершённый результат за успех
 

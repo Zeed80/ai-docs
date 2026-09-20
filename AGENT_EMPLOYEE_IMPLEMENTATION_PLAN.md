@@ -176,9 +176,15 @@ fail-closed. Контракт E05.2.1, public API, RBAC и approval policy не 
 Независимый полный набор: 238 passed с известным предупреждением
 `asyncio_loop_scope`; production не заявлен. Отчёт:
 `docs/agent-employee-delivery/E05-2-10-db-write-adapters.md`.
-E05.2 остаётся IN PROGRESS: остальные `one-db-commit` операции не мигрированы.
-Следующий шаг — новый отдельно выбранный и независимо проверенный срез E05.2,
-не E05.3.
+E05.2 SCOPED COMPLETE / REVIEWED: E03 содержит 124 `one-db-commit` операций,
+из которых ровно 28 мигрированы точным allowlist; оставшиеся 96 полностью
+классифицированы, и пропущенных простых DB-only кандидатов нет. Реестр причин,
+включая admin/human-only, lifecycle, conditional, external, identity, catalog
+и CAD-контур, находится в `docs/agent-employee-delivery/E05-2-closure.md`.
+При закрытии read retry запрещён для обоих email render aliases,
+`compare_decide` стал явным approval/risk gate, `email.templates.delete`
+получил явный gate, а `task_propose.admin_only` исправлен. E05 остаётся
+IN PROGRESS; следующий шаг — E05.3 async jobs.
 Push накопленной ветки был заблокирован автопроверкой из-за несвязанных CAD-коммитов;
 для публикации всей этой истории нужно отдельное разрешение. Не обходить запрет.
 

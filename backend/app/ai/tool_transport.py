@@ -47,11 +47,18 @@ ONE_DB_COMMIT_OPERATIONS = frozenset(
     }
 )
 
-# E03 documents this catalog GET as a persistent write: the handler refreshes
-# and commits the calculated trust score. It is deliberately outside E05.2's
-# reviewed ToolResult subset, but must still never receive the read retry
-# policy merely because the legacy catalog method/effect says GET/read.
-READ_CATALOG_OPERATIONS_WITH_PERSISTENT_EFFECTS = frozenset({"suppliers.trust_score"})
+# E03 documents these catalog reads as persistent writes: trust_score refreshes
+# a calculated score, while template rendering records render-time state. They
+# are deliberately outside E05.2's reviewed ToolResult subset, but must still
+# never receive the read retry policy merely because the catalog effect says
+# ``read``.
+READ_CATALOG_OPERATIONS_WITH_PERSISTENT_EFFECTS = frozenset(
+    {
+        "email.render_template",
+        "email.templates.render",
+        "suppliers.trust_score",
+    }
+)
 
 
 def resolve_catalog_operation(skill: dict, args: dict) -> ToolDefinition | None:

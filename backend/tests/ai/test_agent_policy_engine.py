@@ -45,7 +45,51 @@ def test_capability_action_risk_is_detected_for_broad_tools():
     assert classify_capability_action_risk("bulk_delete") == "high"
     assert classify_capability_action_risk("bom_approve") == "high"
     assert classify_capability_action_risk("table_export_1c") == "high"
+    assert classify_capability_action_risk("compare_decide") == "high"
+    assert classify_capability_action_risk("delete_template") == "high"
+    assert classify_capability_action_risk("templates.delete") == "high"
     assert classify_capability_action_risk("list") == "low"
+
+
+def test_template_delete_alias_requires_its_own_broad_capability_gate():
+    config = BuiltinAgentConfig(permission_mode="workspace_write")
+    denied = check_tool_execution(
+        skill_name="email",
+        args={"action": "templates.delete"},
+        config=config,
+        approval_gates=set(),
+    )
+    canonical_gate_does_not_authorize_alias = check_tool_execution(
+        skill_name="email",
+        args={"action": "templates.delete"},
+        config=config,
+        approval_gates={"email.delete_template"},
+    )
+    alias_gate = check_tool_execution(
+        skill_name="email",
+        args={"action": "templates.delete"},
+        config=config,
+        approval_gates={"email.templates.delete"},
+    )
+    canonical_action = check_tool_execution(
+        skill_name="email",
+        args={"action": "delete_template"},
+        config=config,
+        approval_gates={"email.delete_template"},
+    )
+    direct_alias = check_tool_execution(
+        skill_name="email.templates.delete",
+        args={},
+        config=config,
+        approval_gates=set(),
+    )
+
+    assert denied.allowed is False
+    assert denied.required_approval is True
+    assert canonical_gate_does_not_authorize_alias.allowed is False
+    assert alias_gate.allowed is True
+    assert canonical_action.allowed is True
+    assert direct_alias.allowed is False
 
 
 def test_high_risk_capability_action_requires_gate():

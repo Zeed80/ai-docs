@@ -196,7 +196,14 @@ approval-gated. `normalization.suggest_rule`/`normalization.apply_rules`
 public API, RBAC и approval policy не менялись. Независимый полный набор из
 корня: 238 passed с известным предупреждением `asyncio_loop_scope`; production
 не заявлен. Отчёт: `docs/agent-employee-delivery/E05-2-10-db-write-adapters.md`.
-E05.2 остаётся IN PROGRESS; далее нужен новый отдельно проверенный срез E05.2.
+E05.2 SCOPED COMPLETE / REVIEWED: из 124 `one-db-commit` операций E03 точным
+allowlist мигрированы 28, а остаток из 96 полностью классифицирован без
+пропущенных простых DB-only кандидатов. Документ закрытия:
+`docs/agent-employee-delivery/E05-2-closure.md`. В нём также закреплены
+исключение email render aliases из read retry, approval/risk gate
+`analytics.compare_decide`, alias gate `email.templates.delete` и корректный
+`task_propose.admin_only`. E05 остаётся IN PROGRESS; следующий шаг — E05.3
+async jobs.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя
 в WorkEvent, проверяет владельца/аргументы/попытку/lease. Детали журнала и UI

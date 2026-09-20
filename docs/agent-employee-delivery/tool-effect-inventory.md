@@ -349,7 +349,7 @@
 - E05.1 REVIEWED: операции, для которых `retry_safe()` подтверждает catalog
   `effect=read`, получают ToolResult v1 на HTTP agent boundary. Исходный ответ
   сохраняется в `data`; публичные business API не менялись.
-- E05.2 IN PROGRESS; E05.2.1–E05.2.10 REVIEWED: cumulative allowlist класса
+- E05.2 SCOPED COMPLETE / REVIEWED; E05.2.1–E05.2.10 REVIEWED: cumulative allowlist класса
   `one-db-commit` содержит ровно 28 операций —
   `analytics.calendar_create_reminder`, `analytics.collection_add_item`,
   `analytics.collection_close`, `analytics.collection_create`,
@@ -458,6 +458,12 @@
   Контракт E05.2.1 не менялся; независимый полный набор из корня: 238 passed с
   известным предупреждением `asyncio_loop_scope`; production не заявлен. См.
   `docs/agent-employee-delivery/E05-2-10-db-write-adapters.md`.
-- Остальные `one-db-commit` строки не мигрированы и продолжают прежний контракт
-  до отдельных срезов E05.2. E05.3 async jobs и E05.4 external/MCP handlers
-  также TODO. Наличие строки в этой матрице не означает её миграцию.
+- E03 содержит 124 `one-db-commit` строк. 28 операций exact allowlist
+  мигрированы; все 96 оставшихся отнесены к взаимоисключающим категориям без
+  пропущенных простых DB-only кандидатов. Полный ledger и отложенные identity
+  mismatches находятся в `docs/agent-employee-delivery/E05-2-closure.md`.
+  При закрытии render aliases email исключены из read retry, `compare_decide`
+  закреплён как approval/risk gate, `email.templates.delete` получил явный
+  alias gate, `task_propose.admin_only` исправлен. E05 остаётся IN PROGRESS:
+  следующий этап E05.3 async jobs; E05.4 external/MCP handlers также TODO.
+  Наличие строки в этой матрице не означает её миграцию.

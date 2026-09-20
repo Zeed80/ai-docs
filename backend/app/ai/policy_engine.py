@@ -91,6 +91,9 @@ RISKY_CAPABILITY_ACTIONS = {
     "learning_rule_activate",
     "table_apply_diff",
     "table_import_excel",
+    "compare_decide",
+    "delete_template",
+    "templates.delete",
     "spec_table_cell_edit",
     "ai_config_set",
 }
@@ -177,7 +180,11 @@ def check_tool_execution(
             risk_level="high",
         )
 
-    if risk == "high" and skill_name not in approval_gates:
+    gate_names = {skill_name}
+    if action and "." not in skill_name:
+        gate_names.add(f"{skill_name}.{action}")
+
+    if risk == "high" and not (gate_names & approval_gates):
         return PolicyDecision(
             allowed=False,
             reason=(

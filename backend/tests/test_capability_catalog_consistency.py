@@ -229,6 +229,7 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_10_subset():
         "warehouse.bulk_confirm": "unknown",
         "warehouse.confirm_receipt": "unknown",
         "email.templates.from_message": "one-db-commit",
+        "email.render_template": "one-db-commit",
         "email.templates.render": "one-db-commit",
         "email.compose": "one-db-commit",
         "email.reply": "one-db-commit",
@@ -325,6 +326,10 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_10_subset():
     assert "source_propose" not in memory.gate_actions
     tech = load_capability_manifest().by_name["tech"]
     assert not {"correction_record", "operation_template_create"} & set(tech.gate_actions)
+    analytics = load_capability_manifest().by_name["analytics"]
+    assert "compare_decide" in analytics.gate_actions
+    email = load_capability_manifest().by_name["email"]
+    assert {"send", "delete_template", "templates.delete"} <= set(email.gate_actions)
 
     from app.ai.gateway_config import gateway_config
 
@@ -335,3 +340,9 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_10_subset():
     assert not (e05_2_8_slice & gateway_config.approval_gates)
     assert not (e05_2_9_slice & gateway_config.approval_gates)
     assert not (e05_2_10_slice & gateway_config.approval_gates)
+    assert {
+        "analytics.compare_decide",
+        "email.delete_template",
+        "email.templates.delete",
+    } <= gateway_config.approval_gates
+    assert TOOLS["agent_control.task_propose"].admin_only is True

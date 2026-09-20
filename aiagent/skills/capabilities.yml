@@ -366,7 +366,7 @@ capabilities:
       {thread_ids:[...], action:"read"|"archive"|"star"|"add_label", label_id?}).
     path: /api/agent/cap/email
     method: POST
-    gate_actions: [send, delete_template]
+    gate_actions: [send, delete_template, templates.delete]
     parameters:
       type: object
       properties:
@@ -1015,7 +1015,7 @@ capabilities:
       фильтрами, а не table_query (который работает с кастомными таблицами).
     path: /api/agent/cap/analytics
     method: POST
-    gate_actions: [table_apply_diff, table_import_excel, table_export_1c]
+    gate_actions: [table_apply_diff, table_import_excel, table_export_1c, compare_decide]
     parameters:
       type: object
       properties:
@@ -1227,6 +1227,7 @@ capabilities:
           type: integer
           description: "Количество записей (максимум 100, по умолчанию 20)"
           default: 20
+      required: [vault_ref]
 
   - name: mcp
     description: >
@@ -1253,4 +1254,3 @@ capabilities:
           type: object
           description: "Аргументы инструмента — по его собственной JSON-schema"
       required: [action]
-      required: [vault_ref]
