@@ -37,6 +37,8 @@ ONE_DB_COMMIT_OPERATIONS = frozenset(
         "payments.create_schedule",
         "procurement.create_request",
         "suppliers.update",
+        "tech.correction_record",
+        "tech.operation_template_create",
         "tool_catalog.create_supplier",
         "warehouse.adjust_stock",
         "warehouse.create_item",

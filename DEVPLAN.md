@@ -150,6 +150,22 @@ publish fail-closed. Контракт E05.2.1, public API, RBAC и approval poli
 предупреждением `asyncio_loop_scope`; production не заявлен. Отчёт:
 `docs/agent-employee-delivery/E05-2-9-db-write-adapters.md`. E05.2 остаётся
 IN PROGRESS; далее нужен новый отдельно проверенный срез E05.2.
+E05.2.10 REVIEWED: десятый узкий DB write-срез добавляет только
+`tech.correction_record` и `tech.operation_template_create` через точные
+уникальные маршруты `POST /api/technology/corrections` и
+`POST /api/technology/operation-templates`. Cumulative allowlist содержит 28
+операций. У каждого handler-а один прямой безусловный commit на success path;
+helper-вызовы только flush/select, AI/network/enqueue/chat_bus нет. Обе операции
+`admin_only=false` и не approval-gated. `normalization.suggest_rule` и
+`normalization.apply_rules` исключены из-за conditional 0/1 commit,
+`sheets.add_row` — из-за publish effect, `tech.resource_create` — поскольку
+принимает `status`, `tech.learning_rule_activate`/`tech.learning_rule_reject`
+— как approval-gated; остальные lifecycle/status и непроверенные actions
+fail-closed. Контракт E05.2.1, public API, RBAC и approval policy не менялись.
+Независимый полный набор из корня: 238 passed с известным предупреждением
+`asyncio_loop_scope`; production не заявлен. Отчёт:
+`docs/agent-employee-delivery/E05-2-10-db-write-adapters.md`. E05.2 остаётся
+IN PROGRESS; далее нужен новый отдельно проверенный срез E05.2.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при
 сетевой ошибке/HTTP 5xx дают outcome_unknown и блокируют durable-цикл после

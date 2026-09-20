@@ -606,6 +606,34 @@ def test_e05_2_9_direct_routes_resolve_to_exact_catalog_operations(skill, args, 
     assert operation.name == expected
 
 
+@pytest.mark.parametrize(
+    "skill,args,expected",
+    [
+        (
+            {"method": "POST", "path": "/api/technology/corrections"},
+            {
+                "entity_type": "manufacturing_operation",
+                "entity_id": "operation-1",
+                "field_name": "setup_time_min",
+                "old_value": "10",
+                "new_value": "12",
+                "corrected_by": "operator",
+            },
+            "tech.correction_record",
+        ),
+        (
+            {"method": "POST", "path": "/api/technology/operation-templates"},
+            {"operation_type": "turning", "name": "Finish turning"},
+            "tech.operation_template_create",
+        ),
+    ],
+)
+def test_e05_2_10_direct_routes_resolve_to_exact_catalog_operations(skill, args, expected):
+    operation = one_db_commit_operation(skill, args)
+    assert operation is not None
+    assert operation.name == expected
+
+
 def test_one_db_commit_resolution_fails_closed_for_other_operations_and_routes():
     assert (
         one_db_commit_operation(
@@ -712,6 +740,44 @@ def test_one_db_commit_resolution_fails_closed_for_other_operations_and_routes()
         one_db_commit_operation(
             {"method": "POST", "path": "/api/memory/sources/discover"},
             {"query": "supplier catalogs"},
+        )
+        is None
+    )
+    # These superficially local writes do not meet this slice's recipient
+    # boundary: normalization can commit 0/1 times, sheets publish to the
+    # chat bus, resource creation accepts status, and rule activation is gated.
+    assert (
+        one_db_commit_operation(
+            {"method": "POST", "path": "/api/normalization/suggest"},
+            {"min_corrections": 3},
+        )
+        is None
+    )
+    assert (
+        one_db_commit_operation(
+            {"method": "POST", "path": "/api/normalization/apply"},
+            {"document_id": "document-1"},
+        )
+        is None
+    )
+    assert (
+        one_db_commit_operation(
+            {"method": "POST", "path": "/api/workspace/sheets/{sheet_id}/add-row"},
+            {"sheet_id": "sheet-1", "count": 1},
+        )
+        is None
+    )
+    assert (
+        one_db_commit_operation(
+            {"method": "POST", "path": "/api/technology/resources"},
+            {"resource_type": "lathe", "name": "1K62", "status": "active"},
+        )
+        is None
+    )
+    assert (
+        one_db_commit_operation(
+            {"method": "POST", "path": "/api/technology/learning-rules/{rule_id}/activate"},
+            {"rule_id": "rule-1", "activated_by": "operator"},
         )
         is None
     )
@@ -1200,6 +1266,60 @@ async def test_e05_2_8_preserves_raw_success_response_and_original_body(
     ],
 )
 async def test_e05_2_9_preserves_raw_success_response_and_original_body(
+    monkeypatch, skill, args, expected_body, raw_response, operation
+):
+    from app.ai import agent_loop
+
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.post.return_value = httpx.Response(200, json=raw_response)
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", MagicMock(return_value=client))
+    monkeypatch.setattr(agent_loop, "internal_headers", lambda: {})
+
+    result = await execute_skill(skill, args, BuiltinAgentConfig())
+
+    assert result["status"] == "succeeded"
+    assert result["data"] == raw_response
+    assert result["evidence"]["operation"] == operation
+    client.post.assert_awaited_once()
+    assert client.post.call_args.kwargs["json"] == expected_body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "skill,args,expected_body,raw_response,operation",
+    [
+        (
+            {"method": "POST", "path": "/api/technology/corrections"},
+            {
+                "entity_type": "manufacturing_operation",
+                "entity_id": "operation-1",
+                "field_name": "setup_time_min",
+                "old_value": "10",
+                "new_value": "12",
+                "corrected_by": "operator",
+            },
+            {
+                "entity_type": "manufacturing_operation",
+                "entity_id": "operation-1",
+                "field_name": "setup_time_min",
+                "old_value": "10",
+                "new_value": "12",
+                "corrected_by": "operator",
+            },
+            {"id": "correction-1", "field_name": "setup_time_min", "new_value": "12"},
+            "tech.correction_record",
+        ),
+        (
+            {"method": "POST", "path": "/api/technology/operation-templates"},
+            {"operation_type": "turning", "name": "Finish turning"},
+            {"operation_type": "turning", "name": "Finish turning"},
+            {"id": "template-1", "operation_type": "turning", "name": "Finish turning"},
+            "tech.operation_template_create",
+        ),
+    ],
+)
+async def test_e05_2_10_preserves_raw_success_response_and_original_body(
     monkeypatch, skill, args, expected_body, raw_response, operation
 ):
     from app.ai import agent_loop

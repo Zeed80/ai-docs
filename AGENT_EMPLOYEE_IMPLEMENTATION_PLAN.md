@@ -161,6 +161,21 @@ mismatch, sheets publish fail-closed. Контракт E05.2.1, public API, RBAC
 approval policy не менялись. Независимый полный набор из корня: 234 passed с
 известным предупреждением `asyncio_loop_scope`; production не заявлен. Отчёт:
 `docs/agent-employee-delivery/E05-2-9-db-write-adapters.md`.
+E05.2.10 REVIEWED: десятый узкий DB write-срез добавляет только
+`tech.correction_record` и `tech.operation_template_create` через точные
+уникальные соответственно `POST /api/technology/corrections` и
+`POST /api/technology/operation-templates`. Cumulative allowlist содержит 28
+операций. У каждого handler-а один прямой безусловный commit на success path;
+helper-вызовы только flush/select, AI/network/enqueue/chat_bus нет. Обе операции
+`admin_only=false` и не approval-gated. `normalization.suggest_rule` и
+`normalization.apply_rules` исключены из-за conditional 0/1 commit,
+`sheets.add_row` — из-за publish effect, `tech.resource_create` — поскольку
+принимает `status`, `tech.learning_rule_activate`/`tech.learning_rule_reject`
+— как approval-gated; остальные lifecycle/status и непроверенные actions
+fail-closed. Контракт E05.2.1, public API, RBAC и approval policy не менялись.
+Независимый полный набор: 238 passed с известным предупреждением
+`asyncio_loop_scope`; production не заявлен. Отчёт:
+`docs/agent-employee-delivery/E05-2-10-db-write-adapters.md`.
 E05.2 остаётся IN PROGRESS: остальные `one-db-commit` операции не мигрированы.
 Следующий шаг — новый отдельно выбранный и независимо проверенный срез E05.2,
 не E05.3.

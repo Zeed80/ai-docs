@@ -145,8 +145,8 @@ def test_every_active_catalog_operation_has_a_fail_closed_effect_classification(
     ), "unknown classifications must prohibit automatic retry"
 
 
-def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_9_subset():
-    """E05.2.9 adds two DB-only, non-gated local operations."""
+def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_10_subset():
+    """E05.2.10 adds two DB-only, non-gated technology operations."""
 
     from app.ai.tool_catalog import TOOLS
     from app.ai.tool_transport import ONE_DB_COMMIT_OPERATIONS
@@ -188,6 +188,8 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_9_subset():
             "payments.create_schedule",
             "procurement.create_request",
             "suppliers.update",
+            "tech.correction_record",
+            "tech.operation_template_create",
             "tool_catalog.create_supplier",
             "warehouse.adjust_stock",
             "warehouse.create_item",
@@ -219,6 +221,8 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_9_subset():
     assert all(not TOOLS[name].admin_only for name in e05_2_8_slice)
     e05_2_9_slice = {"invoices.validate", "memory.source_propose"}
     assert all(not TOOLS[name].admin_only for name in e05_2_9_slice)
+    e05_2_10_slice = {"tech.correction_record", "tech.operation_template_create"}
+    assert all(not TOOLS[name].admin_only for name in e05_2_10_slice)
     excluded = {
         "documents.ingest": "db-async-enqueue",
         "email.send": "external-dispatch",
@@ -242,6 +246,11 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_9_subset():
         "memory.promotion_decide": "one-db-commit",
         "memory.source_discover": "one-db-commit",
         "sheets.add_row": "one-db-commit",
+        "normalization.apply_rules": "one-db-commit",
+        "normalization.suggest_rule": "one-db-commit",
+        "tech.learning_rule_activate": "one-db-commit",
+        "tech.learning_rule_reject": "one-db-commit",
+        "tech.resource_create": "one-db-commit",
     }
     assert not (ONE_DB_COMMIT_OPERATIONS & excluded.keys())
     assert {name: classifications[name] for name in excluded} == excluded
@@ -282,6 +291,8 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_9_subset():
         "normalization.update_canonical_item": {"normalization.update_canonical_item"},
         "normalization.update_norm_card": {"normalization.update_norm_card"},
         "tool_catalog.create_supplier": {"tool_catalog.create_supplier"},
+        "tech.correction_record": {"tech.correction_record"},
+        "tech.operation_template_create": {"tech.operation_template_create"},
     }
 
     from app.ai.capability_manifest import load_capability_manifest
@@ -312,6 +323,8 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_9_subset():
     assert "create_supplier" not in tool_catalog.gate_actions
     memory = load_capability_manifest().by_name["memory"]
     assert "source_propose" not in memory.gate_actions
+    tech = load_capability_manifest().by_name["tech"]
+    assert not {"correction_record", "operation_template_create"} & set(tech.gate_actions)
 
     from app.ai.gateway_config import gateway_config
 
@@ -321,3 +334,4 @@ def test_one_db_commit_adapter_allowlist_is_exact_reviewed_e05_2_9_subset():
     assert not (e05_2_7_slice & gateway_config.approval_gates)
     assert not (e05_2_8_slice & gateway_config.approval_gates)
     assert not (e05_2_9_slice & gateway_config.approval_gates)
+    assert not (e05_2_10_slice & gateway_config.approval_gates)

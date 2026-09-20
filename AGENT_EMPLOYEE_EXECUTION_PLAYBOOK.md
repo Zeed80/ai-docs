@@ -416,8 +416,8 @@ scope/time/action и запреты replay/resume, но нельзя выдум�
 
 ### E05 — Перевод адаптеров на ToolResult по одной группе
 
-**Статус:** IN PROGRESS: E05.1 REVIEWED; E05.2.1–E05.2.9 REVIEWED как
-девять узких срезов; E05.2 в целом и E05.3–E05.4 не завершены. Отчёты:
+**Статус:** IN PROGRESS: E05.1 REVIEWED; E05.2.1–E05.2.10 REVIEWED как
+десять узких срезов; E05.2 в целом и E05.3–E05.4 не завершены. Отчёты:
 `docs/agent-employee-delivery/E05-1-read-adapters.md`,
 `docs/agent-employee-delivery/E05-2-1-db-write-adapters.md`,
 `docs/agent-employee-delivery/E05-2-2-db-write-adapters.md`,
@@ -427,7 +427,8 @@ scope/time/action и запреты replay/resume, но нельзя выдум�
 `docs/agent-employee-delivery/E05-2-6-db-write-adapters.md`,
 `docs/agent-employee-delivery/E05-2-7-db-write-adapters.md`,
 `docs/agent-employee-delivery/E05-2-8-db-write-adapters.md`,
-`docs/agent-employee-delivery/E05-2-9-db-write-adapters.md`. **После:** E04.
+`docs/agent-employee-delivery/E05-2-9-db-write-adapters.md`,
+`docs/agent-employee-delivery/E05-2-10-db-write-adapters.md`. **После:** E04.
 **Файлы:** `ai/agent_loop.py::execute_skill`, `api/capability_router.py`,
 `ai/tool_transport.py`, адаптеры из E03, тесты транспорта/gateway.
 
@@ -554,6 +555,22 @@ fail-closed. Контракт E05.2.1, public API, RBAC и approval policy не 
 Независимый полный набор из корня: 234 passed с известным предупреждением
 `asyncio_loop_scope`; production не заявлен. Отчёт:
 `docs/agent-employee-delivery/E05-2-9-db-write-adapters.md`.
+
+E05.2.10 добавляет только `tech.correction_record` и
+`tech.operation_template_create` через точные уникальные соответственно
+`POST /api/technology/corrections` и `POST /api/technology/operation-templates`;
+cumulative allowlist содержит 28 операций. У каждого handler-а один прямой
+безусловный `db.commit()` на success path; helper-вызовы ограничены `flush()`
+или `select()`, AI/network/external dispatch/enqueue и `chat_bus` publish нет.
+Обе операции `admin_only=false` и не approval-gated. `normalization.suggest_rule`
+и `normalization.apply_rules` исключены из-за conditional 0/1 commit,
+`sheets.add_row` — из-за publish effect, `tech.resource_create` — поскольку
+принимает `status`, `tech.learning_rule_activate`/`tech.learning_rule_reject`
+— как approval-gated; остальные lifecycle/status, gated и непроверенные actions
+fail-closed. Контракт E05.2.1, public API, RBAC и approval policy не менялись.
+Независимый полный набор из корня: 238 passed с известным предупреждением
+`asyncio_loop_scope`; production не заявлен. Отчёт:
+`docs/agent-employee-delivery/E05-2-10-db-write-adapters.md`.
 
 **Негативные тесты:** 200 + error, job SUCCESS + built=false, read timeout,
 write timeout после commit, MCP exception, double wrapping. **Готово:** каждая

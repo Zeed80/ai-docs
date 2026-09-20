@@ -349,8 +349,8 @@
 - E05.1 REVIEWED: операции, для которых `retry_safe()` подтверждает catalog
   `effect=read`, получают ToolResult v1 на HTTP agent boundary. Исходный ответ
   сохраняется в `data`; публичные business API не менялись.
-- E05.2 IN PROGRESS; E05.2.1–E05.2.9 REVIEWED: cumulative allowlist класса
-  `one-db-commit` содержит ровно 26 операций —
+- E05.2 IN PROGRESS; E05.2.1–E05.2.10 REVIEWED: cumulative allowlist класса
+  `one-db-commit` содержит ровно 28 операций —
   `analytics.calendar_create_reminder`, `analytics.collection_add_item`,
   `analytics.collection_close`, `analytics.collection_create`,
   `analytics.compare_align`, `analytics.compare_create`,
@@ -359,8 +359,9 @@
   `invoices.update`, `invoices.validate`, `memory.source_propose`,
   `normalization.create_norm_card`, `normalization.update_canonical_item`,
   `normalization.update_norm_card`, `payments.create_schedule`,
-  `procurement.create_request`, `suppliers.update`, `tool_catalog.create_supplier`
-  и `warehouse.adjust_stock`,
+  `procurement.create_request`, `suppliers.update`, `tech.correction_record`,
+  `tech.operation_template_create`, `tool_catalog.create_supplier` и
+  `warehouse.adjust_stock`,
   `warehouse.create_item`, `warehouse.create_receipt` и `warehouse.update_item`.
   E05.2.3 добавила три
   новые `warehouse.*` операции; E05.2.4 добавила три операции email/suppliers;
@@ -443,6 +444,20 @@
   набор из корня: 234 passed с известным предупреждением `asyncio_loop_scope`;
   production не заявлен. См.
   `docs/agent-employee-delivery/E05-2-9-db-write-adapters.md`.
+  E05.2.10 добавила `tech.correction_record` и
+  `tech.operation_template_create`: точные уникальные соответственно
+  `POST /api/technology/corrections` и
+  `POST /api/technology/operation-templates`; у каждого handler-а один прямой
+  безусловный commit, helper-вызовы только flush/select, AI/network/enqueue и
+  `chat_bus` publish отсутствуют. Обе операции `admin_only=false` и не
+  approval-gated. `normalization.suggest_rule` и `normalization.apply_rules`
+  остаются вне среза из-за conditional 0/1 commit, `sheets.add_row` — из-за
+  publish effect, `tech.resource_create` — поскольку принимает `status`, а
+  `tech.learning_rule_activate` и `tech.learning_rule_reject` — как
+  approval-gated; прочие lifecycle/status и непроверенные actions fail-closed.
+  Контракт E05.2.1 не менялся; независимый полный набор из корня: 238 passed с
+  известным предупреждением `asyncio_loop_scope`; production не заявлен. См.
+  `docs/agent-employee-delivery/E05-2-10-db-write-adapters.md`.
 - Остальные `one-db-commit` строки не мигрированы и продолжают прежний контракт
   до отдельных срезов E05.2. E05.3 async jobs и E05.4 external/MCP handlers
   также TODO. Наличие строки в этой матрице не означает её миграцию.
