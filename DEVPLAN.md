@@ -169,7 +169,18 @@ COMPLETE / REVIEWED: E03 содержит 124 `one-db-commit` операций; 
 мигрированы, 96 полностью классифицированы, пропущенных простых DB-only
 кандидатов нет. Полный реестр и safety-corrections:
 `docs/agent-employee-delivery/E05-2-closure.md`. E05 остаётся IN PROGRESS;
-следующая карточка — E05.3 async jobs.
+E05.3 остаётся IN PROGRESS. E05.3.1 REVIEWED переводит только
+`documents.classify`, `documents.extract` и `documents.reprocess` через точный
+`POST /api/agent/cap/documents`: queue acceptance — ToolResult v1
+`partial`/`job_queued` с raw data, checkpoint и evidence; прямые routes
+fail-closed. Корректный versioned nonterminal сохраняется, `succeeded` с queued
+job отклоняется. 4xx — `failed`, неоднозначность после dispatch —
+`outcome_unknown`, ошибка до dispatch — `failed`; ровно одна попытка без retry.
+Остальные async operations legacy. Независимо: 236 focused + 43 boundary/router
+теста с известным предупреждением `asyncio_loop_scope`; production rebuild и
+`/health` проверены.
+Отчёт: `docs/agent-employee-delivery/E05-3-1-async-job-adapters.md`. Далее
+нужен отдельно аудируемый E05.3-срез без предположения о конкретной операции.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при
 сетевой ошибке/HTTP 5xx дают outcome_unknown и блокируют durable-цикл после

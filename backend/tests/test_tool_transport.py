@@ -7,7 +7,12 @@ import pytest
 
 from app.ai.agent_config import BuiltinAgentConfig
 from app.ai.agent_loop import capability_args_digest, execute_skill
-from app.ai.tool_transport import one_db_commit_operation, retry_safe
+from app.ai.tool_transport import (
+    ASYNC_JOB_OPERATIONS,
+    async_job_operation,
+    one_db_commit_operation,
+    retry_safe,
+)
 
 
 @pytest.mark.parametrize(
@@ -1662,3 +1667,211 @@ async def test_e05_2_3_uses_original_args_without_approval_envelope(
     assert sent["headers"]["X-Agent-Idempotency-Key"] == "logical-action:attempt"
     assert sent["headers"]["Authorization"] == "test-context"
     assert "X-Agent-Approval" not in sent["headers"]
+
+
+@pytest.mark.parametrize(
+    "action,operation",
+    [
+        ("classify", "documents.classify"),
+        ("extract", "documents.extract"),
+        ("reprocess", "documents.reprocess"),
+    ],
+)
+def test_async_job_resolution_uses_exact_documents_capability_action(action, operation):
+    resolved = async_job_operation(
+        {"method": "POST", "path": "/api/agent/cap/documents"},
+        {"action": action, "document_id": "document-1", "force": True},
+    )
+
+    assert resolved is not None
+    assert resolved.name == operation
+
+
+def test_async_job_allowlist_is_exact_e05_3_1_subset():
+    assert ASYNC_JOB_OPERATIONS == frozenset(
+        {
+            "documents.classify",
+            "documents.extract",
+            "documents.reprocess",
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "skill,args",
+    [
+        (
+            {"method": "POST", "path": "/api/documents/{document_id}/classify"},
+            {"document_id": "document-1", "force": True},
+        ),
+        (
+            {"method": "POST", "path": "/api/documents/{document_id}/extract"},
+            {"document_id": "document-1", "force": True},
+        ),
+        (
+            {"method": "POST", "path": "/api/agent/cap/documents"},
+            {"action": "ingest", "document_id": "document-1"},
+        ),
+    ],
+)
+def test_async_job_resolution_fails_closed_for_direct_routes_and_other_actions(skill, args):
+    assert async_job_operation(skill, args) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "action,operation",
+    [
+        ("classify", "documents.classify"),
+        ("extract", "documents.extract"),
+        ("reprocess", "documents.reprocess"),
+    ],
+)
+async def test_async_job_queue_acceptance_preserves_raw_response_args_and_headers(
+    monkeypatch, action, operation
+):
+    from app.ai import agent_loop, tool_transport
+
+    payload = {
+        "task_id": f"task-{action}",
+        "document_id": "document-1",
+        "status": "queued",
+        "recipient_metadata": {"queue": "gpu"},
+    }
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.post.return_value = httpx.Response(202, json=payload)
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", MagicMock(return_value=client))
+    monkeypatch.setattr(agent_loop, "internal_headers", lambda: {"Authorization": "test-context"})
+    seen_args = []
+    real_resolver = tool_transport.async_job_operation
+
+    def resolver_with_identity(received_skill, received_args):
+        seen_args.append(received_args)
+        return real_resolver(received_skill, received_args)
+
+    monkeypatch.setattr(tool_transport, "async_job_operation", resolver_with_identity)
+    args = {"action": action, "document_id": "document-1", "force": True}
+    original_args = args.copy()
+
+    result = await execute_skill(
+        {"method": "POST", "path": "/api/agent/cap/documents"},
+        args,
+        BuiltinAgentConfig(),
+        idempotency_key="logical-action:attempt",
+    )
+
+    assert result["version"] == 1
+    assert result["status"] == "partial"
+    assert result["error_code"] == "job_queued"
+    assert result["retryable"] is False
+    assert result["data"] == payload
+    assert result["evidence"]["operation"] == operation
+    assert result["evidence"]["recipient_outcome"] == "accepted"
+    assert result["checkpoint"] == {
+        "task_id": f"task-{action}",
+        "document_id": "document-1",
+        "status": "queued",
+    }
+    assert seen_args == [args]
+    assert seen_args[0] is args
+    assert args == original_args
+    assert client.post.call_args.kwargs["json"] == original_args
+    assert client.post.call_args.kwargs["headers"] == {
+        "Authorization": "test-context",
+        "X-Agent-Idempotency-Key": "logical-action:attempt",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [400, 404, 422])
+async def test_async_job_4xx_is_failed_without_retry(monkeypatch, status_code):
+    from app.ai import agent_loop
+
+    payload = {"detail": {"error_code": "rejected"}}
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.post.side_effect = [
+        httpx.Response(status_code, json=payload),
+        httpx.Response(202, json={"task_id": "duplicate"}),
+    ]
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", MagicMock(return_value=client))
+    monkeypatch.setattr(agent_loop, "internal_headers", lambda: {})
+
+    result = await execute_skill(
+        {"method": "POST", "path": "/api/agent/cap/documents"},
+        {"action": "extract", "document_id": "document-1"},
+        BuiltinAgentConfig(),
+    )
+
+    assert result["status"] == "failed"
+    assert result["error_code"] == f"http_{status_code}"
+    assert result["retryable"] is False
+    assert result["data"] == payload
+    assert result["evidence"]["recipient_outcome"] == "rejected"
+    client.post.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure,reason",
+    [
+        (httpx.Response(302, json={"detail": "redirect"}), "http_302"),
+        (httpx.Response(503, json={"detail": "unavailable"}), "http_503"),
+        (httpx.ReadTimeout("private timeout"), "transport_ReadTimeout"),
+        (RuntimeError("private exception"), "exception_RuntimeError"),
+    ],
+)
+async def test_async_job_post_dispatch_ambiguity_is_unknown_without_retry(
+    monkeypatch, failure, reason
+):
+    from app.ai import agent_loop
+
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.post.side_effect = [failure, httpx.Response(202, json={"task_id": "duplicate"})]
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", MagicMock(return_value=client))
+    monkeypatch.setattr(agent_loop, "internal_headers", lambda: {})
+    sleep = AsyncMock()
+    monkeypatch.setattr(agent_loop.asyncio, "sleep", sleep)
+
+    result = await execute_skill(
+        {"method": "POST", "path": "/api/agent/cap/documents"},
+        {"action": "classify", "document_id": "document-1"},
+        BuiltinAgentConfig(),
+    )
+
+    assert result["status"] == "outcome_unknown"
+    assert result["retryable"] is False
+    assert result["evidence"]["reason"] == reason
+    assert result["evidence"]["recipient_outcome"] == "unconfirmed"
+    assert "private" not in str(result)
+    client.post.assert_awaited_once()
+    sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_async_job_pre_dispatch_failure_is_failed(monkeypatch):
+    from app.ai import agent_loop
+
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", MagicMock(return_value=client))
+    monkeypatch.setattr(
+        agent_loop,
+        "internal_headers",
+        MagicMock(side_effect=RuntimeError("private header detail")),
+    )
+
+    result = await execute_skill(
+        {"method": "POST", "path": "/api/agent/cap/documents"},
+        {"action": "reprocess", "document_id": "document-1"},
+        BuiltinAgentConfig(),
+    )
+
+    assert result["status"] == "failed"
+    assert result["error_code"] == "async_dispatch_failed"
+    assert result["retryable"] is False
+    assert result["evidence"]["dispatch_attempted"] is False
+    assert "private" not in str(result)
+    client.post.assert_not_awaited()

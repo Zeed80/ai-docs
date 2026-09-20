@@ -257,6 +257,86 @@ def normalize_http_one_db_commit_response(payload: Any, *, operation: str) -> To
     )
 
 
+def normalize_http_async_job_response(payload: Any, *, operation: str) -> ToolResult:
+    """Normalize acceptance of one reviewed asynchronous recipient job.
+
+    The HTTP call is complete when the recipient accepts the job, but the work
+    itself is not.  Only the exact legacy ``TaskResponse`` shape is accepted;
+    a versioned ``succeeded`` envelope containing queued work is contradictory
+    and must not turn queue acceptance into completion.
+    """
+
+    raw: Any
+    if isinstance(payload, ToolResult):
+        raw = payload.model_dump(mode="json")
+    elif isinstance(payload, Mapping):
+        raw = dict(payload)
+    else:
+        raw = payload
+
+    contract_error: str | None = None
+    recipient_error_code: str | None = None
+    if not isinstance(raw, Mapping):
+        contract_error = "response_not_mapping"
+    elif "version" in raw:
+        normalized = normalize_tool_result(raw)
+        if raw.get("status") != "succeeded":
+            return normalized
+        data = raw.get("data")
+        contract_error = (
+            "versioned_succeeded_contains_queued_job"
+            if isinstance(data, Mapping) and data.get("status") == "queued"
+            else "versioned_succeeded_not_async_acceptance"
+        )
+    else:
+        recipient_error_code = _domain_failure(raw)
+        if recipient_error_code is not None:
+            contract_error = "recipient_domain_failure"
+        elif not _nonempty_string(raw.get("task_id")):
+            contract_error = "missing_task_id"
+        elif not _nonempty_string(raw.get("document_id")):
+            contract_error = "missing_document_id"
+        elif raw.get("status") != "queued":
+            contract_error = "status_not_queued"
+
+    evidence: dict[str, Any] = {
+        "adapter_contract": "http_async_job_response_v1",
+        "operation": operation,
+    }
+    if contract_error is not None:
+        evidence["contract_error"] = contract_error
+        if recipient_error_code is not None:
+            evidence["recipient_error_code"] = recipient_error_code
+        return ToolResult(
+            status="failed",
+            data=raw,
+            error_code="invalid_async_job_contract",
+            retryable=False,
+            evidence=evidence,
+        )
+
+    task_id = raw["task_id"]
+    document_id = raw["document_id"]
+    evidence.update(
+        {
+            "task_id": task_id,
+            "recipient_outcome": "accepted",
+        }
+    )
+    return ToolResult(
+        status="partial",
+        data=raw,
+        error_code="job_queued",
+        retryable=False,
+        evidence=evidence,
+        checkpoint={
+            "task_id": task_id,
+            "document_id": document_id,
+            "status": "queued",
+        },
+    )
+
+
 def _normalize_one_db_commit_nonterminal(payload: Any, *, operation: str) -> ToolResult | None:
     """Preserve reviewed legacy nonterminal outcomes without calling them failed."""
 
@@ -433,6 +513,10 @@ def _domain_failure(value: Any) -> str | None:
 
 def _meaningful(value: Any) -> bool:
     return value not in (None, "", False, [], {})
+
+
+def _nonempty_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _unrecognized(payload: Any, reason: str) -> ToolResult:

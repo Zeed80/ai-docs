@@ -5,8 +5,21 @@ from typing import Any
 from app.ai.tool_catalog import TOOLS, ToolDefinition, get_tool
 from app.ai.tool_result import (
     ToolResult,
+    normalize_http_async_job_response,
     normalize_http_one_db_commit_response,
     normalize_http_read_response,
+)
+
+# First reviewed E05.3 slice. These actions share the capability endpoint and
+# return the document TaskResponse after enqueueing a Celery job. Direct route
+# aliases are intentionally excluded: classify and reprocess both own the same
+# /classify route, so only capability + original action proves the operation.
+ASYNC_JOB_OPERATIONS = frozenset(
+    {
+        "documents.classify",
+        "documents.extract",
+        "documents.reprocess",
+    }
 )
 
 # E05.2's independently reviewed subset of E03 ``one-db-commit`` rows from
@@ -94,6 +107,23 @@ def one_db_commit_operation(skill: dict, args: dict) -> ToolDefinition | None:
     return operation
 
 
+def async_job_operation(skill: dict, args: dict) -> ToolDefinition | None:
+    """Return an exact E05.3 async operation only at its reviewed gateway."""
+
+    if (
+        str(skill.get("method", "")).upper() != "POST"
+        or str(skill.get("path", "")) != "/api/agent/cap/documents"
+    ):
+        return None
+    action = args.get("action")
+    if not isinstance(action, str):
+        return None
+    operation = get_tool("documents", action)
+    if operation is None or operation.name not in ASYNC_JOB_OPERATIONS:
+        return None
+    return operation
+
+
 def retry_safe(skill: dict, args: dict) -> bool:
     method = str(skill.get("method", "")).upper()
     path = str(skill.get("path", ""))
@@ -144,6 +174,76 @@ def serialize_one_db_commit_response(payload: Any, *, operation: str) -> dict[st
     return normalize_http_one_db_commit_response(payload, operation=operation).model_dump(
         mode="json"
     )
+
+
+def serialize_async_job_response(payload: Any, *, operation: str) -> dict[str, Any]:
+    """Return queue acceptance as a non-terminal ToolResult v1 envelope."""
+
+    return normalize_http_async_job_response(payload, operation=operation).model_dump(mode="json")
+
+
+def async_job_http_failure(*, operation: str, status_code: int, payload: Any) -> dict[str, Any]:
+    """A 4xx rejection means the reviewed async job was not accepted."""
+
+    return ToolResult(
+        status="failed",
+        data=payload,
+        error_code=f"http_{status_code}",
+        retryable=False,
+        evidence={
+            "adapter_contract": "http_async_job_response_v1",
+            "operation": operation,
+            "http_status": status_code,
+            "effect": "async_enqueue",
+            "dispatch_attempted": True,
+            "recipient_outcome": "rejected",
+        },
+    ).model_dump(mode="json")
+
+
+def async_job_outcome_unknown(
+    *,
+    operation: str,
+    reason: str,
+    status_code: int | None = None,
+    payload: Any = None,
+) -> dict[str, Any]:
+    """Stop after one dispatched enqueue whose recipient outcome is ambiguous."""
+
+    evidence: dict[str, Any] = {
+        "adapter_contract": "http_async_job_response_v1",
+        "operation": operation,
+        "effect": "async_enqueue",
+        "dispatch_attempted": True,
+        "recipient_outcome": "unconfirmed",
+        "reason": reason,
+    }
+    if status_code is not None:
+        evidence["http_status"] = status_code
+    return ToolResult(
+        status="outcome_unknown",
+        data=payload,
+        error_code="tool_outcome_unknown",
+        retryable=False,
+        evidence=evidence,
+    ).model_dump(mode="json")
+
+
+def async_job_pre_dispatch_failure(*, operation: str, reason: str) -> dict[str, Any]:
+    """Fail when the reviewed enqueue request never reached its recipient."""
+
+    return ToolResult(
+        status="failed",
+        error_code="async_dispatch_failed",
+        retryable=False,
+        evidence={
+            "adapter_contract": "http_async_job_response_v1",
+            "operation": operation,
+            "effect": "async_enqueue",
+            "dispatch_attempted": False,
+            "reason": reason,
+        },
+    ).model_dump(mode="json")
 
 
 def one_db_commit_http_failure(*, operation: str, status_code: int, payload: Any) -> dict[str, Any]:

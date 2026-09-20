@@ -6,6 +6,19 @@
 
 Классы: `read-only`, `one-db-commit`, `db-async-enqueue`, `external-dispatch`, `browser-script-mcp`, `unknown`. `unknown` — handler не доказывает единственную безопасную границу (несколько/нулевой direct commit, helper либо target route неразрешим); для него automatic retry запрещён. Отсутствие retry-кода не разрешает retry: E03 не добавляет idempotency, outbox или receipt.
 
+E05.3.1 REVIEWED — узкое исключение на агентской границе, не новая
+классификация inventory: только `documents.classify`, `documents.extract` и
+`documents.reprocess` через точный `POST /api/agent/cap/documents` нормализуют
+допустимую queue acceptance в ToolResult v1 `partial`/`job_queued` с raw data,
+checkpoint и evidence. Прямые routes и прочие `db-async-enqueue` operations
+fail-closed и сохраняют legacy-контракт. Одна попытка: 4xx — `failed`,
+неоднозначность после dispatch — `outcome_unknown`, ошибка до dispatch —
+`failed`; automatic retry отсутствует. Корректный versioned nonterminal
+сохраняется, `succeeded` с queued job отклоняется. Production rebuild и
+`/health` проверены;
+E05.3 и E05 остаются IN PROGRESS. Отчёт:
+`docs/agent-employee-delivery/E05-3-1-async-job-adapters.md`.
+
 | Operation | Route / recipient | Backend RBAC | Actual effect | DB commit boundary | External effect / internal retries | Receipt | Classification / retry |
 | --- | --- | --- | --- | --- | --- | --- |
 | `agent_control.ai_config_get` | `GET /api/ai/config`; `backend/app/api/ai_settings.py:252 get_config` | gateway auth+actor; viewer=read; deps=get_current_user | direct handler source: read path | no direct commit | none detected; no handler retry | none | `read-only`; auto-retry not-authorized-by-E03 |

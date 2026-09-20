@@ -184,7 +184,17 @@ E05.2 SCOPED COMPLETE / REVIEWED: E03 содержит 124 `one-db-commit` оп�
 При закрытии read retry запрещён для обоих email render aliases,
 `compare_decide` стал явным approval/risk gate, `email.templates.delete`
 получил явный gate, а `task_propose.admin_only` исправлен. E05 остаётся
-IN PROGRESS; следующий шаг — E05.3 async jobs.
+IN PROGRESS. E05.3 также остаётся IN PROGRESS: E05.3.1 REVIEWED переводит
+только `documents.classify`, `documents.extract` и `documents.reprocess` через
+точный `POST /api/agent/cap/documents`; прямые routes fail-closed. Queue
+acceptance — ToolResult v1 `partial`/`job_queued` с raw data, checkpoint и
+evidence; 4xx — `failed`, неоднозначность после dispatch — `outcome_unknown`,
+ошибка до dispatch — `failed`, одна попытка без retry. Прочие async operations
+остаются legacy. Независимо: 236 focused + 43 boundary/router теста с известным
+предупреждением `asyncio_loop_scope`; production rebuild и `/health` проверены.
+Отчёт:
+`docs/agent-employee-delivery/E05-3-1-async-job-adapters.md`. Следующий шаг —
+отдельно аудируемый E05.3-срез, без предположения о конкретной операции.
 Push накопленной ветки был заблокирован автопроверкой из-за несвязанных CAD-коммитов;
 для публикации всей этой истории нужно отдельное разрешение. Не обходить запрет.
 

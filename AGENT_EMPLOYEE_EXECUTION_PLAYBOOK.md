@@ -417,7 +417,8 @@ scope/time/action и запреты replay/resume, но нельзя выдум�
 ### E05 — Перевод адаптеров на ToolResult по одной группе
 
 **Статус:** IN PROGRESS: E05.1 REVIEWED; E05.2 SCOPED COMPLETE / REVIEWED
-после десяти узких срезов; E05.3–E05.4 не завершены. Отчёты:
+после десяти узких срезов; E05.3 IN PROGRESS, включая E05.3.1 REVIEWED; E05.4
+не завершена. Отчёты:
 `docs/agent-employee-delivery/E05-1-read-adapters.md`,
 `docs/agent-employee-delivery/E05-2-1-db-write-adapters.md`,
 `docs/agent-employee-delivery/E05-2-2-db-write-adapters.md`,
@@ -429,7 +430,8 @@ scope/time/action и запреты replay/resume, но нельзя выдум�
 `docs/agent-employee-delivery/E05-2-8-db-write-adapters.md`,
 `docs/agent-employee-delivery/E05-2-9-db-write-adapters.md`,
 `docs/agent-employee-delivery/E05-2-10-db-write-adapters.md`,
-`docs/agent-employee-delivery/E05-2-closure.md`. **После:** E04.
+`docs/agent-employee-delivery/E05-2-closure.md`,
+`docs/agent-employee-delivery/E05-3-1-async-job-adapters.md`. **После:** E04.
 **Файлы:** `ai/agent_loop.py::execute_skill`, `api/capability_router.py`,
 `ai/tool_transport.py`, адаптеры из E03, тесты транспорта/gateway.
 
@@ -581,8 +583,21 @@ allowlist из 28 мигрированных операций и 96 явных �
 `docs/agent-employee-delivery/E05-2-closure.md`. При закрытии email render
 aliases исключены из read retry, `compare_decide` закреплён как approval/risk
 gate, `email.templates.delete` получил alias gate, а
-`task_propose.admin_only` исправлен. E05 остаётся IN PROGRESS: следующая
-карточка — E05.3 async jobs.
+`task_propose.admin_only` исправлен. E05 остаётся IN PROGRESS.
+
+E05.3.1 REVIEWED охватывает только `documents.classify`, `documents.extract` и
+`documents.reprocess` через точный `POST /api/agent/cap/documents` и исходный
+`action`; прямые routes и прочие actions fail-closed. Допустимая queue acceptance
+нормализуется в ToolResult v1 `partial`/`job_queued`, сохраняющий raw `data`,
+checkpoint и evidence. Корректный versioned nonterminal сохраняется, а
+`succeeded` с queued job отклоняется. Одна попытка без retry: 4xx — `failed`,
+неоднозначность после dispatch — `outcome_unknown`, ошибка до dispatch —
+`failed`. Остальные async operations legacy. Независимо: 236 focused + 43
+boundary/router теста с известным предупреждением `asyncio_loop_scope`;
+production rebuild и `/health` проверены. Отчёт:
+`docs/agent-employee-delivery/E05-3-1-async-job-adapters.md`. E05.3 и E05
+остаются IN PROGRESS; следующий шаг — отдельно аудируемый E05.3-срез без
+предположения о конкретной операции.
 
 ### E06 — Consumers не принимают незавершённый результат за успех
 

@@ -202,8 +202,19 @@ allowlist мигрированы 28, а остаток из 96 полность�
 `docs/agent-employee-delivery/E05-2-closure.md`. В нём также закреплены
 исключение email render aliases из read retry, approval/risk gate
 `analytics.compare_decide`, alias gate `email.templates.delete` и корректный
-`task_propose.admin_only`. E05 остаётся IN PROGRESS; следующий шаг — E05.3
-async jobs.
+`task_propose.admin_only`. E05 остаётся IN PROGRESS. E05.3 остаётся IN
+PROGRESS, при этом E05.3.1 REVIEWED: только `documents.classify`,
+`documents.extract` и `documents.reprocess` через точный
+`POST /api/agent/cap/documents` получают queue-acceptance ToolResult v1
+`partial`/`job_queued` с raw data, checkpoint и evidence; прямые routes
+fail-closed. 4xx — `failed`, неоднозначность после dispatch —
+`outcome_unknown`, ошибка до dispatch — `failed`; одна попытка без retry.
+Versioned nonterminal сохраняется, `succeeded` с queued job отклоняется;
+остальные async operations legacy. Независимо: 236 focused + 43
+boundary/router теста с известным предупреждением `asyncio_loop_scope`;
+production rebuild и `/health` проверены. Отчёт:
+`docs/agent-employee-delivery/E05-3-1-async-job-adapters.md`. Далее нужен
+отдельно аудируемый E05.3-срез без предположения о конкретной операции.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя
 в WorkEvent, проверяет владельца/аргументы/попытку/lease. Детали журнала и UI
