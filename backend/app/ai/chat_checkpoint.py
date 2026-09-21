@@ -17,8 +17,16 @@ class ChatCheckpointError(BaseException):
     """Cross model recovery handlers when durable state cannot be recorded."""
 
 
-class ChatOutcomeUnknown(BaseException):
-    """Stop model recovery after saving an uncertain tool outcome."""
+class ChatNonterminalToolResult(BaseException):
+    """Carry a persisted v1 nonterminal ToolResult across recovery boundaries."""
+
+    def __init__(self, result: dict) -> None:
+        super().__init__(str(result.get("status")))
+        self.result = result
+
+
+class ChatOutcomeUnknown(ChatNonterminalToolResult):
+    """Backward-compatible signal for a persisted uncertain tool outcome."""
 
 
 def pack_checkpoint(state: dict) -> dict:

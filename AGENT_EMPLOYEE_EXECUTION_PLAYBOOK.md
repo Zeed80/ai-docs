@@ -681,6 +681,11 @@ evidence и переиспользует exact HTTP-423 approval settlement. Dig
 81 passed. Отчёт:
 `docs/agent-employee-delivery/E06-2-work-order-waiting-approval.md`. E06 остаётся
 IN PROGRESS; далее durable/non-durable chat stop paths.
+E06.3 REVIEWED: checkpointed durable chat сохраняет history/checkpoint/journal,
+затем v1 `partial`/`outcome_unknown` останавливает tool/LLM tail через typed
+сигнал и E06.1 settlement. Независимо: 115 passed. Отчёт:
+`docs/agent-employee-delivery/E06-3-durable-chat-nonterminal-results.md`. E06
+остаётся IN PROGRESS; далее chat `waiting_approval` и non-checkpointed paths.
 
 ### E07 — Основа масштабируемых квитанций
 

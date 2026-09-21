@@ -265,6 +265,11 @@ capability/action/arguments через существующий HTTP-423 settlem
 digest не используется. Независимо: 81 passed. Отчёт:
 `docs/agent-employee-delivery/E06-2-work-order-waiting-approval.md`. Далее —
 chat consumer stop paths.
+E06.3 REVIEWED: checkpointed durable chat переносит v1
+`partial`/`outcome_unknown` после checkpoint/journal в безопасный WorkOrder stop;
+следующие tool/LLM/replan не выполняются. Независимо: 115 passed. Отчёт:
+`docs/agent-employee-delivery/E06-3-durable-chat-nonterminal-results.md`. E06
+остаётся IN PROGRESS.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя
 в WorkEvent, проверяет владельца/аргументы/попытку/lease. Детали журнала и UI

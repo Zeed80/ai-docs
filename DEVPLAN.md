@@ -228,6 +228,11 @@ E06.2 REVIEWED добавляет exact-bound settlement ToolResult
 digest. Независимо: 81 passed. Отчёт:
 `docs/agent-employee-delivery/E06-2-work-order-waiting-approval.md`. Далее —
 chat consumers.
+E06.3 REVIEWED останавливает checkpointed durable chat после сохранённого v1
+`partial`/`outcome_unknown` без tool tail, LLM continuation или replan.
+Независимо: 115 passed. Отчёт:
+`docs/agent-employee-delivery/E06-3-durable-chat-nonterminal-results.md`. E06
+остаётся IN PROGRESS.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при
 сетевой ошибке/HTTP 5xx дают outcome_unknown и блокируют durable-цикл после

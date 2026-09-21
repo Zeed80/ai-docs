@@ -3340,12 +3340,18 @@ class AgentSession:
                         "result": result,
                     },
                 )
-                if isinstance(result, dict) and result.get("status") == "outcome_unknown":
-                    from app.ai.chat_checkpoint import ChatOutcomeUnknown
+                # Only a valid v1 envelope has lifecycle semantics here.  Raw
+                # legacy maps remain ordinary history, including a coincidental
+                # ``status`` field; they cannot silently change durable control
+                # flow.  This happens only after history, checkpoint and action
+                # journal persistence have completed.
+                if isinstance(result, dict) and "version" in result:
+                    from app.ai.chat_checkpoint import ChatNonterminalToolResult
+                    from app.ai.tool_result import normalize_tool_result
 
-                    raise ChatOutcomeUnknown(
-                        "Tool outcome unknown; recipient verification required"
-                    )
+                    normalized = normalize_tool_result(result)
+                    if normalized.status in {"partial", "outcome_unknown"}:
+                        raise ChatNonterminalToolResult(normalized.model_dump(mode="json"))
             self._trim_history()
         return results
 

@@ -57,7 +57,8 @@ async def boundary(factory, run, attempt_id, payload):
 
 
 @pytest.mark.asyncio
-async def test_journal_result_and_checkpoint_rollback_together(test_engine):
+@pytest.mark.parametrize("status", ["partial", "outcome_unknown"])
+async def test_journal_result_and_checkpoint_rollback_together(test_engine, status):
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     run, _, attempt_id, action_id, payload = await setup_action(factory)
     started = {**payload, "phase": "tool_started", "in_flight_call_id": "call-1"}
@@ -69,7 +70,7 @@ async def test_journal_result_and_checkpoint_rollback_together(test_engine):
         "completed_call": {
             "action_id": str(action_id),
             "call_id": "call-1",
-            "result": {"error": "timeout", "status": "outcome_unknown"},
+            "result": {"error": "timeout", "status": status},
         },
     }
     async with factory() as db:
@@ -93,7 +94,7 @@ async def test_journal_result_and_checkpoint_rollback_together(test_engine):
     await boundary(factory, run, attempt_id, recorded)
     async with factory() as db:
         action = await db.get(ChatLogicalAction, action_id)
-        assert action.status == "outcome_unknown"  # Honor the tool's explicit structured status.
+        assert action.status == status  # Honor the tool's explicit structured status.
         assert action.result == recorded["completed_call"]["result"]
     with pytest.raises(ValueError, match="cannot execute again"):
         await boundary(factory, run, attempt_id, payload)

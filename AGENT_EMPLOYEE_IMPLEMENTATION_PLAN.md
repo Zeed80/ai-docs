@@ -257,6 +257,11 @@ Recipient digest не авторизует действие; retry/replan/verifi
 Независимо: 81 passed. Отчёт:
 `docs/agent-employee-delivery/E06-2-work-order-waiting-approval.md`. E06 остаётся
 IN PROGRESS; далее chat consumers.
+E06.3 REVIEWED: checkpointed durable chat после journal/checkpoint переносит v1
+`partial`/`outcome_unknown` typed-сигналом в E06.1 settlement; tool tail, новый
+LLM call, retry и replan не запускаются. Независимо: 115 passed. Отчёт:
+`docs/agent-employee-delivery/E06-3-durable-chat-nonterminal-results.md`. E06
+остаётся IN PROGRESS; далее chat `waiting_approval` и non-checkpointed paths.
 Push накопленной ветки был заблокирован автопроверкой из-за несвязанных CAD-коммитов;
 для публикации всей этой истории нужно отдельное разрешение. Не обходить запрет.
 

@@ -16,6 +16,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.ai.chat_checkpoint import ChatNonterminalToolResult
 from app.db.models import Approval, WorkOrder, WorkStep, WorkStepAttempt, WorkToolCall
 from app.domain.work_orders import (
     claim_ready_step,
@@ -290,7 +291,7 @@ async def test_nonterminal_v1_tool_result_blocks_without_retry_or_downstream_exe
         "evidence": {"adapter_contract": "reviewed_v1", "receipt": "r-1"},
         "checkpoint": checkpoint,
     }
-    capability_call = AsyncMock(side_effect=NonterminalToolResultError(result))
+    capability_call = AsyncMock(side_effect=ChatNonterminalToolResult(result))
     verifier = AsyncMock()
     with (
         patch("app.tasks.work_orders._execute_step_kind", new=capability_call),

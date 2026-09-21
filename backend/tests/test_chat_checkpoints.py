@@ -1,6 +1,7 @@
 """Checkpoint integrity and tool-boundary persistence without automatic replay."""
 
 import copy
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
@@ -12,7 +13,12 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.ai.agent_config import BuiltinAgentConfig
 from app.ai.agent_loop import AgentSession
-from app.ai.chat_checkpoint import ChatCheckpointError, pack_checkpoint, unpack_checkpoint
+from app.ai.chat_checkpoint import (
+    ChatCheckpointError,
+    ChatNonterminalToolResult,
+    pack_checkpoint,
+    unpack_checkpoint,
+)
 from app.api.chat_runs import (
     ChatResumeRequest,
     ChatRunCreate,
@@ -157,6 +163,59 @@ async def test_failure_recording_result_does_not_execute_remaining_calls():
     assert effects == ["one"]
     assert saved[-1]["in_flight_call_id"] == "one"
     assert saved[-1]["can_resume"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["partial", "outcome_unknown"])
+async def test_checkpointed_v1_nonterminal_result_is_recorded_then_stops_tool_tail(status):
+    obj = session()
+    snapshots, effects = [], []
+    result = {
+        "version": 1,
+        "status": status,
+        "data": {"recipient": "accepted"},
+        "error_code": f"tool_{status}",
+        "retryable": False,
+        "evidence": {"adapter_contract": "test_v1"},
+        "checkpoint": {"receipt": "r-1"},
+    }
+
+    async def persist(snapshot):
+        snapshots.append(unpack_checkpoint(snapshot))
+
+    async def execute(tc, iteration):
+        effects.append(tc["id"])
+        return "test", result, tc["id"]
+
+    obj.set_checkpoint_sink(persist)
+    obj._execute_single_tool = execute
+    with pytest.raises(ChatNonterminalToolResult) as exc_info:
+        await obj._execute_tools_sequential([call(), call("two")], 0)
+
+    assert exc_info.value.result == result
+    assert effects == ["one"]
+    assert [snapshot["phase"] for snapshot in snapshots] == [
+        "tools_planned",
+        "tool_started",
+        "tool_recorded",
+    ]
+    assert snapshots[-1]["completed_call"]["result"] == result
+    assert json.loads(obj.messages[-1]["content"]) == result
+
+
+@pytest.mark.asyncio
+async def test_checkpointed_raw_outcome_unknown_remains_legacy_history():
+    obj = session()
+    effects = []
+
+    async def execute(tc, iteration):
+        effects.append(tc["id"])
+        return "test", {"status": "outcome_unknown"}, tc["id"]
+
+    obj.set_checkpoint_sink(AsyncMock())
+    obj._execute_single_tool = execute
+    await obj._execute_tools_sequential([call(), call("two")], 0)
+    assert effects == ["one", "two"]
 
 
 async def claim(factory):
@@ -561,7 +620,19 @@ async def test_worker_journal_failure_fences_effect_and_preserves_unknown_outcom
             async def execute(tc, iteration):
                 effects.append(tc["id"])
                 if failed_phase == "unknown_result":
-                    return "test", {"status": "outcome_unknown", "error": "timeout"}, tc["id"]
+                    return (
+                        "test",
+                        {
+                            "version": 1,
+                            "status": "outcome_unknown",
+                            "data": {"recipient": "unconfirmed"},
+                            "error_code": "tool_outcome_unknown",
+                            "retryable": False,
+                            "evidence": {"adapter_contract": "test_v1"},
+                            "checkpoint": {"receipt": "r-1"},
+                        },
+                        tc["id"],
+                    )
                 return "test", {"result": tc["id"]}, tc["id"]
 
             self._executor._execute_single_tool = execute

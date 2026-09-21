@@ -57,7 +57,7 @@ async def record_boundary(db, order, attempt, payload):
             or digest(action.request) != request_digest
         ):
             raise ValueError("Logical action binding changed")
-        if action.status in {"result_recorded", "outcome_unknown"}:
+        if action.status in {"result_recorded", "partial", "outcome_unknown"}:
             raise ValueError("Recorded logical action cannot execute again")
         if phase == "tools_planned" and action.status == "started":
             raise ValueError("Unknown action outcome cannot be replayed")
@@ -99,8 +99,9 @@ async def record_boundary(db, order, attempt, payload):
         action.result = completed["result"]
         action.result_digest = digest(action.result)
         action.status = (
-            "outcome_unknown"
-            if isinstance(action.result, dict) and action.result.get("status") == "outcome_unknown"
+            action.result["status"]
+            if isinstance(action.result, dict)
+            and action.result.get("status") in {"partial", "outcome_unknown"}
             else "result_recorded"
         )
         await append_event(

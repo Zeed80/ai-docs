@@ -136,6 +136,30 @@ class FakeAgent:
 
 
 @pytest.mark.asyncio
+async def test_nonterminal_checkpoint_signal_propagates_without_runtime_wrapping(monkeypatch):
+    from app.ai.chat_checkpoint import ChatNonterminalToolResult
+    from app.tasks import durable_chat
+
+    result = {
+        "version": 1,
+        "status": "partial",
+        "data": {"recipient": "accepted"},
+        "error_code": "job_queued",
+        "retryable": False,
+        "evidence": {"adapter_contract": "test_v1"},
+        "checkpoint": {"receipt": "r-1"},
+    }
+
+    async def stopped(*args, **kwargs):
+        raise ChatNonterminalToolResult(result)
+
+    monkeypatch.setattr(durable_chat, "_run_durable_chat", stopped)
+    with pytest.raises(ChatNonterminalToolResult) as exc_info:
+        await run_durable_chat(uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), session_factory=object())
+    assert exc_info.value.result == result
+
+
+@pytest.mark.asyncio
 async def test_worker_persists_result_without_http_connection(test_engine):
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     run, step, attempt = await claimed_run(factory)

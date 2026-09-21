@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 import structlog
 
+from app.ai.chat_checkpoint import ChatNonterminalToolResult
 from app.domain.work_orders import (
     append_event,
     attempt_owns_lease,
@@ -962,7 +963,7 @@ async def execute_claimed_step(
                     call_row.finished_at = utcnow()
                 await db.commit()
         return False
-    except NonterminalToolResultError as exc:
+    except (NonterminalToolResultError, ChatNonterminalToolResult) as exc:
         async with factory() as db:
             order = await db.get(WorkOrder, work_order_id, with_for_update=True)
             step_row = await db.get(WorkStep, step_id, with_for_update=True)
