@@ -48,6 +48,11 @@ queued receipt нормализуется в `partial/job_queued`, но клас
 `docs/agent-employee-delivery/E05-4-3-email-send-queue-adapter.md`. Следующий
 safety-срез должен исключить все `computer_use.*` из generic read retry.
 
+E05.4.4 REVIEWED: все 11 `browser-script-mcp` operations на точном
+`/api/agent/cap/computer_use` исключены из generic read retry. Это не меняет их
+класс, не добавляет success adapter и не ослабляет grant/audit/budget. См.
+`docs/agent-employee-delivery/E05-4-4-computer-use-retry-boundary.md`.
+
 | Operation | Route / recipient | Backend RBAC | Actual effect | DB commit boundary | External effect / internal retries | Receipt | Classification / retry |
 | --- | --- | --- | --- | --- | --- | --- |
 | `agent_control.ai_config_get` | `GET /api/ai/config`; `backend/app/api/ai_settings.py:252 get_config` | gateway auth+actor; viewer=read; deps=get_current_user | direct handler source: read path | no direct commit | none detected; no handler retry | none | `read-only`; auto-retry not-authorized-by-E03 |

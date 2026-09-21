@@ -639,6 +639,13 @@ passed. Отчёт:
 остаются IN PROGRESS; следующий срез запрещает generic read retry для
 `computer_use.*`.
 
+E05.4.4 REVIEWED запрещает generic read retry для всех 11 exact
+`computer_use.*` operations: grant/audit/budget и browser/file effects не могут
+быть повторены transport-слоем. Несвязанные reads сохраняют retry; adapters и
+permissions не менялись. Независимо: 251 passed. Отчёт:
+`docs/agent-employee-delivery/E05-4-4-computer-use-retry-boundary.md`. E05.4/E05
+остаются IN PROGRESS; далее drawing read-only audit и scoped closure.
+
 ### E06 — Consumers не принимают незавершённый результат за успех
 
 **Статус:** TODO. **После:** E05.

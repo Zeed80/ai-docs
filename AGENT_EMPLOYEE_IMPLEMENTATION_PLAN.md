@@ -232,6 +232,12 @@ delivery; неоднозначность после единственного d
 Независимо: 333 passed. Отчёт:
 `docs/agent-employee-delivery/E05-4-3-email-send-queue-adapter.md`. E05.4/E05
 остаются IN PROGRESS; далее safety-срез retry для `computer_use.*`.
+E05.4.4 REVIEWED исключает все 11 `computer_use.*`/`browser-script-mcp`
+operations из generic read retry на точном capability route. 5xx/transport
+делают один dispatch; unrelated reads сохраняют retry. Независимо: 251 passed.
+Отчёт: `docs/agent-employee-delivery/E05-4-4-computer-use-retry-boundary.md`.
+E05.4/E05 остаются IN PROGRESS; далее повторный аудит read-only drawing built-in
+и scoped closure остатка.
 Push накопленной ветки был заблокирован автопроверкой из-за несвязанных CAD-коммитов;
 для публикации всей этой истории нужно отдельное разрешение. Не обходить запрет.
 

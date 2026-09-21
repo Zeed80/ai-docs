@@ -17,6 +17,26 @@ _MCP_GATEWAY_PATH = "/api/agent/cap/mcp"
 _MCP_BUILTIN_TOOL_SEARCH_ACTION = "tool_search_mcp"
 _EMAIL_SEND_CAPABILITY_PATH = "/api/agent/cap/email"
 _EMAIL_SEND_ACTION = "send"
+_COMPUTER_USE_CAPABILITY_PATH = "/api/agent/cap/computer_use"
+
+# Browser/script calls may persist browser evidence or spend a short-lived
+# grant even when their catalog effect appears to be ``read``. They therefore
+# never inherit generic read retries; the set mirrors the reviewed inventory.
+BROWSER_SCRIPT_MCP_OPERATIONS = frozenset(
+    {
+        "computer_use.browser_fetch",
+        "computer_use.web_discover",
+        "computer_use.desktop_snapshot",
+        "computer_use.desktop_start",
+        "computer_use.desktop_click",
+        "computer_use.desktop_type",
+        "computer_use.desktop_read",
+        "computer_use.desktop_close",
+        "computer_use.file_read",
+        "computer_use.file_write",
+        "computer_use.shell",
+    }
+)
 
 # Reviewed E05.3 queue-acceptance operations. Direct routes are intentionally
 # excluded: only the exact capability endpoint plus the original action proves
@@ -138,6 +158,20 @@ def email_send_queue_operation(skill: dict, args: dict) -> ToolDefinition | None
     return operation
 
 
+def browser_script_mcp_operation(skill: dict, args: dict) -> ToolDefinition | None:
+    """Resolve an exact reviewed computer-use call that must never retry."""
+
+    operation = resolve_catalog_operation(skill, args)
+    if operation is None or operation.name not in BROWSER_SCRIPT_MCP_OPERATIONS:
+        return None
+    if (
+        str(skill.get("method", "")).upper() != "POST"
+        or str(skill.get("path", "")) != _COMPUTER_USE_CAPABILITY_PATH
+    ):
+        return None
+    return operation
+
+
 def mcp_builtin_tool_search_operation(skill: dict, args: dict) -> bool:
     """Return true only for the reviewed built-in MCP gateway call.
 
@@ -157,6 +191,8 @@ def retry_safe(skill: dict, args: dict) -> bool:
     path = str(skill.get("path", ""))
     prefix = "/api/agent/cap/"
     if method == "POST" and path.startswith(prefix):
+        if browser_script_mcp_operation(skill, args) is not None:
+            return False
         capability = path[len(prefix) :]
         action = args.get("action")
         if not isinstance(action, str):

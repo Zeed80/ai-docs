@@ -9,7 +9,9 @@ from app.ai.agent_config import BuiltinAgentConfig
 from app.ai.agent_loop import capability_args_digest, execute_skill
 from app.ai.tool_transport import (
     ASYNC_JOB_OPERATIONS,
+    BROWSER_SCRIPT_MCP_OPERATIONS,
     async_job_operation,
+    browser_script_mcp_operation,
     email_send_queue_operation,
     one_db_commit_operation,
     retry_safe,
@@ -61,6 +63,117 @@ def test_persistent_template_rendering_never_receives_read_retry(skill, args):
     """Direct calls and both catalog aliases fail closed on retry safety."""
     assert retry_safe(skill, args) is False
     assert one_db_commit_operation(skill, args) is None
+
+
+_BROWSER_SCRIPT_ACTIONS = [name.split(".", 1)[1] for name in sorted(BROWSER_SCRIPT_MCP_OPERATIONS)]
+
+
+def test_browser_script_mcp_allowlist_matches_reviewed_catalog_inventory():
+    assert BROWSER_SCRIPT_MCP_OPERATIONS == frozenset(
+        {
+            "computer_use.browser_fetch",
+            "computer_use.web_discover",
+            "computer_use.desktop_snapshot",
+            "computer_use.desktop_start",
+            "computer_use.desktop_click",
+            "computer_use.desktop_type",
+            "computer_use.desktop_read",
+            "computer_use.desktop_close",
+            "computer_use.file_read",
+            "computer_use.file_write",
+            "computer_use.shell",
+        }
+    )
+
+
+@pytest.mark.parametrize("action", _BROWSER_SCRIPT_ACTIONS)
+def test_browser_script_mcp_resolver_requires_exact_capability_identity(action):
+    skill = {"method": "POST", "path": "/api/agent/cap/computer_use"}
+    args = {"action": action, "work_order_id": "order-1"}
+
+    resolved = browser_script_mcp_operation(skill, args)
+
+    assert resolved is not None
+    assert resolved.name == f"computer_use.{action}"
+    assert retry_safe(skill, args) is False
+
+
+@pytest.mark.parametrize(
+    "skill,args",
+    [
+        (
+            {"method": "POST", "path": "/api/computer-use/execute"},
+            {"action": "browser_fetch", "work_order_id": "order-1"},
+        ),
+        (
+            {"method": "POST", "path": "/api/agent/cap/computer_use/"},
+            {"action": "browser_fetch", "work_order_id": "order-1"},
+        ),
+        (
+            {"method": "POST", "path": "/api/agent/cap/computer_use"},
+            {"action": "unknown", "work_order_id": "order-1"},
+        ),
+    ],
+)
+def test_browser_script_mcp_resolver_fails_closed_for_aliases_and_unknown_actions(skill, args):
+    assert browser_script_mcp_operation(skill, args) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", _BROWSER_SCRIPT_ACTIONS)
+@pytest.mark.parametrize(
+    "failure",
+    [
+        httpx.Response(503, json={"detail": "unavailable"}),
+        httpx.ReadTimeout("timeout"),
+    ],
+)
+async def test_browser_script_mcp_5xx_and_transport_never_retry(monkeypatch, action, failure):
+    from app.ai import agent_loop
+
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.post.side_effect = [failure, httpx.Response(200, json={"duplicate": True})]
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", MagicMock(return_value=client))
+    monkeypatch.setattr(agent_loop, "internal_headers", lambda: {})
+    sleep = AsyncMock()
+    monkeypatch.setattr(agent_loop.asyncio, "sleep", sleep)
+
+    result = await execute_skill(
+        {"method": "POST", "path": "/api/agent/cap/computer_use"},
+        {"action": action, "work_order_id": "order-1"},
+        BuiltinAgentConfig(),
+    )
+
+    assert result["status"] == "outcome_unknown"
+    assert result["retryable"] is False
+    client.post.assert_awaited_once()
+    sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unrelated_catalog_read_keeps_generic_retry_policy(monkeypatch):
+    from app.ai import agent_loop
+
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.post.side_effect = [
+        httpx.Response(503, json={"detail": "unavailable"}),
+        httpx.Response(200, json={"items": []}),
+    ]
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", MagicMock(return_value=client))
+    monkeypatch.setattr(agent_loop, "internal_headers", lambda: {})
+    monkeypatch.setattr(agent_loop.asyncio, "sleep", AsyncMock())
+
+    result = await execute_skill(
+        {"method": "POST", "path": "/api/agent/cap/documents"},
+        {"action": "list"},
+        BuiltinAgentConfig(),
+    )
+
+    assert retry_safe({"method": "POST", "path": "/api/agent/cap/documents"}, {"action": "list"})
+    assert result["status"] == "succeeded"
+    assert client.post.await_count == 2
 
 
 @pytest.mark.asyncio

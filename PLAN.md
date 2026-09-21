@@ -244,6 +244,11 @@ E05.4.3 REVIEWED: только exact `email.send` получает строги�
 dispatch запрещён. Независимо: 333 passed. Отчёт:
 `docs/agent-employee-delivery/E05-4-3-email-send-queue-adapter.md`. Далее —
 safety-срез retry для `computer_use.*`.
+E05.4.4 REVIEWED исключает все 11 `computer_use.*` из generic read retry:
+неоднозначный browser/file/grant/audit вызов не повторяется. Независимо: 251
+passed. Отчёт:
+`docs/agent-employee-delivery/E05-4-4-computer-use-retry-boundary.md`. Далее —
+повторный аудит drawing read-only и scoped closure E05.4.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя
 в WorkEvent, проверяет владельца/аргументы/попытку/lease. Детали журнала и UI

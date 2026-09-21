@@ -207,6 +207,11 @@ E05.4.3 REVIEWED добавляет exact `email.send` queue adapter: строг
 dispatch; SMTP delivery явно не подтверждена. Независимо: 333 passed. Отчёт:
 `docs/agent-employee-delivery/E05-4-3-email-send-queue-adapter.md`. Далее —
 запрет generic read retry для `computer_use.*`.
+E05.4.4 REVIEWED запрещает generic read retry всем 11 exact
+`computer_use.*` operations; unrelated reads не изменены. Независимо: 251
+passed. Отчёт:
+`docs/agent-employee-delivery/E05-4-4-computer-use-retry-boundary.md`. Далее —
+drawing read-only audit и scoped closure E05.4.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при
 сетевой ошибке/HTTP 5xx дают outcome_unknown и блокируют durable-цикл после
