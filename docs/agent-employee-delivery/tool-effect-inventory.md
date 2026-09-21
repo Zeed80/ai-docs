@@ -53,6 +53,12 @@ E05.4.4 REVIEWED: все 11 `browser-script-mcp` operations на точном
 класс, не добавляет success adapter и не ослабляет grant/audit/budget. См.
 `docs/agent-employee-delivery/E05-4-4-computer-use-retry-boundary.md`.
 
+E05.4.5 REVIEWED нормализует только exact read-only
+`drawing_analysis_mcp(reanalyze=false)`. E05.4/E05 SCOPED COMPLETE / REVIEWED:
+dynamic MCP, write-reanalyze и computer-use явно остаются legacy/fail-closed
+без recipient receipts. См.
+`docs/agent-employee-delivery/E05-4-5-drawing-mcp-adapter-and-closure.md`.
+
 | Operation | Route / recipient | Backend RBAC | Actual effect | DB commit boundary | External effect / internal retries | Receipt | Classification / retry |
 | --- | --- | --- | --- | --- | --- | --- |
 | `agent_control.ai_config_get` | `GET /api/ai/config`; `backend/app/api/ai_settings.py:252 get_config` | gateway auth+actor; viewer=read; deps=get_current_user | direct handler source: read path | no direct commit | none detected; no handler retry | none | `read-only`; auto-retry not-authorized-by-E03 |

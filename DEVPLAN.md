@@ -212,6 +212,12 @@ E05.4.4 REVIEWED запрещает generic read retry всем 11 exact
 passed. Отчёт:
 `docs/agent-employee-delivery/E05-4-4-computer-use-retry-boundary.md`. Далее —
 drawing read-only audit и scoped closure E05.4.
+E05.4.5 REVIEWED добавляет exact read-only drawing MCP adapter при
+`reanalyze=false`. E05.4/E05 SCOPED COMPLETE / REVIEWED; dynamic MCP,
+write-reanalyze и computer-use не получают ложных success envelopes.
+Независимо: 394 passed. Отчёт:
+`docs/agent-employee-delivery/E05-4-5-drawing-mcp-adapter-and-closure.md`.
+Следующая карточка — E06.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при
 сетевой ошибке/HTTP 5xx дают outcome_unknown и блокируют durable-цикл после

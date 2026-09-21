@@ -249,6 +249,12 @@ E05.4.4 REVIEWED исключает все 11 `computer_use.*` из generic read
 passed. Отчёт:
 `docs/agent-employee-delivery/E05-4-4-computer-use-retry-boundary.md`. Далее —
 повторный аудит drawing read-only и scoped closure E05.4.
+E05.4.5 REVIEWED добавляет строгий read-only adapter
+`drawing_analysis_mcp(reanalyze=false)`. E05.4/E05 SCOPED COMPLETE / REVIEWED:
+dynamic MCP, write-reanalyze и computer-use явно остаются без недоказанных
+success contracts. Независимо: 394 passed. Отчёт:
+`docs/agent-employee-delivery/E05-4-5-drawing-mcp-adapter-and-closure.md`.
+Следующая карточка — E06 consumer hardening.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя
 в WorkEvent, проверяет владельца/аргументы/попытку/lease. Детали журнала и UI

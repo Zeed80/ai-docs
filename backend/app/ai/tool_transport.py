@@ -10,11 +10,13 @@ from app.ai.tool_result import (
     normalize_http_email_send_queue_response,
     normalize_http_one_db_commit_response,
     normalize_http_read_response,
+    normalize_mcp_builtin_drawing_analysis_response,
     normalize_mcp_builtin_tool_search_response,
 )
 
 _MCP_GATEWAY_PATH = "/api/agent/cap/mcp"
 _MCP_BUILTIN_TOOL_SEARCH_ACTION = "tool_search_mcp"
+_MCP_BUILTIN_DRAWING_ANALYSIS_ACTION = "drawing_analysis_mcp"
 _EMAIL_SEND_CAPABILITY_PATH = "/api/agent/cap/email"
 _EMAIL_SEND_ACTION = "send"
 _COMPUTER_USE_CAPABILITY_PATH = "/api/agent/cap/computer_use"
@@ -186,6 +188,22 @@ def mcp_builtin_tool_search_operation(skill: dict, args: dict) -> bool:
     )
 
 
+def mcp_builtin_drawing_analysis_operation(skill: dict, args: dict) -> bool:
+    """Return true only for the reviewed read-only drawing MCP call."""
+
+    arguments = args.get("arguments")
+    drawing_id = arguments.get("drawing_id") if isinstance(arguments, dict) else None
+    return (
+        str(skill.get("method", "")).upper() == "POST"
+        and str(skill.get("path", "")) == _MCP_GATEWAY_PATH
+        and args.get("action") == _MCP_BUILTIN_DRAWING_ANALYSIS_ACTION
+        and isinstance(arguments, dict)
+        and isinstance(drawing_id, str)
+        and bool(drawing_id.strip())
+        and ("reanalyze" not in arguments or arguments["reanalyze"] is False)
+    )
+
+
 def retry_safe(skill: dict, args: dict) -> bool:
     method = str(skill.get("method", "")).upper()
     path = str(skill.get("path", ""))
@@ -250,6 +268,22 @@ def serialize_mcp_builtin_tool_search_response(payload: Any) -> dict[str, Any]:
     """Return the v1 result only for the reviewed built-in MCP search tool."""
 
     return normalize_mcp_builtin_tool_search_response(payload).model_dump(mode="json")
+
+
+def serialize_mcp_builtin_drawing_analysis_response(
+    payload: Any,
+    *,
+    arguments: dict,
+) -> dict[str, Any]:
+    """Return v1 only for the reviewed read-only drawing MCP response."""
+
+    return normalize_mcp_builtin_drawing_analysis_response(
+        payload,
+        requested_drawing_id=arguments["drawing_id"],
+        include_dimensions=arguments.get("include_dimensions", True),
+        include_surfaces=arguments.get("include_surfaces", True),
+        include_gdt=arguments.get("include_gdt", True),
+    ).model_dump(mode="json")
 
 
 def serialize_email_send_queue_response(payload: Any, *, requested_draft_id: Any) -> dict[str, Any]:
@@ -380,6 +414,67 @@ def mcp_builtin_tool_search_pre_dispatch_failure(*, reason: str) -> dict[str, An
         evidence={
             "adapter_contract": "mcp_builtin_tool_search_v1",
             "action": _MCP_BUILTIN_TOOL_SEARCH_ACTION,
+            "gateway": _MCP_GATEWAY_PATH,
+            "recipient_outcome": "not_dispatched",
+            "dispatch_attempted": False,
+            "reason": reason,
+        },
+    ).model_dump(mode="json")
+
+
+def mcp_builtin_drawing_analysis_http_failure(*, status_code: int, payload: Any) -> dict[str, Any]:
+    """A rejected read-only drawing MCP gateway call is confirmed failed."""
+
+    return ToolResult(
+        status="failed",
+        data=payload,
+        error_code=f"http_{status_code}",
+        retryable=False,
+        evidence={
+            "adapter_contract": "mcp_builtin_drawing_analysis_v1",
+            "action": _MCP_BUILTIN_DRAWING_ANALYSIS_ACTION,
+            "gateway": _MCP_GATEWAY_PATH,
+            "recipient_outcome": "rejected",
+            "handler_dispatched": False,
+            "http_status": status_code,
+        },
+    ).model_dump(mode="json")
+
+
+def mcp_builtin_drawing_analysis_outcome_unknown(
+    *, reason: str, status_code: int | None = None, payload: Any = None
+) -> dict[str, Any]:
+    """A dispatched drawing read has an unconfirmed outcome and is not replayed."""
+
+    evidence: dict[str, Any] = {
+        "adapter_contract": "mcp_builtin_drawing_analysis_v1",
+        "action": _MCP_BUILTIN_DRAWING_ANALYSIS_ACTION,
+        "gateway": _MCP_GATEWAY_PATH,
+        "recipient_outcome": "unconfirmed",
+        "dispatch_attempted": True,
+        "reason": reason,
+    }
+    if status_code is not None:
+        evidence["http_status"] = status_code
+    return ToolResult(
+        status="outcome_unknown",
+        data=payload,
+        error_code="tool_outcome_unknown",
+        retryable=False,
+        evidence=evidence,
+    ).model_dump(mode="json")
+
+
+def mcp_builtin_drawing_analysis_pre_dispatch_failure(*, reason: str) -> dict[str, Any]:
+    """A local error proves that the drawing MCP gateway was not called."""
+
+    return ToolResult(
+        status="failed",
+        error_code="mcp_dispatch_failed",
+        retryable=False,
+        evidence={
+            "adapter_contract": "mcp_builtin_drawing_analysis_v1",
+            "action": _MCP_BUILTIN_DRAWING_ANALYSIS_ACTION,
             "gateway": _MCP_GATEWAY_PATH,
             "recipient_outcome": "not_dispatched",
             "dispatch_attempted": False,

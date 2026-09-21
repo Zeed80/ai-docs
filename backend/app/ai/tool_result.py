@@ -321,6 +321,153 @@ def _invalid_mcp_builtin_tool_search_response(
     )
 
 
+def normalize_mcp_builtin_drawing_analysis_response(
+    payload: Any,
+    *,
+    requested_drawing_id: str,
+    include_dimensions: Any = True,
+    include_surfaces: Any = True,
+    include_gdt: Any = True,
+) -> ToolResult:
+    """Normalize only the reviewed read-only ``drawing_analysis_mcp`` shape."""
+
+    raw: Any
+    if isinstance(payload, ToolResult):
+        raw = payload.model_dump(mode="json")
+    elif isinstance(payload, Mapping):
+        raw = dict(payload)
+    else:
+        raw = payload
+
+    if isinstance(raw, Mapping) and "version" in raw:
+        versioned_payload = dict(raw)
+        normalized = normalize_tool_result(raw)
+        if raw.get("status") != "succeeded":
+            return normalized
+        if normalized.status != "succeeded":
+            return _invalid_mcp_builtin_drawing_analysis_response(
+                versioned_payload,
+                "invalid_versioned_tool_result",
+            )
+        return _validate_mcp_builtin_drawing_analysis_payload(
+            normalized.data,
+            requested_drawing_id=requested_drawing_id,
+            include_dimensions=include_dimensions,
+            include_surfaces=include_surfaces,
+            include_gdt=include_gdt,
+            invalid_payload=versioned_payload,
+        )
+
+    return _validate_mcp_builtin_drawing_analysis_payload(
+        raw,
+        requested_drawing_id=requested_drawing_id,
+        include_dimensions=include_dimensions,
+        include_surfaces=include_surfaces,
+        include_gdt=include_gdt,
+    )
+
+
+def _validate_mcp_builtin_drawing_analysis_payload(
+    payload: Any,
+    *,
+    requested_drawing_id: str,
+    include_dimensions: Any,
+    include_surfaces: Any,
+    include_gdt: Any,
+    invalid_payload: Any | None = None,
+) -> ToolResult:
+    contract_error: str | None = None
+    domain_error: str | None = None
+    if not isinstance(payload, Mapping):
+        contract_error = "response_not_mapping"
+    else:
+        raw = dict(payload)
+        domain_error = _domain_failure(raw)
+        drawing = raw.get("drawing")
+        features = raw.get("features")
+        if domain_error is not None:
+            contract_error = "recipient_domain_failure"
+        elif not isinstance(drawing, Mapping):
+            contract_error = "drawing_not_mapping"
+        elif drawing.get("id") != requested_drawing_id:
+            contract_error = "drawing_id_mismatch"
+        elif not isinstance(drawing.get("filename"), str) or not drawing["filename"].strip():
+            contract_error = "drawing_filename_not_nonempty_string"
+        elif not isinstance(drawing.get("format"), str) or not drawing["format"].strip():
+            contract_error = "drawing_format_not_nonempty_string"
+        elif not isinstance(drawing.get("status"), str):
+            contract_error = "drawing_status_not_string"
+        elif not isinstance(features, list):
+            contract_error = "features_not_list"
+        elif type(raw.get("total_features")) is not int:
+            contract_error = "total_features_not_integer"
+        elif raw["total_features"] != len(features):
+            contract_error = "total_features_mismatch"
+        else:
+            selected_feature_fields = (
+                ("dimensions", include_dimensions),
+                ("surfaces", include_surfaces),
+                ("gdt", include_gdt),
+            )
+            for feature in features:
+                if not isinstance(feature, Mapping):
+                    contract_error = "feature_not_mapping"
+                    break
+                for field, selected in selected_feature_fields:
+                    if selected and (
+                        field not in feature
+                        or feature[field] is not None
+                        and not isinstance(feature[field], list)
+                    ):
+                        contract_error = f"feature_{field}_not_list_compatible"
+                        break
+                if contract_error is not None:
+                    break
+
+    if contract_error is not None:
+        return _invalid_mcp_builtin_drawing_analysis_response(
+            payload if invalid_payload is None else invalid_payload,
+            contract_error,
+            recipient_error_code=domain_error,
+        )
+
+    return ToolResult(
+        status="succeeded",
+        data=dict(payload),
+        retryable=False,
+        evidence={
+            "adapter_contract": "mcp_builtin_drawing_analysis_v1",
+            "action": "drawing_analysis_mcp",
+            "gateway": "/api/agent/cap/mcp",
+            "recipient_outcome": "confirmed",
+        },
+    )
+
+
+def _invalid_mcp_builtin_drawing_analysis_response(
+    payload: Any,
+    contract_error: str,
+    *,
+    recipient_error_code: str | None = None,
+) -> ToolResult:
+    evidence: dict[str, Any] = {
+        "adapter_contract": "mcp_builtin_drawing_analysis_v1",
+        "action": "drawing_analysis_mcp",
+        "gateway": "/api/agent/cap/mcp",
+        "recipient_outcome": "confirmed_malformed",
+        "contract_error": contract_error,
+    }
+    if recipient_error_code is not None:
+        evidence["recipient_error_code"] = recipient_error_code
+    return ToolResult(
+        status="failed",
+        data=payload,
+        error_code="invalid_mcp_builtin_drawing_analysis_contract",
+        retryable=False,
+        evidence=evidence,
+    )
+
+
 def normalize_http_one_db_commit_response(payload: Any, *, operation: str) -> ToolResult:
     """Normalize a reviewed E03 one-DB-commit response at the agent boundary.
 

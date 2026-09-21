@@ -9,7 +9,9 @@ import pytest
 from app.ai import agent_loop
 from app.ai.agent_config import BuiltinAgentConfig
 from app.ai.tool_transport import (
+    mcp_builtin_drawing_analysis_operation,
     mcp_builtin_tool_search_operation,
+    serialize_mcp_builtin_drawing_analysis_response,
     serialize_mcp_builtin_tool_search_response,
 )
 
@@ -222,6 +224,189 @@ def test_mcp_builtin_tool_search_resolver_is_exact(skill, args, selected):
 
 
 @pytest.mark.parametrize(
+    "skill,args,selected",
+    [
+        (
+            {"method": "POST", "path": "/api/agent/cap/mcp"},
+            {"action": "drawing_analysis_mcp", "arguments": {"drawing_id": "drawing-1"}},
+            True,
+        ),
+        (
+            {"method": "POST", "path": "/api/agent/cap/mcp"},
+            {
+                "action": "drawing_analysis_mcp",
+                "arguments": {"drawing_id": "drawing-1", "reanalyze": False},
+            },
+            True,
+        ),
+        (
+            {"method": "POST", "path": "/api/agent/cap/mcp"},
+            {
+                "action": "drawing_analysis_mcp",
+                "arguments": {"drawing_id": "drawing-1", "reanalyze": True},
+            },
+            False,
+        ),
+        (
+            {"method": "POST", "path": "/api/agent/cap/mcp"},
+            {
+                "action": "drawing_analysis_mcp",
+                "arguments": {"drawing_id": "drawing-1", "reanalyze": "false"},
+            },
+            False,
+        ),
+        (
+            {"method": "POST", "path": "/api/agent/cap/mcp"},
+            {"action": "drawing_analysis_mcp", "arguments": {"drawing_id": " "}},
+            False,
+        ),
+        (
+            {"method": "POST", "path": "/api/agent/cap/mcp"},
+            {"action": "drawing_analysis_mcp", "arguments": []},
+            False,
+        ),
+        (
+            {"method": "POST", "path": "/api/agent/cap/mcp/"},
+            {"action": "drawing_analysis_mcp", "arguments": {"drawing_id": "drawing-1"}},
+            False,
+        ),
+        (
+            {"method": "POST", "path": "/api/agent/cap/mcp"},
+            {"action": "acme__drawing", "arguments": {"drawing_id": "drawing-1"}},
+            False,
+        ),
+    ],
+)
+def test_mcp_builtin_drawing_analysis_resolver_is_exact(skill, args, selected):
+    assert mcp_builtin_drawing_analysis_operation(skill, args) is selected
+
+
+def _drawing_payload(**overrides):
+    payload = {
+        "drawing": {
+            "id": "drawing-1",
+            "filename": "part.dxf",
+            "format": "dxf",
+            "status": "analyzed",
+        },
+        "features": [{"id": "feature-1", "dimensions": [], "surfaces": None, "gdt": []}],
+        "total_features": 1,
+    }
+    payload.update(overrides)
+    return payload
+
+
+@pytest.mark.parametrize(
+    "payload,arguments,expected_status,contract_error",
+    [
+        (_drawing_payload(), {"drawing_id": "drawing-1"}, "succeeded", None),
+        (
+            _drawing_payload(
+                drawing={
+                    "id": "other",
+                    "filename": "part.dxf",
+                    "format": "dxf",
+                    "status": "analyzed",
+                }
+            ),
+            {"drawing_id": "drawing-1"},
+            "failed",
+            "drawing_id_mismatch",
+        ),
+        (
+            _drawing_payload(features=["bad"], total_features=1),
+            {"drawing_id": "drawing-1"},
+            "failed",
+            "feature_not_mapping",
+        ),
+        (
+            _drawing_payload(total_features=True),
+            {"drawing_id": "drawing-1"},
+            "failed",
+            "total_features_not_integer",
+        ),
+        (
+            _drawing_payload(total_features=0),
+            {"drawing_id": "drawing-1"},
+            "failed",
+            "total_features_mismatch",
+        ),
+        (
+            _drawing_payload(
+                features=[{"id": "feature-1", "dimensions": "bad", "surfaces": [], "gdt": []}]
+            ),
+            {"drawing_id": "drawing-1"},
+            "failed",
+            "feature_dimensions_not_list_compatible",
+        ),
+        (
+            _drawing_payload(features=[{"id": "feature-1"}]),
+            {
+                "drawing_id": "drawing-1",
+                "include_dimensions": False,
+                "include_surfaces": False,
+                "include_gdt": False,
+            },
+            "succeeded",
+            None,
+        ),
+        (
+            _drawing_payload(error="recipient failed"),
+            {"drawing_id": "drawing-1"},
+            "failed",
+            "recipient_domain_failure",
+        ),
+    ],
+)
+def test_mcp_builtin_drawing_analysis_adapter_accepts_only_reviewed_shape(
+    payload, arguments, expected_status, contract_error
+):
+    result = serialize_mcp_builtin_drawing_analysis_response(payload, arguments=arguments)
+
+    assert result["status"] == expected_status
+    assert result["data"] == payload
+    assert result["retryable"] is False
+    assert result["evidence"]["adapter_contract"] == "mcp_builtin_drawing_analysis_v1"
+    assert result["evidence"]["action"] == "drawing_analysis_mcp"
+    if expected_status == "succeeded":
+        assert result["evidence"]["recipient_outcome"] == "confirmed"
+    else:
+        assert result["error_code"] == "invalid_mcp_builtin_drawing_analysis_contract"
+        assert result["evidence"]["contract_error"] == contract_error
+
+
+def test_mcp_builtin_drawing_analysis_revalidates_versioned_success_and_preserves_nonterminal():
+    arguments = {"drawing_id": "drawing-1"}
+    succeeded = serialize_mcp_builtin_drawing_analysis_response(
+        {"version": 1, "status": "succeeded", "data": _drawing_payload()}, arguments=arguments
+    )
+    malformed = serialize_mcp_builtin_drawing_analysis_response(
+        {
+            "version": 1,
+            "status": "succeeded",
+            "data": _drawing_payload(total_features=True),
+        },
+        arguments=arguments,
+    )
+    pending = {
+        "version": 1,
+        "status": "partial",
+        "data": {"cursor": "next"},
+        "error_code": "drawing_pending",
+        "evidence": {"source": "recipient"},
+        "checkpoint": {"cursor": "next"},
+    }
+
+    assert succeeded["status"] == "succeeded"
+    assert malformed["status"] == "failed"
+    assert malformed["data"]["data"]["total_features"] is True
+    preserved = serialize_mcp_builtin_drawing_analysis_response(pending, arguments=arguments)
+    assert preserved["status"] == "partial"
+    assert preserved["data"] == pending["data"]
+    assert preserved["checkpoint"] == pending["checkpoint"]
+
+
+@pytest.mark.parametrize(
     "payload,expected_status,contract_error",
     [
         ({"results": [], "total": 0, "query": "drill"}, "succeeded", None),
@@ -403,6 +588,74 @@ async def test_execute_builtin_tool_search_pre_dispatch_failure_is_failed(monkey
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response,expected_status",
+    [
+        ({"status_code": 200, "payload": _drawing_payload()}, "succeeded"),
+        ({"status_code": 200, "payload": _drawing_payload(total_features=True)}, "failed"),
+        ({"status_code": 400, "payload": {"detail": "bad input"}}, "failed"),
+        ({"status_code": 302, "payload": {"detail": "redirect"}}, "outcome_unknown"),
+        ({"status_code": 502, "payload": {"error": "recipient failed"}}, "outcome_unknown"),
+    ],
+)
+async def test_execute_builtin_drawing_analysis_has_one_attempt_and_explicit_outcomes(
+    monkeypatch, response, expected_status
+):
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.post.return_value = type(
+        "Response",
+        (),
+        {
+            "status_code": response["status_code"],
+            "json": staticmethod(lambda: response["payload"]),
+            "text": "response text",
+        },
+    )()
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", lambda *a, **k: client)
+    monkeypatch.setattr(agent_loop, "internal_headers", lambda: {})
+
+    result = await agent_loop.execute_skill(
+        {"name": "mcp", "method": "POST", "path": "/api/agent/cap/mcp"},
+        {"action": "drawing_analysis_mcp", "arguments": {"drawing_id": "drawing-1"}},
+        _config(),
+    )
+
+    assert result["status"] == expected_status
+    assert result["retryable"] is False
+    assert client.post.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_builtin_drawing_analysis_timeout_and_pre_dispatch_are_explicit(monkeypatch):
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.post.side_effect = agent_loop.httpx.ReadTimeout("timeout")
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", lambda *a, **k: client)
+    monkeypatch.setattr(agent_loop, "internal_headers", lambda: {})
+    args = {"action": "drawing_analysis_mcp", "arguments": {"drawing_id": "drawing-1"}}
+
+    timeout = await agent_loop.execute_skill(
+        {"name": "mcp", "method": "POST", "path": "/api/agent/cap/mcp"}, args, _config()
+    )
+
+    assert timeout["status"] == "outcome_unknown"
+    assert client.post.await_count == 1
+
+    def fail_headers():
+        raise RuntimeError("local header setup failed")
+
+    monkeypatch.setattr(agent_loop, "internal_headers", fail_headers)
+    pre_dispatch = await agent_loop.execute_skill(
+        {"name": "mcp", "method": "POST", "path": "/api/agent/cap/mcp"}, args, _config()
+    )
+
+    assert pre_dispatch["status"] == "failed"
+    assert pre_dispatch["error_code"] == "mcp_dispatch_failed"
+    assert pre_dispatch["evidence"]["dispatch_attempted"] is False
+
+
+@pytest.mark.asyncio
 async def test_nonselected_mcp_action_retains_legacy_payload(monkeypatch):
     client = AsyncMock()
     client.__aenter__.return_value = client
@@ -416,7 +669,10 @@ async def test_nonselected_mcp_action_retains_legacy_payload(monkeypatch):
 
     result = await agent_loop.execute_skill(
         {"name": "mcp", "method": "POST", "path": "/api/agent/cap/mcp"},
-        {"action": "drawing_analysis_mcp", "arguments": {"drawing_id": "d1"}},
+        {
+            "action": "drawing_analysis_mcp",
+            "arguments": {"drawing_id": "d1", "reanalyze": True},
+        },
         _config(),
     )
 

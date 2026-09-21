@@ -830,6 +830,10 @@ async def execute_skill(
         email_send_outcome_unknown,
         email_send_pre_dispatch_failure,
         email_send_queue_operation,
+        mcp_builtin_drawing_analysis_http_failure,
+        mcp_builtin_drawing_analysis_operation,
+        mcp_builtin_drawing_analysis_outcome_unknown,
+        mcp_builtin_drawing_analysis_pre_dispatch_failure,
         mcp_builtin_tool_search_http_failure,
         mcp_builtin_tool_search_operation,
         mcp_builtin_tool_search_outcome_unknown,
@@ -844,6 +848,7 @@ async def execute_skill(
         serialize_async_job_response,
         serialize_email_send_queue_response,
         serialize_http_read_response,
+        serialize_mcp_builtin_drawing_analysis_response,
         serialize_mcp_builtin_tool_search_response,
         serialize_one_db_commit_response,
         unknown_outcome,
@@ -871,6 +876,7 @@ async def execute_skill(
     email_send = email_send_queue_operation(skill, args)
     db_write = one_db_commit_operation(skill, args)
     mcp_tool_search = mcp_builtin_tool_search_operation(skill, args)
+    mcp_drawing_analysis = mcp_builtin_drawing_analysis_operation(skill, args)
     base_url = config.backend_url.rstrip("/")
     timeout = config.backend_timeout_seconds
     # Web research/browse open many live pages (+ PDF OCR) and legitimately run
@@ -902,6 +908,7 @@ async def execute_skill(
         or email_send is not None
         or db_write is not None
         or mcp_tool_search
+        or mcp_drawing_analysis
         else (3 if safe_to_retry else 1)
     )
     last_error: Exception | None = None
@@ -936,6 +943,7 @@ async def execute_skill(
 
             if 200 <= resp.status_code < 300 or (
                 not mcp_tool_search
+                and not mcp_drawing_analysis
                 and async_job is None
                 and email_send is None
                 and db_write is None
@@ -946,6 +954,10 @@ async def execute_skill(
                 except Exception:
                     if mcp_tool_search:
                         return serialize_mcp_builtin_tool_search_response(resp.text)
+                    if mcp_drawing_analysis:
+                        return serialize_mcp_builtin_drawing_analysis_response(
+                            resp.text, arguments=args["arguments"]
+                        )
                     if async_job is not None:
                         return serialize_async_job_response(resp.text, operation=async_job.name)
                     if email_send is not None:
@@ -967,6 +979,10 @@ async def execute_skill(
                     return serialize_one_db_commit_response(payload, operation=db_write.name)
                 if mcp_tool_search:
                     return serialize_mcp_builtin_tool_search_response(payload)
+                if mcp_drawing_analysis:
+                    return serialize_mcp_builtin_drawing_analysis_response(
+                        payload, arguments=args["arguments"]
+                    )
                 if safe_to_retry:
                     return serialize_http_read_response(payload)
                 return payload
@@ -976,6 +992,16 @@ async def execute_skill(
                 except Exception:
                     body = resp.text[:300]
                 return mcp_builtin_tool_search_outcome_unknown(
+                    reason=f"http_{resp.status_code}",
+                    status_code=resp.status_code,
+                    payload=body,
+                )
+            elif 300 <= resp.status_code < 400 and mcp_drawing_analysis:
+                try:
+                    body = resp.json()
+                except Exception:
+                    body = resp.text[:300]
+                return mcp_builtin_drawing_analysis_outcome_unknown(
                     reason=f"http_{resp.status_code}",
                     status_code=resp.status_code,
                     payload=body,
@@ -1016,6 +1042,16 @@ async def execute_skill(
                 except Exception:
                     body = resp.text[:300]
                 return mcp_builtin_tool_search_outcome_unknown(
+                    reason=f"http_{resp.status_code}",
+                    status_code=resp.status_code,
+                    payload=body,
+                )
+            elif resp.status_code >= 500 and mcp_drawing_analysis:
+                try:
+                    body = resp.json()
+                except Exception:
+                    body = resp.text[:300]
+                return mcp_builtin_drawing_analysis_outcome_unknown(
                     reason=f"http_{resp.status_code}",
                     status_code=resp.status_code,
                     payload=body,
@@ -1071,6 +1107,11 @@ async def execute_skill(
                         status_code=resp.status_code,
                         payload=body,
                     )
+                if mcp_drawing_analysis:
+                    return mcp_builtin_drawing_analysis_http_failure(
+                        status_code=resp.status_code,
+                        payload=body,
+                    )
                 if async_job is not None:
                     return async_job_http_failure(
                         operation=async_job.name,
@@ -1098,6 +1139,14 @@ async def execute_skill(
                         reason=f"transport_{type(e).__name__}",
                     )
                 return mcp_builtin_tool_search_outcome_unknown(
+                    reason=f"transport_{type(e).__name__}",
+                )
+            if mcp_drawing_analysis:
+                if not dispatch_attempted:
+                    return mcp_builtin_drawing_analysis_pre_dispatch_failure(
+                        reason=f"transport_{type(e).__name__}",
+                    )
+                return mcp_builtin_drawing_analysis_outcome_unknown(
                     reason=f"transport_{type(e).__name__}",
                 )
             if async_job is not None and dispatch_attempted:
@@ -1142,6 +1191,14 @@ async def execute_skill(
                         reason=f"exception_{type(e).__name__}",
                     )
                 return mcp_builtin_tool_search_outcome_unknown(
+                    reason=f"exception_{type(e).__name__}",
+                )
+            if mcp_drawing_analysis:
+                if not dispatch_attempted:
+                    return mcp_builtin_drawing_analysis_pre_dispatch_failure(
+                        reason=f"exception_{type(e).__name__}",
+                    )
+                return mcp_builtin_drawing_analysis_outcome_unknown(
                     reason=f"exception_{type(e).__name__}",
                 )
             if async_job is not None and dispatch_attempted:

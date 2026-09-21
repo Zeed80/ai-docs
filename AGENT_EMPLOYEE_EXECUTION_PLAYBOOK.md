@@ -416,8 +416,8 @@ scope/time/action и запреты replay/resume, но нельзя выдум�
 
 ### E05 — Перевод адаптеров на ToolResult по одной группе
 
-**Статус:** IN PROGRESS: E05.1 REVIEWED; E05.2 и E05.3 SCOPED COMPLETE /
-REVIEWED; E05.4 не завершена. Отчёты:
+**Статус:** SCOPED COMPLETE / REVIEWED: E05.1 REVIEWED; E05.2, E05.3 и E05.4
+SCOPED COMPLETE / REVIEWED. Отчёты:
 `docs/agent-employee-delivery/E05-1-read-adapters.md`,
 `docs/agent-employee-delivery/E05-2-1-db-write-adapters.md`,
 `docs/agent-employee-delivery/E05-2-2-db-write-adapters.md`,
@@ -645,6 +645,13 @@ E05.4.4 REVIEWED запрещает generic read retry для всех 11 exact
 permissions не менялись. Независимо: 251 passed. Отчёт:
 `docs/agent-employee-delivery/E05-4-4-computer-use-retry-boundary.md`. E05.4/E05
 остаются IN PROGRESS; далее drawing read-only audit и scoped closure.
+
+E05.4.5 REVIEWED добавляет exact read-only `drawing_analysis_mcp` только при
+`reanalyze` absent/exact false. E05.4/E05 SCOPED COMPLETE / REVIEWED: dynamic
+MCP, drawing write-reanalyze и computer-use не получают недоказанных success
+contracts. Независимо: 394 passed. Отчёт:
+`docs/agent-employee-delivery/E05-4-5-drawing-mcp-adapter-and-closure.md`.
+Следующая карточка — E06.
 
 ### E06 — Consumers не принимают незавершённый результат за успех
 

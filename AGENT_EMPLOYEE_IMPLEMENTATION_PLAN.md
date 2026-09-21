@@ -238,6 +238,13 @@ operations из generic read retry на точном capability route. 5xx/trans
 Отчёт: `docs/agent-employee-delivery/E05-4-4-computer-use-retry-boundary.md`.
 E05.4/E05 остаются IN PROGRESS; далее повторный аудит read-only drawing built-in
 и scoped closure остатка.
+E05.4.5 REVIEWED добавляет только read-only `drawing_analysis_mcp` при
+`reanalyze` absent/exact false со строгой identity/shape-проверкой и одной
+попыткой. E05.4 и E05 SCOPED COMPLETE / REVIEWED: write-reanalyze, dynamic MCP
+и computer-use явно отложены без недоказанных success contracts. Независимо:
+394 passed. Отчёт:
+`docs/agent-employee-delivery/E05-4-5-drawing-mcp-adapter-and-closure.md`.
+Следующая карточка — E06 consumer hardening.
 Push накопленной ветки был заблокирован автопроверкой из-за несвязанных CAD-коммитов;
 для публикации всей этой истории нужно отдельное разрешение. Не обходить запрет.
 
