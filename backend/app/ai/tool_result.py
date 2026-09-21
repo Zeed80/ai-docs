@@ -459,6 +459,90 @@ def normalize_http_async_job_response(payload: Any, *, operation: str) -> ToolRe
     )
 
 
+def normalize_http_email_send_queue_response(
+    payload: Any, *, requested_draft_id: Any = None
+) -> ToolResult:
+    """Normalize only the reviewed ``email.send`` queue-acceptance receipt.
+
+    A recipient-issued task id proves that SMTP work was accepted by Celery; it
+    does not prove that an email was delivered.  The adapter is intentionally
+    separate from generic async jobs because this is an external dispatch and
+    its draft identity must be bound to the request when available.
+    """
+
+    raw: Any
+    if isinstance(payload, ToolResult):
+        raw = payload.model_dump(mode="json")
+    elif isinstance(payload, Mapping):
+        raw = dict(payload)
+    else:
+        raw = payload
+
+    requested_identity = str(requested_draft_id).strip() if requested_draft_id is not None else None
+
+    contract_error: str | None = None
+    recipient_error_code: str | None = None
+    if not isinstance(raw, Mapping):
+        contract_error = "response_not_mapping"
+    elif "version" in raw:
+        normalized = normalize_tool_result(raw)
+        if raw.get("status") != "succeeded":
+            return normalized
+        data = raw.get("data")
+        contract_error = (
+            "versioned_succeeded_contains_queued_job"
+            if isinstance(data, Mapping) and data.get("status") == "queued"
+            else "versioned_succeeded_not_queue_acceptance"
+        )
+    else:
+        recipient_error_code = _domain_failure(raw)
+        if recipient_error_code is not None:
+            contract_error = "recipient_domain_failure"
+        elif raw.get("status") != "queued":
+            contract_error = "status_not_queued"
+        elif not _nonempty_string(raw.get("task_id")):
+            contract_error = "missing_task_id"
+        elif not _nonempty_string(raw.get("draft_id")):
+            contract_error = "missing_draft_id"
+        elif requested_identity and raw["draft_id"] != requested_identity:
+            contract_error = "draft_id_mismatch"
+
+    evidence: dict[str, Any] = {
+        "adapter_contract": "http_email_send_queue_response_v1",
+        "operation": "email.send",
+        "effect": "external_dispatch",
+        "smtp_delivery": "not_confirmed",
+    }
+    if contract_error is not None:
+        evidence.update(
+            {
+                "recipient_outcome": "confirmed_malformed",
+                "contract_error": contract_error,
+            }
+        )
+        if recipient_error_code is not None:
+            evidence["recipient_error_code"] = recipient_error_code
+        return ToolResult(
+            status="failed",
+            data=raw,
+            error_code="invalid_email_send_queue_contract",
+            retryable=False,
+            evidence=evidence,
+        )
+
+    task_id = raw["task_id"]
+    draft_id = raw["draft_id"]
+    evidence.update({"task_id": task_id, "recipient_outcome": "accepted"})
+    return ToolResult(
+        status="partial",
+        data=raw,
+        error_code="job_queued",
+        retryable=False,
+        evidence=evidence,
+        checkpoint={"task_id": task_id, "draft_id": draft_id, "status": "queued"},
+    )
+
+
 def _normalize_one_db_commit_nonterminal(payload: Any, *, operation: str) -> ToolResult | None:
     """Preserve reviewed legacy nonterminal outcomes without calling them failed."""
 

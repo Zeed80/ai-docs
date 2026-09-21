@@ -10,6 +10,7 @@ from app.ai.agent_loop import capability_args_digest, execute_skill
 from app.ai.tool_transport import (
     ASYNC_JOB_OPERATIONS,
     async_job_operation,
+    email_send_queue_operation,
     one_db_commit_operation,
     retry_safe,
 )
@@ -1539,7 +1540,6 @@ async def test_one_db_commit_2xx_legacy_nonterminal_status_is_preserved(monkeypa
     "action",
     [
         "ingest",  # E03 db-async-enqueue
-        "send",  # E03 external-dispatch
         "bulk_confirm",  # E03 unknown
         "confirm_receipt",  # approval-gated write outside this reviewed slice
     ],
@@ -1547,7 +1547,7 @@ async def test_one_db_commit_2xx_legacy_nonterminal_status_is_preserved(monkeypa
 async def test_non_one_commit_groups_keep_legacy_success_contract(monkeypatch, action):
     from app.ai import agent_loop
 
-    capability = "documents" if action == "ingest" else "email" if action == "send" else "warehouse"
+    capability = "documents" if action == "ingest" else "warehouse"
     payload = {"job_id": "job-1", "status": "queued"}
     client = AsyncMock()
     client.__aenter__.return_value = client
@@ -1740,6 +1740,44 @@ def test_async_job_resolution_uses_exact_tech_capability_action():
 )
 def test_async_job_resolution_fails_closed_for_direct_routes_and_other_actions(skill, args):
     assert async_job_operation(skill, args) is None
+
+
+@pytest.mark.parametrize(
+    "skill,args,selected",
+    [
+        (
+            {"method": "POST", "path": "/api/agent/cap/email"},
+            {"action": "send", "draft_id": "draft-1"},
+            True,
+        ),
+        (
+            {"method": "POST", "path": "/api/email/drafts/{draft_id}/send"},
+            {"draft_id": "draft-1"},
+            False,
+        ),
+        (
+            {"method": "POST", "path": "/api/agent/cap/email"},
+            {"action": "send", "draft_id": "draft-1", "alias": True},
+            True,
+        ),
+        (
+            {"method": "POST", "path": "/api/agent/cap/email"},
+            {"action": "fetch_new", "draft_id": "draft-1"},
+            False,
+        ),
+        (
+            {"method": "POST", "path": "/api/agent/cap/email/"},
+            {"action": "send", "draft_id": "draft-1"},
+            False,
+        ),
+    ],
+)
+def test_email_send_queue_resolution_requires_exact_capability_identity(skill, args, selected):
+    resolved = email_send_queue_operation(skill, args)
+
+    assert (resolved is not None) is selected
+    if selected:
+        assert resolved.name == "email.send"
 
 
 @pytest.mark.asyncio
@@ -1981,3 +2019,119 @@ async def test_async_job_pre_dispatch_failure_is_failed(monkeypatch, skill, args
     assert result["evidence"]["dispatch_attempted"] is False
     assert "private" not in str(result)
     client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_email_send_queue_acceptance_is_one_attempt_and_binds_requested_draft(monkeypatch):
+    from app.ai import agent_loop
+
+    payload = {"status": "queued", "task_id": "task-email", "draft_id": "draft-1"}
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.post.return_value = httpx.Response(202, json=payload)
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", MagicMock(return_value=client))
+    monkeypatch.setattr(agent_loop, "internal_headers", lambda: {"Authorization": "test-context"})
+    args = {"action": "send", "draft_id": "draft-1", "expected_digest": "digest-1"}
+
+    result = await execute_skill(
+        {"method": "POST", "path": "/api/agent/cap/email"},
+        args,
+        BuiltinAgentConfig(),
+        approval_granted=True,
+    )
+
+    assert result["status"] == "partial"
+    assert result["error_code"] == "job_queued"
+    assert result["retryable"] is False
+    assert result["checkpoint"] == {
+        "task_id": "task-email",
+        "draft_id": "draft-1",
+        "status": "queued",
+    }
+    assert result["evidence"]["smtp_delivery"] == "not_confirmed"
+    client.post.assert_awaited_once()
+    sent = client.post.await_args.kwargs
+    assert sent["json"] == args
+    assert sent["headers"]["X-Agent-Approval-Digest"] == capability_args_digest(args)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response,expected_status,expected_code",
+    [
+        (
+            httpx.Response(
+                202, json={"status": "queued", "task_id": "task-1", "draft_id": "other"}
+            ),
+            "failed",
+            "invalid_email_send_queue_contract",
+        ),
+        (
+            httpx.Response(400, json={"detail": {"error_code": "blocked_by_risk"}}),
+            "failed",
+            "http_400",
+        ),
+        (
+            httpx.Response(503, json={"detail": "unavailable"}),
+            "outcome_unknown",
+            "tool_outcome_unknown",
+        ),
+        (httpx.ReadTimeout("timeout"), "outcome_unknown", "tool_outcome_unknown"),
+    ],
+)
+async def test_email_send_queue_rejection_or_ambiguity_never_retries(
+    monkeypatch, response, expected_status, expected_code
+):
+    from app.ai import agent_loop
+
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.post.side_effect = [response, httpx.Response(202, json={"status": "queued"})]
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", MagicMock(return_value=client))
+    monkeypatch.setattr(agent_loop, "internal_headers", lambda: {})
+    sleep = AsyncMock()
+    monkeypatch.setattr(agent_loop.asyncio, "sleep", sleep)
+
+    result = await execute_skill(
+        {"method": "POST", "path": "/api/agent/cap/email"},
+        {"action": "send", "draft_id": "draft-1"},
+        BuiltinAgentConfig(),
+    )
+
+    assert result["status"] == expected_status
+    assert result["error_code"] == expected_code
+    assert result["retryable"] is False
+    assert result["evidence"]["smtp_delivery"] == "not_confirmed"
+    client.post.assert_awaited_once()
+    sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "skill,args",
+    [
+        (
+            {"method": "POST", "path": "/api/email/drafts/{draft_id}/send"},
+            {"draft_id": "draft-1"},
+        ),
+        (
+            {"method": "POST", "path": "/api/agent/cap/email"},
+            {"action": "fetch_new"},
+        ),
+    ],
+)
+async def test_unselected_email_routes_keep_legacy_payload(monkeypatch, skill, args):
+    """Only the exact gateway identity receives the external queue adapter."""
+    from app.ai import agent_loop
+
+    payload = {"status": "queued", "job_id": "legacy-job"}
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.post.return_value = httpx.Response(200, json=payload)
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", MagicMock(return_value=client))
+    monkeypatch.setattr(agent_loop, "internal_headers", lambda: {})
+
+    result = await execute_skill(skill, args, BuiltinAgentConfig())
+
+    assert result == payload
+    client.post.assert_awaited_once()

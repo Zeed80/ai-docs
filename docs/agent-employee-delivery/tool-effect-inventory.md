@@ -41,6 +41,13 @@ headers. Это не меняет effect class и не разрешает нов
 `docs/agent-employee-delivery/E05-4-2-mcp-builtin-reachability.md`. Следующий
 кандидат — отдельный `email.send` queue-acceptance adapter.
 
+E05.4.3 REVIEWED добавляет узкое исключение для exact `email.send`: строгий
+queued receipt нормализуется в `partial/job_queued`, но классификация остаётся
+`external-dispatch`, SMTP delivery не подтверждается, автоматический retry
+запрещён. См.
+`docs/agent-employee-delivery/E05-4-3-email-send-queue-adapter.md`. Следующий
+safety-срез должен исключить все `computer_use.*` из generic read retry.
+
 | Operation | Route / recipient | Backend RBAC | Actual effect | DB commit boundary | External effect / internal retries | Receipt | Classification / retry |
 | --- | --- | --- | --- | --- | --- | --- |
 | `agent_control.ai_config_get` | `GET /api/ai/config`; `backend/app/api/ai_settings.py:252 get_config` | gateway auth+actor; viewer=read; deps=get_current_user | direct handler source: read path | no direct commit | none detected; no handler retry | none | `read-only`; auto-retry not-authorized-by-E03 |

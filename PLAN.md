@@ -239,6 +239,11 @@ E05.4.2 REVIEWED исправляет reachability built-in MCP: configured back
 Независимо: 233 passed. Отчёт:
 `docs/agent-employee-delivery/E05-4-2-mcp-builtin-reachability.md`. Далее —
 отдельный `email.send` queue-acceptance adapter.
+E05.4.3 REVIEWED: только exact `email.send` получает строгий queued receipt как
+`partial/job_queued`; SMTP delivery не заявляется, повтор после неоднозначного
+dispatch запрещён. Независимо: 333 passed. Отчёт:
+`docs/agent-employee-delivery/E05-4-3-email-send-queue-adapter.md`. Далее —
+safety-срез retry для `computer_use.*`.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя
 в WorkEvent, проверяет владельца/аргументы/попытку/lease. Детали журнала и UI

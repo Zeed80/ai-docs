@@ -8,6 +8,7 @@ from app.ai.tool_result import (
     ToolResult,
     classify_tool_result,
     normalize_http_async_job_response,
+    normalize_http_email_send_queue_response,
     normalize_http_one_db_commit_response,
     normalize_tool_result,
     result_failed,
@@ -427,6 +428,57 @@ def test_tech_async_job_acceptance_uses_plan_id_queue_checkpoint():
         "plan_id": "plan-1",
         "status": "queued",
     }
+
+
+def test_email_send_queue_acceptance_is_partial_without_claiming_smtp_delivery():
+    payload = {"status": "queued", "task_id": "task-1", "draft_id": "draft-1"}
+
+    normalized = normalize_http_email_send_queue_response(payload, requested_draft_id="draft-1")
+
+    assert normalized.status == "partial"
+    assert normalized.error_code == "job_queued"
+    assert normalized.retryable is False
+    assert normalized.data == payload
+    assert normalized.evidence == {
+        "adapter_contract": "http_email_send_queue_response_v1",
+        "operation": "email.send",
+        "effect": "external_dispatch",
+        "smtp_delivery": "not_confirmed",
+        "task_id": "task-1",
+        "recipient_outcome": "accepted",
+    }
+    assert normalized.checkpoint == {"task_id": "task-1", "draft_id": "draft-1", "status": "queued"}
+
+
+def test_email_send_queue_rejects_identity_mismatch_and_versioned_success_queue():
+    mismatch = {"status": "queued", "task_id": "task-1", "draft_id": "other-draft"}
+    contradictory = {
+        "version": 1,
+        "status": "succeeded",
+        "data": {"status": "queued", "task_id": "task-1", "draft_id": "draft-1"},
+    }
+    pending = {
+        "version": 1,
+        "status": "partial",
+        "data": {"status": "queued", "task_id": "task-1", "draft_id": "draft-1"},
+        "error_code": "job_queued",
+        "retryable": False,
+        "evidence": {"recipient": "email"},
+        "checkpoint": {"task_id": "task-1", "draft_id": "draft-1", "status": "queued"},
+    }
+
+    rejected = normalize_http_email_send_queue_response(mismatch, requested_draft_id="draft-1")
+    invalid = normalize_http_email_send_queue_response(contradictory, requested_draft_id="draft-1")
+    preserved = normalize_http_email_send_queue_response(pending, requested_draft_id="draft-1")
+
+    assert rejected.status == "failed"
+    assert rejected.error_code == "invalid_email_send_queue_contract"
+    assert rejected.evidence["contract_error"] == "draft_id_mismatch"
+    assert invalid.status == "failed"
+    assert invalid.error_code == "invalid_email_send_queue_contract"
+    assert invalid.data == contradictory
+    assert invalid.evidence["contract_error"] == "versioned_succeeded_contains_queued_job"
+    assert preserved.model_dump(mode="json") == pending
 
 
 @pytest.mark.parametrize(

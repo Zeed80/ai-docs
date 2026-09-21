@@ -7,6 +7,7 @@ from app.ai.tool_result import (
     ASYNC_JOB_IDENTITY_FIELDS,
     ToolResult,
     normalize_http_async_job_response,
+    normalize_http_email_send_queue_response,
     normalize_http_one_db_commit_response,
     normalize_http_read_response,
     normalize_mcp_builtin_tool_search_response,
@@ -14,6 +15,8 @@ from app.ai.tool_result import (
 
 _MCP_GATEWAY_PATH = "/api/agent/cap/mcp"
 _MCP_BUILTIN_TOOL_SEARCH_ACTION = "tool_search_mcp"
+_EMAIL_SEND_CAPABILITY_PATH = "/api/agent/cap/email"
+_EMAIL_SEND_ACTION = "send"
 
 # Reviewed E05.3 queue-acceptance operations. Direct routes are intentionally
 # excluded: only the exact capability endpoint plus the original action proves
@@ -120,6 +123,21 @@ def async_job_operation(skill: dict, args: dict) -> ToolDefinition | None:
     return operation
 
 
+def email_send_queue_operation(skill: dict, args: dict) -> ToolDefinition | None:
+    """Return only the reviewed email-send capability gateway operation."""
+
+    operation = resolve_catalog_operation(skill, args)
+    if operation is None or operation.name != "email.send":
+        return None
+    if (
+        str(skill.get("method", "")).upper() != "POST"
+        or str(skill.get("path", "")) != _EMAIL_SEND_CAPABILITY_PATH
+        or args.get("action") != _EMAIL_SEND_ACTION
+    ):
+        return None
+    return operation
+
+
 def mcp_builtin_tool_search_operation(skill: dict, args: dict) -> bool:
     """Return true only for the reviewed built-in MCP gateway call.
 
@@ -196,6 +214,78 @@ def serialize_mcp_builtin_tool_search_response(payload: Any) -> dict[str, Any]:
     """Return the v1 result only for the reviewed built-in MCP search tool."""
 
     return normalize_mcp_builtin_tool_search_response(payload).model_dump(mode="json")
+
+
+def serialize_email_send_queue_response(payload: Any, *, requested_draft_id: Any) -> dict[str, Any]:
+    """Return external email queue acceptance without claiming SMTP delivery."""
+
+    return normalize_http_email_send_queue_response(
+        payload, requested_draft_id=requested_draft_id
+    ).model_dump(mode="json")
+
+
+def email_send_http_failure(*, status_code: int, payload: Any) -> dict[str, Any]:
+    """A 4xx email gateway response is a confirmed rejection, never a retry."""
+
+    return ToolResult(
+        status="failed",
+        data=payload,
+        error_code=f"http_{status_code}",
+        retryable=False,
+        evidence={
+            "adapter_contract": "http_email_send_queue_response_v1",
+            "operation": "email.send",
+            "effect": "external_dispatch",
+            "smtp_delivery": "not_confirmed",
+            "recipient_outcome": "rejected",
+            "dispatch_attempted": True,
+            "http_status": status_code,
+        },
+    ).model_dump(mode="json")
+
+
+def email_send_outcome_unknown(
+    *, reason: str, status_code: int | None = None, payload: Any = None
+) -> dict[str, Any]:
+    """Stop after one ambiguous external email dispatch attempt."""
+
+    evidence: dict[str, Any] = {
+        "adapter_contract": "http_email_send_queue_response_v1",
+        "operation": "email.send",
+        "effect": "external_dispatch",
+        "smtp_delivery": "not_confirmed",
+        "recipient_outcome": "unconfirmed",
+        "dispatch_attempted": True,
+        "reason": reason,
+    }
+    if status_code is not None:
+        evidence["http_status"] = status_code
+    return ToolResult(
+        status="outcome_unknown",
+        data=payload,
+        error_code="tool_outcome_unknown",
+        retryable=False,
+        evidence=evidence,
+    ).model_dump(mode="json")
+
+
+def email_send_pre_dispatch_failure(*, reason: str) -> dict[str, Any]:
+    """A local failure before email dispatch is confirmed not to have queued SMTP."""
+
+    return ToolResult(
+        status="failed",
+        error_code="email_send_dispatch_failed",
+        retryable=False,
+        evidence={
+            "adapter_contract": "http_email_send_queue_response_v1",
+            "operation": "email.send",
+            "effect": "external_dispatch",
+            "smtp_delivery": "not_confirmed",
+            "recipient_outcome": "not_dispatched",
+            "dispatch_attempted": False,
+            "reason": reason,
+        },
+    ).model_dump(mode="json")
 
 
 def mcp_builtin_tool_search_http_failure(*, status_code: int, payload: Any) -> dict[str, Any]:

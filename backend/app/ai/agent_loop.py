@@ -826,6 +826,10 @@ async def execute_skill(
         async_job_operation,
         async_job_outcome_unknown,
         async_job_pre_dispatch_failure,
+        email_send_http_failure,
+        email_send_outcome_unknown,
+        email_send_pre_dispatch_failure,
+        email_send_queue_operation,
         mcp_builtin_tool_search_http_failure,
         mcp_builtin_tool_search_operation,
         mcp_builtin_tool_search_outcome_unknown,
@@ -838,6 +842,7 @@ async def execute_skill(
         read_transport_failure,
         retry_safe,
         serialize_async_job_response,
+        serialize_email_send_queue_response,
         serialize_http_read_response,
         serialize_mcp_builtin_tool_search_response,
         serialize_one_db_commit_response,
@@ -863,6 +868,7 @@ async def execute_skill(
     method = skill["method"].upper()
     path = skill["path"]
     async_job = async_job_operation(skill, args)
+    email_send = email_send_queue_operation(skill, args)
     db_write = one_db_commit_operation(skill, args)
     mcp_tool_search = mcp_builtin_tool_search_operation(skill, args)
     base_url = config.backend_url.rstrip("/")
@@ -892,7 +898,10 @@ async def execute_skill(
     safe_to_retry = retry_safe(skill, args)
     max_retries = (
         1
-        if async_job is not None or db_write is not None or mcp_tool_search
+        if async_job is not None
+        or email_send is not None
+        or db_write is not None
+        or mcp_tool_search
         else (3 if safe_to_retry else 1)
     )
     last_error: Exception | None = None
@@ -928,6 +937,7 @@ async def execute_skill(
             if 200 <= resp.status_code < 300 or (
                 not mcp_tool_search
                 and async_job is None
+                and email_send is None
                 and db_write is None
                 and resp.status_code < 400
             ):
@@ -938,6 +948,10 @@ async def execute_skill(
                         return serialize_mcp_builtin_tool_search_response(resp.text)
                     if async_job is not None:
                         return serialize_async_job_response(resp.text, operation=async_job.name)
+                    if email_send is not None:
+                        return serialize_email_send_queue_response(
+                            resp.text, requested_draft_id=args.get("draft_id")
+                        )
                     if db_write is not None:
                         return serialize_one_db_commit_response(resp.text, operation=db_write.name)
                     if safe_to_retry:
@@ -945,6 +959,10 @@ async def execute_skill(
                     return {"text": resp.text[:2000]}
                 if async_job is not None:
                     return serialize_async_job_response(payload, operation=async_job.name)
+                if email_send is not None:
+                    return serialize_email_send_queue_response(
+                        payload, requested_draft_id=args.get("draft_id")
+                    )
                 if db_write is not None:
                     return serialize_one_db_commit_response(payload, operation=db_write.name)
                 if mcp_tool_search:
@@ -972,6 +990,14 @@ async def execute_skill(
                     reason=f"http_{resp.status_code}",
                     status_code=resp.status_code,
                     payload=body,
+                )
+            elif 300 <= resp.status_code < 400 and email_send is not None:
+                try:
+                    body = resp.json()
+                except Exception:
+                    body = resp.text[:300]
+                return email_send_outcome_unknown(
+                    reason=f"http_{resp.status_code}", status_code=resp.status_code, payload=body
                 )
             elif 300 <= resp.status_code < 400 and db_write is not None:
                 try:
@@ -1004,6 +1030,14 @@ async def execute_skill(
                     reason=f"http_{resp.status_code}",
                     status_code=resp.status_code,
                     payload=body,
+                )
+            elif resp.status_code >= 500 and email_send is not None:
+                try:
+                    body = resp.json()
+                except Exception:
+                    body = resp.text[:300]
+                return email_send_outcome_unknown(
+                    reason=f"http_{resp.status_code}", status_code=resp.status_code, payload=body
                 )
             elif resp.status_code >= 500 and db_write is not None:
                 try:
@@ -1043,6 +1077,8 @@ async def execute_skill(
                         status_code=resp.status_code,
                         payload=body,
                     )
+                if email_send is not None:
+                    return email_send_http_failure(status_code=resp.status_code, payload=body)
                 if db_write is not None:
                     return one_db_commit_http_failure(
                         operation=db_write.name,
@@ -1069,6 +1105,10 @@ async def execute_skill(
                     operation=async_job.name,
                     reason=f"transport_{type(e).__name__}",
                 )
+            if email_send is not None and dispatch_attempted:
+                return email_send_outcome_unknown(reason=f"transport_{type(e).__name__}")
+            if email_send is not None:
+                return email_send_pre_dispatch_failure(reason=f"transport_{type(e).__name__}")
             if async_job is not None:
                 return async_job_pre_dispatch_failure(
                     operation=async_job.name,
@@ -1109,6 +1149,10 @@ async def execute_skill(
                     operation=async_job.name,
                     reason=f"exception_{type(e).__name__}",
                 )
+            if email_send is not None and dispatch_attempted:
+                return email_send_outcome_unknown(reason=f"exception_{type(e).__name__}")
+            if email_send is not None:
+                return email_send_pre_dispatch_failure(reason=f"exception_{type(e).__name__}")
             if async_job is not None:
                 return async_job_pre_dispatch_failure(
                     operation=async_job.name,

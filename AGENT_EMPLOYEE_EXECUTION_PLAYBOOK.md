@@ -630,6 +630,15 @@ snapshot. Независимо: 233 passed. Отчёт:
 `docs/agent-employee-delivery/E05-4-2-mcp-builtin-reachability.md`. E05.4/E05
 остаются IN PROGRESS; следующий срез — `email.send` queue acceptance.
 
+E05.4.3 REVIEWED добавляет exact capability/action adapter `email.send`.
+Строгий `queued` receipt с совпадающим `draft_id` означает только Celery
+acceptance и возвращает `partial/job_queued`; SMTP delivery не подтверждается.
+Одна попытка, post-dispatch ambiguity — `outcome_unknown`. Независимо: 333
+passed. Отчёт:
+`docs/agent-employee-delivery/E05-4-3-email-send-queue-adapter.md`. E05.4/E05
+остаются IN PROGRESS; следующий срез запрещает generic read retry для
+`computer_use.*`.
+
 ### E06 — Consumers не принимают незавершённый результат за успех
 
 **Статус:** TODO. **После:** E05.

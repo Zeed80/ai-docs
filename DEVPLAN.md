@@ -202,6 +202,11 @@ configured backend URL, `/api` и internal-agent auth. Полный ASGI gateway
 и fail-closed reanalyze покрыты тестами; независимо 233 passed. Отчёт:
 `docs/agent-employee-delivery/E05-4-2-mcp-builtin-reachability.md`. Следующий
 срез — `email.send` queue acceptance без заявления об SMTP delivery.
+E05.4.3 REVIEWED добавляет exact `email.send` queue adapter: строгий receipt,
+`partial/job_queued`, одна попытка и `outcome_unknown` после неоднозначного
+dispatch; SMTP delivery явно не подтверждена. Независимо: 333 passed. Отчёт:
+`docs/agent-employee-delivery/E05-4-3-email-send-queue-adapter.md`. Далее —
+запрет generic read retry для `computer_use.*`.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при
 сетевой ошибке/HTTP 5xx дают outcome_unknown и блокируют durable-цикл после
