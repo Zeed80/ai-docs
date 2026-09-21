@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import socket
 import uuid
@@ -12,9 +11,11 @@ from typing import Any
 
 import httpx
 import structlog
+from sqlalchemy import select
 
-from app.ai.chat_checkpoint import ChatNonterminalToolResult
+from app.ai.chat_checkpoint import ChatNonterminalToolResult, ChatWaitingApprovalToolResult
 from app.domain.work_orders import (
+    WorkStateError,
     append_event,
     attempt_owns_lease,
     claim_ready_step,
@@ -26,10 +27,12 @@ from app.domain.work_orders import (
     promote_waiting_parents,
     reclaim_expired_leases,
     record_verifier_verdict,
+    recorded_recipient_action_digest,
     stop_attempt_for_nonterminal_tool_result,
     transition_step,
     transition_work_order,
     utcnow,
+    validate_recorded_recipient_binding,
     verify_nonempty_result,
 )
 from app.domain.work_planning import resolve_step_input, tool_call_digest
@@ -84,10 +87,7 @@ class NonterminalToolResultError(RuntimeError):
 
 
 def _action_digest(capability: str, action: str, arguments: dict[str, Any]) -> str:
-    payload = {"capability": capability, "action": action, "arguments": arguments}
-    return hashlib.sha256(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
-    ).hexdigest()
+    return recorded_recipient_action_digest(capability, action, arguments)
 
 
 async def _notify_computer_use_needs_grant(
@@ -961,6 +961,176 @@ async def execute_claimed_step(
                     call_row.status = "failed"
                     call_row.error = error
                     call_row.finished_at = utcnow()
+                await db.commit()
+        return False
+    except ChatWaitingApprovalToolResult as exc:
+        from app.db.models import Approval, ApprovalActionType, ApprovalStatus
+
+        async with factory() as db:
+            order = await db.get(WorkOrder, work_order_id, with_for_update=True)
+            step_row = await db.get(WorkStep, step_id, with_for_update=True)
+            attempt_row = await db.get(WorkStepAttempt, attempt_id, with_for_update=True)
+            call_row = await db.get(WorkToolCall, call_id, with_for_update=True)
+            if order and step_row and attempt_row and attempt_owns_lease(step_row, attempt_row):
+                try:
+                    approval_context = await validate_recorded_recipient_binding(
+                        db,
+                        order=order,
+                        step=step_row,
+                        attempt=attempt_row,
+                        action_id=exc.action_id,
+                        call_id=exc.call_id,
+                        result=exc.result,
+                        expected_request=exc.function,
+                        lock_action=True,
+                    )
+                except (TypeError, ValueError, WorkStateError):
+                    error = {
+                        "code": "recorded_recipient_approval_binding_invalid",
+                        "message": "Recorded recipient approval binding changed",
+                    }
+                    await fail_attempt(
+                        db,
+                        order=order,
+                        step=step_row,
+                        attempt=attempt_row,
+                        error=error,
+                        retryable=False,
+                        actor=worker,
+                    )
+                    if call_row is not None:
+                        call_row.status = "failed"
+                        call_row.error = error
+                        call_row.finished_at = utcnow()
+                    await db.commit()
+                    return False
+                approvals = list(
+                    await db.scalars(
+                        select(Approval)
+                        .where(
+                            Approval.entity_id == order.id,
+                            Approval.entity_type == "work_order",
+                            Approval.action_type == ApprovalActionType.agent_tool_call,
+                            Approval.status == ApprovalStatus.pending,
+                        )
+                        .with_for_update()
+                    )
+                )
+                foreign_approvals = list(
+                    await db.scalars(
+                        select(Approval)
+                        .where(
+                            Approval.entity_id == order.id,
+                            Approval.entity_type != "work_order",
+                            Approval.action_type == ApprovalActionType.agent_tool_call,
+                            Approval.status == ApprovalStatus.pending,
+                        )
+                        .with_for_update()
+                    )
+                )
+                bound = [
+                    item
+                    for item in approvals
+                    if (item.context or {}).get("continuation_mode") == "recorded_recipient_result"
+                    and (
+                        (item.context or {}).get("source_attempt_id") == str(attempt_row.id)
+                        or (item.context or {}).get("action_id") == exc.action_id
+                    )
+                ]
+                exact = [
+                    item
+                    for item in bound
+                    if item.entity_type == "work_order" and item.context == approval_context
+                ]
+                foreign_bound = [
+                    item
+                    for item in foreign_approvals
+                    if (item.context or {}).get("continuation_mode") == "recorded_recipient_result"
+                    and (
+                        (item.context or {}).get("source_attempt_id") == str(attempt_row.id)
+                        or (item.context or {}).get("action_id") == exc.action_id
+                    )
+                ]
+                if foreign_bound or len(bound) > 1 or (bound and len(exact) != 1):
+                    error = {
+                        "code": "recorded_recipient_approval_binding_invalid",
+                        "message": "Existing recipient approval binding is ambiguous or changed",
+                    }
+                    await fail_attempt(
+                        db,
+                        order=order,
+                        step=step_row,
+                        attempt=attempt_row,
+                        error=error,
+                        retryable=False,
+                        actor=worker,
+                    )
+                    if call_row is not None:
+                        call_row.status = "failed"
+                        call_row.error = error
+                        call_row.finished_at = utcnow()
+                    await db.commit()
+                    return False
+                approval = exact[0] if exact else None
+                if approval is None:
+                    approval = Approval(
+                        action_type=ApprovalActionType.agent_tool_call,
+                        entity_type="work_order",
+                        entity_id=order.id,
+                        requested_by=order.owner_key,
+                        context=approval_context,
+                    )
+                    db.add(approval)
+                    await db.flush()
+                # The source call already ran.  Preserve its recorded result
+                # and durable checkpoint, then wait for an approval without
+                # converting it into retryable work or authorizing replay.
+                error = {
+                    "code": "tool_result_waiting_approval",
+                    "error_code": exc.result.get("error_code"),
+                    "evidence": exc.result.get("evidence") or {},
+                }
+                attempt_row.status = "waiting_approval"
+                attempt_row.output = exc.result
+                attempt_row.error = error
+                attempt_row.finished_at = utcnow()
+                attempt_row.heartbeat_at = utcnow()
+                step_row.output = {"result": exc.result, "executor": "durable_chat"}
+                step_row.last_error = error
+                step_row.lease_owner = None
+                step_row.lease_expires_at = None
+                await transition_step(
+                    db,
+                    step_row,
+                    "waiting_approval",
+                    actor=worker,
+                    payload={"approval_id": str(approval.id), "action_id": exc.action_id},
+                )
+                await transition_work_order(
+                    db,
+                    order,
+                    "waiting_approval",
+                    actor=worker,
+                    payload={"approval_id": str(approval.id), "step_id": str(step_row.id)},
+                )
+                if call_row is not None:
+                    call_row.status = "waiting_approval"
+                    call_row.output = exc.result
+                    call_row.error = error
+                    call_row.finished_at = utcnow()
+                await append_event(
+                    db,
+                    order.id,
+                    "chat.recorded_recipient_approval_requested",
+                    actor=worker,
+                    payload={
+                        "approval_id": str(approval.id),
+                        "action_id": exc.action_id,
+                        "call_id": exc.call_id,
+                        "request_digest": approval_context["request_digest"],
+                        "result_digest": approval_context["result_digest"],
+                    },
+                )
                 await db.commit()
         return False
     except (NonterminalToolResultError, ChatNonterminalToolResult) as exc:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -1535,6 +1536,223 @@ async def apply_approval_decision(
             actor=actor,
             payload={"approval_id": str(approval_id)},
         )
+
+
+def recorded_recipient_action_digest(
+    capability: str, action: str, arguments: dict[str, Any]
+) -> str:
+    payload = {"capability": capability, "action": action, "arguments": arguments}
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()
+
+
+async def validate_recorded_recipient_binding(
+    db: AsyncSession,
+    *,
+    order: WorkOrder,
+    step: WorkStep,
+    attempt: WorkStepAttempt,
+    action_id: str,
+    call_id: str,
+    result: dict[str, Any],
+    expected_request: dict[str, Any] | None = None,
+    lock_action: bool = False,
+) -> dict[str, Any]:
+    """Validate and reconstruct the exact post-dispatch approval binding."""
+    from app.ai.chat_checkpoint import unpack_checkpoint
+    from app.db.agent_runtime_models import ChatLogicalAction
+    from app.domain.chat_action_journal import digest
+
+    try:
+        parsed_action_id = uuid.UUID(action_id)
+    except (TypeError, ValueError) as exc:
+        raise WorkStateError("Recorded recipient action ID is invalid") from exc
+
+    logical_action = await db.get(
+        ChatLogicalAction,
+        parsed_action_id,
+        with_for_update=lock_action,
+    )
+    source_checkpoint = attempt.checkpoint
+    if not isinstance(source_checkpoint, dict):
+        raise WorkStateError("Recorded recipient checkpoint is missing")
+    snapshot = source_checkpoint.get("snapshot")
+    if not isinstance(snapshot, dict):
+        raise WorkStateError("Recorded recipient snapshot is missing")
+    try:
+        snapshot_payload = unpack_checkpoint(snapshot)
+    except (TypeError, ValueError) as exc:
+        raise WorkStateError("Recorded recipient snapshot integrity check failed") from exc
+
+    plan = await db.get(WorkPlan, step.plan_id)
+    completed_call = snapshot_payload.get("completed_call")
+    action_ids = snapshot_payload.get("action_ids") or {}
+    pending_ids = [
+        item.get("id")
+        for item in snapshot_payload.get("pending_calls", [])
+        if isinstance(item, dict)
+    ]
+    if (
+        logical_action is None
+        or logical_action.work_order_id != order.id
+        or logical_action.attempt_id != attempt.id
+        or logical_action.call_id != call_id
+        or logical_action.status != "waiting_approval"
+        or logical_action.request_digest != digest(logical_action.request)
+        or logical_action.result != result
+        or logical_action.result_digest != digest(result)
+        or (expected_request is not None and logical_action.request != expected_request)
+        or step.work_order_id != order.id
+        or attempt.step_id != step.id
+        or plan is None
+        or plan.work_order_id != order.id
+        or plan.status != "active"
+        or plan.revision != order.plan_revision
+        or source_checkpoint.get("kind") != "durable_chat"
+        or source_checkpoint.get("owner_key") != order.owner_key
+        or source_checkpoint.get("work_order_id") != str(order.id)
+        or source_checkpoint.get("step_id") != str(step.id)
+        or source_checkpoint.get("attempt_id") != str(attempt.id)
+        or source_checkpoint.get("plan_id") != str(plan.id)
+        or source_checkpoint.get("plan_revision") != order.plan_revision
+        or snapshot_payload.get("phase") != "tool_recorded"
+        or snapshot_payload.get("in_flight_call_id") is not None
+        or not isinstance(completed_call, dict)
+        or completed_call.get("action_id") != action_id
+        or completed_call.get("call_id") != call_id
+        or completed_call.get("result") != result
+        or action_ids.get(call_id) != action_id
+        or call_id in pending_ids
+    ):
+        raise WorkStateError("Recorded recipient approval binding changed")
+
+    arguments = logical_action.request.get("arguments", {})
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except (TypeError, json.JSONDecodeError):
+            arguments = {}
+    if not isinstance(arguments, dict):
+        arguments = {}
+    tool_name = str(logical_action.request.get("name") or "")
+    action = str(arguments.get("action") or "")
+    return {
+        "continuation_mode": "recorded_recipient_result",
+        "work_order_id": str(order.id),
+        "source_step_id": str(step.id),
+        "source_attempt_id": str(attempt.id),
+        "source_plan_id": str(plan.id),
+        "source_plan_revision": order.plan_revision,
+        "snapshot_sha256": snapshot["sha256"],
+        "action_id": action_id,
+        "call_id": call_id,
+        "tool_name": tool_name,
+        "tool_args": arguments,
+        "request_digest": digest(logical_action.request),
+        "result_digest": digest(result),
+        "action_digest": recorded_recipient_action_digest(tool_name, action, arguments),
+        "tool_result": result,
+    }
+
+
+async def block_recorded_recipient_approval_decision(
+    db: AsyncSession,
+    *,
+    approval: Any,
+    approved: bool,
+    actor: str,
+) -> None:
+    """Close a post-dispatch recipient wait without authorizing a replay.
+
+    E10/E11 may later add a separately authorized continuation.  A decision
+    over the already-recorded recipient result must not put the source step
+    back into the claim queue.
+    """
+    from app.db.models import ApprovalActionType, ApprovalStatus
+
+    context = approval.context or {}
+    try:
+        step_id = uuid.UUID(str(context.get("source_step_id")))
+        attempt_id = uuid.UUID(str(context.get("source_attempt_id")))
+    except (TypeError, ValueError) as exc:
+        raise WorkStateError("Recorded recipient approval binding is invalid") from exc
+    order = await db.get(WorkOrder, approval.entity_id, with_for_update=True)
+    step = await db.get(WorkStep, step_id, with_for_update=True)
+    attempt = await db.get(WorkStepAttempt, attempt_id, with_for_update=True)
+    if (
+        approval.status != ApprovalStatus.pending
+        or approval.action_type != ApprovalActionType.agent_tool_call
+        or approval.entity_type != "work_order"
+        or context.get("continuation_mode") != "recorded_recipient_result"
+        or order is None
+        or step is None
+        or attempt is None
+        or not isinstance(context.get("tool_result"), dict)
+        or context.get("work_order_id") != str(approval.entity_id)
+        or step.work_order_id != approval.entity_id
+        or attempt.step_id != step.id
+        or attempt.status != "waiting_approval"
+        or attempt.attempt_no != step.attempt_count
+        or attempt.output != context.get("tool_result")
+        or step.output != {"result": context.get("tool_result"), "executor": "durable_chat"}
+    ):
+        raise WorkStateError("Recorded recipient approval binding is invalid")
+    if order.status != "waiting_approval" or step.state != "waiting_approval":
+        raise WorkStateError("Work order is no longer waiting for this approval")
+    expected_context = await validate_recorded_recipient_binding(
+        db,
+        order=order,
+        step=step,
+        attempt=attempt,
+        action_id=str(context.get("action_id") or ""),
+        call_id=str(context.get("call_id") or ""),
+        result=context.get("tool_result"),
+        lock_action=True,
+    )
+    if context != expected_context:
+        raise WorkStateError("Recorded recipient approval context changed")
+    await transition_step(
+        db,
+        step,
+        "failed",
+        actor=actor,
+        payload={
+            "approval_id": str(approval.id),
+            "decision": "approved" if approved else "rejected",
+            "continuation_mode": "recorded_recipient_result",
+        },
+    )
+    order.blocker = {
+        "code": "recorded_recipient_approval_decided",
+        "approval_id": str(approval.id),
+        "step_id": str(step.id),
+        "attempt_id": str(attempt.id),
+        "approved": approved,
+    }
+    await transition_work_order(
+        db,
+        order,
+        "blocked",
+        actor=actor,
+        payload={
+            "approval_id": str(approval.id),
+            "continuation_mode": "recorded_recipient_result",
+        },
+    )
+    await append_event(
+        db,
+        order.id,
+        "chat.recorded_recipient_approval_decided",
+        actor=actor,
+        payload={
+            "approval_id": str(approval.id),
+            "approved": approved,
+            "continuation_mode": "recorded_recipient_result",
+            "action_id": context.get("action_id"),
+            "call_id": context.get("call_id"),
+        },
+    )
 
 
 async def record_verifier_verdict(

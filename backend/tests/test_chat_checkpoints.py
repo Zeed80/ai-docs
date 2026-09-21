@@ -16,6 +16,7 @@ from app.ai.agent_loop import AgentSession
 from app.ai.chat_checkpoint import (
     ChatCheckpointError,
     ChatNonterminalToolResult,
+    ChatWaitingApprovalToolResult,
     pack_checkpoint,
     unpack_checkpoint,
 )
@@ -216,6 +217,61 @@ async def test_checkpointed_raw_outcome_unknown_remains_legacy_history():
     obj._execute_single_tool = execute
     await obj._execute_tools_sequential([call(), call("two")], 0)
     assert effects == ["one", "two"]
+
+
+@pytest.mark.asyncio
+async def test_checkpointed_v1_waiting_approval_is_recorded_and_stops_tool_tail():
+    obj = session()
+    snapshots, effects = [], []
+    result = {
+        "version": 1,
+        "status": "waiting_approval",
+        "data": {"recipient": "requires_approval"},
+        "error_code": "approval_required",
+        "retryable": False,
+        "evidence": {"adapter_contract": "test_v1", "recipient_digest": "untrusted"},
+        "checkpoint": {"receipt": "r-1"},
+    }
+
+    async def persist(snapshot):
+        snapshots.append(unpack_checkpoint(snapshot))
+
+    async def execute(tc, iteration):
+        effects.append(tc["id"])
+        return "test", result, tc["id"]
+
+    obj.set_checkpoint_sink(persist)
+    obj._execute_single_tool = execute
+    with pytest.raises(ChatWaitingApprovalToolResult) as exc_info:
+        await obj._execute_tools_sequential([call(), call("two")], 0)
+
+    assert exc_info.value.result == result
+    assert exc_info.value.call_id == "one"
+    assert exc_info.value.function == call()["function"]
+    assert effects == ["one"]
+    assert snapshots[-1]["completed_call"]["result"] == result
+
+
+@pytest.mark.asyncio
+async def test_checkpointed_compact_v1_waiting_approval_keeps_exact_raw_envelope():
+    obj = session()
+    snapshots = []
+    result = {"version": 1, "status": "waiting_approval"}
+
+    async def persist(snapshot):
+        snapshots.append(unpack_checkpoint(snapshot))
+
+    async def execute(tc, iteration):
+        return "test", result, tc["id"]
+
+    obj.set_checkpoint_sink(persist)
+    obj._execute_single_tool = execute
+    with pytest.raises(ChatWaitingApprovalToolResult) as exc_info:
+        await obj._execute_tools_sequential([call()], 0)
+
+    assert exc_info.value.result == result
+    assert snapshots[-1]["completed_call"]["result"] == result
+    assert json.loads(obj.messages[-1]["content"]) == result
 
 
 async def claim(factory):

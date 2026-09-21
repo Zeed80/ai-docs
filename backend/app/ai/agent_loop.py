@@ -3346,12 +3346,25 @@ class AgentSession:
                 # flow.  This happens only after history, checkpoint and action
                 # journal persistence have completed.
                 if isinstance(result, dict) and "version" in result:
-                    from app.ai.chat_checkpoint import ChatNonterminalToolResult
+                    from app.ai.chat_checkpoint import (
+                        ChatNonterminalToolResult,
+                        ChatWaitingApprovalToolResult,
+                    )
                     from app.ai.tool_result import normalize_tool_result
 
                     normalized = normalize_tool_result(result)
+                    if normalized.status == "waiting_approval":
+                        function = tc.get("function")
+                        if not isinstance(function, dict):
+                            raise ChatNonterminalToolResult(result)
+                        raise ChatWaitingApprovalToolResult(
+                            result,
+                            action_id=self._checkpoint_action_ids[tc["id"]],
+                            call_id=tc["id"],
+                            function=dict(function),
+                        )
                     if normalized.status in {"partial", "outcome_unknown"}:
-                        raise ChatNonterminalToolResult(normalized.model_dump(mode="json"))
+                        raise ChatNonterminalToolResult(result)
             self._trim_history()
         return results
 

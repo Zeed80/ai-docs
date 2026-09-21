@@ -270,6 +270,15 @@ E06.3 REVIEWED: checkpointed durable chat переносит v1
 следующие tool/LLM/replan не выполняются. Независимо: 115 passed. Отчёт:
 `docs/agent-employee-delivery/E06-3-durable-chat-nonterminal-results.md`. E06
 остаётся IN PROGRESS.
+E06.4 REVIEWED: checkpointed durable chat сохраняет exact raw envelope
+`waiting_approval`; cryptographically verified packed checkpoint/journal binding
+допускает ровно один pending exact Approval. Duplicate/foreign approval
+fail-closed; single/bulk approve/reject блокируют source без replay/resume,
+статусы ограничены `approved`/`rejected`. Исполнитель: 409 passed; независимо:
+434 passed. Остаточный DB uniqueness race — E07. Отчёт:
+`docs/agent-employee-delivery/E06-4-durable-chat-waiting-approval.md`. E06
+остаётся IN PROGRESS; далее E06.5 — non-checkpointed sequential и
+requested-parallel paths.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя
 в WorkEvent, проверяет владельца/аргументы/попытку/lease. Детали журнала и UI

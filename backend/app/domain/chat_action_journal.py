@@ -57,7 +57,7 @@ async def record_boundary(db, order, attempt, payload):
             or digest(action.request) != request_digest
         ):
             raise ValueError("Logical action binding changed")
-        if action.status in {"result_recorded", "partial", "outcome_unknown"}:
+        if action.status in {"result_recorded", "partial", "waiting_approval", "outcome_unknown"}:
             raise ValueError("Recorded logical action cannot execute again")
         if phase == "tools_planned" and action.status == "started":
             raise ValueError("Unknown action outcome cannot be replayed")
@@ -98,12 +98,22 @@ async def record_boundary(db, order, attempt, payload):
             raise ValueError("Result does not match started logical action")
         action.result = completed["result"]
         action.result_digest = digest(action.result)
-        action.status = (
-            action.result["status"]
-            if isinstance(action.result, dict)
-            and action.result.get("status") in {"partial", "outcome_unknown"}
-            else "result_recorded"
-        )
+        lifecycle_status = None
+        if isinstance(action.result, dict) and "version" in action.result:
+            from app.ai.tool_result import normalize_tool_result
+
+            normalized = normalize_tool_result(action.result)
+            if normalized.status in {"partial", "waiting_approval", "outcome_unknown"}:
+                lifecycle_status = normalized.status
+        elif isinstance(action.result, dict) and action.result.get("status") in {
+            "partial",
+            "waiting_approval",
+            "outcome_unknown",
+        }:
+            # Preserve the pre-v1 journal contract. Only versioned envelopes
+            # require validation before their status controls durable flow.
+            lifecycle_status = action.result["status"]
+        action.status = lifecycle_status if lifecycle_status is not None else "result_recorded"
         await append_event(
             db,
             order.id,

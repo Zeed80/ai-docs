@@ -233,6 +233,15 @@ E06.3 REVIEWED останавливает checkpointed durable chat после �
 Независимо: 115 passed. Отчёт:
 `docs/agent-employee-delivery/E06-3-durable-chat-nonterminal-results.md`. E06
 остаётся IN PROGRESS.
+E06.4 REVIEWED сохраняет в checkpointed durable chat exact raw envelope
+`waiting_approval`: cryptographically verified packed checkpoint/journal binding
+создаёт ровно один pending exact Approval. Duplicate/foreign approval
+fail-closed; single/bulk approve/reject блокируют source без replay/resume,
+статусы ограничены `approved`/`rejected`. Исполнитель: 409 passed; независимо:
+434 passed. Остаточный DB uniqueness race — E07. Отчёт:
+`docs/agent-employee-delivery/E06-4-durable-chat-waiting-approval.md`. E06
+остаётся IN PROGRESS; далее E06.5 — non-checkpointed sequential и
+requested-parallel paths.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при
 сетевой ошибке/HTTP 5xx дают outcome_unknown и блокируют durable-цикл после

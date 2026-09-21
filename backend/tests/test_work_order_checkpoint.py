@@ -16,8 +16,16 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.ai.chat_checkpoint import ChatNonterminalToolResult
-from app.db.models import Approval, WorkOrder, WorkStep, WorkStepAttempt, WorkToolCall
+from app.ai.chat_checkpoint import ChatNonterminalToolResult, pack_checkpoint
+from app.db.agent_runtime_models import ChatLogicalAction
+from app.db.models import (
+    Approval,
+    ApprovalActionType,
+    WorkOrder,
+    WorkStep,
+    WorkStepAttempt,
+    WorkToolCall,
+)
 from app.domain.work_orders import (
     claim_ready_step,
     complete_attempt,
@@ -51,7 +59,7 @@ async def test_versioned_waiting_approval_persists_exact_result_and_current_call
             objective="Wait only for the exact requested capability action",
             budgets={"max_replans": 9},
         )
-        _plan, steps = await create_work_plan(
+        plan, steps = await create_work_plan(
             db,
             order,
             steps=[
@@ -143,7 +151,187 @@ async def test_versioned_waiting_approval_persists_exact_result_and_current_call
         assert approval.context["tool_args"] == current_arguments
         assert approval.context["action_digest"] == expected_digest
         assert approval.context["action_digest"] != result["evidence"]["recipient_supplied_digest"]
-        assert approval.context["tool_result"] == result
+    assert approval.context["tool_result"] == result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    [
+        "create",
+        "compact_create",
+        "reuse",
+        "approval_context",
+        "request_digest",
+        "snapshot_payload",
+        "snapshot_hash",
+        "duplicate",
+        "foreign_collision",
+    ],
+)
+async def test_recorded_durable_waiting_approval_preserves_binding_and_never_replays_source(
+    test_engine,
+    case,
+):
+    from app.ai.chat_checkpoint import ChatWaitingApprovalToolResult
+    from app.domain.chat_action_journal import digest
+
+    factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as db:
+        order = await create_work_order(
+            db,
+            owner_key="tester",
+            objective="Recorded recipient approval",
+            source="durable_chat",
+            budgets={"max_replans": 0},
+        )
+        plan, steps = await create_work_plan(
+            db,
+            order,
+            steps=[{"step_key": "chat", "title": "chat", "kind": "agent_turn", "input": {}}],
+        )
+        order_id, step_id = order.id, steps[0].id
+        await db.commit()
+    async with factory() as db:
+        _order, _step, attempt = await claim_ready_step(db, worker_id="w1", work_order_id=order_id)
+        attempt_id = attempt.id
+        request = {"name": "agent__mcp", "arguments": '{"action":"send","draft_id":"d-1"}'}
+        result = (
+            {"version": 1, "status": "waiting_approval"}
+            if case == "compact_create"
+            else {
+                "version": 1,
+                "status": "waiting_approval",
+                "data": {"recipient": "requires_approval"},
+                "error_code": "approval_required",
+                "retryable": False,
+                "evidence": {"recipient_digest": "untrusted"},
+                "checkpoint": {"recipient": "must_not_replace_source"},
+            }
+        )
+        action = ChatLogicalAction(
+            work_order_id=order_id,
+            attempt_id=attempt_id,
+            call_id="call-1",
+            request=request,
+            request_digest=digest(request),
+            status="waiting_approval",
+            result=result,
+            result_digest=digest(result),
+        )
+        db.add(action)
+        await db.flush()
+        snapshot = pack_checkpoint(
+            {
+                "phase": "tool_recorded",
+                "messages": [{"role": "tool", "tool_call_id": "call-1", "content": "recorded"}],
+                "pending_calls": [],
+                "in_flight_call_id": None,
+                "action_ids": {"call-1": str(action.id)},
+                "completed_call": {
+                    "action_id": str(action.id),
+                    "call_id": "call-1",
+                    "result": result,
+                },
+            }
+        )
+        attempt.checkpoint = {
+            "kind": "durable_chat",
+            "owner_key": "tester",
+            "work_order_id": str(order_id),
+            "step_id": str(step_id),
+            "attempt_id": str(attempt_id),
+            "plan_id": str(plan.id),
+            "plan_revision": 1,
+            "snapshot": snapshot,
+        }
+        approval_context = {
+            "continuation_mode": "recorded_recipient_result",
+            "work_order_id": str(order_id),
+            "source_step_id": str(step_id),
+            "source_attempt_id": str(attempt_id),
+            "source_plan_id": str(plan.id),
+            "source_plan_revision": 1,
+            "snapshot_sha256": snapshot["sha256"],
+            "action_id": str(action.id),
+            "call_id": "call-1",
+            "tool_name": "agent__mcp",
+            "tool_args": {"action": "send", "draft_id": "d-1"},
+            "request_digest": digest(request),
+            "result_digest": digest(result),
+            "action_digest": _action_digest(
+                "agent__mcp", "send", {"action": "send", "draft_id": "d-1"}
+            ),
+            "tool_result": result,
+        }
+        existing = None
+        if case not in {"create", "compact_create"}:
+            existing = Approval(
+                action_type=ApprovalActionType.agent_tool_call,
+                entity_type="foreign" if case == "foreign_collision" else "work_order",
+                entity_id=order_id,
+                requested_by="tester",
+                context=dict(approval_context),
+            )
+            db.add(existing)
+        if case == "approval_context":
+            existing.context = {k: v for k, v in existing.context.items() if k != "tool_result"}
+        if case == "request_digest":
+            action.request_digest = "forged"
+        if case == "snapshot_payload":
+            attempt.checkpoint["snapshot"]["payload"]["completed_call"]["call_id"] = "forged"
+        if case == "snapshot_hash":
+            attempt.checkpoint["snapshot"]["sha256"] = "forged"
+        if case == "duplicate":
+            db.add(
+                Approval(
+                    action_type=ApprovalActionType.agent_tool_call,
+                    entity_type="work_order",
+                    entity_id=order_id,
+                    requested_by="tester",
+                    context=dict(approval_context),
+                )
+            )
+        await db.commit()
+        action_id = action.id
+        approval_id = existing.id if existing is not None else None
+
+    runner = AsyncMock(
+        side_effect=ChatWaitingApprovalToolResult(
+            result, action_id=str(action_id), call_id="call-1", function=request
+        )
+    )
+    with patch("app.tasks.durable_chat.run_durable_chat", new=runner):
+        assert not await execute_claimed_step(step_id, attempt_id, session_factory=factory)
+    runner.assert_awaited_once()
+
+    async with factory() as db:
+        order = await db.get(WorkOrder, order_id)
+        step = await db.get(WorkStep, step_id)
+        attempt = await db.get(WorkStepAttempt, attempt_id)
+        action = await db.get(ChatLogicalAction, action_id)
+        approvals = list(
+            (await db.execute(select(Approval).where(Approval.entity_id == order_id))).scalars()
+        )
+        if case in {"create", "compact_create"}:
+            assert len(approvals) == 1
+        elif case == "reuse":
+            assert len(approvals) == 1 and approvals[0].id == approval_id
+        if case in {"create", "compact_create", "reuse"}:
+            assert order.status == "waiting_approval" and step.state == "waiting_approval"
+            assert (
+                attempt.output == result
+                and attempt.checkpoint["snapshot"]["sha256"] == snapshot["sha256"]
+            )
+            assert action.status == "waiting_approval" and action.result_digest == digest(result)
+            assert approvals[0].context["request_digest"] == digest(request)
+            if "evidence" in result:
+                assert (
+                    approvals[0].context["action_digest"] != result["evidence"]["recipient_digest"]
+                )
+        else:
+            assert order.status == "blocked" and step.state == "failed"
+            assert attempt.error["code"] == "recorded_recipient_approval_binding_invalid"
 
 
 @pytest.mark.asyncio

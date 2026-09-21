@@ -262,6 +262,15 @@ E06.3 REVIEWED: checkpointed durable chat после journal/checkpoint пере
 LLM call, retry и replan не запускаются. Независимо: 115 passed. Отчёт:
 `docs/agent-employee-delivery/E06-3-durable-chat-nonterminal-results.md`. E06
 остаётся IN PROGRESS; далее chat `waiting_approval` и non-checkpointed paths.
+E06.4 REVIEWED: checkpointed durable chat сохраняет exact raw envelope
+`waiting_approval`, а cryptographically verified packed checkpoint/journal
+binding допускает ровно один pending exact Approval. Duplicate либо foreign
+approval fail-closed; single и bulk approve/reject безопасно блокируют source
+без replay/resume, а статусы ограничены `approved`/`rejected`. Исполнитель: 409
+passed; независимо: 434 passed. Остаточный DB uniqueness race передан E07.
+Отчёт: `docs/agent-employee-delivery/E06-4-durable-chat-waiting-approval.md`.
+E06 остаётся IN PROGRESS; далее E06.5 — non-checkpointed sequential и
+requested-parallel paths.
 Push накопленной ветки был заблокирован автопроверкой из-за несвязанных CAD-коммитов;
 для публикации всей этой истории нужно отдельное разрешение. Не обходить запрет.
 

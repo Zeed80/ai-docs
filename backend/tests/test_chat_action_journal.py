@@ -57,7 +57,7 @@ async def boundary(factory, run, attempt_id, payload):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", ["partial", "outcome_unknown"])
+@pytest.mark.parametrize("status", ["partial", "waiting_approval", "outcome_unknown"])
 async def test_journal_result_and_checkpoint_rollback_together(test_engine, status):
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     run, _, attempt_id, action_id, payload = await setup_action(factory)

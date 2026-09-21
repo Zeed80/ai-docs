@@ -39,6 +39,35 @@ _POLICY_KEY = "approval_policy"
 _POLICY_DEFAULT = {"enabled": False, "trust_threshold": 0.85, "max_amount": None}
 
 
+def _is_recorded_recipient_approval(approval: Approval) -> bool:
+    context = approval.context or {}
+    return bool(
+        approval.action_type == ApprovalActionType.agent_tool_call
+        and approval.entity_type == "work_order"
+        and context.get("continuation_mode") == "recorded_recipient_result"
+    )
+
+
+async def _settle_recorded_recipient_approval(
+    db: AsyncSession,
+    approval: Approval,
+    *,
+    approved: bool,
+    actor: str,
+) -> bool:
+    if not _is_recorded_recipient_approval(approval):
+        return False
+    from app.domain.work_orders import block_recorded_recipient_approval_decision
+
+    await block_recorded_recipient_approval_decision(
+        db,
+        approval=approval,
+        approved=approved,
+        actor=actor,
+    )
+    return True
+
+
 class ApprovalPolicyIn(BaseModel):
     enabled: bool
     trust_threshold: float = 0.85
@@ -313,6 +342,16 @@ async def create_approval_chain(
     )
 
 
+@router.post("/bulk-decide", response_model=BulkDecideResponse)
+async def bulk_decide_approvals(
+    payload: BulkDecide,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(require_role(UserRole.manager)),
+) -> BulkDecideResponse:
+    """Approve or reject multiple pending approvals in one call."""
+    return await _bulk_decide_approvals(payload, db, user)
+
+
 @router.get("/{approval_id}", response_model=ApprovalOut)
 async def get_approval_status(
     approval_id: uuid.UUID,
@@ -334,7 +373,7 @@ async def decide_approval(
     user: UserInfo = Depends(require_role(UserRole.manager)),
 ):
     """Decide on an approval (approve/reject)."""
-    result = await db.execute(select(Approval).where(Approval.id == approval_id))
+    result = await db.execute(select(Approval).where(Approval.id == approval_id).with_for_update())
     approval = result.scalar_one_or_none()
     if not approval:
         raise HTTPException(status_code=404, detail="Approval not found")
@@ -347,6 +386,20 @@ async def decide_approval(
     is_admin = UserRole.admin in (user.roles or [])
     if not is_assigned and not is_admin:
         raise HTTPException(status_code=403, detail="Not assigned to this approval")
+
+    recorded_recipient = _is_recorded_recipient_approval(approval)
+    if recorded_recipient:
+        from app.domain.work_orders import WorkStateError
+
+        try:
+            await _settle_recorded_recipient_approval(
+                db,
+                approval,
+                approved=payload.status == ApprovalStatus.approved,
+                actor=user.sub,
+            )
+        except (ValueError, WorkStateError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     approval.status = payload.status
     approval.decision_comment = payload.comment
@@ -378,7 +431,7 @@ async def decide_approval(
                 },
             )
         )
-        if approval.entity_type == "work_order":
+        if approval.entity_type == "work_order" and not recorded_recipient:
             from app.domain.work_orders import WorkStateError, apply_approval_decision
 
             try:
@@ -434,7 +487,7 @@ async def decide_approval(
     # Ход агента, ждущий именно этого решения, продолжается — даже если
     # человек ответил не в чате, а здесь или с телефона. Раньше решение
     # ложилось в базу, а ход к этому моменту уже был оборван закрытой вкладкой.
-    if approval.action_type == ApprovalActionType.agent_tool_call:
+    if approval.action_type == ApprovalActionType.agent_tool_call and not recorded_recipient:
         try:
             from app.ai.agent_loop import deliver_external_approval
 
@@ -446,7 +499,8 @@ async def decide_approval(
             logger.warning("approval_resume_failed", approval_id=str(approval.id), error=str(exc))
 
     # Execute the underlying action after approval
-    await _execute_approved_action(approval, db)
+    if not recorded_recipient:
+        await _execute_approved_action(approval, db)
 
     return approval
 
@@ -527,38 +581,45 @@ async def delegate_approval(
     return approval
 
 
-@router.post("/bulk-decide", response_model=BulkDecideResponse)
-async def bulk_decide_approvals(
+async def _bulk_decide_approvals(
     payload: BulkDecide,
-    db: AsyncSession = Depends(get_db),
-    user: UserInfo = Depends(require_role(UserRole.manager)),
+    db: AsyncSession,
+    user: UserInfo,
 ) -> BulkDecideResponse:
-    """Approve or reject multiple pending approvals in one call."""
     processed = 0
     failed = 0
     decision_status = ApprovalStatus(payload.status)
 
     for approval_id in payload.approval_ids:
         try:
-            result = await db.execute(select(Approval).where(Approval.id == approval_id))
-            approval = result.scalar_one_or_none()
-            if not approval or approval.status != ApprovalStatus.pending:
-                failed += 1
-                continue
+            async with db.begin_nested():
+                result = await db.execute(
+                    select(Approval).where(Approval.id == approval_id).with_for_update()
+                )
+                approval = result.scalar_one_or_none()
+                if not approval or approval.status != ApprovalStatus.pending:
+                    failed += 1
+                    continue
 
-            approval.status = decision_status
-            approval.decision_comment = payload.comment
-            approval.decided_by = user.sub
-            approval.decided_at = datetime.now(UTC)
+                await _settle_recorded_recipient_approval(
+                    db,
+                    approval,
+                    approved=decision_status == ApprovalStatus.approved,
+                    actor=user.sub,
+                )
+                approval.status = decision_status
+                approval.decision_comment = payload.comment
+                approval.decided_by = user.sub
+                approval.decided_at = datetime.now(UTC)
 
-            await log_action(
-                db,
-                action=f"approval.{payload.status}",
-                entity_type="approval",
-                entity_id=approval.id,
-                user_id=user.sub,
-                details={"bulk": True, "comment": payload.comment},
-            )
+                await log_action(
+                    db,
+                    action=f"approval.{payload.status}",
+                    entity_type="approval",
+                    entity_id=approval.id,
+                    user_id=user.sub,
+                    details={"bulk": True, "comment": payload.comment},
+                )
             processed += 1
         except Exception as exc:
             logger.error("bulk_decide_item_failed", approval_id=str(approval_id), error=str(exc))

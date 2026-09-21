@@ -25,6 +25,20 @@ class ChatNonterminalToolResult(BaseException):
         self.result = result
 
 
+class ChatWaitingApprovalToolResult(ChatNonterminalToolResult):
+    """A recorded recipient wait bound to one durable logical action.
+
+    This is deliberately distinct from pre-dispatch confirmation: the source
+    call already ran and therefore cannot be replayed after an approval.
+    """
+
+    def __init__(self, result: dict, *, action_id: str, call_id: str, function: dict) -> None:
+        super().__init__(result)
+        self.action_id = action_id
+        self.call_id = call_id
+        self.function = function
+
+
 class ChatOutcomeUnknown(ChatNonterminalToolResult):
     """Backward-compatible signal for a persisted uncertain tool outcome."""
 

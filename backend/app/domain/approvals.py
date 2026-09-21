@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.db.models import ApprovalActionType, ApprovalStatus
 
@@ -42,6 +42,13 @@ class ApprovalOut(BaseModel):
 class ApprovalDecision(BaseModel):
     status: ApprovalStatus = Field(..., description="approved or rejected")
     comment: str | None = None
+
+    @field_validator("status")
+    @classmethod
+    def require_terminal_decision(cls, value: ApprovalStatus) -> ApprovalStatus:
+        if value not in {ApprovalStatus.approved, ApprovalStatus.rejected}:
+            raise ValueError("status must be approved or rejected")
+        return value
 
 
 class ApprovalListParams(BaseModel):

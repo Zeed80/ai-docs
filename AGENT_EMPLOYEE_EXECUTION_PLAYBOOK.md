@@ -686,6 +686,15 @@ E06.3 REVIEWED: checkpointed durable chat сохраняет history/checkpoint/
 сигнал и E06.1 settlement. Независимо: 115 passed. Отчёт:
 `docs/agent-employee-delivery/E06-3-durable-chat-nonterminal-results.md`. E06
 остаётся IN PROGRESS; далее chat `waiting_approval` и non-checkpointed paths.
+E06.4 REVIEWED: checkpointed durable chat сохраняет exact raw envelope
+`waiting_approval`; cryptographically verified packed checkpoint/journal binding
+создаёт ровно один pending exact Approval. Duplicate/foreign approval
+fail-closed, а single/bulk approve/reject безопасно блокируют source без
+replay/resume; разрешены только `approved`/`rejected`. Исполнитель: 409 passed;
+независимо: 434 passed. Остаточный DB uniqueness race — E07. Отчёт:
+`docs/agent-employee-delivery/E06-4-durable-chat-waiting-approval.md`. E06
+остаётся IN PROGRESS; далее E06.5 — non-checkpointed sequential и
+requested-parallel paths.
 
 ### E07 — Основа масштабируемых квитанций
 
