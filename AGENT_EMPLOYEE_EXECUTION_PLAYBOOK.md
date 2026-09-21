@@ -655,7 +655,7 @@ contracts. Независимо: 394 passed. Отчёт:
 
 ### E06 — Consumers не принимают незавершённый результат за успех
 
-**Статус:** IN PROGRESS; E06.1 REVIEWED. **После:** E05.
+**Статус:** SCOPED COMPLETE / REVIEWED. **После:** E05.
 **Файлы:** `tasks/work_orders.py`, `tasks/durable_chat.py`, `ai/agent_loop.py`,
 `domain/work_orders.py`, тесты worker/verifier/checkpoint.
 
@@ -695,6 +695,14 @@ replay/resume; разрешены только `approved`/`rejected`. Испол
 `docs/agent-employee-delivery/E06-4-durable-chat-waiting-approval.md`. E06
 остаётся IN PROGRESS; далее E06.5 — non-checkpointed sequential и
 requested-parallel paths.
+E06.5 REVIEWED: non-checkpointed AgentSession в sequential и requested-parallel
+пути сохраняет exact raw envelope valid v1 `partial`/`waiting_approval`/
+`outcome_unknown`, затем не выполняет tool tail и не вызывает следующий LLM turn.
+Requested parallel намеренно serial-degraded с event; raw legacy и v1
+`succeeded`/`failed` сохраняют execution semantics. Независимо: 135 passed.
+Отчёт: `docs/agent-employee-delivery/E06-5-noncheckpointed-chat-nonterminal-results.md`.
+Все status consumer transitions и Definition of Done E06 покрыты: E06 SCOPED
+COMPLETE / REVIEWED. Residual DB uniqueness race передан E07; E06.6 не требуется.
 
 ### E07 — Основа масштабируемых квитанций
 

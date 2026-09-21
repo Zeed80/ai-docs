@@ -2880,6 +2880,12 @@ class AgentSession:
                 else:
                     results = await self._execute_tools_sequential(tool_calls, iteration)
 
+                # A valid v1 nonterminal result is an execution boundary, not
+                # conversational context for another model/tool turn.  The
+                # executor has already retained the exact recipient envelope.
+                if self._contains_nonterminal_v1_result(results):
+                    break
+
                 # Fast path: a single Workspace-publish tool already produced the
                 # table AND a ready user message — deliver it directly instead of
                 # burning another ~8 s LLM call just to say "таблица готова".
@@ -3248,7 +3254,9 @@ class AgentSession:
         await self._send({"type": "tool_result", "tool": fn_name, "result": result})
         return fn_name, result, tc_id
 
-    async def _tool_result_to_history(self, result: dict, tool_call_id: str = "") -> None:
+    async def _tool_result_to_history(
+        self, result: dict, tool_call_id: str = "", *, preserve_exact: bool = False
+    ) -> None:
         """Serialise a tool result for conversation history.
 
         Results exceeding VAULT_THRESHOLD are stored in Redis; the history
@@ -3258,7 +3266,7 @@ class AgentSession:
         from app.ai.turn_vault import make_vault_envelope, should_vault, vault_store
 
         content_json = json.dumps(result, ensure_ascii=False)
-        if should_vault(content_json):
+        if not preserve_exact and should_vault(content_json):
             try:
                 ref = await vault_store(self._session_id, result)
                 envelope = make_vault_envelope(result, ref)
@@ -3268,11 +3276,27 @@ class AgentSession:
                 pass
         msg: dict = {
             "role": "tool",
-            "content": _trim_tool_result(content_json),
+            "content": content_json if preserve_exact else _trim_tool_result(content_json),
         }
         if tool_call_id:
             msg["tool_call_id"] = tool_call_id
         self.messages.append(msg)
+
+    @staticmethod
+    def _nonterminal_v1_status(result: object) -> str | None:
+        """Return lifecycle status only for a valid v1 nonterminal envelope."""
+        if not isinstance(result, dict) or "version" not in result:
+            return None
+        from app.ai.tool_result import normalize_tool_result
+
+        normalized = normalize_tool_result(result)
+        if normalized.status in {"partial", "waiting_approval", "outcome_unknown"}:
+            return normalized.status
+        return None
+
+    @classmethod
+    def _contains_nonterminal_v1_result(cls, results: list[tuple[str, dict]]) -> bool:
+        return any(cls._nonterminal_v1_status(result) is not None for _name, result in results)
 
     async def _announce_plan(self, tool_calls: list[dict], iteration: int) -> None:
         """Сказать словами, что агент собирается сделать в этом шаге.
@@ -3325,7 +3349,10 @@ class AgentSession:
                 await self.save_checkpoint("tool_started")
             fn_name, result, tc_id = await self._execute_single_tool(tc, iteration)
             results.append((fn_name, result))
-            await self._tool_result_to_history(result, tc_id)
+            nonterminal_status = self._nonterminal_v1_status(result)
+            await self._tool_result_to_history(
+                result, tc_id, preserve_exact=nonterminal_status is not None
+            )
             if self._checkpoint_sink is not None:
                 self._checkpoint_pending = self._checkpoint_pending[1:]
                 self._checkpoint_in_flight = None
@@ -3345,15 +3372,13 @@ class AgentSession:
                 # ``status`` field; they cannot silently change durable control
                 # flow.  This happens only after history, checkpoint and action
                 # journal persistence have completed.
-                if isinstance(result, dict) and "version" in result:
+                if nonterminal_status is not None:
                     from app.ai.chat_checkpoint import (
                         ChatNonterminalToolResult,
                         ChatWaitingApprovalToolResult,
                     )
-                    from app.ai.tool_result import normalize_tool_result
 
-                    normalized = normalize_tool_result(result)
-                    if normalized.status == "waiting_approval":
+                    if nonterminal_status == "waiting_approval":
                         function = tc.get("function")
                         if not isinstance(function, dict):
                             raise ChatNonterminalToolResult(result)
@@ -3363,8 +3388,12 @@ class AgentSession:
                             call_id=tc["id"],
                             function=dict(function),
                         )
-                    if normalized.status in {"partial", "outcome_unknown"}:
+                    if nonterminal_status in {"partial", "outcome_unknown"}:
                         raise ChatNonterminalToolResult(result)
+            elif nonterminal_status is not None:
+                # Non-checkpointed sessions have no durable replay boundary,
+                # but must still stop before another tool or LLM turn.
+                break
             self._trim_history()
         return results
 
@@ -3375,16 +3404,11 @@ class AgentSession:
             # Until parallel completion is journaled atomically, keep durable
             # calls sequential so each snapshot has one unambiguous frontier.
             return await self._execute_tools_sequential(tool_calls, iteration)
-        # Observability marker — lets the orchestrator log parallel_used per turn.
-        await self._send({"type": "tools.parallel", "count": len(tool_calls)})
-        results = await asyncio.gather(
-            *[self._execute_single_tool(tc, iteration) for tc in tool_calls],
-            return_exceptions=False,
-        )
-        for _fn_name, result, tc_id in results:
-            await self._tool_result_to_history(result, tc_id)
-        self._trim_history()
-        return [(fn_name, result) for fn_name, result, _tc_id in results]
+        # A requested parallel batch cannot know its first result before all
+        # effects have been dispatched.  Degrade it to the serial frontier so
+        # a v1 nonterminal outcome can stop the tail before it starts.
+        await self._send({"type": "tools.parallel_degraded", "count": len(tool_calls)})
+        return await self._execute_tools_sequential(tool_calls, iteration)
 
     @staticmethod
     def _terminal_publish_reply(results: list[tuple[str, dict]]) -> str | None:

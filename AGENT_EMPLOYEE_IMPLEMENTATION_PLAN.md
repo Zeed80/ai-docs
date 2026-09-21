@@ -271,6 +271,14 @@ passed; независимо: 434 passed. Остаточный DB uniqueness rac
 Отчёт: `docs/agent-employee-delivery/E06-4-durable-chat-waiting-approval.md`.
 E06 остаётся IN PROGRESS; далее E06.5 — non-checkpointed sequential и
 requested-parallel paths.
+E06.5 REVIEWED: non-checkpointed AgentSession в sequential и requested-parallel
+пути сохраняет exact raw envelope valid v1 `partial`/`waiting_approval`/
+`outcome_unknown`, затем не выполняет tool tail и не вызывает следующий LLM turn.
+Requested parallel намеренно serial-degraded с event; raw legacy и v1
+`succeeded`/`failed` сохраняют execution semantics. Независимо: 135 passed.
+Отчёт: `docs/agent-employee-delivery/E06-5-noncheckpointed-chat-nonterminal-results.md`.
+Все status consumer transitions E06 покрыты: E06 SCOPED COMPLETE / REVIEWED.
+Residual DB uniqueness race остаётся E07.
 Push накопленной ветки был заблокирован автопроверкой из-за несвязанных CAD-коммитов;
 для публикации всей этой истории нужно отдельное разрешение. Не обходить запрет.
 

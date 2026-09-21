@@ -274,6 +274,93 @@ async def test_checkpointed_compact_v1_waiting_approval_keeps_exact_raw_envelope
     assert json.loads(obj.messages[-1]["content"]) == result
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["partial", "waiting_approval", "outcome_unknown"])
+@pytest.mark.parametrize("requested_parallel", [False, True])
+async def test_noncheckpointed_v1_nonterminal_stops_tool_tail_and_next_llm(
+    monkeypatch, status, requested_parallel
+):
+    """E06.5: even a requested parallel batch has one safe serial frontier."""
+    obj = session()
+    obj._compressor = None
+    obj._try_fast_intent = AsyncMock(return_value=False)
+    obj._append_memory_context = AsyncMock()
+    obj._inject_rating_hint = AsyncMock()
+    obj._inject_learning_rules = AsyncMock()
+    obj._tools_for_turn = lambda: []
+    obj._accumulate_usage = lambda _message: None
+    obj._log_action = AsyncMock()
+    obj._announce_plan = AsyncMock()
+    effects, llm_calls = [], []
+    result = {"version": 1, "status": status}
+    calls = [call(), call("two")]
+
+    async def execute(tc, iteration):
+        effects.append(tc["id"])
+        return "test", result, tc["id"]
+
+    async def provider(*_args, **_kwargs):
+        llm_calls.append(True)
+        return {"tool_calls": calls}
+
+    obj._execute_single_tool = execute
+    monkeypatch.setattr("app.ai.agent_loop._call_provider_streaming", provider)
+    monkeypatch.setattr(
+        "app.ai.tool_parallelism.should_parallelize", lambda _calls: requested_parallel
+    )
+
+    await obj._run()
+
+    assert llm_calls == [True]
+    assert effects == ["one"]
+    assert json.loads(obj.messages[-1]["content"]) == result
+    if requested_parallel:
+        assert any(
+            args[0]["type"] == "tools.parallel_degraded"
+            for args, _kwargs in obj._send.await_args_list
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["partial", "waiting_approval", "outcome_unknown"])
+@pytest.mark.parametrize("requested_parallel", [False, True])
+async def test_noncheckpointed_raw_nonterminal_status_remains_legacy_history(
+    status, requested_parallel
+):
+    obj = session()
+    effects = []
+
+    async def execute(tc, iteration):
+        effects.append(tc["id"])
+        return "test", {"status": status}, tc["id"]
+
+    obj._execute_single_tool = execute
+    executor = obj._execute_tools_parallel if requested_parallel else obj._execute_tools_sequential
+    await executor([call(), call("two")], 0)
+
+    assert effects == ["one", "two"]
+    assert [json.loads(message["content"]) for message in obj.messages] == [
+        {"status": status},
+        {"status": status},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["succeeded", "failed"])
+async def test_noncheckpointed_terminal_v1_results_keep_requested_parallel_tail(status):
+    obj = session()
+    effects = []
+
+    async def execute(tc, iteration):
+        effects.append(tc["id"])
+        return "test", {"version": 1, "status": status}, tc["id"]
+
+    obj._execute_single_tool = execute
+    await obj._execute_tools_parallel([call(), call("two")], 0)
+
+    assert effects == ["one", "two"]
+
+
 async def claim(factory):
     async with factory() as db:
         run = await submit_chat_run(
