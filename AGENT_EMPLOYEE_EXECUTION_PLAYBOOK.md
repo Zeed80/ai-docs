@@ -736,7 +736,7 @@ COMPLETE / REVIEWED; массовые recipients остаются E08+.
 
 ### E08 — Вторая DB-операция с атомарной квитанцией
 
-**Статус:** TODO. **После:** E07. **Выбор:** одна операция из E03 без внешнего эффекта.
+**Статус:** SCOPED COMPLETE / REVIEWED. **После:** E07. **Выбор:** одна операция из E03 без внешнего эффекта.
 
 1. В отчёте назвать точный route, доменную таблицу и текущий commit boundary.
 2. Вынести создание/изменение объекта в функцию без внутреннего commit.
@@ -746,8 +746,17 @@ COMPLETE / REVIEWED; массовые recipients остаются E08+.
 5. Проверить response serialization через настоящий ASGI route, не только функцию.
 6. Повторить duplicate/lost response/rollback/cancel/foreign owner тесты пилота.
 
-**Готово:** одна операция доказана. Для каждой следующей — отдельная E08.N;
-операции DB+queue требуют outbox E13, SMTP/browser не объявлять exactly-once.
+**Готово:** доказана ровно `warehouse.update_item`: route
+`PATCH /api/warehouse/inventory/{item_id}`, таблица `InventoryItem` /
+`inventory_items`, прежняя граница — direct commit в handler-е. Helper не делает
+commit; keyed path под current auth и common fence атомарно коммитит item +
+`ActionReceipt`, legacy no-key path сохранён. Реальный ASGI route возвращает
+exact stored receipt response со стабильным `updated_at`; gateway передаёт ключ
+только `agent_control.task_propose` и `warehouse.update_item`. Исполнитель: 41
+focused/317 expanded; независимо: 317 passed; Ruff/format/diff clean. Отчёт:
+`docs/agent-employee-delivery/E08-warehouse-update-item-receipt.md`. Каждая
+следующая операция — отдельная E08.N; DB+queue требует outbox E13, SMTP/browser
+не объявлять exactly-once. Далее — E09.
 
 ### E09 — Реестр независимых проверок артефактов
 

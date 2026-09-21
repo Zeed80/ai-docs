@@ -14,8 +14,9 @@
 из чата по `/work-orders/chat-journal?run_id=…`. Для `agent_control.task_propose`
 реализован пилот: предложение и квитанция атомарны в БД, ключ связан с владельцем,
 аргументами и действующей попыткой; дубликат не создаёт задачу. UI показывает
-квитанцию прошлого commit, но не разрешает продолжение. Расширение на другие
-операции остаётся в плане. Проверка: `python3 -m pytest backend/tests/test_action_receipts.py -q`.
+квитанцию прошлого commit, но не разрешает продолжение. E08 дополнительно
+закрывает только `warehouse.update_item`; другие операции остаются E08.N.
+Проверка: `python3 -m pytest backend/tests/test_action_receipts.py -q`.
 Проверка UI: `cd frontend && PLAYWRIGHT_MOCK_API=1 npx playwright test tests/e2e/chat-action-journal.spec.ts --project=chromium`.
 Подробные задания для последовательной реализации другой моделью:
 [`AGENT_EMPLOYEE_EXECUTION_PLAYBOOK.md`](./AGENT_EMPLOYEE_EXECUTION_PLAYBOOK.md).
@@ -259,7 +260,16 @@ receipt-only replay. Migration переносит только strict valid Work
 corrupt/duplicate остаются fail-closed с backward read; другие recipients —
 E08+. Исполнитель: 29 focused/76 expanded; независимо: 29 focused, один Alembic
 head, Ruff/format/diff clean. Отчёт:
-`docs/agent-employee-delivery/E07-scalable-action-receipts.md`. Далее — E08.
+`docs/agent-employee-delivery/E07-scalable-action-receipts.md`.
+E08 SCOPED COMPLETE / REVIEWED: ровно `warehouse.update_item` на
+`PATCH /api/warehouse/inventory/{item_id}` (`InventoryItem` / `inventory_items`)
+перенесён с direct handler commit на helper без commit. Keyed путь под current
+auth/common fence атомарно сохраняет item + `ActionReceipt`; legacy no-key
+сохранён. Реальный ASGI response совпадает с receipt и сохраняет стабильный
+`updated_at`; gateway передаёт ключ только `task_propose` и `warehouse.update_item`.
+Исполнитель: 41 focused/317 expanded; независимо: 317 passed; Ruff/format/diff
+clean. Отчёт: `docs/agent-employee-delivery/E08-warehouse-update-item-receipt.md`.
+Остальные операции — E08.N; DB+queue — E13, SMTP/browser не exactly-once. Далее — E09.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при
 сетевой ошибке/HTTP 5xx дают outcome_unknown и блокируют durable-цикл после

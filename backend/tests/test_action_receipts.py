@@ -4,12 +4,13 @@ import asyncio
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 import pytest_asyncio
-from fastapi import HTTPException
-from sqlalchemy import event, func, select, update
+from fastapi import FastAPI, HTTPException
+from sqlalchemy import delete, event, func, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.agent_control_plane import AgentTaskPropose, propose_agent_task_tool
@@ -21,7 +22,15 @@ from app.api.chat_runs import (
 from app.auth.jwt import _DEV_USER, get_current_user
 from app.auth.models import UserRole
 from app.db.agent_runtime_models import ActionReceipt, ChatLogicalAction
-from app.db.models import AgentTask, AgentTeam, WorkEvent, WorkOrder, WorkStep, WorkStepAttempt
+from app.db.models import (
+    AgentTask,
+    AgentTeam,
+    InventoryItem,
+    WorkEvent,
+    WorkOrder,
+    WorkStep,
+    WorkStepAttempt,
+)
 from app.domain.action_receipts import read_receipt, verify_proposal_receipt
 from app.domain.chat_action_journal import digest, record_boundary
 from app.domain.work_orders import append_event, claim_ready_step
@@ -40,6 +49,12 @@ async def settle_receipt_test_orders(test_engine):
                 WorkOrder.objective.startswith("Receipt scenario "),
             )
             .values(status="blocked")
+        )
+        # Warehouse recipient scenarios use independently committed sessions
+        # to exercise the real duplicate-delivery race.  Keep their synthetic
+        # rows out of unrelated warehouse API tests that share this schema.
+        await db.execute(
+            delete(InventoryItem).where(InventoryItem.name.startswith("Receipt item "))
         )
         await db.commit()
 
@@ -92,6 +107,94 @@ async def proposal(factory, user=_DEV_USER):
 async def deliver(factory, payload, key, user=_DEV_USER):
     async with factory() as db:
         return await propose_agent_task_tool(payload, db, user, key)
+
+
+async def warehouse_update_proposal(factory, *, item_id=None, payload=None, user=_DEV_USER):
+    """Create one started, journaled warehouse.update_item call."""
+    payload = payload or {"location": f"Receipt shelf {uuid.uuid4()}"}
+    async with factory() as db:
+        if item_id is None:
+            item = InventoryItem(name=f"Receipt item {uuid.uuid4()}", unit="pcs", current_qty=1)
+            db.add(item)
+            await db.flush()
+            item_id = item.id
+        else:
+            item = await db.get(InventoryItem, item_id)
+        await db.commit()
+
+    async with factory() as db:
+        run = await submit_chat_run(
+            ChatRunCreate(request_id=uuid.uuid4(), content=f"Receipt scenario {uuid.uuid4()}"),
+            db,
+            user,
+        )
+    async with factory() as db:
+        order, _, attempt = await claim_ready_step(
+            db,
+            worker_id="warehouse-receipt-worker",
+            work_order_id=run["work_order_id"],
+        )
+        action_id = uuid.uuid4()
+        call = {
+            "id": "call-warehouse-update",
+            "function": {
+                "name": "warehouse",
+                "arguments": json.dumps(
+                    {"action": "update_item", "item_id": str(item_id), **payload}
+                ),
+            },
+        }
+        boundary = {
+            "phase": "tools_planned",
+            "pending_calls": [call],
+            "action_ids": {call["id"]: str(action_id)},
+            "in_flight_call_id": None,
+        }
+        await record_boundary(db, order, attempt, boundary)
+        await record_boundary(
+            db,
+            order,
+            attempt,
+            {**boundary, "phase": "tool_started", "in_flight_call_id": call["id"]},
+        )
+        await db.commit()
+    return payload, run, action_id, item_id, f"{action_id}:{attempt.id}"
+
+
+async def deliver_warehouse(factory, item_id, payload, key, user=_DEV_USER):
+    from app.api.warehouse import InventoryItemUpdate, update_inventory_item
+
+    async with factory() as db:
+        return await update_inventory_item(
+            item_id,
+            InventoryItemUpdate(**payload),
+            db,
+            user,
+            key,
+        )
+
+
+async def deliver_warehouse_asgi(factory, item_id, payload, key, user=_DEV_USER):
+    """Exercise the actual warehouse route with independent DB connections."""
+    from app.api import warehouse
+    from app.db.session import get_db
+
+    app = FastAPI()
+    app.include_router(warehouse.router, prefix="/api/warehouse")
+
+    async def database():
+        async with factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = database
+    app.dependency_overrides[get_current_user] = lambda: user
+    headers = {"Idempotency-Key": key} if key is not None else {}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://warehouse-recipient"
+    ) as client:
+        return await client.patch(
+            f"/api/warehouse/inventory/{item_id}", json=payload, headers=headers
+        )
 
 
 @pytest.mark.asyncio
@@ -369,6 +472,219 @@ async def test_legacy_proposal_without_key_remains_available(test_engine):
 
 
 @pytest.mark.asyncio
+async def test_warehouse_keyed_asgi_response_is_exact_committed_receipt(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    payload, _, action_id, item_id, key = await warehouse_update_proposal(factory)
+
+    response = await deliver_warehouse_asgi(factory, item_id, payload, key)
+    assert response.status_code == 200
+    committed = response.json()
+
+    async with factory() as db:
+        receipt = await db.scalar(
+            select(ActionReceipt).where(ActionReceipt.logical_action_id == action_id)
+        )
+        assert receipt is not None
+        assert receipt.response == committed
+        assert receipt.operation == "warehouse.update_item"
+        assert (
+            await db.scalar(
+                select(func.count()).select_from(InventoryItem).where(InventoryItem.id == item_id)
+            )
+            == 1
+        )
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(ActionReceipt)
+                .where(ActionReceipt.logical_action_id == action_id)
+            )
+            == 1
+        )
+
+    # A new ASGI request sees exactly the timestamp frozen in the receipt, not
+    # a pre-flush version that changed on commit.
+    after = await deliver_warehouse_asgi(factory, item_id, {}, None)
+    assert after.status_code == 200
+    assert after.json()["updated_at"] == committed["updated_at"]
+
+
+@pytest.mark.asyncio
+async def test_warehouse_concurrent_lost_response_has_one_item_mutation_and_receipt(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    payload, run, action_id, item_id, key = await warehouse_update_proposal(factory)
+    first, second = await asyncio.gather(
+        deliver_warehouse(factory, item_id, payload, key),
+        deliver_warehouse(factory, item_id, payload, key),
+    )
+    assert first == second
+    async with factory() as db:
+        assert (
+            await db.scalar(
+                select(func.count()).select_from(InventoryItem).where(InventoryItem.id == item_id)
+            )
+            == 1
+        )
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(ActionReceipt)
+                .where(ActionReceipt.logical_action_id == action_id)
+            )
+            == 1
+        )
+        action = await db.get(ChatLogicalAction, action_id)
+        assert action.result is None  # The worker lost its HTTP response/checkpoint.
+        order = await db.get(WorkOrder, run["work_order_id"], with_for_update=True)
+        order.status = "blocked"
+        await db.commit()
+    assert await deliver_warehouse(factory, item_id, payload, key) == first
+
+
+@pytest.mark.asyncio
+async def test_warehouse_receipt_failure_rolls_back_item_mutation(test_engine, monkeypatch):
+    from app.domain import action_receipts
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    payload, _, action_id, item_id, key = await warehouse_update_proposal(factory)
+    real = action_receipts.record_warehouse_update_receipt
+
+    async def fail_after_insert(*args):
+        await real(*args)
+        raise RuntimeError("Crash before warehouse commit")
+
+    monkeypatch.setattr(action_receipts, "record_warehouse_update_receipt", fail_after_insert)
+    with pytest.raises(RuntimeError, match="Crash before warehouse commit"):
+        await deliver_warehouse(factory, item_id, payload, key)
+    async with factory() as db:
+        item = await db.get(InventoryItem, item_id)
+        assert item.location != payload.get("location")
+        assert not await db.scalar(
+            select(ActionReceipt.id).where(ActionReceipt.logical_action_id == action_id)
+        )
+
+
+@pytest.mark.asyncio
+async def test_warehouse_cancellation_and_recipient_share_order_lock(test_engine, monkeypatch):
+    from app.api import work_orders as work_order_api
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    payload, run, action_id, item_id, key = await warehouse_update_proposal(factory)
+    lock_acquired = asyncio.Event()
+    release_cancel = asyncio.Event()
+    real_transition = work_order_api.transition_work_order
+
+    async def pause_after_order_lock(*args, **kwargs):
+        lock_acquired.set()
+        await release_cancel.wait()
+        return await real_transition(*args, **kwargs)
+
+    monkeypatch.setattr(work_order_api, "transition_work_order", pause_after_order_lock)
+
+    async def cancel():
+        async with factory() as db:
+            return await work_order_api.cancel_order(run["work_order_id"], db, _DEV_USER)
+
+    cancellation = asyncio.create_task(cancel())
+    await asyncio.wait_for(lock_acquired.wait(), timeout=2)
+    delivery = asyncio.create_task(deliver_warehouse(factory, item_id, payload, key))
+    await asyncio.sleep(0)
+    release_cancel.set()
+    await cancellation
+    with pytest.raises(HTTPException, match="fence is no longer valid"):
+        await delivery
+    async with factory() as db:
+        assert not await db.scalar(
+            select(ActionReceipt.id).where(ActionReceipt.logical_action_id == action_id)
+        )
+        assert (await db.get(WorkOrder, run["work_order_id"])).status == "canceled"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("violation", ["item", "payload", "action", "owner", "attempt"])
+async def test_warehouse_receipt_rejects_foreign_or_mismatched_delivery(test_engine, violation):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    payload, _, action_id, item_id, key = await warehouse_update_proposal(factory)
+    user = _DEV_USER
+    delivered_item_id = item_id
+    delivered_payload = payload
+    async with factory() as db:
+        action = await db.get(ChatLogicalAction, action_id)
+        if violation == "item":
+            delivered_item_id = uuid.uuid4()
+        elif violation == "payload":
+            delivered_payload = {**payload, "location": "substituted"}
+        elif violation == "action":
+            args = json.loads(action.request["arguments"])
+            action.request = {
+                **action.request,
+                "arguments": json.dumps({**args, "action": "create_item"}),
+            }
+            action.request_digest = digest(action.request)
+        elif violation == "owner":
+            user = _DEV_USER.model_copy(update={"sub": "foreign-owner"})
+        else:
+            key = f"{action_id}:{uuid.uuid4()}"
+        await db.commit()
+    with pytest.raises(HTTPException) as exc:
+        await deliver_warehouse(factory, delivered_item_id, delivered_payload, key, user)
+    assert exc.value.status_code in {404, 409}
+    async with factory() as db:
+        assert not await db.scalar(
+            select(ActionReceipt.id).where(ActionReceipt.logical_action_id == action_id)
+        )
+
+
+@pytest.mark.asyncio
+async def test_warehouse_key_is_not_bearer_and_legacy_authorized_update_remains_available(
+    test_engine,
+):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    payload, _, action_id, item_id, key = await warehouse_update_proposal(factory)
+    foreign = _DEV_USER.model_copy(update={"sub": "foreign-owner"})
+    denied = await deliver_warehouse_asgi(factory, item_id, payload, key, foreign)
+    assert denied.status_code == 404
+    async with factory() as db:
+        assert not await db.scalar(
+            select(ActionReceipt.id).where(ActionReceipt.logical_action_id == action_id)
+        )
+
+    legacy = await deliver_warehouse_asgi(factory, item_id, payload, None)
+    assert legacy.status_code == 200
+    assert legacy.json()["location"] == payload["location"]
+    async with factory() as db:
+        assert not await db.scalar(
+            select(ActionReceipt.id).where(ActionReceipt.logical_action_id == action_id)
+        )
+
+
+@pytest.mark.asyncio
+async def test_warehouse_committed_receipt_allows_only_source_or_current_attempt(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    payload, _, action_id, item_id, old_key = await warehouse_update_proposal(factory)
+    committed = await deliver_warehouse(factory, item_id, payload, old_key)
+    async with factory() as db:
+        action = await db.get(ChatLogicalAction, action_id)
+        original_attempt = await db.get(WorkStepAttempt, action.attempt_id)
+        next_attempt = WorkStepAttempt(
+            step_id=original_attempt.step_id,
+            attempt_no=original_attempt.attempt_no + 1,
+            worker_id="warehouse-replacement-worker",
+            status="running",
+        )
+        db.add(next_attempt)
+        await db.flush()
+        action.attempt_id = next_attempt.id
+        await db.commit()
+        current_key = f"{action_id}:{next_attempt.id}"
+
+    assert await deliver_warehouse(factory, item_id, payload, old_key) == committed
+    assert await deliver_warehouse(factory, item_id, payload, current_key) == committed
+    with pytest.raises(HTTPException, match="attempt mismatch"):
+        await deliver_warehouse(factory, item_id, payload, f"{action_id}:{uuid.uuid4()}")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("dict_arguments", [False, True])
 async def test_gateway_forwards_key_to_real_recipient_route(
     test_engine, monkeypatch, dict_arguments
@@ -420,6 +736,65 @@ async def test_gateway_forwards_key_to_real_recipient_route(
         detail = await get_chat_action(run["id"], action_id, db, _DEV_USER)
         assert detail["recipient_receipt"]["response"] == result
     assert result["status"] == "proposed"
+
+
+@pytest.mark.asyncio
+async def test_durable_gateway_key_is_sent_only_to_exact_receipt_recipients(monkeypatch):
+    """The journal key is transport metadata for the two E07/E08 recipients only."""
+    from app.ai import agent_loop
+    from app.ai.policy_engine import PolicyDecision
+
+    session = agent_loop.AgentSession(AsyncMock())
+    session._log_action = AsyncMock()
+    session._skill_map = {
+        "warehouse__update_item": {
+            "name": "warehouse",
+            "path": "/api/agent/cap/warehouse",
+        },
+        "agent_control__task_propose": {
+            "name": "agent_control",
+            "path": "/api/agent/cap/agent_control",
+        },
+        "warehouse__create_item": {
+            "name": "warehouse",
+            "path": "/api/agent/cap/warehouse",
+        },
+    }
+    action_id = uuid.uuid4()
+    attempt_id = uuid.uuid4()
+    session._checkpoint_action_ids = {
+        "warehouse-update": action_id,
+        "task-propose": action_id,
+        "warehouse-create": action_id,
+    }
+    session._recipient_attempt_id = attempt_id
+    sent: list[tuple[str, str, str | None]] = []
+
+    async def fake_execute(skill, args, _config, **kwargs):
+        sent.append((skill["path"], args["action"], kwargs.get("idempotency_key")))
+        return {"ok": True}
+
+    monkeypatch.setattr(agent_loop, "execute_skill", fake_execute)
+    monkeypatch.setattr(
+        "app.ai.policy_engine.check_tool_execution",
+        lambda **_: PolicyDecision(allowed=True),
+    )
+
+    for call_id, name, args in [
+        ("warehouse-update", "warehouse__update_item", {"action": "update_item"}),
+        ("task-propose", "agent_control__task_propose", {"action": "task_propose"}),
+        ("warehouse-create", "warehouse__create_item", {"action": "create_item"}),
+    ]:
+        await session._execute_single_tool(
+            {"id": call_id, "function": {"name": name, "arguments": json.dumps(args)}},
+            1,
+        )
+
+    assert sent == [
+        ("/api/agent/cap/warehouse", "update_item", f"{action_id}:{attempt_id}"),
+        ("/api/agent/cap/agent_control", "task_propose", f"{action_id}:{attempt_id}"),
+        ("/api/agent/cap/warehouse", "create_item", None),
+    ]
 
 
 @pytest.mark.asyncio

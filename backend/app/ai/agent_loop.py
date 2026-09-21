@@ -3223,8 +3223,16 @@ class AgentSession:
             if (
                 action_id
                 and attempt_id
-                and skill.get("path") == "/api/agent/cap/agent_control"
-                and args.get("action") == "task_propose"
+                and (
+                    (
+                        skill.get("path") == "/api/agent/cap/agent_control"
+                        and args.get("action") == "task_propose"
+                    )
+                    or (
+                        skill.get("path") == "/api/agent/cap/warehouse"
+                        and args.get("action") == "update_item"
+                    )
+                )
             ):
                 receipt_options["idempotency_key"] = f"{action_id}:{attempt_id}"
             result = await execute_skill(

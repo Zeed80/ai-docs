@@ -21,6 +21,7 @@ from app.domain.work_orders import attempt_owns_lease
 
 RECEIPT_VERSION = 1
 PROPOSAL_OPERATION = "agent_control.task_propose"
+WAREHOUSE_UPDATE_OPERATION = "warehouse.update_item"
 
 
 def _expected_operation(action):
@@ -233,6 +234,94 @@ async def record_proposal_receipt(db, action, response):
             artifact_revision=artifact_revision,
             receipt_version=RECEIPT_VERSION,
             provenance={"source": "recipient", "recipient": PROPOSAL_OPERATION},
+            created_at=datetime.now(UTC),
+        )
+    )
+    await db.flush()
+
+
+async def prepare_warehouse_update_receipt(db, key, user, item_id, payload):
+    """Fence an exact journaled warehouse update; key is never authorization."""
+    try:
+        action_id, attempt_id = (uuid.UUID(part) for part in key.split(":"))
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Invalid logical action key") from None
+    action = await db.get(ChatLogicalAction, action_id)
+    if action is None:
+        raise HTTPException(404, "Logical action not found")
+    order = await db.get(WorkOrder, action.work_order_id, with_for_update=True)
+    if order is None or order.owner_key != user.sub:
+        raise HTTPException(404, "Logical action not found")
+    await db.refresh(action)
+    try:
+        args = action.request["arguments"]
+        args = dict(args) if isinstance(args, dict) else json.loads(args)
+        expected = {"item_id": str(item_id), **payload}
+        actual = {k: v for k, v in args.items() if k not in {"action", "reason"}}
+        if (
+            digest(action.request) != action.request_digest
+            or action.request.get("name") != "warehouse"
+            or args.get("action") != "update_item"
+            or actual != expected
+        ):
+            raise ValueError()
+    except (ValueError, TypeError, KeyError, AttributeError):
+        raise HTTPException(409, "Recipient request does not match logical action") from None
+    with db.no_autoflush:
+        receipt = await read_receipt(db, action)
+    if receipt is not None:
+        if receipt["operation"] != WAREHOUSE_UPDATE_OPERATION:
+            raise HTTPException(409, "Recipient operation mismatch")
+        if attempt_id not in {uuid.UUID(receipt["attempt_id"]), action.attempt_id}:
+            raise HTTPException(409, "Recipient attempt mismatch")
+        return action, receipt
+    if action.attempt_id != attempt_id:
+        raise HTTPException(409, "Recipient attempt mismatch")
+    attempt = await db.get(WorkStepAttempt, attempt_id)
+    step = await db.get(WorkStep, attempt.step_id) if attempt else None
+    plan = await db.get(WorkPlan, step.plan_id) if step else None
+    if not (
+        order.source == "durable_chat"
+        and order.status == "running"
+        and action.status == "started"
+        and step
+        and plan
+        and step.work_order_id == order.id
+        and plan.work_order_id == order.id
+        and plan.revision == order.plan_revision
+        and plan.status == "active"
+        and attempt_owns_lease(step, attempt)
+    ):
+        raise HTTPException(409, "Recipient execution fence is no longer valid")
+    try:
+        validate_wall_budget(order)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+    return action, None
+
+
+async def record_warehouse_update_receipt(db, action, response):
+    order = await db.get(WorkOrder, action.work_order_id)
+    if order is None:
+        raise ValueError("Warehouse receipt has no work order")
+    try:
+        artifact_id, revision = str(uuid.UUID(str(response["id"]))), response["updated_at"]
+    except (ValueError, TypeError, KeyError):
+        raise ValueError("Warehouse response has no stable artifact binding") from None
+    db.add(
+        ActionReceipt(
+            logical_action_id=action.id,
+            work_order_id=order.id,
+            owner_key=order.owner_key,
+            attempt_id=action.attempt_id,
+            operation=WAREHOUSE_UPDATE_OPERATION,
+            request_digest=action.request_digest,
+            response=response,
+            response_digest=digest(response),
+            artifact_id=artifact_id,
+            artifact_revision=revision,
+            receipt_version=RECEIPT_VERSION,
+            provenance={"source": "recipient", "recipient": WAREHOUSE_UPDATE_OPERATION},
             created_at=datetime.now(UTC),
         )
     )

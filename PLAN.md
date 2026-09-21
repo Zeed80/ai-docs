@@ -295,12 +295,22 @@ lock и fence. Source/current attempt дают только receipt-only replay.
 переносит лишь strict valid WorkEvent, corrupt/duplicate остаются fail-closed с
 backward read; остальные recipients — E08+. Исполнитель: 29 focused/76 expanded;
 независимо: 29 focused, один Alembic head, Ruff/format/diff clean. Отчёт:
-`docs/agent-employee-delivery/E07-scalable-action-receipts.md`. Далее — E08.
+`docs/agent-employee-delivery/E07-scalable-action-receipts.md`.
+E08 SCOPED COMPLETE / REVIEWED: ровно `warehouse.update_item` на
+`PATCH /api/warehouse/inventory/{item_id}` (`InventoryItem` / `inventory_items`)
+перенесён с direct handler commit на helper без commit. Keyed путь под current
+auth/common fence атомарно сохраняет item + `ActionReceipt`; legacy no-key
+сохранён. Реальный ASGI response совпадает с receipt и сохраняет стабильный
+`updated_at`; gateway передаёт ключ только `task_propose` и `warehouse.update_item`.
+Исполнитель: 41 focused/317 expanded; независимо: 317 passed; Ruff/format/diff
+clean. Отчёт: `docs/agent-employee-delivery/E08-warehouse-update-item-receipt.md`.
+Остальные операции — E08.N; DB+queue — E13, SMTP/browser не exactly-once. Далее — E09.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя
 в WorkEvent, проверяет владельца/аргументы/попытку/lease. Детали журнала и UI
 показывают квитанцию независимо от потерянного ответа worker. Другие операции
-и продолжение по квитанциям ещё в плане. Проверка:
+и продолжение по квитанциям ещё в плане; E08 дополнительно закрывает только
+`warehouse.update_item`, остальные recipients требуют E08.N. Проверка:
 `python3 -m pytest backend/tests/test_action_receipts.py -q`.
 Предварительно устранён слепой HTTP retry: повторяется только проверенное чтение;
 неизвестный эффект сохраняется и блокирует durable-цикл. Проверка:

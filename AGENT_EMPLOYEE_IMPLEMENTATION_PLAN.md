@@ -288,7 +288,16 @@ current auth, common order lock и fence. Source/current attempt допуска�
 WorkEvent, corrupt/duplicate оставляет fail-closed с backward read. Остальные
 recipients — E08+. Исполнитель: 29 focused/76 expanded; независимо: 29 focused,
 один Alembic head, Ruff/format/diff clean. Отчёт:
-`docs/agent-employee-delivery/E07-scalable-action-receipts.md`. Далее — E08.
+`docs/agent-employee-delivery/E07-scalable-action-receipts.md`.
+E08 SCOPED COMPLETE / REVIEWED: ровно `warehouse.update_item` на
+`PATCH /api/warehouse/inventory/{item_id}` (`InventoryItem` / `inventory_items`)
+перенесён с direct handler commit на helper без commit. Keyed путь под current
+auth/common fence атомарно сохраняет item + `ActionReceipt`; legacy no-key
+сохранён. Реальный ASGI response совпадает с receipt и сохраняет стабильный
+`updated_at`; gateway передаёт ключ только `task_propose` и `warehouse.update_item`.
+Исполнитель: 41 focused/317 expanded; независимо: 317 passed; Ruff/format/diff
+clean. Отчёт: `docs/agent-employee-delivery/E08-warehouse-update-item-receipt.md`.
+Остальные операции — E08.N; DB+queue — E13, SMTP/browser не exactly-once. Далее — E09.
 Push накопленной ветки был заблокирован автопроверкой из-за несвязанных CAD-коммитов;
 для публикации всей этой истории нужно отдельное разрешение. Не обходить запрет.
 

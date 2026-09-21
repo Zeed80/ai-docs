@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from typing import Literal
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select
@@ -23,6 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.audit.service import add_timeline_event, log_action
+from app.auth.jwt import get_current_user
+from app.auth.models import UserInfo
 from app.db.models import (
     InventoryItem,
     Invoice,
@@ -292,24 +294,56 @@ async def get_inventory_item(
     return out
 
 
-@router.patch("/inventory/{item_id}", response_model=InventoryItemOut)
-async def update_inventory_item(
-    item_id: uuid.UUID,
-    payload: InventoryItemUpdate,
-    db: AsyncSession = Depends(get_db),
+async def _apply_inventory_update(
+    db: AsyncSession, item_id: uuid.UUID, payload: InventoryItemUpdate
 ):
-    """Skill: warehouse.update_item — Update inventory item fields."""
     item = await db.get(InventoryItem, item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
     for k, v in payload.model_dump(exclude_unset=True).items():
         if k != "notes" and hasattr(item, k):
             setattr(item, k, v)
-    await db.commit()
+    await db.flush()
+    return item
+
+
+@router.patch("/inventory/{item_id}", response_model=InventoryItemOut)
+async def update_inventory_item(
+    item_id: uuid.UUID,
+    payload: InventoryItemUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    """Skill: warehouse.update_item — Update inventory item fields."""
+    if idempotency_key is None:
+        item = await _apply_inventory_update(db, item_id, payload)
+        await db.commit()
+        await db.refresh(item)
+        out = InventoryItemOut.model_validate(item)
+        out.is_low_stock = bool(item.min_qty and item.current_qty < item.min_qty)
+        return out
+    from app.domain.action_receipts import (
+        prepare_warehouse_update_receipt,
+        record_warehouse_update_receipt,
+    )
+
+    body = payload.model_dump(mode="json", exclude_unset=True)
+    action, receipt = await prepare_warehouse_update_receipt(
+        db, idempotency_key, user, item_id, body
+    )
+    if receipt is not None:
+        return receipt["response"]
+    item = await _apply_inventory_update(db, item_id, payload)
+    # ``updated_at`` is populated by the database expression on flush.  Refresh
+    # it before producing the receipt: its response is an immutable record of
+    # this commit and must be byte-for-byte replayable after the transaction.
     await db.refresh(item)
-    out = InventoryItemOut.model_validate(item)
-    out.is_low_stock = bool(item.min_qty and item.current_qty < item.min_qty)
-    return out
+    response = InventoryItemOut.model_validate(item).model_dump(mode="json")
+    response["is_low_stock"] = bool(item.min_qty and item.current_qty < item.min_qty)
+    await record_warehouse_update_receipt(db, action, response)
+    await db.commit()
+    return response
 
 
 @router.delete("/inventory/{item_id}", status_code=200)
