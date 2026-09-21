@@ -615,6 +615,13 @@ audit и digest исходных `{action, arguments}`; direct callable fail-clo
 passed. Отчёт: `docs/agent-employee-delivery/E05-4-0-mcp-boundary.md`. E05.4
 остаётся IN PROGRESS; следующая карточка — E05.4.1 `tool_search_mcp`.
 
+E05.4.1 REVIEWED переводит только gateway `tool_search_mcp` на строгий
+ToolResult v1: exact response shape, одна попытка, malformed/4xx/pre-dispatch
+failed и post-dispatch ambiguity outcome_unknown. Прочие MCP actions legacy.
+Независимо: 290 focused и 317 расширенных тестов. Отчёт:
+`docs/agent-employee-delivery/E05-4-1-tool-search-mcp-adapter.md`. E05.4/E05
+остаются IN PROGRESS; следующий шаг — аудит остатка E05.4.
+
 ### E06 — Consumers не принимают незавершённый результат за успех
 
 **Статус:** TODO. **После:** E05.

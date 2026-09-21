@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
 
 from app.ai import agent_loop
 from app.ai.agent_config import BuiltinAgentConfig
+from app.ai.tool_transport import (
+    mcp_builtin_tool_search_operation,
+    serialize_mcp_builtin_tool_search_response,
+)
 
 
 def _config() -> BuiltinAgentConfig:
@@ -179,6 +185,242 @@ async def test_execute_skill_routes_named_mcp_tool_through_gateway(monkeypatch):
     assert sent["headers"]["X-Agent-Approval-Digest"] == (
         agent_loop.capability_args_digest(expected_body)
     )
+
+
+@pytest.mark.parametrize(
+    "skill,args,selected",
+    [
+        (
+            {"method": "POST", "path": "/api/agent/cap/mcp"},
+            {"action": "tool_search_mcp"},
+            True,
+        ),
+        (
+            {"method": "POST", "path": "/api/agent/cap/mcp/"},
+            {"action": "tool_search_mcp"},
+            False,
+        ),
+        (
+            {"method": "GET", "path": "/api/agent/cap/mcp"},
+            {"action": "tool_search_mcp"},
+            False,
+        ),
+        (
+            {"method": "POST", "path": "/api/agent/cap/mcp"},
+            {"action": "drawing_analysis_mcp"},
+            False,
+        ),
+        (
+            {"method": "POST", "path": "/api/agent/cap/mcp"},
+            {"action": "acme__search"},
+            False,
+        ),
+    ],
+)
+def test_mcp_builtin_tool_search_resolver_is_exact(skill, args, selected):
+    assert mcp_builtin_tool_search_operation(skill, args) is selected
+
+
+@pytest.mark.parametrize(
+    "payload,expected_status,contract_error",
+    [
+        ({"results": [], "total": 0, "query": "drill"}, "succeeded", None),
+        (
+            {"results": [], "total": True, "query": "drill"},
+            "failed",
+            "total_not_nonnegative_integer",
+        ),
+        ({"results": {}, "total": 0, "query": "drill"}, "failed", "results_not_list"),
+        ({"results": [], "total": -1, "query": "drill"}, "failed", "total_not_nonnegative_integer"),
+        ({"results": [], "total": 0, "query": 42}, "failed", "query_not_string"),
+        (
+            {"results": [], "total": 0, "query": "drill", "error": "nope"},
+            "failed",
+            "recipient_domain_failure",
+        ),
+        (
+            {"results": [], "total": 0, "query": "drill", "built": False},
+            "failed",
+            "recipient_domain_failure",
+        ),
+    ],
+)
+def test_mcp_builtin_tool_search_adapter_accepts_only_reviewed_shape(
+    payload, expected_status, contract_error
+):
+    result = serialize_mcp_builtin_tool_search_response(payload)
+
+    assert result["status"] == expected_status
+    assert result["data"] == payload
+    assert result["retryable"] is False
+    assert result["evidence"]["adapter_contract"] == "mcp_builtin_tool_search_v1"
+    assert result["evidence"]["action"] == "tool_search_mcp"
+    assert result["evidence"]["gateway"] == "/api/agent/cap/mcp"
+    if expected_status == "succeeded":
+        assert result["evidence"]["recipient_outcome"] == "confirmed"
+    else:
+        assert result["error_code"] == "invalid_mcp_builtin_tool_search_contract"
+        assert result["evidence"]["recipient_outcome"] == "confirmed_malformed"
+        assert result["evidence"]["contract_error"] == contract_error
+
+
+def test_mcp_builtin_tool_search_versioned_result_is_revalidated_and_nonterminal_preserved():
+    valid_payload = {"results": [{"id": "tool-1"}], "total": 1, "query": "drill"}
+    succeeded = serialize_mcp_builtin_tool_search_response(
+        {"version": 1, "status": "succeeded", "data": valid_payload}
+    )
+    malformed = serialize_mcp_builtin_tool_search_response(
+        {"version": 1, "status": "succeeded", "data": {"results": [], "total": True, "query": "d"}}
+    )
+    pending = {
+        "version": 1,
+        "status": "partial",
+        "data": {"cursor": "next"},
+        "error_code": "search_pending",
+        "evidence": {"source": "recipient"},
+        "checkpoint": {"cursor": "next"},
+    }
+
+    assert succeeded["status"] == "succeeded"
+    assert succeeded["data"] == valid_payload
+    assert succeeded["evidence"]["recipient_outcome"] == "confirmed"
+    assert malformed["status"] == "failed"
+    assert malformed["data"]["data"]["total"] is True
+    assert malformed["evidence"]["contract_error"] == "total_not_nonnegative_integer"
+    preserved = serialize_mcp_builtin_tool_search_response(pending)
+    assert preserved["status"] == "partial"
+    assert preserved["data"] == pending["data"]
+    assert preserved["error_code"] == pending["error_code"]
+    assert preserved["evidence"] == pending["evidence"]
+    assert preserved["checkpoint"] == pending["checkpoint"]
+    assert preserved["retryable"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response,expected_status",
+    [
+        (
+            {"status_code": 200, "payload": {"results": [], "total": 0, "query": "drill"}},
+            "succeeded",
+        ),
+        (
+            {"status_code": 200, "payload": {"results": [], "total": True, "query": "drill"}},
+            "failed",
+        ),
+        ({"status_code": 400, "payload": {"detail": "bad input"}}, "failed"),
+        ({"status_code": 302, "payload": {"detail": "redirect"}}, "outcome_unknown"),
+        ({"status_code": 502, "payload": {"error": "handler failed"}}, "outcome_unknown"),
+    ],
+)
+async def test_execute_builtin_tool_search_has_one_attempt_and_explicit_outcomes(
+    monkeypatch, response, expected_status
+):
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.post.return_value = type(
+        "Response",
+        (),
+        {
+            "status_code": response["status_code"],
+            "json": staticmethod(lambda: response["payload"]),
+            "text": "response text",
+        },
+    )()
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", lambda *a, **k: client)
+    monkeypatch.setattr(agent_loop, "internal_headers", lambda: {})
+
+    result = await agent_loop.execute_skill(
+        {"name": "mcp", "method": "POST", "path": "/api/agent/cap/mcp"},
+        {"action": "tool_search_mcp", "arguments": {"query": "drill"}},
+        _config(),
+    )
+
+    assert result["status"] == expected_status
+    assert result["retryable"] is False
+    assert client.post.await_count == 1
+    if expected_status == "failed" and response["status_code"] == 400:
+        assert result["evidence"]["recipient_outcome"] == "rejected"
+    if expected_status == "outcome_unknown":
+        assert result["evidence"]["recipient_outcome"] == "unconfirmed"
+
+
+@pytest.mark.asyncio
+async def test_execute_builtin_tool_search_transport_is_unknown_once_and_preserves_gateway_body(
+    monkeypatch,
+):
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.post.side_effect = agent_loop.httpx.ReadTimeout("timeout")
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", lambda *a, **k: client)
+    monkeypatch.setattr(agent_loop, "internal_headers", lambda: {})
+
+    original_arguments = {"query": "drill", "limit": 2}
+    result = await agent_loop.execute_skill(
+        {
+            "name": "mcp",
+            "method": "POST",
+            "path": "/api/agent/cap/mcp",
+            "_mcp_action": "tool_search_mcp",
+        },
+        original_arguments,
+        _config(),
+        approval_granted=True,
+    )
+
+    expected_body = {"action": "tool_search_mcp", "arguments": original_arguments}
+    assert result["status"] == "outcome_unknown"
+    assert result["retryable"] is False
+    assert client.post.await_count == 1
+    assert client.post.await_args.kwargs["json"] == expected_body
+    assert client.post.await_args.kwargs["headers"]["X-Agent-Approval-Digest"] == (
+        agent_loop.capability_args_digest(expected_body)
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_builtin_tool_search_pre_dispatch_failure_is_failed(monkeypatch):
+    client_factory = AsyncMock()
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", client_factory)
+
+    def fail_headers():
+        raise RuntimeError("local header setup failed")
+
+    monkeypatch.setattr(agent_loop, "internal_headers", fail_headers)
+
+    result = await agent_loop.execute_skill(
+        {"name": "mcp", "method": "POST", "path": "/api/agent/cap/mcp"},
+        {"action": "tool_search_mcp", "arguments": {"query": "drill"}},
+        _config(),
+    )
+
+    assert result["status"] == "failed"
+    assert result["error_code"] == "mcp_dispatch_failed"
+    assert result["retryable"] is False
+    assert result["evidence"]["dispatch_attempted"] is False
+    assert result["evidence"]["recipient_outcome"] == "not_dispatched"
+    client_factory.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_nonselected_mcp_action_retains_legacy_payload(monkeypatch):
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.post.return_value = type(
+        "Response",
+        (),
+        {"status_code": 200, "json": staticmethod(lambda: {"ok": True}), "text": ""},
+    )()
+    monkeypatch.setattr(agent_loop.httpx, "AsyncClient", lambda *a, **k: client)
+    monkeypatch.setattr(agent_loop, "internal_headers", lambda: {})
+
+    result = await agent_loop.execute_skill(
+        {"name": "mcp", "method": "POST", "path": "/api/agent/cap/mcp"},
+        {"action": "drawing_analysis_mcp", "arguments": {"drawing_id": "d1"}},
+        _config(),
+    )
+
+    assert result == {"ok": True}
 
 
 @pytest.mark.asyncio

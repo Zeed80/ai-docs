@@ -214,6 +214,113 @@ def normalize_http_read_response(payload: Any) -> ToolResult:
     )
 
 
+def normalize_mcp_builtin_tool_search_response(payload: Any) -> ToolResult:
+    """Normalize only the reviewed built-in ``tool_search_mcp`` response.
+
+    The MCP gateway is intentionally dynamic, so a successful HTTP response
+    cannot generally be called a semantic success.  This narrow adapter owns
+    exactly one built-in, read-only response contract.  It retains the full
+    recipient payload in ``data`` and accepts only its documented shape.
+    """
+
+    raw: Any
+    if isinstance(payload, ToolResult):
+        raw = payload.model_dump(mode="json")
+    elif isinstance(payload, Mapping):
+        raw = dict(payload)
+    else:
+        raw = payload
+
+    if isinstance(raw, Mapping) and "version" in raw:
+        versioned_payload = dict(raw)
+        normalized = normalize_tool_result(raw)
+        # Nonterminal v1 outcomes are already a validated lifecycle contract;
+        # preserve them rather than turning a pending recipient state into a
+        # malformed search result.  A v1 success, however, still has to prove
+        # that its data is this exact built-in tool's payload.
+        if raw.get("status") != "succeeded":
+            return normalized
+        if normalized.status != "succeeded":
+            return _invalid_mcp_builtin_tool_search_response(
+                versioned_payload,
+                "invalid_versioned_tool_result",
+            )
+        return _validate_mcp_builtin_tool_search_payload(
+            normalized.data,
+            invalid_payload=versioned_payload,
+        )
+
+    return _validate_mcp_builtin_tool_search_payload(raw)
+
+
+def _validate_mcp_builtin_tool_search_payload(
+    payload: Any,
+    *,
+    invalid_payload: Any | None = None,
+) -> ToolResult:
+    contract_error: str | None = None
+    domain_error: str | None = None
+    if not isinstance(payload, Mapping):
+        contract_error = "response_not_mapping"
+    else:
+        raw = dict(payload)
+        domain_error = _domain_failure(raw)
+        if domain_error is not None:
+            contract_error = "recipient_domain_failure"
+        elif not isinstance(raw.get("results"), list):
+            contract_error = "results_not_list"
+        elif type(raw.get("total")) is not int or raw["total"] < 0:
+            # ``bool`` is an ``int`` subclass, hence the exact type check.
+            contract_error = "total_not_nonnegative_integer"
+        elif not isinstance(raw.get("query"), str):
+            contract_error = "query_not_string"
+
+    if contract_error is not None:
+        return _invalid_mcp_builtin_tool_search_response(
+            payload if invalid_payload is None else invalid_payload,
+            contract_error,
+            recipient_error_code=domain_error,
+        )
+
+    return ToolResult(
+        status="succeeded",
+        data=dict(payload),
+        retryable=False,
+        evidence={
+            "adapter_contract": "mcp_builtin_tool_search_v1",
+            "action": "tool_search_mcp",
+            "gateway": "/api/agent/cap/mcp",
+            "recipient_outcome": "confirmed",
+        },
+    )
+
+
+def _invalid_mcp_builtin_tool_search_response(
+    payload: Any,
+    contract_error: str,
+    *,
+    recipient_error_code: str | None = None,
+) -> ToolResult:
+    """A received 2xx payload is confirmed malformed, not unknown."""
+
+    evidence: dict[str, Any] = {
+        "adapter_contract": "mcp_builtin_tool_search_v1",
+        "action": "tool_search_mcp",
+        "gateway": "/api/agent/cap/mcp",
+        "recipient_outcome": "confirmed_malformed",
+        "contract_error": contract_error,
+    }
+    if recipient_error_code is not None:
+        evidence["recipient_error_code"] = recipient_error_code
+    return ToolResult(
+        status="failed",
+        data=payload,
+        error_code="invalid_mcp_builtin_tool_search_contract",
+        retryable=False,
+        evidence=evidence,
+    )
+
+
 def normalize_http_one_db_commit_response(payload: Any, *, operation: str) -> ToolResult:
     """Normalize a reviewed E03 one-DB-commit response at the agent boundary.
 

@@ -826,6 +826,10 @@ async def execute_skill(
         async_job_operation,
         async_job_outcome_unknown,
         async_job_pre_dispatch_failure,
+        mcp_builtin_tool_search_http_failure,
+        mcp_builtin_tool_search_operation,
+        mcp_builtin_tool_search_outcome_unknown,
+        mcp_builtin_tool_search_pre_dispatch_failure,
         one_db_commit_http_failure,
         one_db_commit_operation,
         one_db_commit_outcome_unknown,
@@ -835,6 +839,7 @@ async def execute_skill(
         retry_safe,
         serialize_async_job_response,
         serialize_http_read_response,
+        serialize_mcp_builtin_tool_search_response,
         serialize_one_db_commit_response,
         unknown_outcome,
     )
@@ -859,6 +864,7 @@ async def execute_skill(
     path = skill["path"]
     async_job = async_job_operation(skill, args)
     db_write = one_db_commit_operation(skill, args)
+    mcp_tool_search = mcp_builtin_tool_search_operation(skill, args)
     base_url = config.backend_url.rstrip("/")
     timeout = config.backend_timeout_seconds
     # Web research/browse open many live pages (+ PDF OCR) and legitimately run
@@ -885,7 +891,9 @@ async def execute_skill(
     url = base_url + path
     safe_to_retry = retry_safe(skill, args)
     max_retries = (
-        1 if async_job is not None or db_write is not None else (3 if safe_to_retry else 1)
+        1
+        if async_job is not None or db_write is not None or mcp_tool_search
+        else (3 if safe_to_retry else 1)
     )
     last_error: Exception | None = None
     for attempt in range(max_retries):
@@ -918,11 +926,16 @@ async def execute_skill(
                     return {"error": f"Unsupported method: {method}"}
 
             if 200 <= resp.status_code < 300 or (
-                async_job is None and db_write is None and resp.status_code < 400
+                not mcp_tool_search
+                and async_job is None
+                and db_write is None
+                and resp.status_code < 400
             ):
                 try:
                     payload = resp.json()
                 except Exception:
+                    if mcp_tool_search:
+                        return serialize_mcp_builtin_tool_search_response(resp.text)
                     if async_job is not None:
                         return serialize_async_job_response(resp.text, operation=async_job.name)
                     if db_write is not None:
@@ -934,9 +947,21 @@ async def execute_skill(
                     return serialize_async_job_response(payload, operation=async_job.name)
                 if db_write is not None:
                     return serialize_one_db_commit_response(payload, operation=db_write.name)
+                if mcp_tool_search:
+                    return serialize_mcp_builtin_tool_search_response(payload)
                 if safe_to_retry:
                     return serialize_http_read_response(payload)
                 return payload
+            elif 300 <= resp.status_code < 400 and mcp_tool_search:
+                try:
+                    body = resp.json()
+                except Exception:
+                    body = resp.text[:300]
+                return mcp_builtin_tool_search_outcome_unknown(
+                    reason=f"http_{resp.status_code}",
+                    status_code=resp.status_code,
+                    payload=body,
+                )
             elif 300 <= resp.status_code < 400 and async_job is not None:
                 try:
                     body = resp.json()
@@ -955,6 +980,16 @@ async def execute_skill(
                     body = resp.text[:300]
                 return one_db_commit_outcome_unknown(
                     operation=db_write.name,
+                    reason=f"http_{resp.status_code}",
+                    status_code=resp.status_code,
+                    payload=body,
+                )
+            elif resp.status_code >= 500 and mcp_tool_search:
+                try:
+                    body = resp.json()
+                except Exception:
+                    body = resp.text[:300]
+                return mcp_builtin_tool_search_outcome_unknown(
                     reason=f"http_{resp.status_code}",
                     status_code=resp.status_code,
                     payload=body,
@@ -997,6 +1032,11 @@ async def execute_skill(
                 except Exception:
                     body = resp.text if async_job is not None else resp.text[:300]
                     detail = None
+                if mcp_tool_search:
+                    return mcp_builtin_tool_search_http_failure(
+                        status_code=resp.status_code,
+                        payload=body,
+                    )
                 if async_job is not None:
                     return async_job_http_failure(
                         operation=async_job.name,
@@ -1016,6 +1056,14 @@ async def execute_skill(
                 return {"error": f"HTTP {resp.status_code}", "detail": resp.text[:300]}
 
         except httpx.TransportError as e:
+            if mcp_tool_search:
+                if not dispatch_attempted:
+                    return mcp_builtin_tool_search_pre_dispatch_failure(
+                        reason=f"transport_{type(e).__name__}",
+                    )
+                return mcp_builtin_tool_search_outcome_unknown(
+                    reason=f"transport_{type(e).__name__}",
+                )
             if async_job is not None and dispatch_attempted:
                 return async_job_outcome_unknown(
                     operation=async_job.name,
@@ -1048,6 +1096,14 @@ async def execute_skill(
             if attempt < max_retries - 1:
                 await asyncio.sleep(2**attempt)
         except Exception as e:
+            if mcp_tool_search:
+                if not dispatch_attempted:
+                    return mcp_builtin_tool_search_pre_dispatch_failure(
+                        reason=f"exception_{type(e).__name__}",
+                    )
+                return mcp_builtin_tool_search_outcome_unknown(
+                    reason=f"exception_{type(e).__name__}",
+                )
             if async_job is not None and dispatch_attempted:
                 return async_job_outcome_unknown(
                     operation=async_job.name,

@@ -212,6 +212,13 @@ E05.4.0 REVIEWED устраняет direct Chat MCP bypass: schemas сохран
 one-db-commit без SMTP. Независимо: 219 passed. Отчёт:
 `docs/agent-employee-delivery/E05-4-0-mcp-boundary.md`. E05.4 остаётся IN
 PROGRESS; следующая карточка — E05.4.1 `tool_search_mcp` gateway-only adapter.
+E05.4.1 REVIEWED добавляет только gateway `tool_search_mcp`: строгая форма
+`results:list`, `total:int>=0`, `query:str` даёт ToolResult v1 success; malformed
+2xx и 4xx — failed, pre-dispatch — failed, неоднозначность после dispatch —
+outcome_unknown, одна попытка. Остальные MCP actions legacy. Независимо: 290
+focused и 317 расширенных тестов. Отчёт:
+`docs/agent-employee-delivery/E05-4-1-tool-search-mcp-adapter.md`. E05.4/E05
+остаются IN PROGRESS; далее нужен аудит остатка E05.4.
 Push накопленной ветки был заблокирован автопроверкой из-за несвязанных CAD-коммитов;
 для публикации всей этой истории нужно отдельное разрешение. Не обходить запрет.
 

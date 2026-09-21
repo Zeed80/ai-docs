@@ -227,6 +227,12 @@ E05.4.0 REVIEWED устраняет прямой Chat MCP bypass: все MCP-в�
 callable fail-closed. E03 исправлена для двух procurement routes. Независимо:
 219 passed. Отчёт: `docs/agent-employee-delivery/E05-4-0-mcp-boundary.md`.
 E05.4 остаётся IN PROGRESS; далее E05.4.1 `tool_search_mcp` gateway-only.
+E05.4.1 REVIEWED: только gateway `tool_search_mcp` получает строгий ToolResult
+v1; одна попытка, malformed/4xx/pre-dispatch — failed, неоднозначность после
+dispatch — outcome_unknown. Прочие MCP actions legacy. Независимо: 290 focused
+и 317 расширенных тестов. Отчёт:
+`docs/agent-employee-delivery/E05-4-1-tool-search-mcp-adapter.md`. E05.4/E05
+остаются IN PROGRESS; далее аудит остатка E05.4.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя
 в WorkEvent, проверяет владельца/аргументы/попытку/lease. Детали журнала и UI

@@ -27,6 +27,14 @@ E05.3.2 REVIEWED добавляет `tech.generate_tp_from_drawing` со стр�
 `docs/agent-employee-delivery/E05-3-2-async-job-adapter.md`. E05 остаётся IN
 PROGRESS; следующий этап — E05.4 external/MCP handlers.
 
+E05.4.0 REVIEWED унифицирует MCP policy boundary через `/api/agent/cap/mcp`.
+E05.4.1 REVIEWED нормализует только built-in `tool_search_mcp` со строгой
+формой результата и одной попыткой; все прочие MCP/browser/external handlers
+сохраняют legacy/fail-closed контракт. См.
+`docs/agent-employee-delivery/E05-4-0-mcp-boundary.md` и
+`docs/agent-employee-delivery/E05-4-1-tool-search-mcp-adapter.md`. E05.4/E05
+остаются IN PROGRESS.
+
 | Operation | Route / recipient | Backend RBAC | Actual effect | DB commit boundary | External effect / internal retries | Receipt | Classification / retry |
 | --- | --- | --- | --- | --- | --- | --- |
 | `agent_control.ai_config_get` | `GET /api/ai/config`; `backend/app/api/ai_settings.py:252 get_config` | gateway auth+actor; viewer=read; deps=get_current_user | direct handler source: read path | no direct commit | none detected; no handler retry | none | `read-only`; auto-retry not-authorized-by-E03 |

@@ -192,6 +192,11 @@ wildcard approval, RBAC, audit и digest исходных args; direct callable
 fail-closed. Исправлена E03-классификация двух procurement routes. Независимо:
 219 passed. Отчёт: `docs/agent-employee-delivery/E05-4-0-mcp-boundary.md`.
 E05.4 остаётся IN PROGRESS; следующая карточка — E05.4.1 `tool_search_mcp`.
+E05.4.1 REVIEWED добавляет строгий gateway-only adapter `tool_search_mcp` с
+одной попыткой и fail-closed исходами; остальные MCP actions legacy.
+Независимо: 290 focused и 317 расширенных тестов. Отчёт:
+`docs/agent-employee-delivery/E05-4-1-tool-search-mcp-adapter.md`. E05.4/E05
+остаются IN PROGRESS; следующий шаг — аудит остатка E05.4.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при
 сетевой ошибке/HTTP 5xx дают outcome_unknown и блокируют durable-цикл после
