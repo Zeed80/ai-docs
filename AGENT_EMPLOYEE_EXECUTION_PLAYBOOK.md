@@ -655,7 +655,7 @@ contracts. Независимо: 394 passed. Отчёт:
 
 ### E06 — Consumers не принимают незавершённый результат за успех
 
-**Статус:** TODO. **После:** E05.
+**Статус:** IN PROGRESS; E06.1 REVIEWED. **После:** E05.
 **Файлы:** `tasks/work_orders.py`, `tasks/durable_chat.py`, `ai/agent_loop.py`,
 `domain/work_orders.py`, тесты worker/verifier/checkpoint.
 
@@ -668,6 +668,13 @@ contracts. Независимо: 394 passed. Отчёт:
 5. Проверить настоящие worker state transitions и сохранённый журнал.
 
 **Готово:** каждый status имеет тест перехода, без потери checkpoint/evidence.
+
+E06.1 REVIEWED: WorkOrder consumer сохраняет полный v1
+`partial`/`outcome_unknown` и блокируется без retry, verifier, dependent unlock
+или replan. Versioned failed не расширяет retry policy; raw legacy payloads
+сохранены. Независимо: 78 passed. Отчёт:
+`docs/agent-employee-delivery/E06-1-work-order-nonterminal-results.md`. E06
+остаётся IN PROGRESS; далее `waiting_approval` и chat consumer paths.
 
 ### E07 — Основа масштабируемых квитанций
 

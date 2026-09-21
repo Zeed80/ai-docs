@@ -13,24 +13,240 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.db.models import WorkOrder, WorkStep, WorkStepAttempt
+from app.db.models import WorkOrder, WorkStep, WorkStepAttempt, WorkToolCall
 from app.domain.work_orders import (
     claim_ready_step,
     complete_attempt,
     create_single_step_plan,
     create_work_order,
+    create_work_plan,
     fail_attempt,
     utcnow,
 )
 from app.tasks.work_orders import (
+    NonterminalToolResultError,
     PartialProgressError,
     _execute_capability,
     _heartbeat_step,
     execute_claimed_step,
     verify_completed_step,
 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,error_code,checkpoint",
+    [
+        ("partial", "job_queued", {"task_id": "job-7"}),
+        ("outcome_unknown", "tool_outcome_unknown", {"receipt": "unconfirmed"}),
+    ],
+)
+async def test_nonterminal_v1_tool_result_blocks_without_retry_or_downstream_execution(
+    test_engine, status, error_code, checkpoint
+):
+    """A received lifecycle result never becomes successful work progress."""
+    factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as db:
+        order = await create_work_order(
+            db,
+            owner_key="tester",
+            objective="Do not continue after a nonterminal tool result",
+            budgets={"max_replans": 9},
+        )
+        _plan, steps = await create_work_plan(
+            db,
+            order,
+            steps=[
+                {
+                    "step_key": "dispatch",
+                    "title": "Dispatch",
+                    "kind": "capability",
+                    "capability": "email",
+                    "action": "send",
+                    "input": {"draft_id": "draft-1"},
+                },
+                {
+                    "step_key": "dependent",
+                    "title": "Must remain pending",
+                    "kind": "capability",
+                    "capability": "documents",
+                    "action": "list",
+                    "input": {},
+                    "depends_on": ["dispatch"],
+                },
+            ],
+        )
+        order_id, step_id = order.id, steps[0].id
+        dependent_id = steps[1].id
+        plan_revision = order.plan_revision
+        await db.commit()
+
+    async with factory() as db:
+        claimed = await claim_ready_step(db, worker_id="w1", work_order_id=order_id)
+        assert claimed is not None
+        _order, _step, attempt = claimed
+        attempt_id = attempt.id
+        await db.commit()
+
+    result = {
+        "version": 1,
+        "status": status,
+        "data": {"recipient": "accepted"},
+        "error_code": error_code,
+        "retryable": False,
+        "evidence": {"adapter_contract": "reviewed_v1", "receipt": "r-1"},
+        "checkpoint": checkpoint,
+    }
+    capability_call = AsyncMock(side_effect=NonterminalToolResultError(result))
+    verifier = AsyncMock()
+    with (
+        patch("app.tasks.work_orders._execute_step_kind", new=capability_call),
+        patch("app.tasks.work_orders.verify_completed_step", new=verifier),
+    ):
+        completed = await execute_claimed_step(
+            step_id, attempt_id, schedule_verification=False, session_factory=factory
+        )
+
+    assert completed is False
+    assert capability_call.await_count == 1
+    verifier.assert_not_awaited()
+    async with factory() as db:
+        order = await db.get(WorkOrder, order_id)
+        step = await db.get(WorkStep, step_id)
+        dependent = await db.get(WorkStep, dependent_id)
+        attempt = await db.get(WorkStepAttempt, attempt_id)
+        call = (
+            await db.execute(select(WorkToolCall).where(WorkToolCall.attempt_id == attempt_id))
+        ).scalar_one()
+        assert order.status == "blocked"
+        assert order.plan_revision == plan_revision
+        assert order.blocker["code"] == f"tool_result_{status}"
+        assert step.state == "failed"
+        assert dependent.state == "pending"
+        assert attempt.status == status
+        assert attempt.output == result
+        assert attempt.checkpoint == checkpoint
+        assert call.status == status
+        assert call.output == result
+        assert call.error["evidence"] == result["evidence"]
+
+
+@pytest.mark.asyncio
+async def test_versioned_succeeded_and_legacy_capability_results_keep_success_path():
+    response = _http_response(
+        200,
+        {
+            "version": 1,
+            "status": "succeeded",
+            "data": {"id": "read-1"},
+            "retryable": False,
+            "evidence": {"adapter_contract": "reviewed_v1"},
+        },
+    )
+    client = AsyncMock()
+    client.post = AsyncMock(return_value=response)
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    with (
+        patch("httpx.AsyncClient", return_value=client),
+        patch(
+            "app.ai.agent_config.get_builtin_agent_config",
+            return_value=MagicMock(backend_url="http://backend"),
+        ),
+        patch("app.ai.orchestrator._agent_headers", return_value={}),
+    ):
+        versioned = await _execute_capability("documents", "list", {}, 30)
+
+    assert versioned["result"]["status"] == "succeeded"
+    assert client.post.await_count == 1
+
+    legacy_response = _http_response(200, {"items": [{"id": "legacy-1"}]})
+    client.post = AsyncMock(return_value=legacy_response)
+    with (
+        patch("httpx.AsyncClient", return_value=client),
+        patch(
+            "app.ai.agent_config.get_builtin_agent_config",
+            return_value=MagicMock(backend_url="http://backend"),
+        ),
+        patch("app.ai.orchestrator._agent_headers", return_value={}),
+    ):
+        legacy = await _execute_capability("documents", "list", {}, 30)
+
+    assert legacy["result"] == {"items": [{"id": "legacy-1"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["partial", "outcome_unknown"])
+async def test_versioned_nonterminal_capability_result_is_recognized_before_legacy_failure(
+    status,
+):
+    response = _http_response(
+        200,
+        {
+            "version": 1,
+            "status": status,
+            "data": {"recipient": "accepted"},
+            "error_code": "job_queued" if status == "partial" else "tool_outcome_unknown",
+            "retryable": False,
+            "evidence": {"adapter_contract": "reviewed_v1"},
+            "checkpoint": {"cursor": "receipt-1"},
+        },
+    )
+    client = AsyncMock()
+    client.post = AsyncMock(return_value=response)
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    with (
+        patch("httpx.AsyncClient", return_value=client),
+        patch(
+            "app.ai.agent_config.get_builtin_agent_config",
+            return_value=MagicMock(backend_url="http://backend"),
+        ),
+        patch("app.ai.orchestrator._agent_headers", return_value={}),
+    ):
+        with pytest.raises(NonterminalToolResultError) as exc_info:
+            await _execute_capability("documents", "list", {}, 30)
+
+    assert exc_info.value.result["status"] == status
+    assert exc_info.value.result["checkpoint"] == {"cursor": "receipt-1"}
+    assert client.post.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_versioned_failed_does_not_become_a_retry_from_model_hint():
+    response = _http_response(
+        200,
+        {
+            "version": 1,
+            "status": "failed",
+            "data": {"reason": "recipient rejected"},
+            "error_code": "recipient_rejected",
+            "retryable": True,
+            "evidence": {"adapter_contract": "reviewed_v1"},
+            "checkpoint": {"legacy_retry_must_not_apply": True},
+        },
+    )
+    client = AsyncMock()
+    client.post = AsyncMock(return_value=response)
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    with (
+        patch("httpx.AsyncClient", return_value=client),
+        patch(
+            "app.ai.agent_config.get_builtin_agent_config",
+            return_value=MagicMock(backend_url="http://backend"),
+        ),
+        patch("app.ai.orchestrator._agent_headers", return_value={}),
+    ):
+        with pytest.raises(RuntimeError) as exc_info:
+            await _execute_capability("documents", "list", {}, 30)
+
+    assert not isinstance(exc_info.value, PartialProgressError)
+    assert client.post.await_count == 1
+
 
 # ── Ф4-re: heartbeat renews leases without locking the shared WorkOrder ────
 

@@ -245,6 +245,12 @@ E05.4.5 REVIEWED добавляет только read-only `drawing_analysis_mcp
 394 passed. Отчёт:
 `docs/agent-employee-delivery/E05-4-5-drawing-mcp-adapter-and-closure.md`.
 Следующая карточка — E06 consumer hardening.
+E06.1 REVIEWED: WorkOrder сохраняет v1 `partial`/`outcome_unknown` полностью и
+стабильно блокируется без retry, verifier, dependents или replan. Versioned
+failed не расширяет retry policy; raw legacy compatibility сохранена.
+Независимо: 78 passed. Отчёт:
+`docs/agent-employee-delivery/E06-1-work-order-nonterminal-results.md`. E06
+остаётся IN PROGRESS; далее exact `waiting_approval` и chat consumers.
 Push накопленной ветки был заблокирован автопроверкой из-за несвязанных CAD-коммитов;
 для публикации всей этой истории нужно отдельное разрешение. Не обходить запрет.
 

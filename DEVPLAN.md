@@ -218,6 +218,11 @@ write-reanalyze и computer-use не получают ложных success envel
 Независимо: 394 passed. Отчёт:
 `docs/agent-employee-delivery/E05-4-5-drawing-mcp-adapter-and-closure.md`.
 Следующая карточка — E06.
+E06.1 REVIEWED устраняет повтор `partial/job_queued` и replan после
+`outcome_unknown` в WorkOrder, сохраняя checkpoint/evidence и legacy raw
+совместимость. Независимо: 78 passed. Отчёт:
+`docs/agent-employee-delivery/E06-1-work-order-nonterminal-results.md`. E06
+остаётся IN PROGRESS.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при
 сетевой ошибке/HTTP 5xx дают outcome_unknown и блокируют durable-цикл после

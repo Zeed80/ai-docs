@@ -1214,6 +1214,81 @@ async def fail_attempt(
         await transition_work_order(db, order, target, actor=actor)
 
 
+async def stop_attempt_for_nonterminal_tool_result(
+    db: AsyncSession,
+    *,
+    order: WorkOrder,
+    step: WorkStep,
+    attempt: WorkStepAttempt,
+    result: dict[str, Any],
+    actor: str,
+) -> None:
+    """Persist a received nonterminal ToolResult and stop this work order.
+
+    ``partial`` and ``outcome_unknown`` are lifecycle states, not retry hints.
+    The existing terminal step/order states deliberately keep them out of the
+    claim, dependency, verifier, and replan paths; their precise meaning stays
+    in the persisted v1 envelope rather than being flattened to plain failure.
+    """
+    if not attempt_owns_lease(step, attempt):
+        raise ValueError("Stale execution attempt cannot publish a result")
+    status = result.get("status")
+    if status not in {"partial", "outcome_unknown"}:
+        raise ValueError("Only nonterminal ToolResult statuses can stop an attempt")
+
+    now = utcnow()
+    checkpoint = result.get("checkpoint")
+    evidence = result.get("evidence")
+    error = {
+        "code": f"tool_result_{status}",
+        "error_code": result.get("error_code"),
+        "evidence": evidence if isinstance(evidence, dict) else {},
+    }
+    attempt.status = str(status)
+    attempt.output = result
+    attempt.checkpoint = checkpoint if isinstance(checkpoint, dict) else None
+    attempt.error = error
+    attempt.finished_at = now
+    attempt.heartbeat_at = now
+    step.output = {"result": result, "executor": "capability"}
+    step.last_error = error
+    step.lease_owner = None
+    step.lease_expires_at = None
+    await transition_step(
+        db,
+        step,
+        "failed",
+        actor=actor,
+        payload={"tool_result_status": status, "error": error},
+    )
+    order.blocker = {
+        "code": f"tool_result_{status}",
+        "step_id": str(step.id),
+        "error_code": result.get("error_code"),
+        "checkpoint": checkpoint if isinstance(checkpoint, dict) else None,
+        "evidence": evidence if isinstance(evidence, dict) else {},
+    }
+    await transition_work_order(
+        db,
+        order,
+        "blocked",
+        actor=actor,
+        payload={"tool_result_status": status, "step_id": str(step.id)},
+    )
+    await append_event(
+        db,
+        order.id,
+        "tool_result.nonterminal",
+        actor=actor,
+        payload={
+            "step_id": str(step.id),
+            "attempt_id": str(attempt.id),
+            "status": status,
+            "result": result,
+        },
+    )
+
+
 async def verify_nonempty_result(
     db: AsyncSession,
     *,

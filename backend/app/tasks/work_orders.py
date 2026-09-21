@@ -25,6 +25,7 @@ from app.domain.work_orders import (
     promote_waiting_parents,
     reclaim_expired_leases,
     record_verifier_verdict,
+    stop_attempt_for_nonterminal_tool_result,
     transition_step,
     transition_work_order,
     utcnow,
@@ -63,6 +64,14 @@ class PartialProgressError(RuntimeError):
     def __init__(self, message: str, *, checkpoint: dict[str, Any]) -> None:
         super().__init__(message)
         self.checkpoint = checkpoint
+
+
+class NonterminalToolResultError(RuntimeError):
+    """A validated v1 ToolResult that must stop, not retry, a WorkOrder."""
+
+    def __init__(self, result: dict[str, Any]) -> None:
+        super().__init__(str(result.get("status")))
+        self.result = result
 
 
 def _action_digest(capability: str, action: str, arguments: dict[str, Any]) -> str:
@@ -255,7 +264,23 @@ async def _execute_capability(
             raise PartialProgressError(message, checkpoint=checkpoint)
         raise RuntimeError(message)
     result = response.json() if response.content else {}
-    from app.ai.tool_result import result_failed
+    from app.ai.tool_result import normalize_tool_result, result_failed
+
+    # Legacy maps keep their historical behaviour: E05 intentionally leaves
+    # deferred operations raw.  Only a validated v1 envelope has enough
+    # lifecycle meaning to stop the durable consumer before it retries,
+    # verifies, releases dependents, or replans.
+    if isinstance(result, dict) and "version" in result:
+        normalized = normalize_tool_result(result)
+        if normalized.status in {"partial", "outcome_unknown"}:
+            raise NonterminalToolResultError(normalized.model_dump(mode="json"))
+        if normalized.status == "failed":
+            result = normalized.model_dump(mode="json")
+            message = str(result.get("error") or result.get("message") or result)
+            # A versioned failure is not the legacy checkpoint convention.
+            # Its retryability cannot broaden WorkOrder's conservative retry
+            # policy; explicit recipient retry support needs its own contract.
+            raise RuntimeError(message)
 
     if result_failed(result):
         message = str(result.get("error") or result.get("message") or result)
@@ -863,6 +888,32 @@ async def execute_claimed_step(
                 if call_row is not None:
                     call_row.status = "failed"
                     call_row.error = error
+                    call_row.finished_at = utcnow()
+                await db.commit()
+        return False
+    except NonterminalToolResultError as exc:
+        async with factory() as db:
+            order = await db.get(WorkOrder, work_order_id, with_for_update=True)
+            step_row = await db.get(WorkStep, step_id, with_for_update=True)
+            attempt_row = await db.get(WorkStepAttempt, attempt_id, with_for_update=True)
+            call_row = await db.get(WorkToolCall, call_id, with_for_update=True)
+            if order and step_row and attempt_row and attempt_owns_lease(step_row, attempt_row):
+                await stop_attempt_for_nonterminal_tool_result(
+                    db,
+                    order=order,
+                    step=step_row,
+                    attempt=attempt_row,
+                    result=exc.result,
+                    actor=worker,
+                )
+                if call_row is not None:
+                    call_row.status = str(exc.result["status"])
+                    call_row.output = exc.result
+                    call_row.error = {
+                        "code": f"tool_result_{exc.result['status']}",
+                        "error_code": exc.result.get("error_code"),
+                        "evidence": exc.result.get("evidence") or {},
+                    }
                     call_row.finished_at = utcnow()
                 await db.commit()
         return False
