@@ -43,11 +43,19 @@ def _worker_id() -> str:
 
 
 class ApprovalRequiredError(RuntimeError):
-    def __init__(self, capability: str, action: str, arguments: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        capability: str,
+        action: str,
+        arguments: dict[str, Any],
+        *,
+        tool_result: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(f"Approval required for {capability}.{action}")
         self.capability = capability
         self.action = action
         self.arguments = arguments
+        self.tool_result = tool_result
 
 
 class PartialProgressError(RuntimeError):
@@ -272,6 +280,13 @@ async def _execute_capability(
     # verifies, releases dependents, or replans.
     if isinstance(result, dict) and "version" in result:
         normalized = normalize_tool_result(result)
+        if normalized.status == "waiting_approval":
+            raise ApprovalRequiredError(
+                capability,
+                action,
+                arguments,
+                tool_result=normalized.model_dump(mode="json"),
+            )
         if normalized.status in {"partial", "outcome_unknown"}:
             raise NonterminalToolResultError(normalized.model_dump(mode="json"))
         if normalized.status == "failed":
@@ -796,6 +811,40 @@ async def execute_claimed_step(
     except ApprovalRequiredError as exc:
         from app.db.models import Approval, ApprovalActionType
 
+        # Bind every durable approval to the arguments this attempt actually
+        # sent.  A recipient envelope never supplies or widens that digest.
+        expected_arguments = dict(input_data)
+        expected_arguments.pop("approval", None)
+        if (
+            exc.capability != capability
+            or exc.action != action
+            or exc.arguments != expected_arguments
+        ):
+            error = {
+                "code": "approval_call_mismatch",
+                "message": "Approval request did not match the current capability call",
+            }
+            async with factory() as db:
+                order = await db.get(WorkOrder, work_order_id, with_for_update=True)
+                step_row = await db.get(WorkStep, step_id, with_for_update=True)
+                attempt_row = await db.get(WorkStepAttempt, attempt_id, with_for_update=True)
+                call_row = await db.get(WorkToolCall, call_id, with_for_update=True)
+                if order and step_row and attempt_row and attempt_owns_lease(step_row, attempt_row):
+                    await fail_attempt(
+                        db,
+                        order=order,
+                        step=step_row,
+                        attempt=attempt_row,
+                        error=error,
+                        retryable=False,
+                        actor=worker,
+                    )
+                    if call_row is not None:
+                        call_row.status = "failed"
+                        call_row.error = error
+                        call_row.finished_at = utcnow()
+                    await db.commit()
+            return False
         digest = _action_digest(exc.capability, exc.action, exc.arguments)
         async with factory() as db:
             order = await db.get(WorkOrder, work_order_id, with_for_update=True)
@@ -803,6 +852,18 @@ async def execute_claimed_step(
             attempt_row = await db.get(WorkStepAttempt, attempt_id, with_for_update=True)
             call_row = await db.get(WorkToolCall, call_id, with_for_update=True)
             if order and step_row and attempt_row and attempt_owns_lease(step_row, attempt_row):
+                tool_result = exc.tool_result
+                checkpoint = tool_result.get("checkpoint") if tool_result else None
+                evidence = tool_result.get("evidence") if tool_result else None
+                result_error = (
+                    {
+                        "code": "tool_result_waiting_approval",
+                        "error_code": tool_result.get("error_code"),
+                        "evidence": evidence if isinstance(evidence, dict) else {},
+                    }
+                    if tool_result is not None
+                    else None
+                )
                 approval = Approval(
                     action_type=ApprovalActionType.agent_tool_call,
                     entity_type="work_order",
@@ -816,14 +877,24 @@ async def execute_claimed_step(
                         "tool_args": exc.arguments,
                         "reason": "Capability gateway requires approval",
                         "action_digest": digest,
+                        **({"tool_result": tool_result} if tool_result is not None else {}),
                     },
                 )
                 db.add(approval)
                 await db.flush()
                 attempt_row.status = "waiting_approval"
                 attempt_row.finished_at = utcnow()
+                if tool_result is not None:
+                    attempt_row.output = tool_result
+                    attempt_row.checkpoint = checkpoint if isinstance(checkpoint, dict) else None
+                    attempt_row.error = result_error
+                    step_row.output = {"result": tool_result, "executor": "capability"}
+                    step_row.last_error = result_error
                 if call_row is not None:
                     call_row.status = "waiting_approval"
+                    if tool_result is not None:
+                        call_row.output = tool_result
+                        call_row.error = result_error
                     call_row.finished_at = utcnow()
                 await transition_step(
                     db,

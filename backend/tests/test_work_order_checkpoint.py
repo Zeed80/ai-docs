@@ -16,7 +16,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.db.models import WorkOrder, WorkStep, WorkStepAttempt, WorkToolCall
+from app.db.models import Approval, WorkOrder, WorkStep, WorkStepAttempt, WorkToolCall
 from app.domain.work_orders import (
     claim_ready_step,
     complete_attempt,
@@ -27,13 +27,203 @@ from app.domain.work_orders import (
     utcnow,
 )
 from app.tasks.work_orders import (
+    ApprovalRequiredError,
     NonterminalToolResultError,
     PartialProgressError,
+    _action_digest,
     _execute_capability,
     _heartbeat_step,
     execute_claimed_step,
     verify_completed_step,
 )
+
+
+@pytest.mark.asyncio
+async def test_versioned_waiting_approval_persists_exact_result_and_current_call_binding(
+    test_engine,
+):
+    factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as db:
+        order = await create_work_order(
+            db,
+            owner_key="tester",
+            objective="Wait only for the exact requested capability action",
+            budgets={"max_replans": 9},
+        )
+        _plan, steps = await create_work_plan(
+            db,
+            order,
+            steps=[
+                {
+                    "step_key": "call_a",
+                    "title": "Call A",
+                    "kind": "capability",
+                    "capability": "email",
+                    "action": "send",
+                    "input": {"draft_id": "draft-a"},
+                },
+                {
+                    "step_key": "call_b",
+                    "title": "Call B must remain pending",
+                    "kind": "capability",
+                    "capability": "email",
+                    "action": "send",
+                    "input": {"draft_id": "draft-b"},
+                    "depends_on": ["call_a"],
+                },
+            ],
+        )
+        order_id, step_id, dependent_id = order.id, steps[0].id, steps[1].id
+        plan_revision = order.plan_revision
+        await db.commit()
+
+    async with factory() as db:
+        claimed = await claim_ready_step(db, worker_id="w1", work_order_id=order_id)
+        assert claimed is not None
+        _order, _step, attempt = claimed
+        attempt_id = attempt.id
+        await db.commit()
+
+    result = {
+        "version": 1,
+        "status": "waiting_approval",
+        "data": {"recipient": "requires_approval"},
+        "error_code": "approval_required",
+        "retryable": False,
+        "evidence": {
+            "adapter_contract": "reviewed_v1",
+            "recipient_supplied_digest": "must-not-be-trusted",
+        },
+        "checkpoint": {"request_id": "approval-1"},
+    }
+    current_arguments = {"draft_id": "draft-a", "work_order_id": str(order_id)}
+    capability_call = AsyncMock(
+        side_effect=ApprovalRequiredError("email", "send", current_arguments, tool_result=result)
+    )
+    verifier = AsyncMock()
+    with (
+        patch("app.tasks.work_orders._execute_step_kind", new=capability_call),
+        patch("app.tasks.work_orders.verify_completed_step", new=verifier),
+    ):
+        completed = await execute_claimed_step(
+            step_id, attempt_id, schedule_verification=False, session_factory=factory
+        )
+
+    assert completed is False
+    assert capability_call.await_count == 1
+    verifier.assert_not_awaited()
+    async with factory() as db:
+        order = await db.get(WorkOrder, order_id)
+        step = await db.get(WorkStep, step_id)
+        dependent = await db.get(WorkStep, dependent_id)
+        attempt = await db.get(WorkStepAttempt, attempt_id)
+        call = (
+            await db.execute(select(WorkToolCall).where(WorkToolCall.attempt_id == attempt_id))
+        ).scalar_one()
+        approval = (
+            await db.execute(select(Approval).where(Approval.entity_id == order_id))
+        ).scalar_one()
+        expected_digest = _action_digest("email", "send", current_arguments)
+
+        assert order.status == "waiting_approval"
+        assert order.plan_revision == plan_revision
+        assert step.state == "waiting_approval"
+        assert dependent.state == "pending"
+        assert attempt.status == "waiting_approval"
+        assert attempt.output == result
+        assert attempt.checkpoint == result["checkpoint"]
+        assert attempt.error["error_code"] == "approval_required"
+        assert call.status == "waiting_approval"
+        assert call.output == result
+        assert call.error["evidence"] == result["evidence"]
+        assert step.output == {"result": result, "executor": "capability"}
+        assert approval.context["tool_name"] == "email"
+        assert approval.context["action"] == "send"
+        assert approval.context["tool_args"] == current_arguments
+        assert approval.context["action_digest"] == expected_digest
+        assert approval.context["action_digest"] != result["evidence"]["recipient_supplied_digest"]
+        assert approval.context["tool_result"] == result
+
+
+@pytest.mark.asyncio
+async def test_versioned_waiting_approval_is_recognized_and_http_423_remains_compatible():
+    waiting_result = {
+        "version": 1,
+        "status": "waiting_approval",
+        "data": {"recipient": "requires_approval"},
+        "error_code": "approval_required",
+        "retryable": False,
+        "evidence": {"adapter_contract": "reviewed_v1"},
+        "checkpoint": {"request_id": "approval-1"},
+    }
+    client = AsyncMock()
+    client.post = AsyncMock(return_value=_http_response(200, waiting_result))
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    with (
+        patch("httpx.AsyncClient", return_value=client),
+        patch(
+            "app.ai.agent_config.get_builtin_agent_config",
+            return_value=MagicMock(backend_url="http://backend"),
+        ),
+        patch("app.ai.orchestrator._agent_headers", return_value={}),
+    ):
+        with pytest.raises(ApprovalRequiredError) as exc_info:
+            await _execute_capability("email", "send", {"draft_id": "draft-a"}, 30)
+
+    assert exc_info.value.arguments == {"draft_id": "draft-a"}
+    assert exc_info.value.tool_result == waiting_result
+    assert client.post.await_count == 1
+
+    client.post = AsyncMock(return_value=_http_response(423, {"detail": "approval required"}))
+    with (
+        patch("httpx.AsyncClient", return_value=client),
+        patch(
+            "app.ai.agent_config.get_builtin_agent_config",
+            return_value=MagicMock(backend_url="http://backend"),
+        ),
+        patch("app.ai.orchestrator._agent_headers", return_value={}),
+    ):
+        with pytest.raises(ApprovalRequiredError) as http_423:
+            await _execute_capability("email", "send", {"draft_id": "draft-a"}, 30)
+
+    assert http_423.value.arguments == {"draft_id": "draft-a"}
+    assert http_423.value.tool_result is None
+
+
+@pytest.mark.asyncio
+async def test_approval_digest_for_call_a_cannot_authorize_call_b():
+    call_a_arguments = {"draft_id": "draft-a"}
+    call_b_arguments = {"draft_id": "draft-b"}
+    approval_for_a = {
+        "approval_id": "approval-a",
+        "action_digest": _action_digest("email", "send", call_a_arguments),
+        "approved_by": "manager",
+    }
+    client = AsyncMock()
+    client.post = AsyncMock(return_value=_http_response(423, {"detail": "approval required"}))
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    with (
+        patch("httpx.AsyncClient", return_value=client),
+        patch(
+            "app.ai.agent_config.get_builtin_agent_config",
+            return_value=MagicMock(backend_url="http://backend"),
+        ),
+        patch("app.ai.orchestrator._agent_headers", return_value={"X-Internal-Agent": "1"}),
+    ):
+        with pytest.raises(ApprovalRequiredError):
+            await _execute_capability(
+                "email",
+                "send",
+                {**call_b_arguments, "approval": approval_for_a},
+                30,
+            )
+
+    sent = client.post.await_args.kwargs
+    assert sent["json"] == {"action": "send", **call_b_arguments}
+    assert "X-Agent-Approval" not in sent["headers"]
+    assert "X-Agent-Approval-Digest" not in sent["headers"]
 
 
 @pytest.mark.asyncio

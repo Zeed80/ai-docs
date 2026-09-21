@@ -260,6 +260,11 @@ E06.1 REVIEWED: WorkOrder корректно сохраняет v1 `partial` и
 legacy compatibility сохранена. Независимо: 78 passed. Отчёт:
 `docs/agent-employee-delivery/E06-1-work-order-nonterminal-results.md`. E06
 остаётся IN PROGRESS; далее waiting approval и chat consumers.
+E06.2 REVIEWED: v1 `waiting_approval` сохраняется и связывается с exact
+capability/action/arguments через существующий HTTP-423 settlement; recipient
+digest не используется. Независимо: 81 passed. Отчёт:
+`docs/agent-employee-delivery/E06-2-work-order-waiting-approval.md`. Далее —
+chat consumer stop paths.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя
 в WorkEvent, проверяет владельца/аргументы/попытку/lease. Детали журнала и UI

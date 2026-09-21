@@ -675,6 +675,12 @@ E06.1 REVIEWED: WorkOrder consumer сохраняет полный v1
 сохранены. Независимо: 78 passed. Отчёт:
 `docs/agent-employee-delivery/E06-1-work-order-nonterminal-results.md`. E06
 остаётся IN PROGRESS; далее `waiting_approval` и chat consumer paths.
+E06.2 REVIEWED: WorkOrder v1 `waiting_approval` сохраняет envelope/checkpoint/
+evidence и переиспользует exact HTTP-423 approval settlement. Digest строится
+только по реально отправленному call; recipient digest игнорируется. Независимо:
+81 passed. Отчёт:
+`docs/agent-employee-delivery/E06-2-work-order-waiting-approval.md`. E06 остаётся
+IN PROGRESS; далее durable/non-durable chat stop paths.
 
 ### E07 — Основа масштабируемых квитанций
 

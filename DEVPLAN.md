@@ -223,6 +223,11 @@ E06.1 REVIEWED устраняет повтор `partial/job_queued` и replan п
 совместимость. Независимо: 78 passed. Отчёт:
 `docs/agent-employee-delivery/E06-1-work-order-nonterminal-results.md`. E06
 остаётся IN PROGRESS.
+E06.2 REVIEWED добавляет exact-bound settlement ToolResult
+`waiting_approval`, сохраняя envelope/checkpoint/evidence и не доверяя recipient
+digest. Независимо: 81 passed. Отчёт:
+`docs/agent-employee-delivery/E06-2-work-order-waiting-approval.md`. Далее —
+chat consumers.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при
 сетевой ошибке/HTTP 5xx дают outcome_unknown и блокируют durable-цикл после

@@ -251,6 +251,12 @@ failed не расширяет retry policy; raw legacy compatibility сохра
 Независимо: 78 passed. Отчёт:
 `docs/agent-employee-delivery/E06-1-work-order-nonterminal-results.md`. E06
 остаётся IN PROGRESS; далее exact `waiting_approval` и chat consumers.
+E06.2 REVIEWED: v1 `waiting_approval` сохраняет полный envelope и использует
+existing HTTP-423 settlement с digest только фактических capability/action/args.
+Recipient digest не авторизует действие; retry/replan/verifier/dependents нет.
+Независимо: 81 passed. Отчёт:
+`docs/agent-employee-delivery/E06-2-work-order-waiting-approval.md`. E06 остаётся
+IN PROGRESS; далее chat consumers.
 Push накопленной ветки был заблокирован автопроверкой из-за несвязанных CAD-коммитов;
 для публикации всей этой истории нужно отдельное разрешение. Не обходить запрет.
 
