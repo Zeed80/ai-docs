@@ -197,6 +197,11 @@ E05.4.1 REVIEWED добавляет строгий gateway-only adapter `tool_se
 Независимо: 290 focused и 317 расширенных тестов. Отчёт:
 `docs/agent-employee-delivery/E05-4-1-tool-search-mcp-adapter.md`. E05.4/E05
 остаются IN PROGRESS; следующий шаг — аудит остатка E05.4.
+E05.4.2 REVIEWED исправляет реальную достижимость built-in recipients через
+configured backend URL, `/api` и internal-agent auth. Полный ASGI gateway path
+и fail-closed reanalyze покрыты тестами; независимо 233 passed. Отчёт:
+`docs/agent-employee-delivery/E05-4-2-mcp-builtin-reachability.md`. Следующий
+срез — `email.send` queue acceptance без заявления об SMTP delivery.
 Проверка журнала: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.
 Перед receipts устранены слепые HTTP-повторы: записи и неизвестные операции при
 сетевой ошибке/HTTP 5xx дают outcome_unknown и блокируют durable-цикл после

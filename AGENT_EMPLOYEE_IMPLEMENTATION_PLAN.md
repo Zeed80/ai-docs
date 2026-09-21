@@ -219,6 +219,13 @@ outcome_unknown, одна попытка. Остальные MCP actions legacy.
 focused и 317 расширенных тестов. Отчёт:
 `docs/agent-employee-delivery/E05-4-1-tool-search-mcp-adapter.md`. E05.4/E05
 остаются IN PROGRESS; далее нужен аудит остатка E05.4.
+E05.4.2 REVIEWED исправляет обнаруженную live-reachability границу built-in
+MCP: recipients теперь используют configured backend URL, `/api` routes и
+штатные service/acting-user headers. ASGI regression проходит gateway,
+approval digest, protected recipient и fail-closed reanalyze. Независимо: 233
+passed. Отчёт:
+`docs/agent-employee-delivery/E05-4-2-mcp-builtin-reachability.md`. E05.4/E05
+остаются IN PROGRESS; следующий срез — queue acceptance `email.send`.
 Push накопленной ветки был заблокирован автопроверкой из-за несвязанных CAD-коммитов;
 для публикации всей этой истории нужно отдельное разрешение. Не обходить запрет.
 

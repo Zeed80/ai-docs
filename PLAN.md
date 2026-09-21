@@ -233,6 +233,12 @@ dispatch — outcome_unknown. Прочие MCP actions legacy. Независи�
 и 317 расширенных тестов. Отчёт:
 `docs/agent-employee-delivery/E05-4-1-tool-search-mcp-adapter.md`. E05.4/E05
 остаются IN PROGRESS; далее аудит остатка E05.4.
+E05.4.2 REVIEWED исправляет reachability built-in MCP: configured backend URL,
+защищённые `/api` recipients и internal-agent auth; ASGI regression доказывает
+полный gateway path, а ошибка reanalyze больше не маскируется stale snapshot.
+Независимо: 233 passed. Отчёт:
+`docs/agent-employee-delivery/E05-4-2-mcp-builtin-reachability.md`. Далее —
+отдельный `email.send` queue-acceptance adapter.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя
 в WorkEvent, проверяет владельца/аргументы/попытку/lease. Детали журнала и UI

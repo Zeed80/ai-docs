@@ -35,6 +35,12 @@ E05.4.1 REVIEWED нормализует только built-in `tool_search_mcp` 
 `docs/agent-employee-delivery/E05-4-1-tool-search-mcp-adapter.md`. E05.4/E05
 остаются IN PROGRESS.
 
+E05.4.2 REVIEWED исправляет runtime reachability обоих built-in handlers:
+configured backend URL, точные `/api` recipients и штатные internal-agent
+headers. Это не меняет effect class и не разрешает новый retry. См.
+`docs/agent-employee-delivery/E05-4-2-mcp-builtin-reachability.md`. Следующий
+кандидат — отдельный `email.send` queue-acceptance adapter.
+
 | Operation | Route / recipient | Backend RBAC | Actual effect | DB commit boundary | External effect / internal retries | Receipt | Classification / retry |
 | --- | --- | --- | --- | --- | --- | --- |
 | `agent_control.ai_config_get` | `GET /api/ai/config`; `backend/app/api/ai_settings.py:252 get_config` | gateway auth+actor; viewer=read; deps=get_current_user | direct handler source: read path | no direct commit | none detected; no handler retry | none | `read-only`; auto-retry not-authorized-by-E03 |

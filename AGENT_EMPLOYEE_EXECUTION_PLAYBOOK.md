@@ -622,6 +622,14 @@ failed и post-dispatch ambiguity outcome_unknown. Прочие MCP actions lega
 `docs/agent-employee-delivery/E05-4-1-tool-search-mcp-adapter.md`. E05.4/E05
 остаются IN PROGRESS; следующий шаг — аудит остатка E05.4.
 
+E05.4.2 REVIEWED исправляет built-in recipient reachability: configured backend
+URL вместо container-local localhost, защищённые `/api` routes и штатные
+internal-agent headers. ASGI regression доказывает gateway → built-in →
+protected recipient; неуспешный drawing reanalyze не маскируется stale
+snapshot. Независимо: 233 passed. Отчёт:
+`docs/agent-employee-delivery/E05-4-2-mcp-builtin-reachability.md`. E05.4/E05
+остаются IN PROGRESS; следующий срез — `email.send` queue acceptance.
+
 ### E06 — Consumers не принимают незавершённый результат за успех
 
 **Статус:** TODO. **После:** E05.

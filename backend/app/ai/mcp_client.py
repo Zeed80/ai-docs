@@ -37,6 +37,34 @@ _MAX_RETRIES = 5
 _BACKOFF_BASE = 2.0  # seconds
 
 
+def _builtin_backend_headers() -> dict:
+    """Authenticated headers for a built-in MCP tool's internal API calls.
+
+    Built-ins are invoked only after the MCP capability gateway has applied its
+    policy, approval digest and audit.  Their recipient calls still have to use
+    the normal internal-agent authentication path: it preserves the bound acting
+    user instead of bypassing protected ``/api`` routes as localhost traffic.
+    """
+
+    from app.ai.agent_loop import internal_headers
+
+    return internal_headers()
+
+
+def _builtin_backend_client(*, timeout: float):
+    import httpx
+
+    return httpx.AsyncClient(timeout=timeout, headers=_builtin_backend_headers())
+
+
+def _builtin_api_url(path: str) -> str:
+    """Return the protected backend API URL used by built-in MCP handlers."""
+
+    from app.ai.agent_config import get_builtin_agent_config
+
+    return f"{get_builtin_agent_config().backend_url.rstrip('/')}/api{path}"
+
+
 def _sanitize(name: str) -> str:
     return name.replace(".", "__").replace("-", "_").replace(" ", "_")
 
@@ -333,27 +361,29 @@ _BUILTIN_TOOL_SCHEMAS: list[dict] = [
 
 
 async def _handle_drawing_analysis_mcp(args: dict) -> dict:
-    """Call internal /drawings/{id} and optionally /drawings/{id}/reanalyze."""
-    import httpx
-
-    from app.core.config import settings
+    """Call protected /api/drawings/{id} and optionally its reanalyze route."""
 
     drawing_id = args.get("drawing_id")
     if not drawing_id:
         return {"error": "drawing_id is required"}
 
     reanalyze = args.get("reanalyze", False)
-    base_url = f"http://localhost:{getattr(settings, 'PORT', 8000)}"
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with _builtin_backend_client(timeout=60.0) as client:
         if reanalyze:
-            await client.post(f"{base_url}/drawings/{drawing_id}/reanalyze")
+            # The legacy MCP payload remains a snapshot, never a claim that the
+            # queued analysis completed.  A rejected restart must not fall
+            # through to a stale GET snapshot and look successful.
+            reanalyze_response = await client.post(
+                _builtin_api_url(f"/drawings/{drawing_id}/reanalyze"), json={}
+            )
+            reanalyze_response.raise_for_status()
 
-        resp = await client.get(f"{base_url}/drawings/{drawing_id}")
+        resp = await client.get(_builtin_api_url(f"/drawings/{drawing_id}"))
         resp.raise_for_status()
         drawing = resp.json()
 
-        features_resp = await client.get(f"{base_url}/drawings/{drawing_id}/features")
+        features_resp = await client.get(_builtin_api_url(f"/drawings/{drawing_id}/features"))
         features_resp.raise_for_status()
         features_raw = features_resp.json()
 
@@ -395,16 +425,12 @@ async def _handle_drawing_analysis_mcp(args: dict) -> dict:
 
 async def _handle_tool_search_mcp(args: dict) -> dict:
     """Call internal /tool-catalog/search endpoint."""
-    import httpx
-
-    from app.core.config import settings
 
     query = args.get("query", "")
     if not query:
         return {"error": "query is required"}
 
-    base_url = f"http://localhost:{getattr(settings, 'PORT', 8000)}"
-    params: dict[str, Any] = {"q": query, "limit": args.get("limit", 10)}
+    params: dict[str, Any] = {"query": query, "page_size": args.get("limit", 10)}
     if args.get("tool_type"):
         params["tool_type"] = args["tool_type"]
     if args.get("diameter_min") is not None:
@@ -416,8 +442,8 @@ async def _handle_tool_search_mcp(args: dict) -> dict:
     if args.get("supplier_id"):
         params["supplier_id"] = args["supplier_id"]
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.get(f"{base_url}/tool-catalog/search", params=params)
+    async with _builtin_backend_client(timeout=30.0) as client:
+        resp = await client.get(_builtin_api_url("/tool-catalog/search"), params=params)
         resp.raise_for_status()
         data = resp.json()
 
