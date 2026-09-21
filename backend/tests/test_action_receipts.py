@@ -20,11 +20,11 @@ from app.api.chat_runs import (
 )
 from app.auth.jwt import _DEV_USER, get_current_user
 from app.auth.models import UserRole
-from app.db.agent_runtime_models import ChatLogicalAction
+from app.db.agent_runtime_models import ActionReceipt, ChatLogicalAction
 from app.db.models import AgentTask, AgentTeam, WorkEvent, WorkOrder, WorkStep, WorkStepAttempt
-from app.domain.action_receipts import verify_proposal_receipt
+from app.domain.action_receipts import read_receipt, verify_proposal_receipt
 from app.domain.chat_action_journal import digest, record_boundary
-from app.domain.work_orders import claim_ready_step
+from app.domain.work_orders import append_event, claim_ready_step
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -111,6 +111,14 @@ async def test_concurrent_duplicate_and_lost_response_have_one_commit(test_engin
             )
             == 1
         )
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(ActionReceipt)
+                .where(ActionReceipt.logical_action_id == action_id)
+            )
+            == 1
+        )
         action = await db.get(ChatLogicalAction, action_id)
         assert action.result is None  # Simulate lost HTTP response/checkpoint.
         order = await db.get(WorkOrder, run["work_order_id"], with_for_update=True)
@@ -123,6 +131,76 @@ async def test_concurrent_duplicate_and_lost_response_have_one_commit(test_engin
         assert detail["recipient_receipt"]["evidence_scope"] == "database_commit"
         assert detail["can_replay"] is False
     assert await deliver(factory, payload, key) == first  # Receipt only, no new effect.
+
+
+@pytest.mark.asyncio
+async def test_committed_action_accepts_source_or_current_attempt_for_read_only_retry(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    payload, _, action_id, step_id, old_key = await proposal(factory)
+    committed = await deliver(factory, payload, old_key)
+    async with factory() as db:
+        next_attempt = WorkStepAttempt(
+            step_id=step_id,
+            attempt_no=2,
+            worker_id="replacement-worker",
+            status="running",
+        )
+        db.add(next_attempt)
+        await db.flush()
+        action = await db.get(ChatLogicalAction, action_id)
+        action.attempt_id = next_attempt.id
+        await db.commit()
+        new_key = f"{action_id}:{next_attempt.id}"
+
+    assert await deliver(factory, payload, old_key) == committed
+    assert await deliver(factory, payload, new_key) == committed
+    with pytest.raises(HTTPException, match="attempt mismatch"):
+        await deliver(factory, payload, f"{action_id}:{uuid.uuid4()}")
+    async with factory() as db:
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(AgentTask)
+                .where(AgentTask.objective == payload.objective)
+            )
+            == 1
+        )
+
+
+@pytest.mark.asyncio
+async def test_cancellation_and_recipient_share_order_lock(test_engine, monkeypatch):
+    from app.api import work_orders as work_order_api
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    payload, run, _, _, key = await proposal(factory)
+    lock_acquired = asyncio.Event()
+    release_cancel = asyncio.Event()
+    real_transition = work_order_api.transition_work_order
+
+    async def pause_after_order_lock(*args, **kwargs):
+        lock_acquired.set()
+        await release_cancel.wait()
+        return await real_transition(*args, **kwargs)
+
+    monkeypatch.setattr(work_order_api, "transition_work_order", pause_after_order_lock)
+
+    async def cancel():
+        async with factory() as db:
+            return await work_order_api.cancel_order(run["work_order_id"], db, _DEV_USER)
+
+    cancellation = asyncio.create_task(cancel())
+    await asyncio.wait_for(lock_acquired.wait(), timeout=2)
+    delivery = asyncio.create_task(deliver(factory, payload, key))
+    await asyncio.sleep(0)
+    release_cancel.set()
+    await cancellation
+    with pytest.raises(HTTPException, match="fence is no longer valid"):
+        await delivery
+    async with factory() as db:
+        assert not await db.scalar(
+            select(AgentTask.id).where(AgentTask.objective == payload.objective)
+        )
+        assert (await db.get(WorkOrder, run["work_order_id"])).status == "canceled"
 
 
 @pytest.mark.asyncio
@@ -206,16 +284,81 @@ async def test_corrupt_receipt_is_not_reused(test_engine):
     payload, run, action_id, _, key = await proposal(factory)
     await deliver(factory, payload, key)
     async with factory() as db:
-        event = await db.scalar(
-            select(WorkEvent).where(
-                WorkEvent.work_order_id == run["work_order_id"],
-                WorkEvent.event_type == "chat.recipient_committed",
-            )
+        receipt = await db.scalar(
+            select(ActionReceipt).where(ActionReceipt.logical_action_id == action_id)
         )
-        event.payload = {**event.payload, "response": {"id": "corrupt"}}
+        receipt.response = {"id": "corrupt"}
         await db.commit()
     with pytest.raises(HTTPException, match="integrity mismatch"):
         await deliver(factory, payload, key)
+
+
+@pytest.mark.asyncio
+async def test_receipt_without_mandatory_provenance_is_not_reused(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    payload, _, action_id, _, key = await proposal(factory)
+    await deliver(factory, payload, key)
+    async with factory() as db:
+        receipt = await db.scalar(
+            select(ActionReceipt).where(ActionReceipt.logical_action_id == action_id)
+        )
+        receipt.provenance = {}
+        await db.commit()
+    with pytest.raises(HTTPException, match="integrity mismatch"):
+        await deliver(factory, payload, key)
+
+
+@pytest.mark.asyncio
+async def test_backward_read_normalizes_valid_pilot_event(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    _, run, action_id, _, key = await proposal(factory)
+    artifact_id = str(uuid.uuid4())
+    response = {"id": artifact_id, "updated_at": datetime.now(UTC).isoformat()}
+    async with factory() as db:
+        action = await db.get(ChatLogicalAction, action_id)
+        event_row = await append_event(
+            db,
+            run["work_order_id"],
+            "chat.recipient_committed",
+            actor="recipient:agent_control.task_propose",
+            payload={
+                "action_id": str(action_id),
+                "attempt_id": key.split(":")[1],
+                "operation": "agent_control.task_propose",
+                "request_digest": action.request_digest,
+                "response": response,
+                "response_digest": digest(response),
+                "evidence_scope": "database_commit",
+                "can_replay": False,
+            },
+        )
+        await db.commit()
+        receipt = await read_receipt(db, action)
+    assert receipt["logical_action_id"] == str(action_id)
+    assert receipt["artifact_id"] == artifact_id
+    assert receipt["artifact_revision"] == response["updated_at"]
+    assert receipt["receipt_version"] == 1
+    assert receipt["provenance"]["event_id"] == str(event_row.id)
+
+
+@pytest.mark.asyncio
+async def test_idempotency_key_is_not_bearer_authorization(client, test_engine):
+    from app.main import app
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    payload, _, _, _, key = await proposal(factory)
+    viewer = _DEV_USER.model_copy(update={"roles": [UserRole.viewer]})
+    app.dependency_overrides[get_current_user] = lambda: viewer
+    response = await client.post(
+        "/api/agent/tasks/propose",
+        json=payload.model_dump(mode="json"),
+        headers={"Idempotency-Key": key},
+    )
+    assert response.status_code == 403
+    async with factory() as db:
+        assert not await db.scalar(
+            select(AgentTask.id).where(AgentTask.objective == payload.objective)
+        )
 
 
 @pytest.mark.asyncio
@@ -436,18 +579,15 @@ async def test_verification_missing_task_and_receipt_are_inconclusive(test_engin
 
 
 @pytest.mark.asyncio
-async def test_verification_rejects_corrupt_receipt_and_unknown_recipient(test_engine):
+async def test_verification_rejects_corrupt_receipt_bindings(test_engine):
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     payload, run, action_id, _, key = await proposal(factory)
     await deliver(factory, payload, key)
     async with factory() as db:
-        event = await db.scalar(
-            select(WorkEvent).where(
-                WorkEvent.work_order_id == run["work_order_id"],
-                WorkEvent.event_type == "chat.recipient_committed",
-            )
+        receipt = await db.scalar(
+            select(ActionReceipt).where(ActionReceipt.logical_action_id == action_id)
         )
-        event.payload = {**event.payload, "response": {"id": "corrupt"}}
+        receipt.response = {"id": "corrupt"}
         await db.commit()
         action = await db.get(ChatLogicalAction, action_id)
         with pytest.raises(HTTPException, match="integrity mismatch"):
@@ -456,47 +596,42 @@ async def test_verification_rejects_corrupt_receipt_and_unknown_recipient(test_e
     payload, run, action_id, _, key = await proposal(factory)
     await deliver(factory, payload, key)
     async with factory() as db:
-        event = await db.scalar(
-            select(WorkEvent).where(
-                WorkEvent.work_order_id == run["work_order_id"],
-                WorkEvent.event_type == "chat.recipient_committed",
-            )
+        receipt = await db.scalar(
+            select(ActionReceipt).where(ActionReceipt.logical_action_id == action_id)
         )
-        event.payload = {**event.payload, "operation": "other.recipient"}
+        receipt.operation = "other.recipient"
         await db.commit()
         action = await db.get(ChatLogicalAction, action_id)
-        result = await verify_proposal_receipt(db, action, _DEV_USER)
-    assert result["status"] == "inconclusive"
-    assert result["reason"] == "unsupported_recipient"
-    assert "artifact_id" not in result
+        with pytest.raises(HTTPException, match="integrity mismatch"):
+            await verify_proposal_receipt(db, action, _DEV_USER)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("malformed_kind", ["invalid_uuid", "missing_id"])
-async def test_verification_rejects_malformed_artifact_binding(test_engine, malformed_kind):
+@pytest.mark.parametrize(
+    ("malformed_kind", "message"),
+    [("invalid_uuid", "artifact binding is invalid"), ("missing_id", "integrity mismatch")],
+)
+async def test_verification_rejects_malformed_artifact_binding(
+    test_engine, malformed_kind, message
+):
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     payload, run, action_id, _, key = await proposal(factory)
     committed = await deliver(factory, payload, key)
     async with factory() as db:
-        event_row = await db.scalar(
-            select(WorkEvent).where(
-                WorkEvent.work_order_id == run["work_order_id"],
-                WorkEvent.event_type == "chat.recipient_committed",
-            )
+        receipt = await db.scalar(
+            select(ActionReceipt).where(ActionReceipt.logical_action_id == action_id)
         )
-        original = event_row.payload["response"]
+        original = receipt.response
         if malformed_kind == "invalid_uuid":
             malformed = {**original, "id": "not-a-uuid"}
         else:
             malformed = {name: value for name, value in original.items() if name != "id"}
-        event_row.payload = {
-            **event_row.payload,
-            "response": malformed,
-            "response_digest": digest(malformed),
-        }
+        receipt.response = malformed
+        receipt.response_digest = digest(malformed)
+        receipt.artifact_id = malformed.get("id", "")
         await db.commit()
         action = await db.get(ChatLogicalAction, action_id)
-        with pytest.raises(HTTPException, match="artifact binding is invalid"):
+        with pytest.raises(HTTPException, match=message):
             await verify_proposal_receipt(db, action, _DEV_USER)
     assert committed["id"] == original["id"]
 
@@ -586,3 +721,181 @@ async def test_verification_route_is_owner_scoped_and_requires_current_admin(
         )
     assert after_state == before_state
     assert after_events == before_events
+
+
+@pytest.mark.asyncio
+async def test_scalable_receipt_migration_roundtrip_quarantines_corrupt_and_duplicate(
+    test_engine,
+):
+    import importlib.util
+    from pathlib import Path
+
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy import inspect, text
+
+    migration_path = (
+        Path(__file__).parents[1] / "migrations/versions/20260913_0001_scalable_action_receipts.py"
+    )
+    spec = importlib.util.spec_from_file_location("scalable_receipt_migration", migration_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    schema = "receipt_test_" + uuid.uuid4().hex
+    owner = "migration-owner"
+    order_id = uuid.uuid4()
+    step_id = uuid.uuid4()
+    cases = {
+        "valid": (uuid.uuid4(), uuid.uuid4()),
+        "corrupt": (uuid.uuid4(), uuid.uuid4()),
+        "duplicate": (uuid.uuid4(), uuid.uuid4()),
+        "foreign_attempt": (uuid.uuid4(), uuid.uuid4()),
+    }
+
+    async with test_engine.begin() as conn:
+        await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+        await conn.execute(text(f'SET LOCAL search_path TO "{schema}"'))
+        await conn.execute(
+            text("CREATE TABLE work_orders (id UUID PRIMARY KEY, owner_key VARCHAR(200) NOT NULL)")
+        )
+        await conn.execute(
+            text(
+                "CREATE TABLE work_steps (id UUID PRIMARY KEY, "
+                "work_order_id UUID NOT NULL REFERENCES work_orders(id))"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE TABLE work_step_attempts (id UUID PRIMARY KEY, "
+                "step_id UUID NOT NULL REFERENCES work_steps(id))"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE TABLE chat_logical_actions (id UUID PRIMARY KEY, "
+                "work_order_id UUID NOT NULL REFERENCES work_orders(id), "
+                "attempt_id UUID NOT NULL REFERENCES work_step_attempts(id), "
+                "request JSON NOT NULL, request_digest VARCHAR(64) NOT NULL)"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE TABLE work_events (id UUID PRIMARY KEY, work_order_id UUID NOT NULL "
+                "REFERENCES work_orders(id), sequence INTEGER NOT NULL, event_type VARCHAR(100) "
+                "NOT NULL, actor VARCHAR(200) NOT NULL, payload JSON NOT NULL, "
+                "created_at TIMESTAMPTZ NOT NULL DEFAULT now())"
+            )
+        )
+        await conn.execute(
+            text("INSERT INTO work_orders (id, owner_key) VALUES (:id, :owner)"),
+            {"id": order_id, "owner": owner},
+        )
+        await conn.execute(
+            text("INSERT INTO work_steps (id, work_order_id) VALUES (:id, :order_id)"),
+            {"id": step_id, "order_id": order_id},
+        )
+
+        sequence = 0
+        for kind, (action_id, attempt_id) in cases.items():
+            request = {
+                "name": "agent_control",
+                "arguments": json.dumps({"action": "task_propose", "body": {"objective": kind}}),
+            }
+            request_digest = digest(request)
+            response = {
+                "id": str(uuid.uuid4()),
+                "updated_at": datetime.now(UTC).isoformat(),
+            }
+            payload = {
+                "action_id": str(action_id),
+                "attempt_id": str(attempt_id),
+                "operation": "agent_control.task_propose",
+                "request_digest": request_digest,
+                "response": response,
+                "response_digest": digest(response),
+                "evidence_scope": "database_commit",
+                "can_replay": False,
+            }
+            if kind == "corrupt":
+                payload["response_digest"] = "0" * 64
+            await conn.execute(
+                text("INSERT INTO work_step_attempts (id, step_id) VALUES (:id, :step_id)"),
+                {"id": attempt_id, "step_id": step_id},
+            )
+            action_attempt_id = attempt_id
+            if kind == "foreign_attempt":
+                action_attempt_id = uuid.uuid4()
+                await conn.execute(
+                    text("INSERT INTO work_step_attempts (id, step_id) VALUES (:id, :step_id)"),
+                    {"id": action_attempt_id, "step_id": step_id},
+                )
+            await conn.execute(
+                text(
+                    "INSERT INTO chat_logical_actions "
+                    "(id, work_order_id, attempt_id, request, request_digest) "
+                    "VALUES (:id, :order_id, :attempt_id, CAST(:request AS JSON), :request_digest)"
+                ),
+                {
+                    "id": action_id,
+                    "order_id": order_id,
+                    "attempt_id": action_attempt_id,
+                    "request": json.dumps(request),
+                    "request_digest": request_digest,
+                },
+            )
+            repeats = 2 if kind == "duplicate" else 1
+            for _ in range(repeats):
+                sequence += 1
+                await conn.execute(
+                    text(
+                        "INSERT INTO work_events "
+                        "(id, work_order_id, sequence, event_type, actor, payload) VALUES "
+                        "(:id, :order_id, :sequence, 'chat.recipient_committed', "
+                        "'recipient:test', CAST(:payload AS JSON))"
+                    ),
+                    {
+                        "id": uuid.uuid4(),
+                        "order_id": order_id,
+                        "sequence": sequence,
+                        "payload": json.dumps(payload),
+                    },
+                )
+
+        def upgrade(sync):
+            with Operations.context(MigrationContext.configure(sync)):
+                module.upgrade()
+
+        def downgrade(sync):
+            with Operations.context(MigrationContext.configure(sync)):
+                module.downgrade()
+
+        await conn.run_sync(upgrade)
+        rows = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT logical_action_id, owner_key, artifact_id, artifact_revision, "
+                        "receipt_version, provenance FROM action_receipts"
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+        assert len(rows) == 1
+        assert rows[0].logical_action_id == cases["valid"][0]
+        assert rows[0].owner_key == owner
+        assert rows[0].receipt_version == 1
+        assert rows[0].provenance["migration"] == "20260913_0001"
+        assert (
+            await conn.scalar(text("SELECT count(*) FROM work_events")) == 5
+        )  # quarantine source rows are retained
+
+        await conn.run_sync(downgrade)
+
+        def assert_dropped(sync):
+            assert "action_receipts" not in inspect(sync).get_table_names()
+
+        await conn.run_sync(assert_dropped)
+        await conn.run_sync(upgrade)
+        assert await conn.scalar(text("SELECT count(*) FROM action_receipts")) == 1
+        await conn.rollback()

@@ -706,8 +706,10 @@ COMPLETE / REVIEWED. Residual DB uniqueness race передан E07; E06.6 не 
 
 ### E07 — Основа масштабируемых квитанций
 
-**Статус:** TODO. **После:** E06. **Читать:** `domain/action_receipts.py`, WorkEvent,
-ChatLogicalAction, миграции `backend/migrations/versions/`.
+**Статус:** SCOPED COMPLETE / REVIEWED. **После:** E06. **Читать:**
+`domain/action_receipts.py`, WorkEvent, ChatLogicalAction, миграции
+`backend/migrations/versions/`. Отчёт:
+`docs/agent-employee-delivery/E07-scalable-action-receipts.md`.
 
 1. Пилот WorkEvent не переписывать молча. Сначала ADR: оставляем event + индекс
    и common order lock либо добавляем отдельную receipt table с unique action ID.
@@ -722,7 +724,15 @@ ChatLogicalAction, миграции `backend/migrations/versions/`.
 
 **Тесты:** уникальность двух соединений, rollback, collision другого owner/args,
 отмена под тем же lock, migration roundtrip, corrupted/duplicate receipt.
-**Готово:** ADR + тесты + один формат чтения; массовые recipients ещё не готовы.
+**Готово:** ADR 005 выбирает dedicated `action_receipts` с unique
+`logical_action_id`, отделённым от fencing `attempt_id`; owner/order/action/
+operation, request/response digests, artifact ID/revision, receipt version и
+provenance обязательны. Первый effect повторно проверяет current auth, common
+order lock и fence; source/current attempt разрешены только для receipt-only
+replay. Migration переносит лишь strict valid WorkEvent, corrupt/duplicate
+сохраняются fail-closed с backward read. Исполнитель: 29 focused/76 expanded;
+независимо: 29 focused, один Alembic head, Ruff/format/diff clean. E07 SCOPED
+COMPLETE / REVIEWED; массовые recipients остаются E08+.
 
 ### E08 — Вторая DB-операция с атомарной квитанцией
 

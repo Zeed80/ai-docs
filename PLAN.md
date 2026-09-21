@@ -287,6 +287,15 @@ Requested parallel намеренно serial-degraded с event; raw legacy и v1
 Отчёт: `docs/agent-employee-delivery/E06-5-noncheckpointed-chat-nonterminal-results.md`.
 Все status consumer transitions E06 покрыты: E06 SCOPED COMPLETE / REVIEWED.
 Residual DB uniqueness race остаётся E07.
+E07 SCOPED COMPLETE / REVIEWED: ADR 005 выбирает dedicated `action_receipts` с
+unique `logical_action_id`, отдельным от fencing `attempt_id`. Обязательны
+owner/order/action/operation, request/response digests, artifact ID/revision,
+receipt version и provenance; первый effect проверяет current auth, common order
+lock и fence. Source/current attempt дают только receipt-only replay. Migration
+переносит лишь strict valid WorkEvent, corrupt/duplicate остаются fail-closed с
+backward read; остальные recipients — E08+. Исполнитель: 29 focused/76 expanded;
+независимо: 29 focused, один Alembic head, Ruff/format/diff clean. Отчёт:
+`docs/agent-employee-delivery/E07-scalable-action-receipts.md`. Далее — E08.
 
 Пилот `agent_control.task_propose` атомарно сохраняет задачу и квитанцию получателя
 в WorkEvent, проверяет владельца/аргументы/попытку/lease. Детали журнала и UI

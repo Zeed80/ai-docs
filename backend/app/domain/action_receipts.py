@@ -13,14 +13,70 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.auth.models import UserRole
-from app.db.agent_runtime_models import ChatLogicalAction
+from app.db.agent_runtime_models import ActionReceipt, ChatLogicalAction
 from app.db.models import AgentTask, WorkEvent, WorkOrder, WorkPlan, WorkStep, WorkStepAttempt
 from app.domain.chat_action_journal import digest
 from app.domain.chat_continuation import validate_wall_budget
-from app.domain.work_orders import append_event, attempt_owns_lease
+from app.domain.work_orders import attempt_owns_lease
+
+RECEIPT_VERSION = 1
+PROPOSAL_OPERATION = "agent_control.task_propose"
 
 
-async def read_receipt(db, action):
+def _expected_operation(action):
+    request = action.request
+    if not isinstance(request, dict):
+        return None
+    arguments = request.get("arguments")
+    try:
+        arguments = dict(arguments) if isinstance(arguments, dict) else json.loads(arguments)
+    except (ValueError, TypeError):
+        return None
+    tool = request.get("name")
+    operation = arguments.get("action") if isinstance(arguments, dict) else None
+    if not isinstance(tool, str) or not isinstance(operation, str):
+        return None
+    return f"{tool.replace('__', '.')}.{operation}"
+
+
+def _validate_receipt_payload(action, order, receipt):
+    try:
+        logical_action_id = uuid.UUID(str(receipt["logical_action_id"]))
+        attempt_id = uuid.UUID(str(receipt["attempt_id"]))
+        artifact_id = receipt["artifact_id"]
+    except (ValueError, TypeError, KeyError, AttributeError):
+        raise HTTPException(409, "Recipient receipt integrity mismatch") from None
+    response = receipt.get("response")
+    provenance = receipt.get("provenance")
+    expected_operation = _expected_operation(action)
+    if (
+        logical_action_id != action.id
+        or receipt.get("work_order_id") != str(action.work_order_id)
+        or receipt.get("owner_key") != order.owner_key
+        or receipt.get("request_digest") != action.request_digest
+        or digest(action.request) != action.request_digest
+        or expected_operation is None
+        or receipt.get("operation") != expected_operation
+        or not isinstance(response, dict)
+        or digest(response) != receipt.get("response_digest")
+        or not isinstance(artifact_id, str)
+        or not artifact_id
+        or response.get("id") != artifact_id
+        or response.get("updated_at") != receipt.get("artifact_revision")
+        or not isinstance(receipt.get("artifact_revision"), str)
+        or not receipt["artifact_revision"]
+        or receipt.get("receipt_version") != RECEIPT_VERSION
+        or not isinstance(provenance, dict)
+        or not isinstance(provenance.get("source"), str)
+        or not provenance["source"]
+    ):
+        raise HTTPException(409, "Recipient receipt integrity mismatch")
+    receipt["attempt_id"] = str(attempt_id)
+    receipt["artifact_id"] = artifact_id
+    return receipt
+
+
+async def _read_legacy_receipt(db, action, order):
     rows = (
         await db.scalars(
             select(WorkEvent).where(
@@ -34,15 +90,54 @@ async def read_receipt(db, action):
         return None
     if len(rows) != 1:
         raise HTTPException(409, "Duplicate recipient receipt")
-    receipt = rows[0].payload
-    if (
-        not isinstance(receipt, dict)
-        or receipt.get("request_digest") != action.request_digest
-        or digest(action.request) != action.request_digest
-        or digest(receipt.get("response")) != receipt.get("response_digest")
-    ):
+    legacy = rows[0].payload
+    if not isinstance(legacy, dict):
         raise HTTPException(409, "Recipient receipt integrity mismatch")
-    return receipt
+    response = legacy.get("response")
+    receipt = {
+        **legacy,
+        "logical_action_id": legacy.get("action_id"),
+        "work_order_id": str(action.work_order_id),
+        "owner_key": order.owner_key,
+        "artifact_id": response.get("id") if isinstance(response, dict) else None,
+        "artifact_revision": response.get("updated_at") if isinstance(response, dict) else None,
+        "receipt_version": RECEIPT_VERSION,
+        "provenance": {
+            "source": "work_event",
+            "event_id": str(rows[0].id),
+            "event_sequence": rows[0].sequence,
+            "legacy_receipt_version": 0,
+        },
+    }
+    return _validate_receipt_payload(action, order, receipt)
+
+
+async def read_receipt(db, action):
+    """Read the unique receipt, falling back to the immutable pilot event."""
+    order = await db.get(WorkOrder, action.work_order_id)
+    if order is None:
+        raise HTTPException(409, "Recipient receipt integrity mismatch")
+    row = await db.scalar(select(ActionReceipt).where(ActionReceipt.logical_action_id == action.id))
+    if row is None:
+        return await _read_legacy_receipt(db, action, order)
+    receipt = {
+        "action_id": str(row.logical_action_id),
+        "logical_action_id": str(row.logical_action_id),
+        "work_order_id": str(row.work_order_id),
+        "owner_key": row.owner_key,
+        "attempt_id": str(row.attempt_id),
+        "operation": row.operation,
+        "request_digest": row.request_digest,
+        "response": row.response,
+        "response_digest": row.response_digest,
+        "artifact_id": row.artifact_id,
+        "artifact_revision": row.artifact_revision,
+        "receipt_version": row.receipt_version,
+        "provenance": row.provenance,
+        "evidence_scope": "database_commit",
+        "can_replay": False,
+    }
+    return _validate_receipt_payload(action, order, receipt)
 
 
 async def prepare_proposal_receipt(db, key, user, payload, schema):
@@ -61,8 +156,6 @@ async def prepare_proposal_receipt(db, key, user, payload, schema):
     # Refresh after acquiring the common fence: a worker may have changed state
     # while this request waited for a concurrent transaction.
     await db.refresh(action)
-    if action.attempt_id != attempt_id:
-        raise HTTPException(409, "Recipient attempt mismatch")
     try:
         request = action.request
         if digest(request) != action.request_digest or request.get("name") != "agent_control":
@@ -84,9 +177,15 @@ async def prepare_proposal_receipt(db, key, user, payload, schema):
     with db.no_autoflush:
         receipt = await read_receipt(db, action)
     if receipt is not None:
-        if receipt.get("operation") != "agent_control.task_propose":
+        if receipt.get("operation") != PROPOSAL_OPERATION:
             raise HTTPException(409, "Recipient operation mismatch")
+        # A committed receipt may be read with its original (now stale) attempt
+        # or the action's current attempt. Neither path authorizes another effect.
+        if attempt_id not in {uuid.UUID(receipt["attempt_id"]), action.attempt_id}:
+            raise HTTPException(409, "Recipient attempt mismatch")
         return action, receipt
+    if action.attempt_id != attempt_id:
+        raise HTTPException(409, "Recipient attempt mismatch")
     attempt = await db.get(WorkStepAttempt, action.attempt_id)
     step = await db.get(WorkStep, attempt.step_id) if attempt else None
     plan = await db.get(WorkPlan, step.plan_id) if step else None
@@ -112,22 +211,32 @@ async def prepare_proposal_receipt(db, key, user, payload, schema):
 
 async def record_proposal_receipt(db, action, response):
     """No commit here: the recipient owns the transaction containing the effect."""
-    await append_event(
-        db,
-        action.work_order_id,
-        "chat.recipient_committed",
-        actor="recipient:agent_control.task_propose",
-        payload={
-            "action_id": str(action.id),
-            "attempt_id": str(action.attempt_id),
-            "operation": "agent_control.task_propose",
-            "request_digest": action.request_digest,
-            "response": response,
-            "response_digest": digest(response),
-            "evidence_scope": "database_commit",
-            "can_replay": False,
-        },
+    order = await db.get(WorkOrder, action.work_order_id)
+    if order is None:
+        raise ValueError("Proposal receipt has no work order")
+    try:
+        artifact_id = str(uuid.UUID(str(response["id"])))
+        artifact_revision = response["updated_at"]
+    except (ValueError, TypeError, KeyError, AttributeError):
+        raise ValueError("Proposal response has no stable artifact binding") from None
+    db.add(
+        ActionReceipt(
+            logical_action_id=action.id,
+            work_order_id=action.work_order_id,
+            owner_key=order.owner_key,
+            attempt_id=action.attempt_id,
+            operation=PROPOSAL_OPERATION,
+            request_digest=action.request_digest,
+            response=response,
+            response_digest=digest(response),
+            artifact_id=artifact_id,
+            artifact_revision=artifact_revision,
+            receipt_version=RECEIPT_VERSION,
+            provenance={"source": "recipient", "recipient": PROPOSAL_OPERATION},
+            created_at=datetime.now(UTC),
+        )
     )
+    await db.flush()
 
 
 async def verify_proposal_receipt(db, action, user):

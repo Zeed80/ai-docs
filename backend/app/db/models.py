@@ -24,6 +24,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.agent_runtime_models import (  # noqa: F401
+    ActionReceipt,
     AgentChannelIdentity,
     AgentScriptRun,
     DelegationGrant,

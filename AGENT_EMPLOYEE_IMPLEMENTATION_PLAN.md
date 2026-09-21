@@ -279,6 +279,16 @@ Requested parallel намеренно serial-degraded с event; raw legacy и v1
 Отчёт: `docs/agent-employee-delivery/E06-5-noncheckpointed-chat-nonterminal-results.md`.
 Все status consumer transitions E06 покрыты: E06 SCOPED COMPLETE / REVIEWED.
 Residual DB uniqueness race остаётся E07.
+E07 SCOPED COMPLETE / REVIEWED: ADR 005 выбирает отдельную
+`action_receipts` с unique `logical_action_id`, отделённым от fencing
+`attempt_id`. Owner/order/action/operation, request/response digests, artifact
+ID/revision, receipt version и provenance обязательны; первый effect проверяет
+current auth, common order lock и fence. Source/current attempt допускаются
+только для receipt-only replay. Migration переносит лишь строгие valid
+WorkEvent, corrupt/duplicate оставляет fail-closed с backward read. Остальные
+recipients — E08+. Исполнитель: 29 focused/76 expanded; независимо: 29 focused,
+один Alembic head, Ruff/format/diff clean. Отчёт:
+`docs/agent-employee-delivery/E07-scalable-action-receipts.md`. Далее — E08.
 Push накопленной ветки был заблокирован автопроверкой из-за несвязанных CAD-коммитов;
 для публикации всей этой истории нужно отдельное разрешение. Не обходить запрет.
 

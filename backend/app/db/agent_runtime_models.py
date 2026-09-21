@@ -4,7 +4,17 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    SmallInteger,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import GUID, Base, TimestampMixin, UUIDPrimaryKey
@@ -42,6 +52,37 @@ class ChatLogicalAction(UUIDPrimaryKey, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(40))
     result: Mapped[dict | None] = mapped_column(JSON)
     result_digest: Mapped[str | None] = mapped_column(String(64))
+
+
+class ActionReceipt(UUIDPrimaryKey, Base):
+    """Immutable proof that one logical action committed one recipient effect."""
+
+    __tablename__ = "action_receipts"
+    __table_args__ = (
+        UniqueConstraint("logical_action_id", name="uq_action_receipts_logical_action"),
+        Index("ix_action_receipts_order_operation", "work_order_id", "operation"),
+        Index("ix_action_receipts_owner", "owner_key"),
+    )
+
+    logical_action_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("chat_logical_actions.id", ondelete="CASCADE"), nullable=False
+    )
+    work_order_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("work_orders.id", ondelete="CASCADE"), nullable=False
+    )
+    owner_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    attempt_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("work_step_attempts.id"), nullable=False
+    )
+    operation: Mapped[str] = mapped_column(String(200), nullable=False)
+    request_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    response: Mapped[dict] = mapped_column(JSON, nullable=False)
+    response_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    artifact_id: Mapped[str] = mapped_column(String(300), nullable=False)
+    artifact_revision: Mapped[str] = mapped_column(String(300), nullable=False)
+    receipt_version: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)
+    provenance: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class OwnedWorkspaceBlock(UUIDPrimaryKey, TimestampMixin, Base):
