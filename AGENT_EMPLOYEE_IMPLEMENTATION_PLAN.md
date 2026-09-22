@@ -297,7 +297,18 @@ auth/common fence атомарно сохраняет item + `ActionReceipt`; le
 `updated_at`; gateway передаёт ключ только `task_propose` и `warehouse.update_item`.
 Исполнитель: 41 focused/317 expanded; независимо: 317 passed; Ruff/format/diff
 clean. Отчёт: `docs/agent-employee-delivery/E08-warehouse-update-item-receipt.md`.
-Остальные операции — E08.N; DB+queue — E13, SMTP/browser не exactly-once. Далее — E09.
+Остальные операции — E08.N; DB+queue — E13, SMTP/browser не exactly-once.
+E09 SCOPED COMPLETE / REVIEWED: явный реестр допускает только
+`agent_control.task_propose` → `agent_task` и `warehouse.update_item` →
+`inventory_item`; versioned `WorkArtifact` descriptor записывается вместе с
+receipt, а migration backfill-ит только эти пары. Owner проверяется до контента;
+verdict связывает verifier version, artifact ID/version/hash, scope/time/evidence
+HMAC-подписью. Stale/forged/missing/unavailable/unsupported fail-closed либо
+inconclusive; external URL — только opaque text без fetch. Matched artifact не
+завершает другую required criteria, `can_replay`/`can_resume` false (Gate A2).
+Исполнитель: 47 focused/175 expanded; независимо: 147 passed; один Alembic head,
+Ruff/format/diff clean. Отчёт:
+`docs/agent-employee-delivery/E09-artifact-verification-registry.md`. Далее — E10.
 Push накопленной ветки был заблокирован автопроверкой из-за несвязанных CAD-коммитов;
 для публикации всей этой истории нужно отдельное разрешение. Не обходить запрет.
 

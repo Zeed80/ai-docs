@@ -420,7 +420,7 @@ async def verify_chat_action(
     db: AsyncSession = Depends(get_db),
     user: UserInfo = Depends(get_current_user),
 ):
-    from app.domain.action_receipts import verify_proposal_receipt
+    from app.domain.artifact_verification import verify_action_artifact
 
     # Verification is a SELECT-only snapshot. Keep the complete owner/action/
     # receipt/task read under one no-autoflush boundary, including helper calls.
@@ -429,7 +429,7 @@ async def verify_chat_action(
         action = await db.get(ChatLogicalAction, action_id)
         if action is None or action.work_order_id != run.work_order_id:
             raise HTTPException(404, "Logical action not found")
-        return await verify_proposal_receipt(db, action, user)
+        return await verify_action_artifact(db, action=action, user=user)
 
 
 @router.get("/{run_id}/actions/{action_id}/observations")

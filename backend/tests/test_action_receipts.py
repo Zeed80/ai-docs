@@ -11,6 +11,7 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI, HTTPException
 from sqlalchemy import delete, event, func, select, update
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.agent_control_plane import AgentTaskPropose, propose_agent_task_tool
@@ -26,12 +27,21 @@ from app.db.models import (
     AgentTask,
     AgentTeam,
     InventoryItem,
+    WorkAcceptanceCriterion,
+    WorkArtifact,
     WorkEvent,
+    WorkEvidence,
     WorkOrder,
     WorkStep,
     WorkStepAttempt,
 )
 from app.domain.action_receipts import read_receipt, verify_proposal_receipt
+from app.domain.artifact_verification import (
+    supported_artifact_verifiers,
+    validate_artifact_verdict,
+    verdict_proves_current_artifact,
+    verify_action_artifact,
+)
 from app.domain.chat_action_journal import digest, record_boundary
 from app.domain.work_orders import append_event, claim_ready_step
 
@@ -1096,6 +1106,317 @@ async def test_verification_route_is_owner_scoped_and_requires_current_admin(
         )
     assert after_state == before_state
     assert after_events == before_events
+
+
+@pytest.mark.asyncio
+async def test_artifact_registry_verifies_only_reviewed_recipient_types(test_engine):
+    assert supported_artifact_verifiers() == (
+        ("agent_control.task_propose", "agent_task"),
+        ("warehouse.update_item", "inventory_item"),
+    )
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    payload, _, action_id, item_id, key = await warehouse_update_proposal(factory)
+    committed = await deliver_warehouse(factory, item_id, payload, key)
+    async with factory() as db:
+        verdict = await verify_action_artifact(
+            db,
+            action=await db.get(ChatLogicalAction, action_id),
+            user=_DEV_USER,
+        )
+
+    assert verdict["status"] == "matched"
+    assert verdict["operation"] == "warehouse.update_item"
+    assert verdict["artifact_type"] == "inventory_item"
+    assert verdict["artifact_id"] == str(item_id)
+    assert verdict["artifact_version"] == committed["updated_at"]
+    assert verdict["artifact_hash"] == verdict["expected_artifact_hash"]
+    assert verdict["scope"] == "inventory_item_database_snapshot"
+    assert verdict["evidence_source"] == "database:inventory_items"
+    assert validate_artifact_verdict(verdict) is True
+    assert verdict["can_resume"] is False
+
+
+@pytest.mark.asyncio
+async def test_unsupported_external_recipient_fails_closed_without_following_reference(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    payload, _, action_id, _, key = await proposal(factory)
+    await deliver(factory, payload, key)
+    unsupported_request = {
+        "name": "external_recipient",
+        "arguments": {"action": "write", "reference": "https://untrusted.invalid/effect"},
+    }
+    async with factory() as db:
+        action = await db.get(ChatLogicalAction, action_id)
+        receipt = await db.scalar(
+            select(ActionReceipt).where(ActionReceipt.logical_action_id == action_id)
+        )
+        action.request = unsupported_request
+        action.request_digest = digest(unsupported_request)
+        receipt.operation = "external_recipient.write"
+        receipt.request_digest = action.request_digest
+        await db.commit()
+    async with factory() as db:
+        verdict = await verify_action_artifact(
+            db,
+            action=await db.get(ChatLogicalAction, action_id),
+            user=_DEV_USER,
+        )
+    assert verdict["status"] == "inconclusive"
+    assert verdict["reason"] == "unsupported_recipient_artifact"
+    assert verdict["operation"] == "external_recipient.write"
+    assert verdict["external_reference"] == "https://untrusted.invalid/effect"
+
+
+@pytest.mark.asyncio
+async def test_stale_artifact_and_forged_verdict_do_not_prove_current_state(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    payload, _, action_id, _, key = await proposal(factory)
+    committed = await deliver(factory, payload, key)
+    async with factory() as db:
+        action = await db.get(ChatLogicalAction, action_id)
+        original = await verify_action_artifact(db, action=action, user=_DEV_USER)
+    assert original["status"] == "matched"
+
+    forged = {**original, "artifact_hash": "0" * 64}
+    assert validate_artifact_verdict(forged) is False
+
+    async with factory() as db:
+        task = await db.get(AgentTask, uuid.UUID(committed["id"]))
+        task.status = "created"
+        await db.commit()
+    async with factory() as db:
+        current = await verify_action_artifact(
+            db,
+            action=await db.get(ChatLogicalAction, action_id),
+            user=_DEV_USER,
+        )
+    assert current["status"] == "changed"
+    assert current["artifact_version"] != original["artifact_version"]
+    assert current["artifact_hash"] != original["artifact_hash"]
+    assert verdict_proves_current_artifact(original, current) is False
+
+
+@pytest.mark.asyncio
+async def test_unavailable_recipient_and_missing_descriptor_version_are_inconclusive(
+    test_engine, monkeypatch
+):
+    from app.domain import artifact_verification
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    payload, _, action_id, item_id, key = await warehouse_update_proposal(factory)
+    await deliver_warehouse(factory, item_id, payload, key)
+
+    async def unavailable(*_args, **_kwargs):
+        raise SQLAlchemyError("recipient unavailable")
+
+    monkeypatch.setattr(artifact_verification, "_recipient_snapshot", unavailable)
+    async with factory() as db:
+        unavailable_verdict = await verify_action_artifact(
+            db,
+            action=await db.get(ChatLogicalAction, action_id),
+            user=_DEV_USER,
+        )
+    assert unavailable_verdict["status"] == "inconclusive"
+    assert unavailable_verdict["reason"] == "recipient_unavailable"
+
+    monkeypatch.undo()
+    async with factory() as db:
+        descriptor = await db.scalar(
+            select(WorkArtifact).where(
+                WorkArtifact.metadata_["logical_action_id"].as_string() == str(action_id)
+            )
+        )
+        metadata = dict(descriptor.metadata_)
+        metadata.pop("descriptor_version")
+        descriptor.metadata_ = metadata
+        await db.commit()
+    async with factory() as db:
+        missing_version = await verify_action_artifact(
+            db,
+            action=await db.get(ChatLogicalAction, action_id),
+            user=_DEV_USER,
+        )
+    assert missing_version["status"] == "inconclusive"
+    assert missing_version["reason"] == "artifact_descriptor_version_missing"
+
+
+@pytest.mark.asyncio
+async def test_external_reference_is_opaque_text_and_match_does_not_complete_other_criteria(
+    test_engine,
+):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    payload, run, action_id, _, key = await proposal(factory)
+    await deliver(factory, payload, key)
+    reference = "https://untrusted.invalid/do-not-fetch"
+    async with factory() as db:
+        descriptor = await db.scalar(
+            select(WorkArtifact).where(
+                WorkArtifact.metadata_["logical_action_id"].as_string() == str(action_id)
+            )
+        )
+        descriptor.uri = reference
+        criterion = WorkAcceptanceCriterion(
+            work_order_id=run["work_order_id"],
+            criterion_key="other_required_result",
+            description="A separate result is still required",
+            kind="semantic",
+            required=True,
+            predicate={},
+        )
+        db.add(criterion)
+        await db.commit()
+        before_evidence = await db.scalar(
+            select(func.count())
+            .select_from(WorkEvidence)
+            .where(WorkEvidence.work_order_id == run["work_order_id"])
+        )
+
+    async with factory() as db:
+        verdict = await verify_action_artifact(
+            db,
+            action=await db.get(ChatLogicalAction, action_id),
+            user=_DEV_USER,
+        )
+        order = await db.get(WorkOrder, run["work_order_id"])
+        criterion = await db.scalar(
+            select(WorkAcceptanceCriterion).where(
+                WorkAcceptanceCriterion.work_order_id == order.id,
+                WorkAcceptanceCriterion.criterion_key == "other_required_result",
+            )
+        )
+        after_evidence = await db.scalar(
+            select(func.count())
+            .select_from(WorkEvidence)
+            .where(WorkEvidence.work_order_id == order.id)
+        )
+
+    assert verdict["status"] == "matched"
+    assert verdict["external_reference"] == reference
+    assert order.status != "completed"
+    assert criterion.status == "pending"
+    assert criterion.verdict is None
+    assert after_evidence == before_evidence
+
+
+@pytest.mark.asyncio
+async def test_artifact_descriptor_migration_backfills_supported_receipts_only(test_engine):
+    import importlib.util
+    from pathlib import Path
+
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy import text
+
+    path = (
+        Path(__file__).parents[1]
+        / "migrations/versions/20260922_0002_artifact_verification_descriptors.py"
+    )
+    spec = importlib.util.spec_from_file_location("artifact_descriptor_migration", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    schema = "artifact_descriptor_" + uuid.uuid4().hex
+    order_id, step_id, attempt_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    receipts = [
+        (uuid.uuid4(), "agent_control.task_propose"),
+        (uuid.uuid4(), "warehouse.update_item"),
+        (uuid.uuid4(), "unreviewed.external_write"),
+    ]
+
+    async with test_engine.begin() as conn:
+        await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+        await conn.execute(text(f'SET LOCAL search_path TO "{schema}"'))
+        await conn.execute(text("CREATE TABLE work_orders (id UUID PRIMARY KEY)"))
+        await conn.execute(
+            text(
+                "CREATE TABLE work_steps (id UUID PRIMARY KEY, "
+                "work_order_id UUID NOT NULL REFERENCES work_orders(id))"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE TABLE work_step_attempts (id UUID PRIMARY KEY, "
+                "step_id UUID NOT NULL REFERENCES work_steps(id))"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE TABLE action_receipts (logical_action_id UUID PRIMARY KEY, "
+                "work_order_id UUID NOT NULL REFERENCES work_orders(id), attempt_id UUID NOT NULL "
+                "REFERENCES work_step_attempts(id), operation VARCHAR(200) NOT NULL, "
+                "artifact_id VARCHAR(300) NOT NULL, artifact_revision VARCHAR(300) NOT NULL, "
+                "response_digest VARCHAR(64) NOT NULL, receipt_version SMALLINT NOT NULL, "
+                "created_at TIMESTAMPTZ NOT NULL)"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE TABLE work_artifacts (id UUID PRIMARY KEY, work_order_id UUID NOT NULL, "
+                "step_id UUID, artifact_type VARCHAR(50) NOT NULL, name VARCHAR(500) NOT NULL, "
+                "uri TEXT, content_hash VARCHAR(128), content_type VARCHAR(150), size_bytes INT, "
+                "metadata JSON NOT NULL, created_at TIMESTAMPTZ NOT NULL, "
+                "updated_at TIMESTAMPTZ NOT NULL)"
+            )
+        )
+        await conn.execute(text("INSERT INTO work_orders (id) VALUES (:id)"), {"id": order_id})
+        await conn.execute(
+            text("INSERT INTO work_steps (id, work_order_id) VALUES (:id, :order_id)"),
+            {"id": step_id, "order_id": order_id},
+        )
+        await conn.execute(
+            text("INSERT INTO work_step_attempts (id, step_id) VALUES (:id, :step_id)"),
+            {"id": attempt_id, "step_id": step_id},
+        )
+        for action_id, operation in receipts:
+            await conn.execute(
+                text(
+                    "INSERT INTO action_receipts "
+                    "(logical_action_id, work_order_id, attempt_id, operation, artifact_id, "
+                    "artifact_revision, response_digest, receipt_version, created_at) VALUES "
+                    "(:action_id, :order_id, :attempt_id, :operation, :artifact_id, "
+                    ":revision, :hash, 1, now())"
+                ),
+                {
+                    "action_id": action_id,
+                    "order_id": order_id,
+                    "attempt_id": attempt_id,
+                    "operation": operation,
+                    "artifact_id": str(uuid.uuid4()),
+                    "revision": datetime.now(UTC).isoformat(),
+                    "hash": uuid.uuid4().hex * 2,
+                },
+            )
+
+        def upgrade(sync):
+            with Operations.context(MigrationContext.configure(sync)):
+                module.upgrade()
+
+        def downgrade(sync):
+            with Operations.context(MigrationContext.configure(sync)):
+                module.downgrade()
+
+        await conn.run_sync(upgrade)
+        rows = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT artifact_type, step_id, content_hash, metadata "
+                        "FROM work_artifacts ORDER BY artifact_type"
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+        assert [row.artifact_type for row in rows] == ["agent_task", "inventory_item"]
+        assert all(row.step_id == step_id for row in rows)
+        assert all(len(row.content_hash) == 64 for row in rows)
+        assert all(row.metadata["descriptor_version"] == 1 for row in rows)
+        assert all(row.metadata["migration"] == "20260922_0002" for row in rows)
+
+        await conn.run_sync(downgrade)
+        assert await conn.scalar(text("SELECT count(*) FROM work_artifacts")) == 0
+        await conn.rollback()
 
 
 @pytest.mark.asyncio

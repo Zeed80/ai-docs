@@ -760,22 +760,29 @@ focused/317 expanded; независимо: 317 passed; Ruff/format/diff clean. 
 
 ### E09 — Реестр независимых проверок артефактов
 
-**Статус:** TODO. **После:** E08.
-**Файлы:** receipts, `WorkArtifact`, verifier в `tasks/work_orders.py`;
-создать модуль `domain/artifact_verification.py` при отсутствии аналога.
+**Статус:** SCOPED COMPLETE / REVIEWED. **После:** E08. **Далее:** E10.
+**Файлы:** `domain/artifact_verification.py`, receipts, `WorkArtifact`, migration
+`20260922_0002`, route verification и focused tests.
 
-1. Реестр по явному типу артефакта/операции, без LLM выбора произвольного callback.
-2. Verdict содержит verifier version, artifact ID и version/hash, scope, время,
-   источник evidence. Проверка чужого owner запрещена до чтения содержимого.
-3. Изменился артефакт — прежний verdict не доказывает новую версию.
-4. Внешние references остаются текстом, пока для них нет безопасного адаптера;
-   произвольный URL не скачивать из-за просьбы модели или человека.
-5. Отсутствие записи у внешнего получателя — inconclusive, кроме отдельно
-   доказанного полного авторитетного журнала с завершённым временным окном.
+Реестр статичен, без LLM-selected callback, и содержит ровно
+`agent_control.task_propose` → `agent_task` и `warehouse.update_item` →
+`inventory_item`. Descriptor `WorkArtifact` с версией записывается в той же
+транзакции, что и receipt; migration backfill-ит только эти review-approved пары.
+Owner проверяется до receipt/descriptor/recipient content. Verdict несёт version
+verifier, artifact ID и version/hash, scope, observed time, evidence source и
+HMAC integrity binding.
 
-**Тесты:** stale artifact, forged verdict, unavailable recipient, missing version,
-Alice/Bob; объект matched не завершает всю работу с другими критериями.
-**Gate A2:** review до использования verdict для возобновления.
+Stale artifact и forged verdict не доказывают current state; missing version,
+unavailable и unsupported результаты fail-closed либо `inconclusive`. Внешняя
+reference — только opaque text, URL не dereference-ится и не fetch-ится. Matched
+один artifact не меняет criteria/evidence и не завершает `WorkOrder`, пока другие
+required criteria не пройдены. `can_replay` и `can_resume` остаются `false`.
+
+**Проверка:** stale, forged, unavailable, missing version, Alice/Bob, unsupported
+external, opaque reference, other required criterion и migration roundtrip.
+Исполнитель: 47 focused / 175 expanded; независимо: 147 passed. Один Alembic
+head; Ruff/format/diff clean. **Gate A2:** E09 не даёт verdict-у право resume,
+replay или completion; E10 определяет такой контракт отдельно.
 
 ### E10 — Контракт продолжения после проверенного commit
 
