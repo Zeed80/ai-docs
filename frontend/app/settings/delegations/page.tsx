@@ -16,7 +16,8 @@ interface Grant {
   revoked_at: string | null;
 }
 
-const API = `${getApiBaseUrl()}/api/agent/delegations`;
+const API = getApiBaseUrl();
+const DELEGATIONS = `${API}/api/agent/delegations`;
 
 async function checked(response: Response) {
   const data = await response.json();
@@ -37,14 +38,14 @@ export default function DelegationsPage() {
   const [loading, setLoading] = useState(true);
 
   const reload = useCallback(async () => {
-    const data = await checked(await fetch(API, { credentials: "include" }));
+    const data = await checked(await fetch(DELEGATIONS, { credentials: "include" }));
     setGrants(data.items);
   }, []);
 
   useEffect(() => {
     Promise.all([
       reload(),
-      fetch(`${API}/actions`, { credentials: "include" }).then(checked).then(data => setActions(data.items)),
+      fetch(`${DELEGATIONS}/actions`, { credentials: "include" }).then(checked).then(data => setActions(data.items)),
     ]).catch(e => setError(String(e.message ?? e))).finally(() => setLoading(false));
   }, [reload]);
 
@@ -57,7 +58,7 @@ export default function DelegationsPage() {
       if (!scope || Array.isArray(scope) || typeof scope !== "object" || !Object.keys(scope).length) {
         throw new Error("Укажите непустой JSON-объект с точными значениями аргументов.");
       }
-      await checked(await mutFetch(API, {
+      await checked(await mutFetch(DELEGATIONS, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title, actions: [action], constraints: scope, max_actions: limit, duration_hours: hours }),
       }));
@@ -72,7 +73,7 @@ export default function DelegationsPage() {
     setBusy(true);
     setError("");
     try {
-      await checked(await mutFetch(`${API}/${id}`, { method: "DELETE" }));
+      await checked(await mutFetch(`${DELEGATIONS}/${id}`, { method: "DELETE" }));
       await reload();
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }

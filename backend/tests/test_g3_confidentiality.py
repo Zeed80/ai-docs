@@ -65,14 +65,17 @@ async def test_capability_dispatch_audits_reason(client, monkeypatch):
     async def fake_audit(capability, action, reason, request):
         audited.append((capability, action, reason))
 
-    real_proxy = cr._proxy
-
     async def spy_proxy(method, path_tpl, path_params, body, base_url, **kwargs):
         # **kwargs: _proxy has grown acting_user / idempotency_key since this
         # spy was written, and a positional-only signature made the test fail
         # with a TypeError that looked like a dispatcher bug.
+        #
+        # The seam is stubbed rather than forwarded: an unreachable downstream is
+        # now an honest 502 (it used to be a 200 wrapping {"error": ...}), and
+        # this test is about what the dispatcher AUDITS and FORWARDS, not about
+        # whether a backend happens to be listening during the test run.
         proxied.append(dict(body))
-        return await real_proxy(method, path_tpl, path_params, body, base_url, **kwargs)
+        return {"items": [], "total": 0}
 
     monkeypatch.setattr(cr, "_audit_tool_call", fake_audit)
     monkeypatch.setattr(cr, "_proxy", spy_proxy)

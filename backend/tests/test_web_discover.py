@@ -469,12 +469,15 @@ async def test_computer_use_approval_required_also_notifies_owner_about_the_gran
         step_id, attempt_id = step.id, attempt.id
         await db.commit()
 
-    with patch(
-        "app.tasks.work_orders._execute_step_kind",
-        new=AsyncMock(
-            side_effect=ApprovalRequiredError("computer_use", "web_discover", {"queries": ["x"]})
-        ),
-    ):
+    # A durable approval is bound to capability+action+EXACT arguments, and a
+    # mismatch is refused before any notification is considered. The real
+    # gateway raises with the arguments the step actually sent (the runtime adds
+    # `work_order_id` to them), so the stub must do the same — a hand-written
+    # argument dict here only tested the mismatch path.
+    async def _needs_approval(kind, input_data, timeout_seconds, **kwargs):
+        raise ApprovalRequiredError("computer_use", "web_discover", dict(input_data))
+
+    with patch("app.tasks.work_orders._execute_step_kind", new=_needs_approval):
         result = await execute_claimed_step(
             step_id, attempt_id, schedule_verification=False, session_factory=factory
         )

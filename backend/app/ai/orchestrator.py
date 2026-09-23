@@ -401,6 +401,41 @@ class AgentOrchestrator:
         self._tier = tier
         self._turn_grounding = "none"  # reset per turn; router sets it below
 
+        # Phase 3 — if the user is correcting the result of a just-replayed recipe,
+        # penalise that recipe so the fail-rate retire logic demotes it.
+        await self._penalise_recipe_on_correction(content)
+
+        # Learned recipes are deterministic plans. Check them before the turn
+        # router so trusted repeated tasks run with 0 planner calls.
+        from app.ai.turn_router import safe_default_decision
+
+        recipe_result = await self._try_recipe_for_turn(
+            content,
+            config,
+            turn_started_at,
+            safe_default_decision(content),
+        )
+        if recipe_result is True:
+            return
+        # A draft (or below-replay-score) recipe is not executed — it travels on
+        # as a worker hint. Dropping it here silently un-learned every draft.
+        recipe_hint = recipe_result or ""
+
+        # Secretary direct path: flow-status questions are answered by the
+        # front-agent itself from live data — no planning, no dispatch, 0 LLM.
+        if _is_secretary_query(content) and await self._answer_flow_status_directly(
+            content, config, turn_started_at
+        ):
+            return
+
+        # Spec-table edits: a recognised Russian edit command on an existing
+        # spec table («добавь столбец с НДС перед суммой», «отсортируй по…»,
+        # «покажи только…») is applied deterministically — 0 LLM, мгновенно.
+        if await self._try_sheet_edit_directly(content, config, turn_started_at):
+            return
+        if await self._try_spec_table_patch_directly(content, config, turn_started_at):
+            return
+
         decision = await self._decide_turn(content, config)
         if self._route_unavailable:
             await self._outer_send(
@@ -413,7 +448,9 @@ class AgentOrchestrator:
             return
         self._turn_grounding = decision.grounding
         plan = _decision_to_plan(decision, content)
-        await self._run_planned_turn(content, plan, config, turn_started_at, reasoning_mode)
+        await self._run_planned_turn(
+            content, plan, config, turn_started_at, reasoning_mode, recipe_hint
+        )
 
     async def _run_planned_turn(
         self,
@@ -703,8 +740,27 @@ class AgentOrchestrator:
             if esc is not None:
                 decision, source = esc, f"escalated_{esc_source}"
 
+        # A DEFAULTED shell (specialist / conf 0.0 / no tools) means the model
+        # ignored the schema — it is NOT a real classification and must not be
+        # dispatched as a blind chat specialist. Rescue an obvious table request
+        # deterministically (catalog-grounded), else treat as unavailable and
+        # degrade to the heuristic planner.
         if decision is not None and turn_router._looks_defaulted(decision):
-            decision = None
+            from app.domain.table_spec import is_spec_table_request
+
+            if is_spec_table_request(content):
+                decision = decision.model_copy(
+                    update={
+                        "intent": "analytical_table",
+                        "output_channel": "workspace",
+                        "grounding": "structured",
+                        "confidence": 0.5,
+                    }
+                )
+                source = "rescued_table"
+                logger.info("router_defaulted_rescued_table", content=content[:80])
+            else:
+                decision = None  # → heuristic planner below
 
         self._route_unavailable = decision is None
         if decision is None:
@@ -3927,8 +3983,16 @@ def _decision_to_plan(decision: TurnDecision, content: str) -> OrchestratorPlan:
     path reuses the exact same machinery as the legacy planner path.
     """
     workspace_required = decision.output_channel == "workspace"
-    canvas_id = decision.workspace_canvas_id if workspace_required else None
+    canvas_id: str | None = None
     workspace_filters: dict[str, str] = {}
+    if workspace_required:
+        # Pick the specialised canvas from the request (grouped invoice items,
+        # by-supplier, the open table, …) instead of always the generic
+        # spec-table — the LLM already decided this is a table; we only choose
+        # which surface. An explicit canvas from the router wins; unmatched
+        # requests still fall back to agent:spec-table.
+        canvas_id, workspace_filters = _resolve_workspace_canvas(content)
+        canvas_id = decision.workspace_canvas_id or canvas_id
     recommended_skills = [
         f"{r.capability}.{r.action}" if r.action else r.capability for r in decision.recommended
     ]

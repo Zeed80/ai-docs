@@ -189,10 +189,25 @@ async def test_secretary_falls_through_when_snapshot_unavailable(monkeypatch):
 
     monkeypatch.setattr(orchestrator_module, "get_flow_snapshot", no_snapshot)
 
-    async def _raise_ai(request, *a, **k):
-        raise RuntimeError("llm offline")
+    # The orchestrator no longer degrades to a keyword heuristic when the router
+    # is down — an unavailable planner stops the turn. This test is about the
+    # secretary declining, so the router must succeed to reach dispatch.
+    from app.ai import turn_router
 
-    monkeypatch.setattr(orchestrator_module.ai_router, "run", _raise_ai)
+    async def _route(text, **kwargs):
+        return (
+            turn_router.TurnDecision(
+                intent="specialist",
+                role="data_analyst",
+                output_channel="chat",
+                grounding="none",
+                goal=text[:200],
+                confidence=0.9,
+            ),
+            "test",
+        )
+
+    monkeypatch.setattr(turn_router, "route_turn", _route)
 
     sent: list[dict] = []
 

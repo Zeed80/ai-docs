@@ -210,7 +210,27 @@ async def client(db_session: AsyncSession, monkeypatch) -> AsyncIterator[AsyncCl
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
+    # Every internal session shares this test's single connection (above). A
+    # background task still holding it when `db_session` rolls back makes asyncpg
+    # raise "another operation is in progress" at teardown — an error that names
+    # the fixture, not the endpoint that spawned the task. Let those tasks finish
+    # first; whatever is still running after the grace period gets cancelled.
+    await _drain_background_tasks()
     app.dependency_overrides.clear()
+
+
+async def _drain_background_tasks(timeout: float = 5.0) -> None:
+    import asyncio
+
+    current = asyncio.current_task()
+    pending = [t for t in asyncio.all_tasks() if t is not current and not t.done()]
+    if not pending:
+        return
+    done, still_running = await asyncio.wait(pending, timeout=timeout)
+    for task in still_running:
+        task.cancel()
+    if still_running:
+        await asyncio.gather(*still_running, return_exceptions=True)
 
 
 @pytest.fixture(autouse=True)

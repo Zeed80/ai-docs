@@ -1033,12 +1033,18 @@ async def _authorize_memory_scope(scope, session_id, user, db) -> None:
     if session_id:
         from app.db.models import ChatSession
 
+        # A session id is an opaque episodic tag, not proof of a persisted chat.
+        # The agent loop mints a fresh uuid4 per run and never stores a
+        # ChatSession row for it, so demanding one here 403'd every memory write
+        # the agent makes. Ownership is enforced where it can leak: a tag that
+        # DOES name a stored session must belong to the caller. A tag that names
+        # nothing (or is not a UUID at all) reaches no one else's data.
         try:
             parsed = uuid.UUID(str(session_id))
-        except ValueError as exc:
-            raise HTTPException(403, "Invalid memory session") from exc
+        except ValueError:
+            return
         session = await db.get(ChatSession, parsed)
-        if session is None or session.user_key != user.sub:
+        if session is not None and session.user_key != user.sub:
             raise HTTPException(403, "Memory session is not accessible")
 
 

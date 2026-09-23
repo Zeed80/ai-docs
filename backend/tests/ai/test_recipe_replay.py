@@ -95,6 +95,32 @@ def _config() -> BuiltinAgentConfig:
     )
 
 
+def _healthy_router(monkeypatch):
+    """Give the turn a real routing decision.
+
+    The orchestrator no longer falls back to a keyword heuristic when the router
+    is down — an unavailable planner stops the turn (`model_unavailable`). These
+    tests are about what happens AFTER a recipe declines, so the router must
+    succeed for the turn to reach dispatch at all.
+    """
+    from app.ai import turn_router
+
+    async def route(content, **kwargs):
+        return (
+            turn_router.TurnDecision(
+                intent="specialist",
+                role="data_analyst",
+                output_channel="chat",
+                grounding="none",
+                goal=content[:200],
+                confidence=0.9,
+            ),
+            "test",
+        )
+
+    monkeypatch.setattr(turn_router, "route_turn", route)
+
+
 @pytest.mark.recipes
 @pytest.mark.asyncio
 async def test_active_recipe_replays_without_planning(monkeypatch):
@@ -166,10 +192,7 @@ async def test_failed_replay_falls_back_to_dispatch(monkeypatch):
     monkeypatch.setattr(recipes_module, "find_recipe", fake_find)
     monkeypatch.setattr(recipes_module, "replay", fake_replay)
 
-    async def _raise_ai(request, *a, **k):
-        raise RuntimeError("planner offline → heuristic")
-
-    monkeypatch.setattr(orchestrator_module.ai_router, "run", _raise_ai)
+    _healthy_router(monkeypatch)
 
     sent: list[dict] = []
 
@@ -214,10 +237,7 @@ async def test_draft_recipe_only_hints(monkeypatch):
     monkeypatch.setattr(recipes_module, "find_recipe", fake_find)
     monkeypatch.setattr(recipes_module, "replay", fail_replay)
 
-    async def _raise_ai(request, *a, **k):
-        raise RuntimeError("heuristic fallback")
-
-    monkeypatch.setattr(orchestrator_module.ai_router, "run", _raise_ai)
+    _healthy_router(monkeypatch)
 
     hints: list[str] = []
 
