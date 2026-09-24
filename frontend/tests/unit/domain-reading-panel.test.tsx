@@ -67,6 +67,9 @@ describe("DomainReadingPanel — строительные и схемы (X5)", (
               spans: 4,
               markers: 7,
               walls_measured: 49,
+              openings_measured: 5,
+              doors: 2,
+              windows: 3,
             },
           },
         }}
@@ -74,7 +77,7 @@ describe("DomainReadingPanel — строительные и схемы (X5)", (
     );
     expect(
       screen.getByText(
-        "Замер по листу: масштаб 8.6 мм/px по 4 звеньям цепочки между осями (7 маркеров), стен измерено 49",
+        "Замер по листу: масштаб 8.6 мм/px по 4 звеньям цепочки между осями (7 маркеров), стен измерено 49; проёмов 5 (дверей 2, окон 3)",
       ),
     ).toBeTruthy();
   });

@@ -161,3 +161,79 @@ def test_a_wall_the_measurement_missed_is_not_refuted_and_an_extra_one_is_added(
     assert verdicts[1]["kind"] == "construction_wall_found"
     assert verdicts[1]["path"] == "walls[1]"
     assert len(walls) == 2 and walls[1]["thickness_mm"] == 120.0
+
+
+def test_doors_and_windows_on_a_generated_plan_are_found_with_their_kind():
+    """Ф7.3: проём — разрыв стены; дверь узнаётся по дуге открывания, окно —
+    по остеклению (тонкая пара линий в разрыве). Эталон — по построению."""
+    from app.ai.construction_walls import find_openings, find_walls
+    from app.ai.verify_corpus.construction_plan import random_plan
+
+    image, truth = random_plan(3)
+    gray = np.asarray(image)
+    found = find_openings(gray, find_walls(gray, truth.mm_per_px), truth.mm_per_px)
+
+    expected = sorted((item["axis"], item["kind"], round(item["start"])) for item in truth.openings)
+    got = sorted((item["gap"].axis, item["kind"], round(item["gap"].start)) for item in found)
+    assert [(axis, kind) for axis, kind, _ in got] == [(axis, kind) for axis, kind, _ in expected]
+    assert all(abs(a[2] - b[2]) <= 4 for a, b in zip(got, expected, strict=True))
+
+
+def test_the_solid_pier_between_two_windows_is_not_an_opening():
+    """Остекления двух окон одной стены — «тонкие стены» на одной осевой;
+    разрыв между ними — глухой простенок, его закрывает сама стена (22
+    лишних «проёма» на корпусе до правила)."""
+    from app.ai.construction_walls import WallSegment, wall_gaps
+
+    outer = [
+        WallSegment("h", 100.0, 0.0, 200.0, 60.0),
+        WallSegment("h", 100.0, 400.0, 700.0, 60.0),
+        WallSegment("h", 100.0, 900.0, 1100.0, 60.0),
+    ]
+    glazing = [
+        WallSegment("h", 100.0, 200.0, 400.0, 20.0),
+        WallSegment("h", 100.0, 700.0, 900.0, 20.0),
+    ]
+
+    gaps = wall_gaps(outer + glazing, min_gap=60.0, max_gap=400.0)
+
+    assert sorted((gap.start, gap.end) for gap in gaps) == [(200.0, 400.0), (700.0, 900.0)]
+
+
+def test_a_plan_wall_drawn_on_its_boundary_keeps_its_thickness():
+    """Генератор рисовал контур внутрь стены: перегородка 120 мм мерилась как
+    88 — ниже порога стены, и её двери пропадали (5 из 67)."""
+    from app.ai.construction_walls import find_walls
+    from app.ai.verify_corpus.construction_plan import random_plan
+
+    image, truth = random_plan(7)
+    walls = find_walls(np.asarray(image), truth.mm_per_px)
+
+    assert any(
+        wall.axis == "v" and abs(wall.position - 975) <= 8 and 100 <= wall.thickness * 8 <= 140
+        for wall in walls
+    )
+
+
+def test_the_majority_counts_the_links_that_could_not_be_read():
+    """Тот же скан не в масштабе, другие маркеры: прочитались лишь два звена
+    слева (оба 3000) из семи — «два из двух» приняли масштаб."""
+    spans = [(283.2, 3000.0), (281.3, 3000.0)]
+
+    assert scale_from_spans(spans) == 10.629
+    assert scale_from_spans(spans, attempted=7) is None
+    assert scale_from_spans(spans, attempted=3) == 10.629
+
+
+def test_axis_markers_are_found_on_a_plan_with_hatched_walls():
+    """Хаф по плану со штриховкой стен: 33 маркера из 145 при 342 лишних.
+    Маркер — кольцо с круглой дырой, штриховка круглых дыр не даёт."""
+    from app.ai.verify_corpus.construction_plan import random_plan
+
+    image, truth = random_plan(3)
+    markers = axis_markers(np.asarray(image))
+
+    assert len(markers) == len(truth.markers)
+    for x, y, radius in truth.markers:
+        assert any(abs(m[0] - x) <= 3 and abs(m[1] - y) <= 3 for m in markers)
+        assert any(abs(m[2] - radius) <= 3 for m in markers)

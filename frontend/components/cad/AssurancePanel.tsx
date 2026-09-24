@@ -36,6 +36,7 @@ const VERIFY_KINDS = new Set([
   // Строительный план (Ф7): стены, измеренные по листу.
   "construction_wall",
   "construction_wall_found",
+  "construction_opening",
 ]);
 
 /** Вырез листа вокруг элемента проверки с обведённой рамкой (Ф9). Индекс —

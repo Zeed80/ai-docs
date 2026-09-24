@@ -200,6 +200,107 @@ def truth_in_px(truth, to_px, unit_px: float):
     return converted
 
 
+def truth_openings(msp, walls, scale_mm: float) -> list[dict]:
+    """Проёмы эталона: разрывы стен из DXF; дверь — дуга ARC радиусом в
+    ширину проёма с центром у одного из его краёв (петля полотна)."""
+    import math
+
+    from app.ai.construction_walls import MAX_OPENING_MM, MIN_OPENING_MM, wall_gaps
+
+    arcs = [
+        (float(e.dxf.center.x), float(e.dxf.center.y), float(e.dxf.radius))
+        for e in msp.query("ARC")
+    ]
+    result = []
+    for gap in wall_gaps(
+        walls, min_gap=MIN_OPENING_MM / scale_mm, max_gap=MAX_OPENING_MM / scale_mm
+    ):
+        door = False
+        for edge in (gap.start, gap.end):
+            hinge = (edge, gap.position) if gap.axis == "h" else (gap.position, edge)
+            for x, y, radius in arcs:
+                if abs(radius - gap.width) > 0.15 * gap.width:
+                    continue
+                if math.hypot(x - hinge[0], y - hinge[1]) <= gap.thickness:
+                    door = True
+        result.append({"gap": gap, "door": door})
+    return result
+
+
+def openings_in_px(openings, to_px, unit_px: float) -> list[dict]:
+    """Проёмы эталона — в пикселях растра, тем же преобразованием, что стены."""
+    from app.ai.construction_walls import OpeningGap, WallSegment
+
+    converted = []
+    for item in openings:
+        gap = item["gap"]
+        wall = truth_in_px(
+            [WallSegment(gap.axis, gap.position, gap.start, gap.end, gap.thickness)],
+            to_px,
+            unit_px,
+        )[0]
+        converted.append(
+            {
+                "gap": OpeningGap(wall.axis, wall.position, wall.start, wall.end, wall.thickness),
+                "door": item["door"],
+            }
+        )
+    return converted
+
+
+def score_openings(truth: list[dict], found: list[dict]) -> dict:
+    """Проёмы: найдено по месту и ширине; двери — верно ли узнана дуга."""
+    pool = list(found)
+    hits = doors_right = doors_truth = doors_false = 0
+    for item in truth:
+        gap = item["gap"]
+        doors_truth += bool(item["door"])
+        match = None
+        for candidate in pool:
+            other = candidate["gap"]
+            if other.axis != gap.axis:
+                continue
+            if abs(other.position - gap.position) > max(_POSITION_SHARE * gap.thickness, 2.0):
+                continue
+            tolerance = max(0.25 * gap.width, 3.0)
+            if abs(other.start - gap.start) > tolerance or abs(other.end - gap.end) > tolerance:
+                continue
+            match = candidate
+            break
+        if match is None:
+            continue
+        pool.remove(match)
+        hits += 1
+        if item["door"] and match["door"]:
+            doors_right += 1
+        if match["door"] and not item["door"]:
+            doors_false += 1
+    return {
+        "truth": len(truth),
+        "found": len(found),
+        "hits": hits,
+        "extra": len(pool),
+        "doors_truth": doors_truth,
+        "doors_right": doors_right,
+        "doors_false": doors_false + sum(1 for item in pool if item["door"]),
+    }
+
+
+def score_markers(truth, found) -> dict:
+    """Маркеры осей: найден ли кружок на месте эталонного (в радиус)."""
+    pool = list(found)
+    hits = 0
+    for x, y, radius in truth:
+        match = next(
+            (item for item in pool if abs(item[0] - x) <= radius and abs(item[1] - y) <= radius),
+            None,
+        )
+        if match is not None:
+            pool.remove(match)
+            hits += 1
+    return {"truth": len(truth), "found": len(found), "hits": hits, "extra": len(pool)}
+
+
 def score(truth, found) -> dict:
     """Сколько эталонных стен найдено и сколько найдено лишнего (всё в px)."""
     pool = list(found)
@@ -242,6 +343,8 @@ def main() -> int:
         action="store_true",
         help="масштаб — по растру: маркеры осей + число звена читает модель (как в продукте)",
     )
+    parser.add_argument("--openings", action="store_true", help="проёмы и двери (Ф7.3)")
+    parser.add_argument("--markers", action="store_true", help="маркеры осей (Ф7.1)")
     args = parser.parse_args()
 
     rows = []
@@ -262,6 +365,16 @@ def main() -> int:
                 continue
             truth = truth_walls(msp, scale_mm)
             image, to_px, unit_px = render_with_transform(doc, args.long_side)
+            markers = None
+            if args.markers:
+                import numpy as np
+
+                from app.ai.construction_axes import axis_markers as sheet_markers
+
+                markers = score_markers(
+                    [(*to_px(x, y), radius * unit_px) for x, y, radius in axis_markers(msp)],
+                    sheet_markers(np.asarray(image)),
+                )
             mm_per_px = scale_mm / unit_px
             measured_scale = None
             if args.live_scale:
@@ -280,12 +393,22 @@ def main() -> int:
                     continue
                 mm_per_px = measured_scale
             found = find_walls(image, mm_per_px)
+            openings = None
+            if args.openings:
+                from app.ai.construction_walls import find_openings
+
+                openings = score_openings(
+                    openings_in_px(truth_openings(msp, truth, scale_mm), to_px, unit_px),
+                    find_openings(image, found, mm_per_px),
+                )
             row = {
                 "sheet": dwg.stem,
                 "scale_mm_per_unit": scale_mm,
                 "mm_per_px": round(mm_per_px, 4),
                 "mm_per_px_truth": round(scale_mm / unit_px, 4),
                 "walls": score(truth_in_px(truth, to_px, unit_px), found),
+                **({"openings": openings} if openings is not None else {}),
+                **({"markers": markers} if markers is not None else {}),
                 "thickness_mm": sorted(
                     {round(wall.thickness * scale_mm / 10) * 10 for wall in truth}
                 ),
@@ -297,6 +420,26 @@ def main() -> int:
         for key in ("truth", "found", "hits", "extra")
     }
     print(json.dumps({"ИТОГ": total}, ensure_ascii=False))
+    if args.markers:
+        marker_total = {
+            key: sum(row.get("markers", {}).get(key, 0) for row in rows)
+            for key in ("truth", "found", "hits", "extra")
+        }
+        print(json.dumps({"МАРКЕРЫ": marker_total}, ensure_ascii=False))
+    if args.openings:
+        opening_total = {
+            key: sum(row.get("openings", {}).get(key, 0) for row in rows)
+            for key in (
+                "truth",
+                "found",
+                "hits",
+                "extra",
+                "doors_truth",
+                "doors_right",
+                "doors_false",
+            )
+        }
+        print(json.dumps({"ПРОЁМЫ": opening_total}, ensure_ascii=False))
     if args.out:
         args.out.write_text(
             json.dumps({"rows": rows, "total": total}, ensure_ascii=False, indent=1),

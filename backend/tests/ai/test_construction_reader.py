@@ -258,6 +258,18 @@ async def test_walls_come_from_the_sheet_measurement_not_from_the_model(monkeypa
                     "bbox_px": [1.0, 2.0, 3.0, 4.0],
                 }
             ],
+            "openings": [
+                {
+                    "kind": "door",
+                    "axis": "h",
+                    "width_mm": 900.0,
+                    "wall_thickness_mm": 380.0,
+                    "center_x_mm": 2000.0,
+                    "center_y_mm": 0.0,
+                    "door": {"hinge": "start", "side": 1, "coverage": 0.9},
+                    "bbox_px": [5.0, 6.0, 7.0, 8.0],
+                }
+            ],
         }
 
     monkeypatch.setattr(construction_walls, "measure_plan", _measure)
@@ -277,5 +289,11 @@ async def test_walls_come_from_the_sheet_measurement_not_from_the_model(monkeypa
     assert wall.material == "кирпич" and wall.load_bearing is True
     assert report["measurement"]["walls_measured"] == 1
     assert report["measurement"]["mm_per_px"] == 8.6
-    assert [item["status"] for item in report["verifications"]] == ["confirmed"]
+    assert [item["kind"] for item in report["verifications"]] == [
+        "construction_wall",
+        "construction_opening",
+    ]
+    assert report["measurement"]["doors"] == 1
+    assert report["verifications"][1]["measured"]["width_mm"] == 900.0
+    assert report["verifications"][1]["evidence_bbox_px"] == [5.0, 6.0, 7.0, 8.0]
     assert report["verifications"][0]["evidence_bbox_px"] == [1.0, 2.0, 3.0, 4.0]

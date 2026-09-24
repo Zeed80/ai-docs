@@ -212,11 +212,43 @@ async def measure_plan(image_bytes: bytes, *, ask: Any = None) -> dict[str, Any]
     sheet = Image.open(io.BytesIO(image_bytes)).convert("L")
     markers = scale["markers"]
     origin = (min(item[0] for item in markers), max(item[1] for item in markers))
-    walls = find_walls(np.asarray(sheet), float(scale["mm_per_px"]))
+    mm_per_px = float(scale["mm_per_px"])
+    gray = np.asarray(sheet)
+    walls = find_walls(gray, mm_per_px)
+    openings = find_openings(gray, walls, mm_per_px)
+    # Остекление окна замер стен принял за тонкую стену — это не стена.
+    glazing = [item["glazing"] for item in openings if item["glazing"] is not None]
+    walls = [wall for wall in walls if wall not in glazing]
     return {
         **scale,
         "origin_px": [round(value, 1) for value in origin],
-        "walls": walls_as_read(walls, mm_per_px=float(scale["mm_per_px"]), origin_px=origin),
+        "walls": walls_as_read(walls, mm_per_px=mm_per_px, origin_px=origin),
+        "openings": [
+            opening_as_read(item, mm_per_px=mm_per_px, origin_px=origin) for item in openings
+        ],
+    }
+
+
+def opening_as_read(
+    item: dict[str, Any], *, mm_per_px: float, origin_px: tuple[float, float]
+) -> dict[str, Any]:
+    """Проём в координатах плана: вид, ширина, середина, толщина стены.
+
+    Высоты проёма на плане нет (она в экспликации или на разрезе), поэтому
+    в модель здания проём не встраивается — только в отчёт и вердикты.
+    """
+    gap: OpeningGap = item["gap"]
+    middle = (gap.start + gap.end) / 2.0
+    x_px, y_px = (middle, gap.position) if gap.axis == "h" else (gap.position, middle)
+    return {
+        "kind": item["kind"],
+        "axis": gap.axis,
+        "width_mm": round(gap.width * mm_per_px, 1),
+        "wall_thickness_mm": round(gap.thickness * mm_per_px, 1),
+        "center_x_mm": round((x_px - origin_px[0]) * mm_per_px, 1),
+        "center_y_mm": round((origin_px[1] - y_px) * mm_per_px, 1),
+        **({"door": item["door"]} if item.get("door") else {}),
+        "bbox_px": _bbox_px(WallSegment(gap.axis, gap.position, gap.start, gap.end, gap.thickness)),
     }
 
 
@@ -346,3 +378,153 @@ def _as_wall(read: Any, measured: dict[str, Any] | None) -> dict[str, Any]:
         "end_y_mm": measured["end_y_mm"],
         "thickness_mm": measured["thickness_mm"],
     }
+
+
+# Проём на плане — разрыв стены: две соосные части одной толщины и между ними
+# пролёт двери или проёма (ГОСТ 21.501: двери 600…2400 мм, ворота шире).
+MIN_OPENING_MM = 500.0
+MAX_OPENING_MM = 3000.0
+# Дуга открывания двери — четверть окружности радиусом в ширину полотна:
+# доля её точек, покрытая чернилами.
+_ARC_COVERAGE = 0.6
+
+
+@dataclass(frozen=True)
+class OpeningGap:
+    """Разрыв стены: ``start``/``end`` — края проёма вдоль стены."""
+
+    axis: str
+    position: float
+    start: float
+    end: float
+    thickness: float
+
+    @property
+    def width(self) -> float:
+        return self.end - self.start
+
+
+def wall_gaps(walls: list[WallSegment], *, min_gap: float, max_gap: float) -> list[OpeningGap]:
+    """Разрывы между соосными частями одной стены.
+
+    Части — одна стена, если их осевые совпадают в пределах трети толщины и
+    толщины равны с точностью до четверти; проём — между соседними частями,
+    когда пролёт между ними ничем не закрыт.
+    """
+    gaps: list[OpeningGap] = []
+    for axis in ("h", "v"):
+        same = sorted((wall for wall in walls if wall.axis == axis), key=lambda item: item.start)
+        for index, first in enumerate(same):
+            following = [
+                other
+                for other in same[index + 1 :]
+                if abs(other.position - first.position) <= first.thickness / 3.0
+                and abs(other.thickness - first.thickness) <= 0.25 * first.thickness
+                and other.start > first.end
+            ]
+            if not following:
+                continue
+            second = min(following, key=lambda item: item.start)
+            width = second.start - first.end
+            if not min_gap <= width <= max_gap:
+                continue
+            # Закрыт разрыв только стеной той же толщины; тонкая пара внутри
+            # — остекление окна (ГОСТ 21.201), это и есть проём.
+            # Тонкие пары (остекление двух окон одной стены) стыкуются друг с
+            # другом через глухой простенок: разрыв закрыт и более толстой
+            # стеной, в полосе которой он лежит.
+            covered = any(
+                abs(other.position - first.position)
+                <= max(first.thickness / 3.0, other.thickness / 2.0)
+                and other.thickness >= 0.75 * first.thickness
+                and other.start < second.start
+                and other.end > first.end + 0.5 * width
+                and other is not first
+                for other in same
+            )
+            if covered:
+                continue
+            gaps.append(
+                OpeningGap(
+                    axis=axis,
+                    position=(first.position + second.position) / 2.0,
+                    start=first.end,
+                    end=second.start,
+                    thickness=(first.thickness + second.thickness) / 2.0,
+                )
+            )
+    return gaps
+
+
+def door_swing(ink: Any, gap: OpeningGap) -> dict[str, Any] | None:
+    """Дуга открывания у проёма: четверть окружности с центром у одного края
+    проёма (на грани стены) и радиусом в его ширину. Найдена — это дверь."""
+    import math
+
+    radius = gap.width
+    best: dict[str, Any] | None = None
+    for hinge in (gap.start, gap.end):
+        for side in (-1.0, 1.0):
+            face = gap.position + side * gap.thickness / 2.0
+            toward = 1.0 if hinge == gap.start else -1.0
+            hits = total = 0
+            for step in range(1, 24):
+                angle = 0.5 * math.pi * step / 24
+                along = hinge + toward * radius * math.cos(angle)
+                across = face + side * radius * math.sin(angle)
+                x, y = (along, across) if gap.axis == "h" else (across, along)
+                column, row = int(round(x)), int(round(y))
+                if not (0 <= row < ink.shape[0] and 0 <= column < ink.shape[1]):
+                    continue
+                total += 1
+                hits += bool(ink[max(0, row - 2) : row + 3, max(0, column - 2) : column + 3].any())
+            if total >= 12 and hits / total >= _ARC_COVERAGE:
+                coverage = hits / total
+                if best is None or coverage > best["coverage"]:
+                    best = {
+                        "hinge": "start" if hinge == gap.start else "end",
+                        "side": int(side),
+                        "coverage": round(coverage, 2),
+                    }
+    return best
+
+
+def find_openings(gray: Any, walls: list[WallSegment], mm_per_px: float) -> list[dict[str, Any]]:
+    """Проёмы плана по растру: разрыв стены и, если есть, дуга двери."""
+    import numpy as np
+
+    from app.ai.cad_recognize.verifiers.plate_frame import _ink
+
+    ink = _ink(np.asarray(gray))
+    found = []
+    for gap in wall_gaps(
+        walls, min_gap=MIN_OPENING_MM / mm_per_px, max_gap=MAX_OPENING_MM / mm_per_px
+    ):
+        glazing = _glazing(walls, gap)
+        door = None if glazing else door_swing(ink, gap)
+        found.append(
+            {
+                "gap": gap,
+                "door": door,
+                "glazing": glazing,
+                "kind": "window" if glazing else ("door" if door else "opening"),
+            }
+        )
+    return found
+
+
+def _glazing(walls: list[WallSegment], gap: OpeningGap) -> WallSegment | None:
+    """Остекление окна: тонкая пара линий вдоль стены внутри разрыва.
+
+    Замер стен принимает её за стену толщиной в треть настоящей — у окна
+    это не стена, а признак проёма; вызывающий убирает её из стен.
+    """
+    for wall in walls:
+        if wall.axis != gap.axis or wall.thickness >= 0.75 * gap.thickness:
+            continue
+        if abs(wall.position - gap.position) > gap.thickness / 2.0:
+            continue
+        inside = min(wall.end, gap.end) - max(wall.start, gap.start)
+        if inside >= 0.7 * gap.width and wall.length <= 1.3 * gap.width:
+            return wall
+    return None

@@ -22,6 +22,9 @@ export type DomainReading = {
       markers?: number;
       spans?: number;
       walls_measured?: number;
+      openings_measured?: number;
+      doors?: number;
+      windows?: number;
       reason?: string | null;
       error?: string;
     } | null;
@@ -78,7 +81,14 @@ export default function DomainReadingPanel({
                 spans: measurement.spans ?? 0,
                 markers: measurement.markers ?? 0,
                 walls: measurement.walls_measured ?? 0,
-              })
+              }) +
+              (measurement.openings_measured
+                ? t("vector.domain_openings_measured", {
+                    count: measurement.openings_measured,
+                    doors: measurement.doors ?? 0,
+                    windows: measurement.windows ?? 0,
+                  })
+                : "")
             : t("vector.domain_walls_unmeasured", {
                 reason: measurement.reason ?? measurement.error ?? "",
               })}

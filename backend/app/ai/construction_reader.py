@@ -415,11 +415,33 @@ async def _measured_walls(
         "markers": len(measured.get("markers") or []),
         "spans": len(measured.get("spans") or []),
         "walls_measured": len(measured.get("walls") or []),
+        "openings_measured": len(measured.get("openings") or []),
+        "doors": sum(1 for item in measured.get("openings") or [] if item["kind"] == "door"),
+        "windows": sum(1 for item in measured.get("openings") or [] if item["kind"] == "window"),
         "reason": measured.get("reason"),
     }
     if not measured.get("walls"):
         return sheet, summary, []
     walls, verdicts = reconcile_walls(list(sheet.walls), measured["walls"])
+    # Проёмы — находкой по листу (Ф7.3): вид, ширина и место; высоты на плане
+    # нет, поэтому в модель здания они не встраиваются.
+    for index, opening in enumerate(measured.get("openings") or []):
+        verdicts.append(
+            {
+                "kind": "construction_opening",
+                "path": f"openings[{index}]",
+                "status": "confirmed",
+                "read": {},
+                "measured": {
+                    key: value for key, value in opening.items() if key not in ("bbox_px", "door")
+                },
+                "evidence_bbox_px": opening["bbox_px"],
+                "reason": {
+                    "door": "дверь найдена по листу: разрыв стены и дуга открывания",
+                    "window": "окно найдено по листу: разрыв стены и остекление",
+                }.get(opening["kind"], "проём найден по листу: разрыв стены"),
+            }
+        )
     fields = set(WallRead.model_fields)
     sheet = sheet.model_copy(
         update={

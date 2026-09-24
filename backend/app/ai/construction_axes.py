@@ -31,6 +31,8 @@ _RING_COVERAGE = 0.85
 _ROW_SPAN_SHARE = 0.25
 # Доля чернил внутри маркера: буква или цифра, а не пустота и не рисунок.
 _LABEL_INK = (0.04, 0.45)
+# Дыра маркера — круг: её площадь от площади описанной окружности.
+_HOLE_ROUNDNESS = 0.8
 
 CHAIN_LABEL_PROMPT = (
     "На фрагменте — участок размерной цепочки между двумя координационными "
@@ -50,29 +52,15 @@ def axis_markers(gray: Any) -> list[tuple[float, float, float]]:
     Берутся окружности ОДНОГО размера: на плане их много и они одинаковы, а
     случайная дуга или кружок отметки — один.
     """
-    import cv2
     import numpy as np
 
     gray = np.asarray(gray)
     reach = max(gray.shape)
-    found = cv2.HoughCircles(
-        gray,
-        cv2.HOUGH_GRADIENT,
-        dp=1.0,
-        minDist=int(max(8, _MIN_RADIUS_SHARE * reach * 2)),
-        param1=120,
-        param2=30,
-        minRadius=int(_MIN_RADIUS_SHARE * reach),
-        maxRadius=int(_MAX_RADIUS_SHARE * reach),
-    )
-    if found is None:
-        return []
     ink = np.asarray(gray) < 160
     circles = [
-        (float(x), float(y), float(r))
-        for x, y, r in found[0]
-        if _ring_drawn(ink, float(x), float(y), float(r))
-        and _holds_a_label(ink, float(x), float(y), float(r))
+        (x, y, r)
+        for x, y, r in _ring_holes(ink, _MIN_RADIUS_SHARE * reach, _MAX_RADIUS_SHARE * reach)
+        if _ring_drawn(ink, x, y, r) and _holds_a_label(ink, x, y, r)
     ]
     if len(circles) < 2:
         return []
@@ -102,6 +90,66 @@ def _grid_sized(
         if best is None or key > (best[0], best[1]):
             best = (share, radius, same)
     return best[2] if best and best[0] >= _ROW_SPAN_SHARE else []
+
+
+def _ring_holes(ink: Any, min_radius: float, max_radius: float) -> list[tuple[float, float, float]]:
+    """Кружки как КОЛЬЦА: дыра в чернилах, круглая по форме.
+
+    Хаф по листу с заштрихованными стенами давал сотни «окружностей» на
+    штриховке и терял настоящие маркеры (синтетический план: 33 из 145 при
+    342 лишних). У маркера внутренняя граница обводки — замкнутый круг, буква
+    внутри — отдельный островок и форму дыры не портит. Радиус — до середины
+    обводки (внутренний плюс половина её толщины), как у Хафа.
+    """
+    import math
+
+    import cv2
+    import numpy as np
+
+    # Тонкая сглаженная обводка (1 px в DWG) по порогу рвётся — дыра не
+    # замыкается; расширение на пиксель её замыкает, а штриховку круглой
+    # не делает.
+    closed = cv2.dilate(ink.astype("uint8"), np.ones((3, 3), np.uint8))
+    contours, hierarchy = cv2.findContours(closed, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
+    if hierarchy is None:
+        return []
+    found = []
+    for contour, (_next, _previous, _child, parent) in zip(contours, hierarchy[0], strict=False):
+        if parent < 0:
+            continue  # внешняя граница компоненты, а не дыра
+        (x, y), radius = cv2.minEnclosingCircle(contour)
+        if not min_radius * 0.8 <= radius <= max_radius:
+            continue
+        if cv2.contourArea(contour) < _HOLE_ROUNDNESS * math.pi * radius * radius:
+            continue
+        found.append((float(x), float(y), _stroke_middle(ink, float(x), float(y), float(radius))))
+    return found
+
+
+def _stroke_middle(ink: Any, x: float, y: float, inner: float) -> float:
+    """Радиус до середины обводки: от внутренней границы — лучами наружу до
+    конца чернил. Вырез звена цепочки строится от этого радиуса; внутренний
+    на толстой обводке DWG сужал вырез, и число цепочки в него не попадало."""
+    import math
+
+    widths = []
+    for step in range(16):
+        angle = 2.0 * math.pi * step / 16
+        width = 0
+        for distance in range(int(inner), int(inner * 1.6) + 2):
+            column = int(round(x + distance * math.cos(angle)))
+            row = int(round(y + distance * math.sin(angle)))
+            if not (0 <= row < ink.shape[0] and 0 <= column < ink.shape[1]):
+                break
+            if ink[row, column]:
+                width = distance - inner + 1
+            elif width:
+                break
+        if width:
+            widths.append(width)
+    widths.sort()
+    stroke = widths[len(widths) // 2] if widths else 2.0
+    return inner + stroke / 2.0
 
 
 def _ring_drawn(ink: Any, x: float, y: float, radius: float) -> bool:
@@ -170,7 +218,9 @@ def chain_crop_box(
     )
 
 
-def scale_from_spans(spans: list[tuple[float, float]]) -> float | None:
+def scale_from_spans(
+    spans: list[tuple[float, float]], *, attempted: int | None = None
+) -> float | None:
     """Масштаб (мм на пиксель) по звеньям ``(px, mm)``, если звенья согласны.
 
     Одно звено — догадка: модель могла прочитать соседнее число или подпись
@@ -190,7 +240,10 @@ def scale_from_spans(spans: list[tuple[float, float]]) -> float | None:
         ),
         key=len,
     )
-    if len(agreeing) < 2 or 2 * len(agreeing) <= len(ratios):
+    # Большинство — от ВСЕХ звеньев, которые пробовали прочитать: на том же
+    # скане с другими маркерами прочитались лишь два звена слева (оба 3000),
+    # «два из двух» приняли масштаб листа, нарисованного не в масштабе.
+    if len(agreeing) < 2 or 2 * len(agreeing) <= max(len(ratios), attempted or 0):
         return None
     return round(sum(agreeing) / len(agreeing), 5)
 
@@ -208,6 +261,7 @@ async def read_sheet_scale(image_bytes: bytes, *, ask: Any = None) -> dict[str, 
     sheet = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     markers = axis_markers(np.asarray(sheet.convert("L")))
     spans: list[dict[str, Any]] = []
+    attempted = 0
     for row in marker_rows(markers):
         axis = 0 if abs(row[0][0] - row[-1][0]) >= abs(row[0][1] - row[-1][1]) else 1
         for first, second in zip(row, row[1:], strict=False):
@@ -215,6 +269,7 @@ async def read_sheet_scale(image_bytes: bytes, *, ask: Any = None) -> dict[str, 
             if distance < 4.0 * first[2]:
                 continue
             crop = chain_crop_box(first, second, axis, sheet.size)
+            attempted += 1
             answer = await ask(CHAIN_LABEL_PROMPT, sheet.crop(crop))
             value = (answer or {}).get("span_mm")
             if not isinstance(value, (int, float)) or isinstance(value, bool):
@@ -222,16 +277,21 @@ async def read_sheet_scale(image_bytes: bytes, *, ask: Any = None) -> dict[str, 
             if not _SPAN_MM.match(f"{round(float(value))}"):
                 continue
             spans.append({"px": round(distance, 1), "mm": float(value), "bbox_px": list(crop)})
-    scale = scale_from_spans([(item["px"], item["mm"]) for item in spans])
+    scale = scale_from_spans([(item["px"], item["mm"]) for item in spans], attempted=attempted)
     return {
         "mm_per_px": scale,
         "markers": [[round(value, 1) for value in marker] for marker in markers],
         "spans": spans,
+        "attempted": attempted,
         "reason": None
         if scale
         else (
             "осей на листе не найдено"
             if len(markers) < 2
+            else "числа цепочки между осями не прочитаны"
+            if len(spans) < 2
+            else f"прочитано звеньев цепочки {len(spans)} из {attempted} — масштаб не подтверждён"
+            if 2 * len(spans) <= attempted
             else "звенья цепочки между осями не согласны — лист не в масштабе"
         ),
     }

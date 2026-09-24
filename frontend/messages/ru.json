@@ -1062,7 +1062,9 @@
       "assurance_verify_kind_construction_wall": "Стена {index}",
       "assurance_verify_kind_construction_wall_found": "Стена {index} (найдена по листу)",
       "domain_walls_measured": "Замер по листу: масштаб {scale} мм/px по {spans} звеньям цепочки между осями ({markers} маркеров), стен измерено {walls}",
-      "domain_walls_unmeasured": "Стены по листу не измерены: {reason}"
+      "domain_walls_unmeasured": "Стены по листу не измерены: {reason}",
+      "assurance_verify_kind_construction_opening": "Проём {index}",
+      "domain_openings_measured": "; проёмов {count} (дверей {doors}, окон {windows})"
     },
     "workflow": {
       "loading": "Загрузка воркфлоу…",

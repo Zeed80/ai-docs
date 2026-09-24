@@ -1062,7 +1062,9 @@
       "assurance_verify_kind_construction_wall": "Wall {index}",
       "assurance_verify_kind_construction_wall_found": "Wall {index} (found on the sheet)",
       "domain_walls_measured": "Measured on the sheet: {scale} mm/px from {spans} chain links between axes ({markers} markers), {walls} walls measured",
-      "domain_walls_unmeasured": "Walls were not measured on the sheet: {reason}"
+      "domain_walls_unmeasured": "Walls were not measured on the sheet: {reason}",
+      "assurance_verify_kind_construction_opening": "Opening {index}",
+      "domain_openings_measured": "; {count} openings ({doors} doors, {windows} windows)"
     },
     "workflow": {
       "loading": "Loading workflows…",
