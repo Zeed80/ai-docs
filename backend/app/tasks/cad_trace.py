@@ -2729,7 +2729,19 @@ def _domain_summary(reader: tuple[str, str | None], model: Any, report: dict) ->
     return text
 
 
-async def _store_domain_reading(factory, gen_uuid, reading: dict) -> None:
+def _verdict_summary(verdicts: list[dict]) -> dict[str, int]:
+    """Сводка вердиктов — как у механических проверяльщиков (панель её читает)."""
+    summary = {"confirmed": 0, "refuted": 0, "unmeasurable": 0}
+    for item in verdicts:
+        status = item.get("status")
+        if status in summary:
+            summary[status] += 1
+    return summary
+
+
+async def _store_domain_reading(
+    factory, gen_uuid, reading: dict, *, verification: dict | None = None
+) -> None:
     """Модель здания или системы — в параметры прогона; прогон завершён."""
     from app.db.models import ImageGeneration, ImageGenStatus
     from app.services import studio_queue
@@ -2738,7 +2750,11 @@ async def _store_domain_reading(factory, gen_uuid, reading: dict) -> None:
         gen = await db.get(ImageGeneration, gen_uuid)
         if gen is None:
             return
-        gen.params = {**(gen.params or {}), "domain_reading": reading}
+        gen.params = {
+            **(gen.params or {}),
+            "domain_reading": reading,
+            **({"spec_verification": verification} if verification else {}),
+        }
         gen.status = ImageGenStatus.done
         gen.error = None
         job = await studio_queue.job_for_generation(db, gen_uuid)
@@ -3612,6 +3628,23 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     f"Отметок по знакам листа: {len(values)}",
                     {key: value for key, value in sheet_levels.items() if key != "levels"},
                 )
+            if domain_reader[0] == "construction":
+                # Стены — замером по листу (Ф7.2): вердикты идут туда же, куда
+                # вердикты механических проверяльщиков, и вырез листа (Ф9)
+                # открывается по тем же рамкам находок.
+                measurement = report.get("measurement") or {}
+                await _record(
+                    "construction.walls",
+                    "completed" if measurement.get("mm_per_px") else "failed",
+                    (
+                        f"Масштаб плана {measurement['mm_per_px']} мм/px по "
+                        f"{measurement.get('spans', 0)} звеньям цепочки; "
+                        f"стен измерено: {measurement.get('walls_measured', 0)}"
+                    )
+                    if measurement.get("mm_per_px")
+                    else f"Стены не измерены: {measurement.get('reason') or measurement.get('error')}",
+                    measurement,
+                )
             await _record(
                 f"{domain_reader[0]}.read",
                 "failed" if report.get("read_failed") or report.get("blocked") else "completed",
@@ -3619,6 +3652,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 {key: value for key, value in report.items() if key != "skipped"}
                 | {"skipped": (report.get("skipped") or [])[:50]},
             )
+            verdicts = report.get("verifications") or []
             await _store_domain_reading(
                 factory,
                 gen_uuid,
@@ -3630,6 +3664,14 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     "summary": summary,
                     "levels": sheet_levels,
                 },
+                verification={
+                    "items": verdicts,
+                    "summary": _verdict_summary(verdicts),
+                    "frame": None,
+                    "notes": [],
+                }
+                if verdicts
+                else None,
             )
             await _record("pipeline", "completed", summary, {"terminal": True})
             return {"domain_model": domain_reader[0]}

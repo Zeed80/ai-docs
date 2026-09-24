@@ -15,6 +15,16 @@ export type DomainReading = {
     skipped?: { id?: string; kind?: string; reason?: string }[];
     blocked?: boolean;
     blocked_reason?: string;
+    /** Замер плана (Ф7.1/Ф7.2): масштаб по цепочке между осями и стены,
+     *  измеренные по листу. Прочитанных «на глаз» координат тут нет. */
+    measurement?: {
+      mm_per_px?: number | null;
+      markers?: number;
+      spans?: number;
+      walls_measured?: number;
+      reason?: string | null;
+      error?: string;
+    } | null;
   };
   /** Отметки уровня по знакам на листе (E10): число прочитано только у
    *  найденного знака или рамки отметки. */
@@ -35,6 +45,7 @@ export default function DomainReadingPanel({
 }) {
   if (!reading) return null;
   const skipped = reading.report?.skipped ?? [];
+  const measurement = reading.report?.measurement ?? null;
   return (
     <section
       className="rounded border border-white/10 bg-zinc-950/60 p-3 text-xs"
@@ -59,9 +70,25 @@ export default function DomainReadingPanel({
           })}
         </p>
       ) : null}
+      {measurement ? (
+        <p className="mt-1 text-zinc-400">
+          {measurement.mm_per_px
+            ? t("vector.domain_walls_measured", {
+                scale: measurement.mm_per_px,
+                spans: measurement.spans ?? 0,
+                markers: measurement.markers ?? 0,
+                walls: measurement.walls_measured ?? 0,
+              })
+            : t("vector.domain_walls_unmeasured", {
+                reason: measurement.reason ?? measurement.error ?? "",
+              })}
+        </p>
+      ) : null}
       {skipped.length ? (
         <details className="mt-2 text-zinc-400">
-          <summary>{t("vector.domain_skipped", { count: skipped.length })}</summary>
+          <summary>
+            {t("vector.domain_skipped", { count: skipped.length })}
+          </summary>
           <ul className="mt-1 space-y-0.5">
             {skipped.slice(0, 50).map((item, index) => (
               <li key={`${item.id ?? index}`} className="break-all">

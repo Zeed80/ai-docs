@@ -33,11 +33,17 @@ const VERIFY_KINDS = new Set([
   // Сварной узел: пластина против перечня на листе.
   "weldment_part",
   "weldment_placement",
+  // Строительный план (Ф7): стены, измеренные по листу.
+  "construction_wall",
+  "construction_wall_found",
 ]);
 
 /** Вырез листа вокруг элемента проверки с обведённой рамкой (Ф9). Индекс —
  *  позиция в `spec_verification.items`, как её хранит сервер. */
-export function verificationOverlayUrl(generationId: string, index: number): string {
+export function verificationOverlayUrl(
+  generationId: string,
+  index: number,
+): string {
   return `${getApiBaseUrl()}/api/image-gen/${generationId}/verification/${index}/overlay`;
 }
 

@@ -229,3 +229,53 @@ async def test_a_wall_without_a_readable_thickness_excludes_only_itself():
 
     assert model is not None and len(model.elements) == 1
     assert {"id": "w2", "kind": "wall", "reason": "no_thickness"} in report["skipped"]
+
+
+@pytest.mark.asyncio
+async def test_walls_come_from_the_sheet_measurement_not_from_the_model(monkeypatch):
+    """Ф7.2: просить у модели координаты стен в миллиметрах — просить измерить
+    на глаз (живой план: 4 стены из десятков, ни одной толщины). Геометрия
+    берётся замером, а надписи (материал, «несущая») остаются от чтения."""
+    from app.ai import construction_walls
+
+    async def _measure(image_bytes, *, ask=None):
+        return {
+            "mm_per_px": 8.6,
+            "markers": [[0.0, 0.0, 10.0]],
+            "spans": [{"px": 100.0, "mm": 860.0}],
+            "origin_px": [0.0, 0.0],
+            "reason": None,
+            "walls": [
+                {
+                    "id": "wall-1",
+                    "name": "стена по листу 1",
+                    "start_x_mm": 0.0,
+                    "start_y_mm": 0.0,
+                    "end_x_mm": 5020.0,
+                    "end_y_mm": 0.0,
+                    "thickness_mm": 380.0,
+                    "length_mm": 5020.0,
+                    "bbox_px": [1.0, 2.0, 3.0, 4.0],
+                }
+            ],
+        }
+
+    monkeypatch.setattr(construction_walls, "measure_plan", _measure)
+    payload = """{
+      "storey": {"name": "1 этаж", "elevation_mm": 0, "default_wall_height_mm": 3000},
+      "walls": [
+        {"id": "w1", "start_x_mm": 0, "start_y_mm": 0, "end_x_mm": 5000, "end_y_mm": 0,
+         "thickness_mm": null, "material": "кирпич", "load_bearing": true}
+      ],
+      "openings": []
+    }"""
+
+    model, report = await read_construction_drawing(b"x", router=_FakeRouter(payload))
+
+    assert model is not None, report
+    wall = model.elements[0]
+    assert wall.material == "кирпич" and wall.load_bearing is True
+    assert report["measurement"]["walls_measured"] == 1
+    assert report["measurement"]["mm_per_px"] == 8.6
+    assert [item["status"] for item in report["verifications"]] == ["confirmed"]
+    assert report["verifications"][0]["evidence_bbox_px"] == [1.0, 2.0, 3.0, 4.0]

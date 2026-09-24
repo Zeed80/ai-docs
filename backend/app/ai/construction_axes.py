@@ -179,9 +179,18 @@ def scale_from_spans(spans: list[tuple[float, float]]) -> float | None:
     ratios = sorted(mm / px for px, mm in spans if px > 0 and mm > 0)
     if len(ratios) < 2:
         return None
-    middle = ratios[len(ratios) // 2]
-    agreeing = [value for value in ratios if abs(value - middle) <= _SCALE_AGREEMENT * middle]
-    if len(agreeing) < 2:
+    # Согласная группа обязана быть БОЛЬШИНСТВОМ звеньев. Живой план «на отм.
+    # 0.000» нарисован не в масштабе (4500 мм — 112 px, 7500 — 142 px): из
+    # шести звеньев два случайно сошлись на 14 мм/px, и по «согласию двух»
+    # замер принял масштаб и нашёл 247 «стен» — рамки отметок, ступени, текст.
+    agreeing = max(
+        (
+            [value for value in ratios if abs(value - center) <= _SCALE_AGREEMENT * center]
+            for center in ratios
+        ),
+        key=len,
+    )
+    if len(agreeing) < 2 or 2 * len(agreeing) <= len(ratios):
         return None
     return round(sum(agreeing) / len(agreeing), 5)
 
@@ -220,7 +229,11 @@ async def read_sheet_scale(image_bytes: bytes, *, ask: Any = None) -> dict[str, 
         "spans": spans,
         "reason": None
         if scale
-        else ("осей на листе не найдено" if len(markers) < 2 else "звенья цепочки не согласны"),
+        else (
+            "осей на листе не найдено"
+            if len(markers) < 2
+            else "звенья цепочки между осями не согласны — лист не в масштабе"
+        ),
     }
 
 

@@ -1058,7 +1058,11 @@
       "assurance_field_height_mm": "высота",
       "assurance_field_thickness_mm": "толщина",
       "assurance_field_center_u_mm": "положение по грани",
-      "assurance_field_center_v_mm": "положение по грани (2)"
+      "assurance_field_center_v_mm": "положение по грани (2)",
+      "assurance_verify_kind_construction_wall": "Стена {index}",
+      "assurance_verify_kind_construction_wall_found": "Стена {index} (найдена по листу)",
+      "domain_walls_measured": "Замер по листу: масштаб {scale} мм/px по {spans} звеньям цепочки между осями ({markers} маркеров), стен измерено {walls}",
+      "domain_walls_unmeasured": "Стены по листу не измерены: {reason}"
     },
     "workflow": {
       "loading": "Загрузка воркфлоу…",

@@ -385,4 +385,48 @@ async def read_construction_drawing(
         # Причина — в отчёт: «не прочитан» без неё прятал, что модель лист
         # прочла, а отбросила его схема (живой план «на отм. 0.000»).
         return None, {"read_failed": True, **failure}
-    return construction_read_as_model(sheet, site_name=site_name, building_name=building_name)
+    sheet, measurement, verdicts = await _measured_walls(image_bytes, sheet)
+    model, report = construction_read_as_model(
+        sheet, site_name=site_name, building_name=building_name
+    )
+    report["measurement"] = measurement
+    report["verifications"] = verdicts
+    return model, report
+
+
+async def _measured_walls(
+    image_bytes: bytes, sheet: ConstructionSheetRead
+) -> tuple[ConstructionSheetRead, dict[str, Any], list[dict[str, Any]]]:
+    """Стены плана — замером по листу (Ф7.2), надписи — чтением.
+
+    Живой план «на отм. 0.000»: модель назвала 4 стены из десятков и ни одной
+    толщины, потому что просить у неё координаты в миллиметрах — это просить
+    измерить на глаз. Пара параллельных линий измерима; без масштаба листа
+    (Ф7.1) замера нет, и тогда всё остаётся как прочитано.
+    """
+    from app.ai.construction_walls import measure_plan, reconcile_walls
+
+    try:
+        measured = await measure_plan(image_bytes)
+    except Exception as exc:  # noqa: BLE001 — замер не валит чтение листа
+        return sheet, {"error": str(exc)[:200]}, []
+    summary = {
+        "mm_per_px": measured.get("mm_per_px"),
+        "markers": len(measured.get("markers") or []),
+        "spans": len(measured.get("spans") or []),
+        "walls_measured": len(measured.get("walls") or []),
+        "reason": measured.get("reason"),
+    }
+    if not measured.get("walls"):
+        return sheet, summary, []
+    walls, verdicts = reconcile_walls(list(sheet.walls), measured["walls"])
+    fields = set(WallRead.model_fields)
+    sheet = sheet.model_copy(
+        update={
+            "walls": [
+                WallRead(**{key: value for key, value in wall.items() if key in fields})
+                for wall in walls
+            ]
+        }
+    )
+    return sheet, summary, verdicts

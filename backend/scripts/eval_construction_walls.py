@@ -237,6 +237,11 @@ def main() -> int:
     parser.add_argument("--dwg-dir", type=pathlib.Path, required=True)
     parser.add_argument("--out", type=pathlib.Path)
     parser.add_argument("--long-side", type=int, default=5000)
+    parser.add_argument(
+        "--live-scale",
+        action="store_true",
+        help="масштаб — по растру: маркеры осей + число звена читает модель (как в продукте)",
+    )
     args = parser.parse_args()
 
     rows = []
@@ -258,11 +263,28 @@ def main() -> int:
             truth = truth_walls(msp, scale_mm)
             image, to_px, unit_px = render_with_transform(doc, args.long_side)
             mm_per_px = scale_mm / unit_px
+            measured_scale = None
+            if args.live_scale:
+                import asyncio
+                import io as _io
+
+                from app.ai.construction_axes import read_sheet_scale
+
+                buffer = _io.BytesIO()
+                image.convert("RGB").save(buffer, format="PNG")
+                measured = asyncio.run(read_sheet_scale(buffer.getvalue()))
+                measured_scale = measured["mm_per_px"]
+                if not measured_scale:
+                    rows.append({"sheet": dwg.stem, "skipped": measured["reason"]})
+                    print(json.dumps(rows[-1], ensure_ascii=False), flush=True)
+                    continue
+                mm_per_px = measured_scale
             found = find_walls(image, mm_per_px)
             row = {
                 "sheet": dwg.stem,
                 "scale_mm_per_unit": scale_mm,
                 "mm_per_px": round(mm_per_px, 4),
+                "mm_per_px_truth": round(scale_mm / unit_px, 4),
                 "walls": score(truth_in_px(truth, to_px, unit_px), found),
                 "thickness_mm": sorted(
                     {round(wall.thickness * scale_mm / 10) * 10 for wall in truth}
