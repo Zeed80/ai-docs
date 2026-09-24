@@ -14,10 +14,16 @@ Fail-closed the same way as every other reader in this codebase: an
 equipment/port/connection the model's own `EngineeringSystemModel` validator
 rejects (unknown reference, incompatible medium/direction, overloaded port
 cardinality) is excluded individually and reported, never silently dropped
-or guessed into compliance. As with `construction_reader.py`, no real
-P&ID/MEP drawing corpus exists in this repository -- unit-tested against
-hand-built fixtures and a synthetic smoke test only; treat the VLM-reading
-half as unproven until run against a real schematic.
+or guessed into compliance.
+
+First run on real P&IDs (2026-09-25, three Wikimedia sheets, see
+`test-drawings/SOURCES.md`): not a single connection was built -- the prompt
+asked for "medium with parameter" and the two ends of one line came back as
+different strings, which the validator compares verbatim. Now the medium is
+the substance only (`canonical_medium`), parameters go to `line`, and a port
+may branch through a tee (`branches`). Recall is still low and unstable
+between runs (3..10 of ~12 connections on the pump/tank sheet): connectivity
+should be traced on the sheet, the model reading only symbols and tags.
 """
 
 from __future__ import annotations
@@ -46,6 +52,13 @@ class PortRead(BaseModel):
     medium: str = Field(min_length=1, max_length=160)
     nominal_size_mm: float | None = Field(default=None, gt=0)
     required_connection: bool = True
+    # Номер линии и параметры среды (температура, напряжение, расход) —
+    # отдельно от самой среды: валидатор модели сравнивает среды концов связи.
+    line: str | None = Field(default=None, max_length=300)
+    # Сколько линий отходит от вывода на листе: штуцер бака через тройник
+    # питает два насоса (живой P&ID RI Sample) — вторая ветвь отбрасывалась
+    # как «перегрузка порта». Читается с листа, по умолчанию одна.
+    branches: int = Field(default=1, ge=1, le=20)
     evidence: list[SpecEvidence] = Field(default_factory=list)
 
 
@@ -80,8 +93,8 @@ _SYSTEM_PROMPT = """Ты читаешь инженерную схему — P&ID
   "ports": [
     {
       "id": "p1", "equipment_id": "e1", "kind": "supply",
-      "direction": "out", "medium": "вода 80°C",
-      "nominal_size_mm": 32, "required_connection": true
+      "direction": "out", "medium": "вода", "line": "Т1, 80°C",
+      "nominal_size_mm": 32, "required_connection": true, "branches": 1
     }
   ],
   "connections": [
@@ -95,8 +108,12 @@ _SYSTEM_PROMPT = """Ты читаешь инженерную схему — P&ID
 - ports — каждый патрубок/вывод/клемма оборудования, который реально
   подключается линией на схеме. direction читай по стрелке потока на линии
   (если стрелки нет и это заведомо двусторонний узел — bidirectional).
-  medium — что течёт/передаётся (вода, пар, воздух, электричество и т.п.),
-  можно с параметром (например "вода 80°C", "220В").
+  medium — ТОЛЬКО вещество или вид энергии одним-двумя словами (вода, пар,
+  воздух, растворитель, электричество, сигнал) и одинаково у обоих концов
+  одной линии. Номер линии, температура, напряжение, расход — в "line"
+  (например "02-100-PE-N", "80°C", "220В"). branches — сколько линий
+  реально отходит от вывода (линия ветвится тройником — число ветвей),
+  по умолчанию 1.
 - connections — только линии связи, которые ТЫ ДЕЙСТВИТЕЛЬНО можешь
   проследить на схеме от одного порта до другого. Если линия обрывается,
   уходит за рамку листа или пересечение неоднозначно — не соединяй порты
@@ -130,6 +147,7 @@ def system_read_as_model(
 
     ports: list[SystemPort] = []
     port_ids: set[str] = set()
+    medium_details: dict[str, str] = {}
     for item in sheet.ports:
         if item.equipment_id not in equipment_ids:
             skipped.append({"id": item.id, "kind": "port", "reason": "unknown_equipment"})
@@ -138,15 +156,20 @@ def system_read_as_model(
             skipped.append({"id": item.id, "kind": "port", "reason": "duplicate_id"})
             continue
         port_ids.add(item.id)
+        if canonical_medium(item.medium) != item.medium.strip() or item.line:
+            medium_details[item.id] = "; ".join(
+                part for part in (item.medium.strip(), item.line) if part
+            )
         ports.append(
             SystemPort(
                 id=item.id,
                 equipment_id=item.equipment_id,
                 kind=item.kind,
                 direction=item.direction,
-                medium=item.medium,
+                medium=canonical_medium(item.medium),
                 nominal_size_mm=item.nominal_size_mm,
                 required_connection=item.required_connection,
+                max_connections=item.branches,
             )
         )
 
@@ -214,9 +237,25 @@ def system_read_as_model(
         "connections_read": len(sheet.connections),
         "connections_built": len(accepted),
         "unresolved_required_ports": model.unresolved_port_ids(),
+        "medium_details": medium_details,
         "skipped": skipped,
     }
     return model, report
+
+
+def canonical_medium(text: str) -> str:
+    """Среда порта — вещество, без параметров и номера линии.
+
+    Живые P&ID (2026-09-25): модель писала у концов одной линии
+    «растворитель (solvent) из UNIT 1, линия 01-100-PE-N» и «растворитель
+    (solvent)»; валидатор сравнивает среды строками, и ни одна связь на трёх
+    реальных листах не построилась. Отрезается всё после скобки, запятой или
+    точки с запятой — вещество «вода» и «пар» остаются разными.
+    """
+    import re
+
+    head = re.split(r"[(,;]", text, maxsplit=1)[0]
+    return " ".join(head.split()) or text.strip()
 
 
 async def _read_sheet_via_vlm(

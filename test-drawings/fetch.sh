@@ -18,6 +18,9 @@ declare -A FILES=(
   ["asm_02_bicycle_headset_wikimedia.png"]="https://upload.wikimedia.org/wikipedia/commons/f/f0/Bicycle_headset_%28threadless%29_exploded_view-en.png"
   ["asm_03_sborka_gost.png"]="https://cadinstructor.org/wp-content/uploads/sb1_2.png"
   ["asm_03_spec_gost.png"]="https://cadinstructor.org/wp-content/uploads/sb2_2.png"
+  ["sys_01_pump_tank_pid_wikimedia.svg"]="https://commons.wikimedia.org/wiki/Special:FilePath/Pump_with_tank_pid_en.svg"
+  ["sys_02_ri_sample_iso_wikimedia.png"]="https://commons.wikimedia.org/wiki/Special:FilePath/RI_Sample_ISO.png"
+  ["sys_03_pid_plant_wikimedia.jpg"]="https://commons.wikimedia.org/wiki/Special:FilePath/P%26ID.JPG"
   ["asm_04_compas_levage_wikimedia.svg"]="https://upload.wikimedia.org/wikipedia/commons/8/86/Compas_levage_ST_lohr_industrie_BTS_CPI_E51_2011_DR1.svg"
 )
 
@@ -28,3 +31,4 @@ for name in "${!FILES[@]}"; do
 done
 
 echo "Done. Convert the SVG separately: cairosvg asm_04_compas_levage_wikimedia.svg -o asm_04_compas_levage_wikimedia.png --output-width 1200"
+echo "      and: cairosvg sys_01_pump_tank_pid_wikimedia.svg -o sys_01_pump_tank_pid_wikimedia.png --output-width 2100 --background-color white"

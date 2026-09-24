@@ -32,3 +32,11 @@ QA, не для публикации/редистрибуции. Файлы НЕ
 ```bash
 bash fetch.sh
 ```
+
+## Схемы (systems) — первая проверка `system_reader` на реальных листах (2026-09-25)
+
+| Файл | Источник | Лицензия | Что на листе |
+|---|---|---|---|
+| sys_01_pump_tank_pid_wikimedia.svg(+png) | [Wikimedia](https://commons.wikimedia.org/wiki/File:Pump_with_tank_pid_en.svg) | см. страницу файла | P&ID: бак T001 (N1–N6, M1), насос P001 с двигателем, предохранительный клапан, L0011/L0012/PI0013, арматура, переходы 100/50 |
+| sys_02_ri_sample_iso_wikimedia.png | [Wikimedia](https://commons.wikimedia.org/wiki/File:RI_Sample_ISO.png) | см. страницу файла | P&ID ISO: бак B-0001, теплообменник W-0001, насосы P-1001/P-1002, регулирующие клапаны, PSV |
+| sys_03_pid_plant_wikimedia.jpg | [Wikimedia](https://commons.wikimedia.org/wiki/File:P%26ID.JPG) | см. страницу файла | P&ID установки (итал. подписи), JPEG |

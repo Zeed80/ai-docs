@@ -186,3 +186,81 @@ async def test_read_system_diagram_fails_closed_on_garbage_response():
     model, report = await read_system_diagram(b"fake-image-bytes", profile="pid", router=router)
     assert model is None
     assert report == {"read_failed": True}
+
+
+def test_the_same_line_is_one_medium_whatever_the_model_appends_to_it():
+    """Живой P&ID (бак T001 → насос P001, Wikimedia): модель писала у концов
+    одной линии «растворитель (solvent)» и «растворитель (solvent), 5 m³/h» —
+    строки разные, и ни одна связь на трёх реальных листах не построилась."""
+    sheet = _sheet(
+        ports=[
+            {
+                "id": "p1",
+                "equipment_id": "e1",
+                "kind": "outlet",
+                "direction": "out",
+                "medium": "растворитель (solvent)",
+            },
+            {
+                "id": "p2",
+                "equipment_id": "e2",
+                "kind": "suction",
+                "direction": "in",
+                "medium": "растворитель (solvent), 5 m³/h",
+                "line": "01-100-PE-N",
+            },
+        ],
+    )
+
+    model, report = system_read_as_model(sheet, profile="pid")
+
+    assert model is not None, report
+    assert report["connections_built"] == 1
+    assert {port.medium for port in model.ports} == {"растворитель"}
+    # Сказанное моделью не теряется — оно в отчёте.
+    assert report["medium_details"]["p2"] == "растворитель (solvent), 5 m³/h; 01-100-PE-N"
+
+
+def test_a_nozzle_that_branches_through_a_tee_keeps_both_lines():
+    """Живой P&ID RI Sample: нижний штуцер бака через тройник питает два
+    насоса; порт принимал одну связь, и вторая ветвь отбрасывалась молча."""
+    sheet = _sheet(
+        equipment=[
+            {"id": "e1", "name": "Бак", "equipment_type": "tank"},
+            {"id": "e2", "name": "Насос 1", "equipment_type": "pump"},
+            {"id": "e3", "name": "Насос 2", "equipment_type": "pump"},
+        ],
+        ports=[
+            {
+                "id": "p1",
+                "equipment_id": "e1",
+                "kind": "outlet",
+                "direction": "out",
+                "medium": "нафта",
+                "branches": 2,
+            },
+            {
+                "id": "p2",
+                "equipment_id": "e2",
+                "kind": "suction",
+                "direction": "in",
+                "medium": "нафта",
+            },
+            {
+                "id": "p3",
+                "equipment_id": "e3",
+                "kind": "suction",
+                "direction": "in",
+                "medium": "нафта",
+            },
+        ],
+        connections=[
+            {"id": "c1", "first_port_id": "p1", "second_port_id": "p2"},
+            {"id": "c2", "first_port_id": "p1", "second_port_id": "p3"},
+        ],
+    )
+
+    model, report = system_read_as_model(sheet, profile="pid")
+
+    assert model is not None, report
+    assert report["connections_built"] == 2
