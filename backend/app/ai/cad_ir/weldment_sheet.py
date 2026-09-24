@@ -20,6 +20,10 @@ _BOM_GAP_MM = 12.0
 _BOM_ROW_MM = 6.0
 _SHELF_MM = 34.0
 _LEADER_MM = 10.0
+# Полка номера позиции и точка на детали, мм листа.
+_POSITION_SHELF_MM = 8.0
+_DOT_MM = 0.6
+_POSITION_RISE_MM = 5.0
 
 
 def _boxes(spec: dict) -> list[tuple[list[float], list[float]]] | None:
@@ -177,7 +181,7 @@ def weldment_entities(
     spec: dict, plan: Any, views: list[dict], placements: list[dict | None]
 ) -> list[Any]:
     """Полки швов и номера позиций на виде слева, перечень под видами."""
-    from app.ai.cad_ir.schema import Point, Segment, TextEntity
+    from app.ai.cad_ir.schema import Circle, Point, Segment, TextEntity
     from app.ai.cad_ir.sheet_from_solid import PAPER_PX_PER_MM
     from app.ai.cad_projection import _ORIGIN, DIM_TEXT_MM
 
@@ -234,12 +238,56 @@ def weldment_entities(
         entities.append(thin(foot, elbow))
         entities.append(thin(elbow, (elbow[0] - _SHELF_MM, shelf_v)))
         entities.append(text(elbow[0] - _SHELF_MM, shelf_v + 1.0, weld_designation(weld)))
-    # Номера позиций — на телах, перечень — под видами.
+    # Номера позиций — на полках линий-выносок (ГОСТ 2.109, 2.316): точка на
+    # теле, тонкая линия наружу вправо от вида, полка, номер над полкой.
+    # Раньше номер стоял текстом прямо на теле — ни выноски, ни полки.
+    right = float(bounds.get("u_max") or 0.0)
+    marks = []
     for position, (lo, hi) in enumerate(boxes, start=1):
-        # У правого края тела над его верхом внутри: у основания середину
-        # занимает размер высоты ребра.
-        mark = left(lo[1] + 0.85 * (hi[1] - lo[1]), lo[2] + 0.5 * (hi[2] - lo[2]))
-        entities.append(text(mark[0] + 1.5, mark[1] - 1.5, str(position)))
+        # У правого края тела, по высоте — середина: у основания середину
+        # по ширине занимает размер высоты ребра.
+        marks.append(
+            (position, left(lo[1] + 0.85 * (hi[1] - lo[1]), lo[2] + 0.5 * (hi[2] - lo[2])))
+        )
+    shelf_u = right + _LEADER_MM
+    # Подъём не меньше половины вылета: пологая выноска (5…10°) сливалась
+    # с полкой в одну горизонталь.
+    wanted = sorted(
+        (
+            (mark[1] + max(_POSITION_RISE_MM, 0.5 * (shelf_u - mark[0])), position, mark)
+            for position, mark in marks
+        ),
+        key=lambda item: -item[0],
+    )
+    slots: list[float] = []
+    for value, _position, _mark in wanted:
+        slots.append(value if not slots else min(value, slots[-1] - _BOM_ROW_MM))
+    order = [(position, mark) for _value, position, mark in wanted]
+    # Выноски не пересекаются (ГОСТ 2.316): пересёкшиеся пары меняются полками.
+    for _round in range(len(order) ** 2):
+        swapped = False
+        for a in range(len(order)):
+            for b in range(a + 1, len(order)):
+                if _crossing(order[a][1], (shelf_u, slots[a]), order[b][1], (shelf_u, slots[b])):
+                    order[a], order[b] = order[b], order[a]
+                    swapped = True
+        if not swapped:
+            break
+    for (position, mark), shelf_v in zip(order, slots, strict=True):
+        entities.append(
+            Circle(
+                center=point(*mark),
+                radius=_DOT_MM * PAPER_PX_PER_MM,
+                line_class="dim",
+                width_class="thin",
+                **_ORIGIN,
+            )
+        )
+        entities.append(thin(mark, (shelf_u, shelf_v)))
+        entities.append(thin((shelf_u, shelf_v), (shelf_u + _POSITION_SHELF_MM, shelf_v)))
+        entities.append(
+            text(shelf_u + _POSITION_SHELF_MM / 2.0, shelf_v + 1.0, str(position), anchor="middle")
+        )
     # Перечень — от нижнего края самого нижнего вида.
     bottom = max(
         placement_item["offset_v"] - float((view.get("bounds_mm") or {}).get("v_min") or 0.0)
@@ -280,3 +328,19 @@ def weldment_extra_height_mm(spec: dict, plan: Any) -> float:
     if plan.part_class != "weldment":
         return 0.0
     return _BOM_GAP_MM + (len(spec.get("parts") or []) + 1) * _BOM_ROW_MM
+
+
+def _crossing(
+    a0: tuple[float, float],
+    a1: tuple[float, float],
+    b0: tuple[float, float],
+    b1: tuple[float, float],
+) -> bool:
+    """Пересекаются ли отрезки a0–a1 и b0–b1 (строго, не касанием концов)."""
+
+    def side(p, q, r) -> float:
+        return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+
+    d1, d2 = side(b0, b1, a0), side(b0, b1, a1)
+    d3, d4 = side(a0, a1, b0), side(a0, a1, b1)
+    return d1 * d2 < 0 and d3 * d4 < 0

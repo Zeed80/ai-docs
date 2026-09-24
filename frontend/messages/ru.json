@@ -1064,7 +1064,10 @@
       "domain_walls_measured": "Замер по листу: масштаб {scale} мм/px по {spans} звеньям цепочки между осями ({markers} маркеров), стен измерено {walls}",
       "domain_walls_unmeasured": "Стены по листу не измерены: {reason}",
       "assurance_verify_kind_construction_opening": "Проём {index}",
-      "domain_openings_measured": "; проёмов {count} (дверей {doors}, окон {windows})"
+      "domain_openings_measured": "; проёмов {count} (дверей {doors}, окон {windows})",
+      "assembly_sheet_positions": "Полок выносок на листе: {shelves}; номер на полке подтверждён у {confirmed} из {total} позиций",
+      "assurance_verify_kind_assembly_position": "Позиция {index}",
+      "assurance_verify_kind_assembly_position_found": "Позиция {index} (найдена на полке)"
     },
     "workflow": {
       "loading": "Загрузка воркфлоу…",

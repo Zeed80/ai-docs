@@ -1064,7 +1064,10 @@
       "domain_walls_measured": "Measured on the sheet: {scale} mm/px from {spans} chain links between axes ({markers} markers), {walls} walls measured",
       "domain_walls_unmeasured": "Walls were not measured on the sheet: {reason}",
       "assurance_verify_kind_construction_opening": "Opening {index}",
-      "domain_openings_measured": "; {count} openings ({doors} doors, {windows} windows)"
+      "domain_openings_measured": "; {count} openings ({doors} doors, {windows} windows)",
+      "assembly_sheet_positions": "Leader shelves on the sheet: {shelves}; number confirmed on a shelf for {confirmed} of {total} positions",
+      "assurance_verify_kind_assembly_position": "Position {index}",
+      "assurance_verify_kind_assembly_position_found": "Position {index} (found on a shelf)"
     },
     "workflow": {
       "loading": "Loading workflows…",

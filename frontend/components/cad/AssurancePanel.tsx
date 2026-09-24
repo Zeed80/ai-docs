@@ -37,6 +37,9 @@ const VERIFY_KINDS = new Set([
   "construction_wall",
   "construction_wall_found",
   "construction_opening",
+  // Сборка: номер позиции на полке выноски листа.
+  "assembly_position",
+  "assembly_position_found",
 ]);
 
 /** Вырез листа вокруг элемента проверки с обведённой рамкой (Ф9). Индекс —

@@ -22,6 +22,8 @@ export type AssemblyComposition = {
   duplicated_rows: number[];
   link_rate: number;
   specification_source?: string;
+  /** Номера, прочитанные на полках выносок листа (Ф2 `leader_label`). */
+  sheet_positions?: { shelves: number; read: number[]; error?: string } | null;
 };
 
 export default function AssemblyCompositionPanel({
@@ -45,6 +47,19 @@ export default function AssemblyCompositionPanel({
         list: assembly.rows_without_position.join(", "),
       }),
     );
+  const onSheet = assembly.sheet_positions;
+  if (onSheet) {
+    const unconfirmed = assembly.positions.filter(
+      (number) => !onSheet.read.includes(number),
+    );
+    issues.push(
+      t("vector.assembly_sheet_positions", {
+        shelves: onSheet.shelves,
+        confirmed: assembly.positions.length - unconfirmed.length,
+        total: assembly.positions.length,
+      }),
+    );
+  }
   if (assembly.duplicated_rows.length)
     issues.push(
       t("vector.assembly_duplicated_rows", {

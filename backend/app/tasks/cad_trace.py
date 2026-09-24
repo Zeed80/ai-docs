@@ -2777,7 +2777,9 @@ async def _store_domain_reading(
         await db.commit()
 
 
-async def _store_assembly_reading(factory, gen_uuid, assembly: dict) -> None:
+async def _store_assembly_reading(
+    factory, gen_uuid, assembly: dict, *, verification: dict | None = None
+) -> None:
     """Состав сборки — в параметры прогона; прогон завершён, не провален."""
     from app.db.models import ImageGeneration, ImageGenStatus
     from app.services import studio_queue
@@ -2786,7 +2788,11 @@ async def _store_assembly_reading(factory, gen_uuid, assembly: dict) -> None:
         gen = await db.get(ImageGeneration, gen_uuid)
         if gen is None:
             return
-        gen.params = {**(gen.params or {}), "assembly": assembly}
+        gen.params = {
+            **(gen.params or {}),
+            "assembly": assembly,
+            **({"spec_verification": verification} if verification else {}),
+        }
         gen.status = ImageGenStatus.done
         gen.error = None
         job = await studio_queue.job_for_generation(db, gen_uuid)
@@ -3585,6 +3591,38 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 assembly = await read_assembly(content, specification)
             except Exception as exc:  # noqa: BLE001 — чтение сборки не валит прогон
                 return await _fail(f"Сборку прочитать не удалось: {str(exc)[:200]}")
+            # Позиции по полкам выносок листа (Ф2 `leader_label`): модель
+            # выписывает номера со всего листа, лист их подтверждает.
+            from app.ai.cad_recognize.verifiers.leader_label import (
+                position_verdicts,
+                read_sheet_positions,
+            )
+
+            try:
+                on_sheet = await read_sheet_positions(content)
+            except Exception as exc:  # noqa: BLE001 — проверка не валит прогон
+                on_sheet = {"positions": [], "shelves": 0, "error": str(exc)[:200]}
+            position_checks = position_verdicts(
+                assembly["positions"],
+                on_sheet["positions"],
+                assembly.get("rows_without_position") or [],
+            )
+            assembly["sheet_positions"] = {
+                "shelves": on_sheet.get("shelves", 0),
+                "read": sorted({item["position"] for item in on_sheet["positions"]}),
+                **({"error": on_sheet["error"]} if on_sheet.get("error") else {}),
+            }
+            await _record(
+                "assembly.shelves",
+                "completed" if not on_sheet.get("error") else "failed",
+                (
+                    f"Полок выносок на листе {on_sheet.get('shelves', 0)}; "
+                    f"подтверждено позиций "
+                    f"{sum(1 for item in position_checks if item['status'] == 'confirmed' and item['kind'] == 'assembly_position')}"
+                    f" из {len(assembly['positions'])}"
+                ),
+                assembly["sheet_positions"],
+            )
             await _record(
                 "assembly.positions",
                 "completed",
@@ -3603,7 +3641,19 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     )
                 },
             )
-            await _store_assembly_reading(factory, gen_uuid, assembly)
+            await _store_assembly_reading(
+                factory,
+                gen_uuid,
+                assembly,
+                verification={
+                    "items": position_checks,
+                    "summary": _verdict_summary(position_checks),
+                    "frame": None,
+                    "notes": [],
+                }
+                if position_checks
+                else None,
+            )
             await _record(
                 "pipeline",
                 "completed",
