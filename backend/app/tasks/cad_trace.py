@@ -2682,12 +2682,25 @@ def _gray_sheet(content: bytes):
     return np.asarray(Image.open(io.BytesIO(content)).convert("L"))
 
 
-async def _read_domain_model(content: bytes, reader: tuple[str, str | None]):
+def _storey_height_mm(params: dict) -> float | None:
+    """Высота этажа, указанная оператором на прогон: на плане её нет, а без
+    неё модель здания не собирается ни на одном плане (`no_height`)."""
+    value = params.get("storey_height_mm")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if 1000.0 <= float(value) <= 20000.0 else None
+
+
+async def _read_domain_model(
+    content: bytes, reader: tuple[str, str | None], params: dict | None = None
+):
     domain, profile = reader
     if domain == "construction":
         from app.ai.construction_reader import read_construction_drawing
 
-        return await read_construction_drawing(content)
+        return await read_construction_drawing(
+            content, storey_height_mm=_storey_height_mm(params or {})
+        )
     from app.ai.system_reader import read_system_diagram
 
     return await read_system_diagram(content, profile=profile)
@@ -2704,6 +2717,8 @@ def _domain_summary(reader: tuple[str, str | None], model: Any, report: dict) ->
             f"{report.get('walls_read', 0)}, проёмов {report.get('openings_built', 0)} из "
             f"{report.get('openings_read', 0)}"
         )
+        if report.get("storey_height_source") == "operator":
+            text += "; высота этажа — указана оператором"
     else:
         counts = {
             key: len(getattr(model, key, []) or [])
@@ -3602,7 +3617,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             # здания или системы (EMG). Ридеры `construction_reader` и
             # `system_reader` были, но в /cad не подключены — прогон отказывал.
             try:
-                model, report = await _read_domain_model(content, domain_reader)
+                model, report = await _read_domain_model(content, domain_reader, params)
             except Exception as exc:  # noqa: BLE001 — чтение не валит прогон
                 return await _fail(f"Чтение листа не удалось: {str(exc)[:200]}")
             summary = _domain_summary(domain_reader, model, report)

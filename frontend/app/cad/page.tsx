@@ -78,6 +78,12 @@ export default function CadListPage() {
   // (Настройки → Данные); галочка решает для этого прогона. null — настройки
   // не загрузились, решение остаётся серверу.
   const [upscaleRun, setUpscaleRun] = useState<boolean | null>(null);
+  // Высота этажа на прогон (Ф7): на плане её нет, без неё модель здания
+  // не собирается. Пусто — не указана, ридер честно сообщит «нет высоты».
+  const [storeyHeight, setStoreyHeight] = useState("");
+  const buildingPlan =
+    digitizationType === "construction_structure" ||
+    digitizationType === "architectural_drawing";
   useEffect(() => {
     fetchUpscaleSettings()
       .then((settings) => setUpscaleRun(settings.enabled))
@@ -186,6 +192,11 @@ export default function CadListPage() {
             ...(digitizeSheetFormat
               ? { sheet_format: digitizeSheetFormat }
               : {}),
+            ...(vectorizeMethod === "spec" &&
+            buildingPlan &&
+            Number(storeyHeight) > 0
+              ? { storey_height_mm: Number(storeyHeight) }
+              : {}),
           },
         });
         router.push(`/cad/${gen.id}`);
@@ -201,6 +212,8 @@ export default function CadListPage() {
       vectorizeMethod,
       readPasses,
       upscaleRun,
+      buildingPlan,
+      storeyHeight,
       router,
       t,
     ],
@@ -272,6 +285,25 @@ export default function CadListPage() {
                 onChange={(e) => setUpscaleRun(e.target.checked)}
               />
               {t("upscale_run")}
+            </label>
+          )}
+          {vectorizeMethod === "spec" && buildingPlan && (
+            <label
+              className="flex items-center gap-2 rounded border border-white/15 bg-zinc-950 px-2 py-2 text-xs text-zinc-200"
+              title={t("storey_height_hint")}
+            >
+              {t("storey_height")}
+              <input
+                type="number"
+                min={1000}
+                max={20000}
+                step={100}
+                value={storeyHeight}
+                onChange={(e) => setStoreyHeight(e.target.value)}
+                placeholder="3000"
+                className="w-20 rounded border border-white/15 bg-zinc-900 px-1 py-0.5 text-zinc-200"
+                aria-label={t("storey_height")}
+              />
             </label>
           )}
           <select

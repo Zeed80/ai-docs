@@ -297,3 +297,35 @@ async def test_walls_come_from_the_sheet_measurement_not_from_the_model(monkeypa
     assert report["verifications"][1]["measured"]["width_mm"] == 900.0
     assert report["verifications"][1]["evidence_bbox_px"] == [5.0, 6.0, 7.0, 8.0]
     assert report["verifications"][0]["evidence_bbox_px"] == [1.0, 2.0, 3.0, 4.0]
+
+
+@pytest.mark.asyncio
+async def test_the_operator_gives_the_storey_height_the_plan_does_not_state():
+    """На плане высоты этажа нет — живой план: 53 стены измерены, модель не
+    собрана (`no_height`). Высота от оператора на прогон собирает модель;
+    прочитанная с листа важнее указанной."""
+    payload = """{
+      "storey": {"name": "1 этаж", "elevation_mm": 0},
+      "walls": [
+        {"id": "w1", "start_x_mm": 0, "start_y_mm": 0, "end_x_mm": 5000, "end_y_mm": 0,
+         "thickness_mm": 380}
+      ],
+      "openings": []
+    }"""
+    model, report = await read_construction_drawing(b"x", router=_FakeRouter(payload))
+    assert model is None and report["blocked_detail"] == {"no_height": 1}
+
+    model, report = await read_construction_drawing(
+        b"x", router=_FakeRouter(payload), storey_height_mm=3300
+    )
+    assert model is not None and len(model.elements) == 1
+    assert report["storey_height_source"] == "operator"
+
+    stated = payload.replace(
+        '"elevation_mm": 0}', '"elevation_mm": 0, "default_wall_height_mm": 3000}'
+    )
+    model, report = await read_construction_drawing(
+        b"x", router=_FakeRouter(stated), storey_height_mm=3300
+    )
+    assert report["storey_height_source"] == "sheet"
+    assert model.elements[0].box.height_mm == 3000

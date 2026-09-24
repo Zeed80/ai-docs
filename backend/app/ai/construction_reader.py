@@ -365,6 +365,7 @@ async def read_construction_drawing(
     allow_cloud: bool = False,
     site_name: str | None = None,
     building_name: str | None = None,
+    storey_height_mm: float | None = None,
 ) -> tuple[Any | None, dict[str, Any]]:
     """Ф5.2 public entry point: image bytes -> (ConstructionModel | None, report).
 
@@ -386,11 +387,24 @@ async def read_construction_drawing(
         # прочла, а отбросила его схема (живой план «на отм. 0.000»).
         return None, {"read_failed": True, **failure}
     sheet, measurement, verdicts = await _measured_walls(image_bytes, sheet)
+    # Высота этажа: на плане её обычно нет — тогда берётся указанная
+    # оператором на прогон; прочитанная с листа важнее.
+    height_source = "sheet" if sheet.storey.default_wall_height_mm else None
+    if height_source is None and storey_height_mm:
+        sheet = sheet.model_copy(
+            update={
+                "storey": sheet.storey.model_copy(
+                    update={"default_wall_height_mm": storey_height_mm}
+                )
+            }
+        )
+        height_source = "operator"
     model, report = construction_read_as_model(
         sheet, site_name=site_name, building_name=building_name
     )
     report["measurement"] = measurement
     report["verifications"] = verdicts
+    report["storey_height_source"] = height_source
     return model, report
 
 

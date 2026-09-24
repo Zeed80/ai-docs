@@ -1292,7 +1292,9 @@
       "save": "Save parameters",
       "saved": "Saved",
       "error": "Settings unavailable: {error}"
-    }
+    },
+    "storey_height": "Storey height, mm",
+    "storey_height_hint": "A floor plan rarely states the storey height, and the building model cannot be built without it. A height read from the sheet takes precedence."
   },
   "email": {
     "title": "Mail",
