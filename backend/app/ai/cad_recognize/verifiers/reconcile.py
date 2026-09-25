@@ -1876,3 +1876,44 @@ def _plate_hole_position(
                 }
             )
     return decisions
+
+
+_UNPLACED_HOLES = re.compile(
+    r"отверсти\w*\s+(?:Ø|M|М)\s*(\d+(?:[.,]\d+)?)[^;]*?(?:положени\w* на листе не проставлен|не построен)",
+    re.IGNORECASE,
+)
+
+
+def settle_placed_hole_notes(spec: dict[str, Any]) -> dict[str, Any]:
+    """Пометка ридера «отверстия Ø5: положение не проставлено — не построены»
+    снимается, когда отверстие этого номинала стоит в спеке и найдено на листе.
+
+    Живая пластина: M5 ридер не смог поставить и оставил пометку, проверка
+    нашла отверстие по x, согласование поставило его y и резьбу M5 — а
+    пометка по-прежнему блокировала сборку.
+    """
+    import copy
+
+    holes = (((spec.get("main_view") or {}).get("profile")) or {}).get("holes") or []
+    placed: set[float] = set()
+    for hole in holes:
+        if not isinstance(hole, dict) or not hole.get("evidence"):
+            continue
+        thread = hole.get("thread") or {}
+        for value in (hole.get("diameter_mm"), thread.get("nominal_diameter_mm")):
+            if isinstance(value, (int, float)):
+                placed.add(round(float(value), 2))
+    if not placed:
+        return spec
+    notes = [str(note) for note in spec.get("unresolved") or []]
+    kept = []
+    for note in notes:
+        found = _UNPLACED_HOLES.search(note)
+        if found and round(float(found.group(1).replace(",", ".")), 2) in placed:
+            continue
+        kept.append(note)
+    if len(kept) == len(notes):
+        return spec
+    spec = copy.deepcopy(spec)
+    spec["unresolved"] = kept
+    return spec

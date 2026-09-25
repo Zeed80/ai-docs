@@ -197,7 +197,19 @@ def _runs(ink: Any, row: int, x0: float, x1: float) -> list[tuple[int, int]]:
             start = None
     if start is not None:
         runs.append((start + int(x0) + 3, len(line) + int(x0) + 3))
-    return runs
+    # Пересечение с вертикалью (дно соседнего глухого отверстия) — не штрих
+    # этой строки: у Ø11 оно склеивалось со штрихами, и строки кромок
+    # расходились (212 против 177 px, живой plate-1).
+    crossings = []
+    for a, b in runs:
+        if b - a > 6:
+            continue
+        middle = (a + b) // 2
+        above = ink[max(0, row - 6) : max(0, row - 3), middle].any()
+        below = ink[row + 4 : row + 7, middle].any()
+        if above and below:
+            crossings.append((a, b))
+    return [run for run in runs if run not in crossings]
 
 
 def _extent(ink: Any, row: int, x0: float, x1: float, gap: float) -> tuple[str, float] | None:

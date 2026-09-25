@@ -137,3 +137,18 @@ def test_a_depth_is_adopted_only_when_the_label_matches_the_measurement():
     assert apply_hole_depths(spec, adopted)["main_view"]["profile"]["holes"][0]["depth_mm"] == 15.0
     assert asyncio.run(says(8)) == []
     assert asyncio.run(says(None)) == []
+
+
+def test_a_neighbouring_bottom_line_crossing_the_row_does_not_lengthen_the_hole():
+    """Живой plate-1: дно соседнего M5 пересекало верхнюю строку Ø11, и
+    пересечение склеивалось со штрихами — строки кромок расходились."""
+    image = Image.new("L", (400, 300), 255)
+    draw = ImageDraw.Draw(image)
+    for x in range(260, 380, 30):
+        draw.line([(x, 100), (x + 20, 100)], fill=0, width=3)
+    draw.line([(220, 60), (220, 140)], fill=0, width=3)  # чужая вертикаль
+    ink = np.asarray(image) < 128
+
+    runs = hole_depth._runs(ink, 100, 100.0, 380.0)
+
+    assert all(not (a <= 220 <= b) for a, b in runs)

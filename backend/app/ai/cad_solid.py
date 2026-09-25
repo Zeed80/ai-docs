@@ -118,6 +118,23 @@ _READER_EVIDENCE_DOUBTS = (
 )
 
 
+def _tolerance_only(note: str) -> bool:
+    """Пометка только о допусках, не о геометрии тела.
+
+    Живая пластина: «Толерансы отверстий (например, г7) не указаны в списке
+    подтверждённых значений» блокировала сборку тела, у которого все
+    отверстия подтверждены листом. Допуск не меняет номинальную геометрию;
+    пометка с геометрическим словом (положение, глубина, не построено)
+    остаётся блокером.
+    """
+    text = note.lower()
+    if not any(word in text for word in ("толеранс", "допуск", "квалитет", "посадк")):
+        return False
+    return not any(
+        word in text for word in ("положени", "глубин", "не построен", "диаметр не", "не найден")
+    )
+
+
 def solid_build_gate(
     spec: dict,
     candidate: FeatureTreeCandidate,
@@ -163,6 +180,7 @@ def solid_build_gate(
         and (
             item.startswith("PMI:")
             or (sheet_verified and any(doubt in item for doubt in _READER_EVIDENCE_DOUBTS))
+            or _tolerance_only(item)
         )
     ]
     blockers = [item for item in unresolved if item not in non_geometric and item not in advisory]
