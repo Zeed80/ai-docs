@@ -46,6 +46,7 @@ def verify_spec_against_sheet(image_bytes: bytes, spec: dict[str, Any]) -> dict[
     shape = profile.get("shape")
     if shape == "rectangle":
         reason = _plate_holes(image_bytes, profile, report)
+        _hole_depths(image_bytes, profile, report)
     elif shape == "circle":
         reason = _circular(image_bytes, profile, report)
     elif ((spec or {}).get("main_view") or {}).get("outer"):
@@ -70,6 +71,19 @@ def verify_spec_against_sheet(image_bytes: bytes, spec: dict[str, Any]) -> dict[
         reason = None
     _sheet_scale(image_bytes, spec or {}, report)
     return _finish(report, started, reason)
+
+
+def _hole_depths(image_bytes: bytes, profile: dict[str, Any], report: dict[str, Any]) -> None:
+    """Сквозное или глухое и на какую глубину — по виду на толщину (X1).
+
+    На плане глухое и сквозное — одна окружность, а «гл.15» ридер живьём не
+    читает: прочитанное «сквозное» уходило в тело молча.
+    """
+    from app.ai.cad_recognize.verifiers.hole_depth import verify_hole_depths
+
+    if not profile.get("holes") or not _is_number(profile.get("thickness_mm")):
+        return
+    report["items"].extend(verify_hole_depths(_gray(image_bytes), profile))
 
 
 def _bent_section(image_bytes: bytes, sheet: dict[str, Any], report: dict[str, Any]) -> None:

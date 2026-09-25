@@ -40,6 +40,8 @@ const VERIFY_KINDS = new Set([
   // Сборка: номер позиции на полке выноски листа.
   "assembly_position",
   "assembly_position_found",
+  // Глубина отверстия пластины по виду на толщину.
+  "hole_depth",
 ]);
 
 /** Вырез листа вокруг элемента проверки с обведённой рамкой (Ф9). Индекс —
@@ -71,6 +73,7 @@ const FIELD_KEYS = new Set([
   "center_v_mm",
   "bolt_circle_diameter_mm",
   "hole_diameter_mm",
+  "depth_mm",
 ]);
 
 /** Подтверждено из проверенного — по видам элементов, в порядке появления.

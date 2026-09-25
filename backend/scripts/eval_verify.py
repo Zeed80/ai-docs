@@ -979,7 +979,37 @@ def eval_keyway_discovery(png: bytes, truth: dict) -> list[dict[str, Any]]:
     return outcomes
 
 
+def eval_hole_depth(png: bytes, truth: dict) -> list[dict]:
+    """Сквозное/глухое и глубина отверстий пластины по виду на толщину.
+
+    Случаи — как в `eval_hole_depth.py`: верное чтение, перевёрнутое
+    (сквозное ↔ глухое на половину толщины) и глубина +3 мм у глухого.
+    """
+    import numpy as np
+    from eval_hole_depth import cases
+    from PIL import Image
+
+    from app.ai.cad_recognize.verifiers.hole_depth import verify_hole_depths
+
+    profile = (truth["spec"].get("main_view") or {}).get("profile") or {}
+    if profile.get("shape") != "rectangle" or not profile.get("holes"):
+        return []
+    if not profile.get("thickness_mm"):
+        return []
+    gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))
+    outcomes, memo = [], {}
+    for case, index, read in cases(profile):
+        if id(read) not in memo:
+            memo[id(read)] = verify_hole_depths(gray, read)
+        verdict = memo[id(read)][index]
+        found = verdict["status"] != "unmeasurable"
+        want = "confirmed" if case == "truth" else "refuted"
+        outcomes.append({"case": case, "found": found, "correct": verdict["status"] == want})
+    return outcomes
+
+
 _VERIFIERS = {
+    "hole_depth": eval_hole_depth,
     "keyway_discovery": eval_keyway_discovery,
     "sheet_profile": eval_sheet_profile,
     "groove": eval_groove,

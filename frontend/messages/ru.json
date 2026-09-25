@@ -1067,7 +1067,9 @@
       "domain_openings_measured": "; проёмов {count} (дверей {doors}, окон {windows})",
       "assembly_sheet_positions": "Полок выносок на листе: {shelves}; номер на полке подтверждён у {confirmed} из {total} позиций",
       "assurance_verify_kind_assembly_position": "Позиция {index}",
-      "assurance_verify_kind_assembly_position_found": "Позиция {index} (найдена на полке)"
+      "assurance_verify_kind_assembly_position_found": "Позиция {index} (найдена на полке)",
+      "assurance_verify_kind_hole_depth": "Глубина отверстия {index}",
+      "assurance_field_depth_mm": "глубина"
     },
     "workflow": {
       "loading": "Загрузка воркфлоу…",

@@ -1067,7 +1067,9 @@
       "domain_openings_measured": "; {count} openings ({doors} doors, {windows} windows)",
       "assembly_sheet_positions": "Leader shelves on the sheet: {shelves}; number confirmed on a shelf for {confirmed} of {total} positions",
       "assurance_verify_kind_assembly_position": "Position {index}",
-      "assurance_verify_kind_assembly_position_found": "Position {index} (found on a shelf)"
+      "assurance_verify_kind_assembly_position_found": "Position {index} (found on a shelf)",
+      "assurance_verify_kind_hole_depth": "Hole depth {index}",
+      "assurance_field_depth_mm": "depth"
     },
     "workflow": {
       "loading": "Loading workflows…",
