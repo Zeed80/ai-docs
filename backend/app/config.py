@@ -168,6 +168,10 @@ class Settings(BaseSettings):
     # E17). Любой отказ — работа с исходником. CAD_AUTO_UPSCALE=false выключает.
     cad_auto_upscale: bool = True
     cad_upscale_timeout_s: float = 600.0
+    # Спорные места проверки (фигура найдена, но слиплась или закрыта
+    # размерами) перерисовываются FLUX.2 dev по вырезу и принимаются только
+    # проверкой (план, E30b). CAD_REDRAW_DISPUTED=false выключает.
+    cad_redraw_disputed: bool = True
     # Technical-drawing line vectorizer (infra/technical-vectorizer) —
     # vendored, openly-licensed (MPL-2.0), pretrained Deep Vectorization of
     # Technical Drawings model. Validated live (2026-07-11): zero-shot

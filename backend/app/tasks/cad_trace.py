@@ -4139,6 +4139,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 from app.ai.cad_recognize.verifiers.stage import (
                     verify_spec_against_sheet,
                 )
+                from app.config import settings as _redraw_settings
 
                 try:
                     verification = verify_spec_against_sheet(content, spec)
@@ -4149,6 +4150,61 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         error=str(exc)[:200],
                     )
                     verification = None
+                # Лист для проверок: спорные места (фигура найдена, но слиплась
+                # или закрыта размерами) перерисовываются FLUX.2 по вырезу и
+                # вклеиваются, только если проверка принимает перерисовку (план,
+                # E30b). Ридер и показ — по исходнику.
+                checked_content = content
+                redraw_log: list[dict[str, Any]] = []
+
+                def _verify_checked() -> dict[str, Any]:
+                    """Проверка по листу с заплатками; принятое перерисовкой помечено."""
+                    report = verify_spec_against_sheet(checked_content, spec)
+                    done = {path for entry in redraw_log for path in entry.get("accepted") or []}
+                    for item in report.get("items") or []:
+                        if item.get("path") in done:
+                            item["measured_on"] = "redraw"
+                    if redraw_log:
+                        report["redraw"] = redraw_log
+                    return report
+
+                if (
+                    verification
+                    and params.get("redraw_disputed", True)
+                    and _redraw_settings.cad_redraw_disputed
+                    and any(
+                        item.get("redraw_box") and item.get("status") == "unmeasurable"
+                        for item in verification.get("items") or []
+                    )
+                ):
+                    import asyncio as _redraw_asyncio
+
+                    from app.ai.cad_recognize.verifiers.redraw import patch_disputed
+
+                    try:
+                        checked_content, redraw_log = await _redraw_asyncio.to_thread(
+                            patch_disputed,
+                            content,
+                            spec,
+                            verification,
+                            comfy_url=_redraw_settings.comfyui_url,
+                        )
+                    except Exception as exc:  # noqa: BLE001 — перерисовка не роняет прогон
+                        checked_content, redraw_log = content, [{"outcome": str(exc)[:200]}]
+                    accepted = [
+                        path for entry in redraw_log for path in entry.get("accepted") or []
+                    ]
+                    if accepted:
+                        verification = _verify_checked()
+                    else:
+                        verification["redraw"] = redraw_log
+                    await _record(
+                        "verify.redraw",
+                        "completed",
+                        f"Спорные места перерисованы: принято {len(accepted)} "
+                        f"из {sum(len(entry.get('paths') or []) for entry in redraw_log)}",
+                        {"entries": redraw_log},
+                    )
                 # Профиль по листу (план, Ф3/Ф8): прочитанный профиль не
                 # подтвердился, а уступы вида и надписи, выписанные ридером,
                 # строго дают другой — он принимается целиком, до сборки
@@ -4178,7 +4234,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         {"decision": adoption},
                     )
                     try:
-                        verification = verify_spec_against_sheet(content, spec)
+                        verification = _verify_checked()
                     except Exception as exc:  # noqa: BLE001 — a check must not break the run
                         logger.warning(
                             "cad_verify_failed",
@@ -4227,7 +4283,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         {"decision": sleeve},
                     )
                     try:
-                        verification = verify_spec_against_sheet(content, spec)
+                        verification = _verify_checked()
                     except Exception as exc:  # noqa: BLE001 — a check must not break the run
                         logger.warning(
                             "cad_verify_failed",
@@ -4467,7 +4523,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         {"decision": housing},
                     )
                     try:
-                        verification = verify_spec_against_sheet(content, spec)
+                        verification = _verify_checked()
                     except Exception as exc:  # noqa: BLE001 — проверка не ломает прогон
                         logger.warning(
                             "cad_verify_failed",
@@ -4491,7 +4547,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         {"addition": cavity},
                     )
                     try:
-                        verification = verify_spec_against_sheet(content, spec)
+                        verification = _verify_checked()
                     except Exception as exc:  # noqa: BLE001 — проверка не ломает прогон
                         logger.warning(
                             "cad_verify_failed",
@@ -4518,7 +4574,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         {"decision": contour},
                     )
                     try:
-                        verification = verify_spec_against_sheet(content, spec)
+                        verification = _verify_checked()
                     except Exception as exc:  # noqa: BLE001 — a check must not break the run
                         logger.warning(
                             "cad_verify_failed",

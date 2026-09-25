@@ -674,6 +674,14 @@ def verify_placed_on_sections(
                     "measured": measured,
                     "evidence_bbox_px": box,
                     "reason": f"{name} на сечении не измерить — линии размеров закрывают фигуру",
+                    # Спорное место для точечной перерисовки (`redraw`): всё
+                    # сечение с полем под выносные.
+                    "redraw_box": [
+                        round(cx - 1.6 * r, 1),
+                        round(cy - 1.6 * r, 1),
+                        round(cx + 1.6 * r, 1),
+                        round(cy + 1.6 * r, 1),
+                    ],
                 }
             )
             continue
