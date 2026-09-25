@@ -194,3 +194,23 @@ def test_a_coarse_sheet_is_unmeasurable_not_refuted():
 
     assert [item["status"] for item in items] == ["unmeasurable"]
     assert "грубый" in items[0]["reason"]
+
+
+def test_without_a_shaft_view_every_placed_feature_still_gets_a_verdict():
+    """Контракт стадии: вид вала не найден (фото) — «не измеримо», не молчание."""
+    import io
+
+    from PIL import Image
+
+    from app.ai.cad_recognize.verifiers.stage import verify_spec_against_sheet
+
+    blank = io.BytesIO()
+    Image.new("L", (1200, 600), 255).save(blank, format="PNG")
+    spec = {"main_view": _body(_hole(45.0, 8.0), _flat(90.0, 4.0))}
+    items = [
+        item
+        for item in verify_spec_against_sheet(blank.getvalue(), spec)["items"]
+        if item["kind"] == "placed_feature"
+    ]
+
+    assert [item["status"] for item in items] == ["unmeasurable", "unmeasurable"], items

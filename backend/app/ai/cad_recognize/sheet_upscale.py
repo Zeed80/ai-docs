@@ -77,6 +77,8 @@ class UpscaleResult:
     factor: int = 0
     seconds: float = 0.0
     agreement: dict[str, float] = field(default_factory=dict)
+    # Толщина основной линии увеличенного листа — то, что увидят проверки.
+    line_after_px: float = 0.0
 
     def as_event(self) -> dict[str, Any]:
         return {
@@ -84,6 +86,7 @@ class UpscaleResult:
             "reason": self.reason,
             "line_px": round(self.line_px, 2),
             "factor": self.factor,
+            "line_after_px": round(self.line_after_px, 2),
             "seconds": round(self.seconds, 1),
             "agreement": {k: round(v, 3) for k, v in self.agreement.items()},
         }
@@ -421,9 +424,9 @@ def upscale_sheet(
 
     buffer = io.BytesIO()
     Image.fromarray(gray).save(buffer, format="PNG")
-    raw = None
     failures: list[str] = []
-    try:
+
+    def run(scale: int) -> bytes | None:
         # Разовый отказ не должен стоить листу увеличения: живая втулка part_03
         # получила 400, а тот же лист минутой позже увеличился ×8 без ошибок.
         for attempt in range(_ATTEMPTS):
@@ -433,17 +436,45 @@ def upscale_sheet(
                     # Как перед каждым запуском диффузии в Студии: карта одна,
                     # модель ридера занимает её почти целиком (OOM 2026-07-05).
                     gpu_lock.unload_ollama()
-                raw = run_comfy_upscale(comfy, buffer.getvalue(), factor, timeout_s=timeout_s)
-                break
+                return run_comfy_upscale(comfy, buffer.getvalue(), scale, timeout_s=timeout_s)
             except Exception as exc:  # noqa: BLE001 — апскейл не должен ронять оцифровку
                 failures.append(str(exc))
                 logger.warning("cad_upscale_failed", attempt=attempt + 1, error=str(exc)[:300])
                 if attempt + 1 < _ATTEMPTS:
                     time.sleep(_RETRY_PAUSE_S)
+        return None
+
+    upscaled = None
+    line_after = 0.0
+    try:
+        raw = run(factor)
+        if raw is not None:
+            upscaled = fill_hollow_strokes(
+                np.asarray(Image.open(io.BytesIO(raw)).convert("L")), factor
+            )
+            line_after = main_line_px(upscaled)
+            # Утончение SeedVR2 гуляет (0,65…0,93 простого увеличения): 75 dpi,
+            # линия 1,95 px, ×3 дало 3,8 px при пороге 4,5 — проверки «грубый
+            # лист» и после увеличения. Не дошли до порога — второй проход с
+            # коэффициентом по фактическому утончению, один раз.
+            if 0.0 < line_after < threshold:
+                thinning = line_after / (factor * line_px)
+                again = upscale_factor(
+                    thinning / _SR_THINNING * line_px, gray.shape, threshold, max_factor
+                )
+                if again > factor:
+                    raw_again = run(again)
+                    if raw_again is not None:
+                        candidate = fill_hollow_strokes(
+                            np.asarray(Image.open(io.BytesIO(raw_again)).convert("L")), again
+                        )
+                        candidate_line = main_line_px(candidate)
+                        if candidate_line > line_after:
+                            upscaled, factor, line_after = candidate, again, candidate_line
     finally:
         # Ридер идёт следом на той же карте.
         gpu_lock.unload_comfyui()
-    if raw is None:
+    if upscaled is None:
         return UpscaleResult(
             content,
             False,
@@ -452,7 +483,6 @@ def upscale_sheet(
             factor=factor,
             seconds=time.monotonic() - started,
         )
-    upscaled = fill_hollow_strokes(np.asarray(Image.open(io.BytesIO(raw)).convert("L")), factor)
     seconds = time.monotonic() - started
     scores = agreement(gray, upscaled)
     patched = 0
@@ -473,18 +503,20 @@ def upscale_sheet(
             factor=factor,
             seconds=seconds,
             agreement=scores,
+            line_after_px=line_after,
         )
     buffer = io.BytesIO()
     Image.fromarray(upscaled).save(buffer, format="PNG")
     return UpscaleResult(
         buffer.getvalue(),
         True,
-        f"лист увеличен ×{factor}: линия {line_px:.1f} px"
+        f"лист увеличен ×{factor}: линия {line_px:.1f} → {line_after:.1f} px"
         + (f"; {patched} плиток расходились — там простое увеличение" if patched else ""),
         line_px=line_px,
         factor=factor,
         seconds=seconds,
         agreement=scores,
+        line_after_px=line_after,
     )
 
 

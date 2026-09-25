@@ -270,3 +270,36 @@ def test_the_operator_agreement_threshold_decides_whether_the_upscale_is_kept(mo
     assert default.applied is True
     assert strict.applied is False
     assert "< 0.92" in strict.reason
+
+
+def _shaft(line: int, scale: int = 1) -> np.ndarray:
+    """Вал из прямоугольников без подписей — в масштабе ``scale``."""
+    image = Image.new("L", (1400 * scale, 1000 * scale), 255)
+    draw = ImageDraw.Draw(image)
+    for x0, x1, r in ((150, 450, 120), (450, 800, 80), (800, 1150, 100)):
+        draw.rectangle(
+            [x0 * scale, (500 - r) * scale, x1 * scale, (500 + r) * scale], outline=0, width=line
+        )
+    return np.asarray(image)
+
+
+def test_an_upscale_that_thins_the_line_below_the_threshold_is_redone_once(monkeypatch):
+    """75 dpi: линия 1,95 px, ×3 дало 3,8 px — проверки остались бы «грубый лист».
+    Второй проход — с коэффициентом по фактическому утончению."""
+    monkeypatch.setattr(sheet_upscale, "_vram_free", lambda comfy: None)
+    monkeypatch.setattr("app.ai.gpu_lock.unload_comfyui", lambda: None)
+    monkeypatch.setattr("app.ai.gpu_lock.unload_ollama", lambda: 0)
+    calls = []
+
+    def thinning(comfy, png, scale, *, timeout_s=600):
+        calls.append(scale)
+        # SR, утончающий до 0,6 простого увеличения.
+        return _png(_shaft(int(0.6 * 2 * scale), scale))
+
+    monkeypatch.setattr(sheet_upscale, "run_comfy_upscale", thinning)
+    result = sheet_upscale.upscale_sheet(_png(_shaft(2)), comfy_url="http://comfy", timeout_s=5)
+
+    assert result.applied is True, result.reason
+    assert len(calls) == 2 and calls[1] > calls[0], calls
+    assert result.factor == calls[1]
+    assert result.line_after_px >= 4.5

@@ -962,7 +962,12 @@ def _shaft(
         and _is_number(step.get("length_mm"))
     ]
     if len(steps) < 2 or len(steps) != len(outer):
-        return "нет полного наружного профиля (Ø и длина каждой ступени)"
+        reason = "нет полного наружного профиля (Ø и длина каждой ступени)"
+        if body.get("placed_features"):
+            from app.ai.cad_recognize.verifiers.section_outline import unmeasurable_placed
+
+            report["items"].extend(unmeasurable_placed(body, reason))
+        return reason
     total = sum(float(step["length_mm"]) for _, step in steps)
     gray = _gray(image_bytes)
     # Диаметры листа — чтобы главным видом стал вал, а не рамка или штамп
@@ -980,6 +985,7 @@ def _shaft(
         _keyways(gray, [], body, report)
         _cross_holes(gray, [], body, report)
         _turned_details(gray, [], body, report)
+        _placed_on_sections(gray, None, None, body, report)
         return reason
     # Масштаб — по цепочке, а не по прочитанной сумме (`chain_frame`): одно
     # неверное звено иначе уводит всё — и ступени, и пазы.
@@ -1065,9 +1071,15 @@ def _placed_on_sections(
     gray: Any, frame: Any, profile: Any, body: dict[str, Any], report: dict[str, Any]
 ) -> None:
     """Лыски и радиальные отверстия по размещению — по контуру сечений (дорожка У)."""
-    from app.ai.cad_recognize.verifiers.section_outline import verify_placed_on_sections
+    from app.ai.cad_recognize.verifiers.section_outline import (
+        unmeasurable_placed,
+        verify_placed_on_sections,
+    )
 
-    if frame is None or not body.get("placed_features"):
+    if not body.get("placed_features"):
+        return
+    if frame is None:
+        report["items"].extend(unmeasurable_placed(body, "главный вид вала на листе не найден"))
         return
     line_px = float(getattr(profile, "line_px", 0.0) or 0.0)
     report["items"].extend(

@@ -451,9 +451,11 @@ def flat_line(
     distance = float(np.median(xs[keep] * normal[0] + ys[keep] * normal[1]))
     angle = math.degrees(math.atan2(-normal[1], normal[0])) % 360.0
     # Штрих края много толще обводки — хорда слиплась с соседней линией
-    # (выносной снаружи); хорда — внутренняя: её середина от внутреннего края.
+    # (выносной, дугой у мелкой лыски): какой край её, по листу не различить.
+    # Правило «от внутреннего края» верно на одном листе и врёт на увеличенном
+    # (лыска 1,3 мм при линии 1,2 мм: 2,4 вместо 1,3) — не измеримо.
     if stroke > 1.3 * line:
-        return round(angle, 1), distance - stroke + line / 2.0
+        return None
     return round(angle, 1), distance - line / 2.0
 
 
@@ -508,6 +510,36 @@ def _angle_gap(a: float, b: float) -> float:
     return abs((a - b + 180.0) % 360.0 - 180.0)
 
 
+def _radial_items(body: dict) -> list[tuple[int, dict]]:
+    """Лыски и отверстия по размещению поперёк оси (ось элемента ⟂ оси детали)."""
+    return [
+        (index, item)
+        for index, item in enumerate(body.get("placed_features") or [])
+        if isinstance(item, dict)
+        and item.get("kind") in ("hole", "pocket")
+        and len(item.get("axis") or []) == 3
+        and len(item.get("origin_mm") or []) == 3
+        and abs(float(item["axis"][2])) < 0.2
+    ]
+
+
+def unmeasurable_placed(body: dict, reason: str) -> list[dict[str, Any]]:
+    """Каждому элементу поперёк оси — «не измеримо» с причиной: ни одна
+    гипотеза не выходит из стадии без вердикта (вид вала не найден, лист груб)."""
+    return [
+        {
+            "kind": "placed_feature",
+            "path": f"main_view.placed_features[{index}]",
+            "feature_id": item.get("id"),
+            "read": {},
+            "status": "unmeasurable",
+            "measured": {},
+            "reason": reason,
+        }
+        for index, item in _radial_items(body)
+    ]
+
+
 def verify_placed_on_sections(
     gray: Any,
     main_view_bbox: tuple[float, float, float, float],
@@ -527,33 +559,14 @@ def verify_placed_on_sections(
     from app.ai.cad_recognize.verifiers.plate_frame import _ink
 
     outer = [s for s in body.get("outer") or [] if isinstance(s, dict)]
-    items = [
-        (index, item)
-        for index, item in enumerate(body.get("placed_features") or [])
-        if isinstance(item, dict)
-        and item.get("kind") in ("hole", "pocket")
-        and len(item.get("axis") or []) == 3
-        and len(item.get("origin_mm") or []) == 3
-        and abs(float(item["axis"][2])) < 0.2
-    ]
+    items = _radial_items(body)
     if not items or not outer:
         return []
     if 0.0 < line_px < _MIN_LINE_PX:
-        return [
-            {
-                "kind": "placed_feature",
-                "path": f"main_view.placed_features[{index}]",
-                "feature_id": item.get("id"),
-                "read": {},
-                "status": "unmeasurable",
-                "measured": {},
-                "reason": (
-                    f"лист слишком грубый: основная линия {line_px:.1f} px "
-                    f"(нужно от {_MIN_LINE_PX:g})"
-                ),
-            }
-            for index, item in items
-        ]
+        return unmeasurable_placed(
+            body,
+            f"лист слишком грубый: основная линия {line_px:.1f} px (нужно от {_MIN_LINE_PX:g})",
+        )
     gray = np.asarray(gray)
     ink = _ink(gray)
     diameters = [float(s["diameter_mm"]) for s in outer if s.get("diameter_mm")]

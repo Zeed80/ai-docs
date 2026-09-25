@@ -17,7 +17,7 @@ STEPS = [(30.0, 30.0), (20.0, 40.0), (25.0, 30.0)]
 MAIN, THIN = 6, 3
 
 
-def _sheet(main: int = MAIN, thin: int = THIN) -> np.ndarray:
+def _sheet(main: int = MAIN, thin: int = THIN, lowered: float = 0.0) -> np.ndarray:
     # Размер как у листа: ядро поиска кромок (0,6 % меньшей стороны) должно
     # быть толще основной линии, как на настоящем листе при любом dpi.
     image = Image.new("L", (2800, 2000), 255)
@@ -27,7 +27,10 @@ def _sheet(main: int = MAIN, thin: int = THIN) -> np.ndarray:
     for diameter, length in STEPS:
         r = diameter / 2 * PX
         x_end = x + length * PX
-        draw.line([(x, AXIS - r), (x_end, AXIS - r)], fill=0, width=main)
+        # ``lowered`` — верхняя кромка средней ступени ниже на столько px:
+        # кромка и опущенная кромка лыски, слитые в одну линию.
+        top = AXIS - r + (lowered if (diameter, length) == STEPS[1] else 0.0)
+        draw.line([(x, top), (x_end, top)], fill=0, width=main)
         draw.line([(x, AXIS + r), (x_end, AXIS + r)], fill=0, width=main)
         # грань уступа / торец — от меньшего радиуса до большего
         low = min(previous, r)
@@ -226,3 +229,14 @@ def test_the_main_view_is_the_one_whose_steps_match_the_sheet_diameters():
         profile.x1,
         profile.axis_y,
     )
+
+
+def test_a_step_with_an_asymmetric_edge_inside_the_view_does_not_split_it():
+    """Лыска на грубом исходнике: кромка ступени опущена на 3,5 px (слилась с
+    кромкой лыски) — пары на всей ступени нет, но вид — целый, торцы — свои."""
+    located = locate_shaft_frame(_sheet(lowered=3.5), sum(length for _d, length in STEPS))
+
+    assert located is not None
+    frame, _profile = located
+    assert abs(frame.origin_px[0] - X0) <= 3
+    assert abs(frame.mm_per_px - 1.0 / PX) <= 0.01 / PX

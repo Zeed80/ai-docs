@@ -35,6 +35,10 @@ from app.ai.cad_recognize.verifiers.view_frame import ViewFrame
 _SYMMETRY_PX = 2.0
 # Основная линия — не тоньше этой доли эталонной толщины (тонкая — вдвое тоньше).
 _MAIN_SHARE = 0.6
+# Внутренние разрывы профиля заполняются парами с таким кратным допуском.
+_LOOSE_SYMMETRY_SHARE = 2.5
+# Лист годен для замера — основная линия не тоньше (`shaft_profile._MIN_LINE_PX`).
+_MEASURABLE_LINE_PX = 4.5
 # Разрыв профиля, который ещё считается тем же видом, — доля всей протяжённости
 # найденных столбцов. Внутри вида разрывы до 3,5 % (короткая ступень без пары,
 # канавка: shaft-3 — 22 px, shaft-20 — 47 px), вид с торца отделён на 20–33 %.
@@ -124,7 +128,7 @@ def locate_shaft_views(
 
     passing = []
     for axis_y in _axis_candidates(main, weight, min_length):
-        found = _profile(main, axis_y, gray.shape[1], min_length)
+        found = _profile(main, axis_y, gray.shape[1], min_length, main_ref)
         if found is None:
             continue
         x0, x1, half = found
@@ -321,7 +325,7 @@ def _axis_candidates(lines: list[Any], weight: dict[int, float], min_length: int
     return result
 
 
-def _profile(lines: list[Any], axis_y: float, width: int, min_length: int):
+def _profile(lines: list[Any], axis_y: float, width: int, min_length: int, main_ref: float = 0.0):
     """Самая внешняя симметричная пара на каждом столбце, самый длинный участок."""
     import numpy as np
 
@@ -344,7 +348,37 @@ def _profile(lines: list[Any], axis_y: float, width: int, min_length: int):
     columns = np.nonzero(~np.isnan(half))[0]
     if columns.size == 0:
         return None
+    # Внутренние разрывы — парами с допуском шире: на грубом исходнике кромка
+    # ступени и опущенная кромка лыски в 1,9 px друг от друга сливаются в одну
+    # линию посередине (увеличение SeedVR2 честно рисует одну), пара на всей
+    # ступени несимметрична на 3 px, и вид рвался надвое. Концы профиля не
+    # трогаются — там подписи и выноски у торцов. Только на листе, годном для
+    # замера (основная линия от 4,5 px): грубее его продукт сначала увеличивает,
+    # а на грубом исходнике широкий допуск находил вид, где пазы опровергались
+    # ложно (150 dpi).
+    inner = np.zeros(width, dtype=bool)
+    inner[int(columns[0]) : int(columns[-1]) + 1] = True
+    inner &= np.isnan(half)
+    if inner.any() and main_ref >= _MEASURABLE_LINE_PX:
+        loose = _LOOSE_SYMMETRY_SHARE * _SYMMETRY_PX
+        for top in above:
+            mirror = 2.0 * axis_y - top.position
+            for bottom in below:
+                if abs(bottom.position - mirror) > loose:
+                    continue
+                start, end = max(top.start, bottom.start), min(top.end, bottom.end)
+                if end - start < min_length:
+                    continue
+                value = (bottom.position - top.position) / 2.0
+                span = slice(int(start), int(end) + 1)
+                segment = half[span]
+                half[span] = np.where(
+                    inner[span] & np.isnan(segment),
+                    value,
+                    np.where(inner[span], np.fmax(segment, value), segment),
+                )
     gap = max(3.0, _GAP_TOTAL_SHARE * float(columns[-1] - columns[0]))
+    columns = np.nonzero(~np.isnan(half))[0]
     runs: list[list[int]] = [[int(columns[0]), int(columns[0])]]
     for x in columns[1:]:
         x = int(x)
