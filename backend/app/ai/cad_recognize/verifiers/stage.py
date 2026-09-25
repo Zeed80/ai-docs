@@ -1518,6 +1518,9 @@ def _record_verdict(item: dict[str, Any], verdict: Any) -> None:
         item["evidence_bbox_px"] = [round(float(v), 1) for v in verdict.evidence_bbox_px]
 
 
+_OTHER_OBJECT_KINDS = frozenset({"plate_hole", "bolt_circle", "concentric_hole"})
+
+
 def attach_sheet_evidence(spec: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
     """Элементы, найденные проверкой на листе, получают свидетельство — место находки.
 
@@ -1534,6 +1537,15 @@ def attach_sheet_evidence(spec: dict[str, Any], report: dict[str, Any]) -> dict[
     for item in report.get("items") or []:
         box = item.get("evidence_bbox_px")
         if not box or not item.get("measured"):
+            continue
+        # У отверстий «не измеримо» с замером — по E28 найденный ДРУГОЙ объект
+        # (не та окружность): его рамка — не свидетельство этого элемента. У
+        # фасок и канавок «не измеримо» значит «найдено, размер условен» —
+        # там рамка законна (z4-r4).
+        if item.get("kind") in _OTHER_OBJECT_KINDS and item.get("status") not in (
+            "confirmed",
+            "refuted",
+        ):
             continue
         node = _resolve(spec, str(item.get("path") or ""))
         if node is None or node.get("evidence"):

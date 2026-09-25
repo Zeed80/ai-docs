@@ -186,6 +186,17 @@ def solid_build_gate(
             for index, item in enumerate(body.get(group) or [])
             if isinstance(item, dict) and not item.get("evidence")
         ]
+        # Пластина и фланец: отверстия и массивы профиля — то же правило. Гейт
+        # знал только группы тела вращения, и геометрия пластины собиралась без
+        # единого свидетельства (план, Ф4). Прорези — нет: их проверяльщика
+        # ещё нет, и свидетельство им взять неоткуда.
+        profile = body.get("profile") or {}
+        missing_evidence += [
+            f"main_view.profile.{group}.{index}"
+            for group in ("holes", "hole_patterns")
+            for index, item in enumerate(profile.get(group) or [])
+            if isinstance(item, dict) and not item.get("evidence")
+        ]
         if missing_evidence:
             blockers.append(
                 "геометрия без локализованного evidence: "

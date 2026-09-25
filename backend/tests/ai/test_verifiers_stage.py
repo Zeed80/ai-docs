@@ -1035,3 +1035,55 @@ def test_the_plan_is_not_assembled_from_two_stacked_views_below_it():
     assert frame is not None and frame.bbox_px[1] < 150 and frame.bbox_px[3] < 560
     fooled = locate_plate_frame(np.asarray(image), 100.0, 100.0)
     assert fooled is not None and fooled.bbox_px[1] > 550
+
+
+def test_a_plate_hole_gets_evidence_only_when_the_sheet_found_that_hole():
+    """Гейт свидетельств теперь держит и отверстия пластины: «не измеримо» с
+    замером у отверстия — это найденная ДРУГАЯ окружность, её рамка — не
+    свидетельство; подтверждённое и опровергнутое — свидетельство."""
+    from app.ai.cad_recognize.verifiers.stage import attach_sheet_evidence
+    from app.ai.cad_solid import solid_build_gate
+
+    spec = {
+        "main_view": {
+            "profile": {
+                "shape": "rectangle",
+                "width_mm": 80.0,
+                "height_mm": 50.0,
+                "thickness_mm": 10.0,
+                "holes": [
+                    {"center_x_mm": -20.0, "center_y_mm": 0.0, "diameter_mm": 6.6},
+                    {"center_x_mm": 20.0, "center_y_mm": 0.0, "diameter_mm": 9.0},
+                ],
+            }
+        }
+    }
+    report = {
+        "items": [
+            {
+                "kind": "plate_hole",
+                "path": "main_view.profile.holes[0]",
+                "status": "confirmed",
+                "measured": {"diameter_mm": 6.6},
+                "evidence_bbox_px": [1, 2, 3, 4],
+            },
+            {
+                "kind": "plate_hole",
+                "path": "main_view.profile.holes[1]",
+                "status": "unmeasurable",
+                "measured": {"diameter_mm": 14.0},
+                "evidence_bbox_px": [5, 6, 7, 8],
+            },
+        ]
+    }
+
+    fixed = attach_sheet_evidence(spec, report)
+
+    holes = fixed["main_view"]["profile"]["holes"]
+    assert holes[0]["evidence"][0]["bbox"] == [1, 2, 3, 4]
+    assert "evidence" not in holes[1]
+    from app.ai.cad_solid import feature_tree_from_spec
+
+    gate = solid_build_gate(fixed, feature_tree_from_spec(fixed), require_source_evidence=True)
+    assert any("main_view.profile.holes.1" in blocker for blocker in gate["blockers"])
+    assert not any("main_view.profile.holes.0" in blocker for blocker in gate["blockers"])
