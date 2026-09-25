@@ -604,6 +604,54 @@ class SpecPlacement(BaseModel):
     angle_deg: float = 0.0
 
 
+class SpecPlacedFeature(BaseModel):
+    """Элемент по 3D-размещению в системе детали (дорожка У).
+
+    То, что списки по типам не выражают: радиальное отверстие под любым
+    углом и в любой ступени, наклонное отверстие, лыска на валу (карман-
+    прямоугольник на цилиндре), отверстие во фланце не по оси, прилив на
+    цилиндре. Система детали — как у ядра (см. ``cad_recognize.features``):
+    тело вращения — ось +Z от левого торца, угол от +X; призма — от центра
+    контура, Z от грани плана. ``axis`` у выреза — в материал, у прилива —
+    наружу; ``ref`` — опорное направление в плоскости элемента (длина
+    прорези и прямоугольника — вдоль него).
+    """
+
+    id: str | None = None  # см. SpecChamfer.id
+    kind: Literal["hole", "pocket", "boss"]
+    profile: Literal["circle", "rectangle", "slot"] = "circle"
+    origin_mm: list[float] = Field(min_length=3, max_length=3)
+    axis: list[float] = Field(min_length=3, max_length=3)
+    ref: list[float] = Field(default_factory=lambda: [1.0, 0.0, 0.0], min_length=3, max_length=3)
+    diameter_mm: float | None = Field(default=None, gt=0)
+    width_mm: float | None = Field(default=None, gt=0)
+    height_mm: float | None = Field(default=None, gt=0)
+    depth_mm: float | None = Field(default=None, gt=0)
+    through: bool | None = None
+    thread: SpecThread | None = None
+    evidence: list[SpecEvidence] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _shape_has_its_sizes(self) -> SpecPlacedFeature:
+        if sum(value * value for value in self.axis) < 1e-12:
+            raise ValueError("axis must not be zero")
+        if self.kind == "hole":
+            if self.diameter_mm is None:
+                raise ValueError("placed hole requires diameter_mm")
+            if self.through is False and self.depth_mm is None:
+                raise ValueError("blind placed hole requires depth_mm")
+        else:
+            if self.depth_mm is None:
+                raise ValueError(f"placed {self.kind} requires depth_mm")
+            if self.profile == "circle" and self.diameter_mm is None:
+                raise ValueError("circle requires diameter_mm")
+            if self.profile in ("rectangle", "slot") and (
+                self.width_mm is None or self.height_mm is None
+            ):
+                raise ValueError(f"{self.profile} requires width_mm and height_mm")
+        return self
+
+
 class SpecBody(BaseModel):
     name: str | None = None
     type: str = "unknown"
@@ -632,6 +680,8 @@ class SpecBody(BaseModel):
     circular_hole_patterns: list[SpecCircularHolePattern] = Field(default_factory=list)
     flanges: list[SpecFlange] = Field(default_factory=list)
     face_grooves: list[SpecFaceGroove] = Field(default_factory=list)
+    # Дорожка У: элементы по 3D-размещению — для любой основы.
+    placed_features: list[SpecPlacedFeature] = Field(default_factory=list)
     # Accepted only for compatibility with already stored prototype responses.
     # The deterministic drafter still requires explicit, complete outer[] data.
     features: list[dict[str, Any]] = Field(default_factory=list)
@@ -2241,6 +2291,8 @@ _BODY_FEATURE_FIELDS = (
     # sleeve of part_03 with its three-lug flange silently gone.
     "flanges",
     "face_grooves",
+    # Дорожка У: элемент по 3D-размещению (лыска, отверстие под любым углом).
+    "placed_features",
 )
 
 # The prismatic-profile equivalent of _BODY_FEATURE_FIELDS — holes/patterns/

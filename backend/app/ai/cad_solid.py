@@ -574,6 +574,87 @@ def _wall_feature_params(
     return params
 
 
+def _profile_offset(profile: dict) -> tuple[float, float, float]:
+    """Система детали (от центра контура) → система ядра для призматической основы."""
+    if profile.get("shape") == "rectangle":
+        return (
+            float(profile.get("width_mm") or 0.0) / 2.0,
+            float(profile.get("height_mm") or 0.0) / 2.0,
+            0.0,
+        )
+    return (0.0, 0.0, 0.0)
+
+
+def _placed_features(
+    body: dict, *, offset: tuple[float, float, float], body_index: int, missing: list[str]
+) -> list[Feature3D]:
+    """Элементы по 3D-размещению (дорожка У) → операции ядра с ``placement``.
+
+    Система детали — как у `cad_recognize.features`; ``offset`` переводит её
+    в систему ядра (у прямоугольной пластины ядро считает от угла, у тела
+    вращения и круглой — от оси).
+    """
+    features: list[Feature3D] = []
+    for index, item in enumerate(body.get("placed_features") or []):
+        if not isinstance(item, dict):
+            continue
+        origin = item.get("origin_mm") or []
+        axis = item.get("axis") or []
+        if len(origin) != 3 or len(axis) != 3:
+            missing.append(f"элемент {index + 1} по размещению: нет точки или оси — не построен")
+            continue
+        placement = {
+            "origin": [float(origin[k]) + offset[k] for k in range(3)],
+            "axis": [float(value) for value in axis],
+            "ref": [float(value) for value in (item.get("ref") or [1.0, 0.0, 0.0])],
+        }
+        kind = str(item.get("kind") or "")
+        params: dict[str, Any] = {"placement": placement}
+        if kind == "hole":
+            diameter = _num(item.get("diameter_mm"))
+            thread = item.get("thread") if isinstance(item.get("thread"), dict) else None
+            if thread is not None:
+                geometry = metric_thread_geometry(thread)
+                if geometry is None:
+                    missing.append(f"элемент {index + 1}: резьба не разобрана — не построен")
+                    continue
+                diameter = float(geometry["minor_diameter_mm"])
+            if not diameter:
+                missing.append(f"элемент {index + 1}: нет Ø — не построен")
+                continue
+            params["diameter_mm"] = diameter
+            if item.get("through") is False:
+                params["through"] = False
+                params["depth_mm"] = _num(item.get("depth_mm"))
+            else:
+                params["through"] = True
+        elif kind in ("pocket", "boss"):
+            params["profile"] = item.get("profile") or "circle"
+            params["depth_mm"] = _num(item.get("depth_mm"))
+            for key in ("diameter_mm", "width_mm", "height_mm"):
+                if _num(item.get(key)):
+                    params[key] = _num(item.get(key))
+        else:
+            missing.append(f"элемент {index + 1}: вид «{kind}» не поддержан — не построен")
+            continue
+        features.append(
+            Feature3D(
+                kind=kind,
+                source_feature_ids=_source_feature_ids(item),
+                params=params,
+                param_provenance={
+                    name: ParamProvenance(
+                        origin="stated", detail="элемент по размещению прочитан с чертежа"
+                    )
+                    for name in params
+                },
+                confidence=0.8,
+                body_index=body_index,
+            )
+        )
+    return features
+
+
 def _prismatic_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
     """Плоские и призматические тела листа — каждое своим поддеревом.
 
@@ -589,7 +670,17 @@ def _prismatic_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
     if not bodies:
         return None
     if len(bodies) == 1:
-        return _one_prismatic_tree(spec, bodies[0]["profile"])
+        tree = _one_prismatic_tree(spec, bodies[0]["profile"])
+        if tree is not None:
+            tree.features.extend(
+                _placed_features(
+                    bodies[0],
+                    offset=_profile_offset(bodies[0]["profile"]),
+                    body_index=0,
+                    missing=tree.missing_data,
+                )
+            )
+        return tree
     features: list[Feature3D] = []
     missing: list[str] = []
     unplaced = 0
@@ -599,6 +690,14 @@ def _prismatic_feature_tree(spec: dict) -> FeatureTreeCandidate | None:
             return None
         for feature in tree.features:
             feature.body_index = body_index
+        tree.features.extend(
+            _placed_features(
+                body,
+                offset=_profile_offset(body["profile"]),
+                body_index=body_index,
+                missing=tree.missing_data,
+            )
+        )
         placement = body.get("placement")
         if body_index > 0:
             if isinstance(placement, dict) and placement.get("position_mm"):
@@ -1321,6 +1420,9 @@ def _one_rotation_body_features(body: dict) -> tuple[list[Feature3D], list[str]]
             continue
         feature.body_index = body_index
         features.append(feature)
+    features.extend(
+        _placed_features(body, offset=(0.0, 0.0, 0.0), body_index=body_index, missing=missing)
+    )
     for index, flange in enumerate(body.get("flanges") or []):
         flange_features = _flange_features(flange) if isinstance(flange, dict) else None
         if flange_features is None:

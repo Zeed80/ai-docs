@@ -46,6 +46,7 @@ ROTATION_GROUPS = (
     "fillets",
     "flanges",
     "face_grooves",
+    "placed_features",
 )
 PROFILE_GROUPS = ("holes", "hole_patterns", "slots", "wall_features")
 
@@ -85,6 +86,7 @@ def features_of(spec: dict[str, Any]) -> list[Feature]:
             found += _rotation_features(body, prefix, index)
         if profile is not None:
             found += _profile_features(profile, f"{prefix}.profile", index, z0=0.0)
+        found += _placed(body, prefix, index)
     return found
 
 
@@ -303,6 +305,38 @@ def _rotation_features(body: dict, prefix: str, index: int) -> list[Feature]:
                 source_path=f"{prefix}.face_grooves[{i}]",
                 body_index=index,
                 tags=["around_axis"],
+            )
+        )
+    return found
+
+
+def _placed(body: dict, prefix: str, index: int) -> list[Feature]:
+    """Элементы, уже заданные размещением в системе детали (`placed_features`)."""
+    found = []
+    for i, item in enumerate(body.get("placed_features") or []):
+        origin, axis = item.get("origin_mm") or [], item.get("axis") or []
+        if len(origin) != 3 or len(axis) != 3:
+            continue
+        ref = item.get("ref") or [1.0, 0.0, 0.0]
+        found.append(
+            Feature(
+                kind=str(item.get("kind")),
+                placement=Placement(
+                    tuple(float(v) for v in origin),
+                    tuple(float(v) for v in axis),
+                    tuple(float(v) for v in ref),
+                ),
+                params=(
+                    _hole_params(item, _num(item.get("diameter_mm")))
+                    if item.get("kind") == "hole"
+                    else {
+                        key: item.get(key)
+                        for key in ("profile", "diameter_mm", "width_mm", "height_mm", "depth_mm")
+                    }
+                ),
+                source_path=f"{prefix}.placed_features[{i}]",
+                body_index=index,
+                tags=["placed"],
             )
         )
     return found

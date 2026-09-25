@@ -493,6 +493,7 @@ _FEATURE_LIST_KIND = {
     "circular_hole_patterns": "circular_hole_pattern",
     "flanges": "flange",
     "face_grooves": "face_groove",
+    "placed_features": "placed_feature",
     "outer": "section_outer",
     "bore": "section_bore",
     "holes": "hole",
