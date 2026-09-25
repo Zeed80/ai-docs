@@ -4579,6 +4579,26 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         threads_from_sheet,
                     )
 
+                    # Координаты отверстий пластины — первыми: резьба и глубина
+                    # сверяют положение прочитанного с замером, и отверстие с
+                    # переставленным ридером y (живой plate-1: M5 на 1 при
+                    # прочитанных −6) иначе не получало ни резьбы, ни глубины.
+                    positions = [
+                        d
+                        for d in reconcile(spec, verification)
+                        if d.get("kind") == "plate_hole"
+                        and d.get("field") in ("center_x_mm", "center_y_mm")
+                        and d.get("action") == "adopt"
+                    ]
+                    if positions:
+                        spec, verification = apply_reconciliation(spec, verification, positions)
+                        spec = _revalidated_spec(spec)
+                        await _record(
+                            "reconcile.hole_positions",
+                            "completed",
+                            f"Координат отверстий по листу: {len(positions)}",
+                            {"decisions": positions},
+                        )
                     thread_decisions = threads_from_sheet(spec, verification)
                     # Надпись ридер прочёл не ту («M6» вместо M8) — переспрос по
                     # вырезу у отверстия, ответ сверяется с замером.

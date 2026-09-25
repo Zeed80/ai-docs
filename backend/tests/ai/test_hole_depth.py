@@ -98,7 +98,8 @@ def test_a_blurred_sheet_is_not_measured(monkeypatch):
 
 
 def test_a_depth_is_adopted_only_when_the_label_matches_the_measurement():
-    """Переспрос по вырезу: «гл.15» при замере 15 — принято; «гл.8» — нет."""
+    """Надпись у отверстия по вырезу: «Ø11 гл.15» при замере 14,8 — принято;
+    «гл.8» и надпись без глубины — нет."""
     import asyncio
     import io
 
@@ -127,7 +128,7 @@ def test_a_depth_is_adopted_only_when_the_label_matches_the_measurement():
 
     async def says(value):
         async def ask(_prompt, _crop):
-            return {"depth_mm": value}
+            return {"label": None if value is None else f"Ø11 гл.{value}"}
 
         return await reask_hole_depths(buffer.getvalue(), spec, report, ask=ask)
 

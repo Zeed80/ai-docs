@@ -555,13 +555,13 @@ async def _default_thread_ask(prompt: str, crop: Any) -> dict:
 
 
 _HOLE_DEPTH_PROMPT = (
-    "На фрагменте чертежа отверстие обведено КРАСНЫМ. Если оно глухое, у его "
-    "размера (по линии-выноске от ЭТОГО отверстия) стоит глубина: «гл.15», «↧15» "
-    "или «на глубину 15»; подписи соседних отверстий — не его. Выпиши "
-    "глубину обведённого отверстия в миллиметрах, число с листа; если глубины нет — "
-    'null. ОДНОЙ строкой JSON: {"depth_mm": 15} или {"depth_mm": null}. Только JSON.'
+    "На чертеже отверстие обведено КРАСНЫМ. От него идёт размерная линия к "
+    "надписи его размера (например «Ø9», «M8 гл.12», «Ø11 гл.15»). Выпиши эту "
+    "надпись ЦЕЛИКОМ, ровно как на листе. ОДНОЙ строкой JSON: "
+    '{"label": "M8 гл.12"} или {"label": null}. Только JSON.'
 )
-_HOLE_DEPTH_SCHEMA = {"type": "object", "properties": {"depth_mm": {"type": ["number", "null"]}}}
+_HOLE_DEPTH_SCHEMA = {"type": "object", "properties": {"label": {"type": ["string", "null"]}}}
+_DEPTH_IN_LABEL = r"(?:гл\.?|↧|глуб\w*)\s*(\d+(?:[.,]\d+)?)"
 
 
 async def reask_hole_depths(
@@ -600,11 +600,24 @@ async def reask_hole_depths(
         if image is None:
             image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         x0, y0, x1, y1 = box
-        # Подпись стоит на полке выноски — дальше от отверстия, чем у резьбы.
-        reach = 7.0 * max(x1 - x0, y1 - y0)
-        left, top = max(0, int(x0 - reach)), max(0, int(y0 - reach))
+        # Подпись стоит на полке выноски, которую лист уводит от чужих
+        # окружностей, — бывает у края плана и дальше (живой plate-1: «M5
+        # гл.18» под планом). Вырез — весь план с полем, отверстие обведено.
+        plan = (report.get("frame") or {}).get("bbox_px")
+        if plan:
+            pad = 0.35 * max(plan[2] - plan[0], plan[3] - plan[1])
+            bounds = (
+                min(x0, plan[0] - pad),
+                min(y0, plan[1] - pad),
+                max(x1, plan[2] + pad),
+                max(y1, plan[3] + pad),
+            )
+        else:
+            reach = 7.0 * max(x1 - x0, y1 - y0)
+            bounds = (x0 - reach, y0 - reach, x1 + reach, y1 + reach)
+        left, top = max(0, int(bounds[0])), max(0, int(bounds[1]))
         crop = image.crop(
-            (left, top, min(image.width, int(x1 + reach)), min(image.height, int(y1 + reach)))
+            (left, top, min(image.width, int(bounds[2])), min(image.height, int(bounds[3])))
         )
         # Отверстие обводится: рядом стоят подписи соседних отверстий, и по
         # вырезу модель прочла «гл.15» соседа вместо «гл.18» своего (живой
@@ -618,8 +631,16 @@ async def reask_hole_depths(
             width=max(2, int(0.08 * max(x1 - x0, y1 - y0))),
         )
         answer = await (ask or _default_depth_ask)(_HOLE_DEPTH_PROMPT, crop)
-        value = (answer or {}).get("depth_mm")
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        # Надпись целиком, глубина — разбором: на вопрос «какая глубина» модель
+        # отвечала «нет» при видимой «M5 гл.18» у обведённого отверстия.
+        import re
+
+        label = str((answer or {}).get("label") or "")
+        found = re.search(_DEPTH_IN_LABEL, label)
+        if not found:
+            continue
+        value = float(found.group(1).replace(",", "."))
+        if value <= 0:
             continue
         depth = float(measured["depth_mm"])
         if abs(float(value) - depth) > max(1.0, 0.1 * depth):
@@ -633,8 +654,8 @@ async def reask_hole_depths(
                 "read": (item.get("read") or {}).get("depth_mm"),
                 "value": float(value),
                 "reason": (
-                    f"вид на толщину: глухое на {depth:g} мм; переспрос по вырезу: "
-                    f"глубина {float(value):g} мм — отверстие глухое"
+                    f"вид на толщину: глухое на {depth:g} мм; надпись у отверстия "
+                    f"«{label.strip()}» — глубина {float(value):g} мм"
                 ),
             }
         )
