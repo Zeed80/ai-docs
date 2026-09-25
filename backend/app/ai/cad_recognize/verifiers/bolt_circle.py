@@ -103,6 +103,23 @@ def verify_bolt_circle(hypothesis: Hypothesis, frame: ViewFrame | None, sheet: A
         "start_angle_deg": round(phase, 2),
     }
     position_tol, diameter_tol = plate_hole_tolerances(scale)
+    read_count = int(expected.get("count") or 0)
+    if (
+        read_count > count
+        and read_count % count == 0
+        and _subset_of_polygon(holes, (cx, cy), read_count)
+    ):
+        # Найдена часть прочитанного n-угольника: 4 из 8 — тоже правильный
+        # многоугольник, и «отверстий 4, прочитано 8» опровергало верное
+        # чтение (фото, штрихпунктирная окружность центров). Остальные просто
+        # не нашлись — это «не измеримо», замер остаётся.
+        return Verdict(
+            status="unmeasurable",
+            measured=measured,
+            evidence_bbox_px=(x0, y0, x1, y1),
+            anchors_px=tuple((hx, hy) for hx, hy, _ in holes),
+            reason=f"найдено {count} из {read_count} отверстий — на шаге прочитанного массива",
+        )
     problems = []
     if expected.get("count") and int(expected["count"]) != count:
         problems.append(f"отверстий {count}, прочитано {expected['count']}")
@@ -186,6 +203,17 @@ def _regular_subset(
             if len(set(picked)) == k:
                 return [holes[t] for t in picked]
     return holes
+
+
+def _subset_of_polygon(
+    holes: list[tuple[float, float, float]], centre: tuple[float, float], count: int
+) -> bool:
+    """Все найденные отверстия — вершины одного правильного ``count``-угольника."""
+    cx, cy = centre
+    step = 360.0 / count
+    angles = [math.degrees(math.atan2(-(hy - cy), hx - cx)) % step for hx, hy, _ in holes]
+    phase = _circular_mean(sorted(angles), step)
+    return all(_angle_gap(angle, phase, step) <= max(2.0, 0.05 * step) for angle in angles)
 
 
 def _circular_mean(angles: list[float], period: float) -> float:

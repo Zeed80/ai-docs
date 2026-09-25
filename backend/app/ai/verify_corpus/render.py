@@ -73,8 +73,34 @@ def render_sheet(ir: CadIR, *, dpi: int, ir_px_per_mm: float) -> RenderedSheet:
     labels: list[dict[str, Any]] = []
     pending_label: dict[str, Any] | None = None
 
+    from app.ai.cad_ir.png_render import DASH_MM, arc_points, dash_runs
+
     for entity in ir.entities:
         if getattr(entity, "construction", False):
+            continue
+        # Невидимые и осевые — штрихами по ГОСТ 2.303, как в продукте: эталон
+        # рисовал их сплошными, и штрихи «невидимого отверстия» на виде
+        # пластины были неотличимы от видимых кромок.
+        if getattr(entity, "line_class", "") in DASH_MM and isinstance(
+            entity, (Segment, Polyline, Circle, Arc)
+        ):
+            if isinstance(entity, Segment):
+                points = [xy(entity.p1), xy(entity.p2)]
+            elif isinstance(entity, Polyline):
+                points = [xy(point) for point in entity.points]
+                if entity.closed and points:
+                    points.append(points[0])
+            else:
+                cx, cy = xy(entity.center)
+                radius = float(entity.radius) * scale
+                start, end = (
+                    (0.0, 360.0)
+                    if isinstance(entity, Circle)
+                    else (float(entity.start_angle), float(entity.end_angle))
+                )
+                points = arc_points(cx, cy, radius, start, end)
+            for run in dash_runs(points, entity.line_class, dpi / 25.4):
+                draw.line(run, fill=0, width=stroke(entity))
             continue
         if isinstance(entity, Segment):
             draw.line([xy(entity.p1), xy(entity.p2)], fill=0, width=stroke(entity))

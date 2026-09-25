@@ -51,22 +51,113 @@ def _draw_hatch_lines(canvas, boundary, holes, thin_px: int, spacing_px: int = 1
     canvas[(lines > 0) & (mask > 0)] = 0
 
 
+# ГОСТ 2.303: штриховая (невидимый контур) — штрих 2…8 мм, промежуток 1…2 мм;
+# штрихпунктирная (осевая) — штрих 5…30 мм, промежуток 3…5 мм с точкой.
+# PNG рисовал обе сплошными: невидимые отверстия на виде пластины читались
+# видимыми кромками (SVG и DXF штрихуют давно).
+DASH_MM: dict[str, tuple[float, ...]] = {"hidden": (5.0, 1.5), "axis": (12.0, 3.0, 0.5, 3.0)}
+
+
+def dash_runs(
+    points: list[tuple[float, float]], line_class: str, px_per_mm: float
+) -> list[list[tuple[float, float]]]:
+    """Ломаная → куски, которые рисуются (штрихи и точки) для класса линии.
+
+    Для сплошных классов — сама ломаная одним куском.
+    """
+    import math
+
+    pattern = DASH_MM.get(line_class)
+    if not pattern or len(points) < 2 or px_per_mm <= 0:
+        return [points]
+    lengths = [max(0.5, value * px_per_mm) for value in pattern]
+    runs: list[list[tuple[float, float]]] = []
+    index, left, drawing = 0, lengths[0], True
+    current: list[tuple[float, float]] = [points[0]]
+    for (x0, y0), (x1, y1) in zip(points, points[1:], strict=False):
+        segment = math.hypot(x1 - x0, y1 - y0)
+        position = 0.0
+        while segment - position > left:
+            position += left
+            t = position / segment
+            point = (x0 + (x1 - x0) * t, y0 + (y1 - y0) * t)
+            if drawing:
+                current.append(point)
+                runs.append(current)
+            current = [point]
+            drawing = not drawing
+            index = (index + 1) % len(lengths)
+            left = lengths[index]
+        left -= segment - position
+        if drawing:
+            current.append((x1, y1))
+        else:
+            current = [(x1, y1)]
+    if drawing and len(current) >= 2:
+        runs.append(current)
+    return runs
+
+
+def arc_points(
+    cx: float, cy: float, radius: float, start: float, end: float
+) -> list[tuple[float, float]]:
+    """Дуга (углы в градусах, как у cv2.ellipse) → ломаная для штриховки."""
+    import math
+
+    low, high = sorted((start, end))
+    steps = max(8, int((high - low) / 3.0))
+    return [
+        (
+            cx + radius * math.cos(math.radians(low + (high - low) * k / steps)),
+            cy + radius * math.sin(math.radians(low + (high - low) * k / steps)),
+        )
+        for k in range(steps + 1)
+    ]
+
+
 def rasterize_entities(
     entities: list[Entity],
     width: int,
     height: int,
     thin_px: int = 1,
     thick_px: int = 2,
+    px_per_mm: float | None = None,
 ):
     """Draw IR geometry onto a white uint8 canvas (0 = ink). Text and
     dimension labels are skipped — they are OCR/VLM artifacts, not stroke
-    geometry (dimension leader lines ARE drawn)."""
+    geometry (dimension leader lines ARE drawn).
+
+    ``px_per_mm`` — масштаб листа для длин штрихов; без него — как у листа
+    A4 по длинной стороне (длина штриха — оформление, не данные).
+    """
     import cv2
     import numpy as np
 
     canvas = np.full((height, width), 255, dtype=np.uint8)
+    scale = px_per_mm or max(width, height) / 297.0
     for entity in entities:
         t = thick_px if entity.width_class == "main" else thin_px
+        if entity.line_class in DASH_MM and isinstance(entity, (Segment, Circle, Arc, Polyline)):
+            if isinstance(entity, Segment):
+                points = [(entity.p1.x, entity.p1.y), (entity.p2.x, entity.p2.y)]
+            elif isinstance(entity, Circle):
+                points = arc_points(entity.center.x, entity.center.y, entity.radius, 0.0, 360.0)
+            elif isinstance(entity, Arc):
+                points = arc_points(
+                    entity.center.x,
+                    entity.center.y,
+                    entity.radius,
+                    entity.start_angle,
+                    entity.end_angle,
+                )
+            else:
+                points = [(p.x, p.y) for p in entity.points]
+                if entity.closed and points:
+                    points.append(points[0])
+            for run in dash_runs(points, entity.line_class, scale):
+                arr = np.array([[int(round(x)), int(round(y))] for x, y in run], dtype=np.int32)
+                cv2.polylines(canvas, [arr], False, 0, t, cv2.LINE_AA)
+            continue
         if isinstance(entity, Segment):
             cv2.line(
                 canvas,
@@ -225,8 +316,16 @@ def render_ir_to_png(
     import cv2
     import numpy as np
 
+    sheet_mm = max(ir.sheet.width_mm or 0.0, ir.sheet.height_mm or 0.0) if ir.sheet else 0.0
     canvas = rasterize_entities(
-        ir.entities, ir.source.image_width, ir.source.image_height, thin_px, thick_px
+        ir.entities,
+        ir.source.image_width,
+        ir.source.image_height,
+        thin_px,
+        thick_px,
+        px_per_mm=(max(ir.source.image_width, ir.source.image_height) / sheet_mm)
+        if sheet_mm
+        else None,
     )
     if draw_text:
         draw_text_entities(canvas, ir.entities)
