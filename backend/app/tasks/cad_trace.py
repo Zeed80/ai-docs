@@ -4666,7 +4666,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     # когда отверстие поставлено по листу (координаты, резьба).
                     from app.ai.cad_recognize.verifiers.reconcile import settle_placed_hole_notes
 
-                    spec = settle_placed_hole_notes(spec)
+                    spec = settle_placed_hole_notes(spec, verification)
                     decisions = reconcile(spec, verification)
                     if decisions:
                         spec, verification = apply_reconciliation(spec, verification, decisions)

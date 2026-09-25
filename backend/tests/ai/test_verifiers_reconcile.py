@@ -707,3 +707,41 @@ def test_plate_hole_y_coordinates_swapped_by_the_reader_are_taken_from_the_sheet
     assert moved["action"] == "adopt" and moved["value"] == 1.0
     diameter = decisions[("main_view.profile.holes[1]", "diameter_mm")]
     assert diameter["action"] == "adopt" and diameter["value"] == 11.0
+
+
+def test_a_note_about_an_unplaced_hole_goes_once_the_sheet_placed_it():
+    """Живая пластина: «отверстия Ø5: положение на листе не проставлено — не
+    построены» держала сборку после того, как лист поставил M5 на место."""
+    from app.ai.cad_recognize.verifiers.reconcile import settle_placed_hole_notes
+
+    spec = {
+        "unresolved": [
+            "отверстия Ø5: положение на листе не проставлено — не построены",
+            "отверстия Ø8: положение на листе не проставлено — не построены",
+        ],
+        "main_view": {
+            "profile": {
+                "holes": [
+                    {
+                        "center_x_mm": 24.0,
+                        "center_y_mm": 1.0,
+                        "diameter_mm": 5.0,
+                        "thread": {"designation": "M5", "nominal_diameter_mm": 5.0},
+                    },
+                ]
+            }
+        },
+    }
+    report = {
+        "items": [
+            {"kind": "plate_hole", "path": "main_view.profile.holes[0]", "status": "confirmed"}
+        ]
+    }
+
+    settled = settle_placed_hole_notes(spec, report)
+
+    # Ø8 на листе не найдено — пометка остаётся.
+    assert settled["unresolved"] == [
+        "отверстия Ø8: положение на листе не проставлено — не построены"
+    ]
+    assert settle_placed_hole_notes(spec)["unresolved"] == spec["unresolved"]

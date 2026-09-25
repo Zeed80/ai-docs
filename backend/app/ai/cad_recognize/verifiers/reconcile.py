@@ -1884,7 +1884,9 @@ _UNPLACED_HOLES = re.compile(
 )
 
 
-def settle_placed_hole_notes(spec: dict[str, Any]) -> dict[str, Any]:
+def settle_placed_hole_notes(
+    spec: dict[str, Any], report: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Пометка ридера «отверстия Ø5: положение не проставлено — не построены»
     снимается, когда отверстие этого номинала стоит в спеке и найдено на листе.
 
@@ -1895,9 +1897,18 @@ def settle_placed_hole_notes(spec: dict[str, Any]) -> dict[str, Any]:
     import copy
 
     holes = (((spec.get("main_view") or {}).get("profile")) or {}).get("holes") or []
+    # Поставлено по листу: свидетельство листа или подтверждение проверкой
+    # (свидетельство ставится позже этого шага).
+    verified = {
+        item.get("path")
+        for item in (report or {}).get("items") or []
+        if item.get("kind") == "plate_hole" and item.get("status") == "confirmed"
+    }
     placed: set[float] = set()
-    for hole in holes:
-        if not isinstance(hole, dict) or not hole.get("evidence"):
+    for index, hole in enumerate(holes):
+        if not isinstance(hole, dict):
+            continue
+        if not hole.get("evidence") and f"main_view.profile.holes[{index}]" not in verified:
             continue
         thread = hole.get("thread") or {}
         for value in (hole.get("diameter_mm"), thread.get("nominal_diameter_mm")):
