@@ -310,6 +310,104 @@ def _radial_hole_tool(
     return tool
 
 
+# Дорожка У (У4): элемент по 3D-размещению — точка на поверхности, ось
+# (у выреза — в материал, у прибавления — наружу) и опорное направление в
+# плоскости элемента. Инструмент строится в системе элемента (местная Z — ось)
+# и переносится матрицей, как элемент на грани корпуса. Радиальное отверстие
+# под любым углом, наклонное отверстие, лыска (прямоугольный карман на
+# цилиндре), отверстие во фланце не по оси — частные случаи одного пути.
+def _feature_frame_matrix(params: dict) -> App.Matrix:
+    placement = params.get("placement")
+    if not isinstance(placement, dict):
+        raise HTTPException(422, "placement must be an object")
+
+    def vector(name: str, default: list[float] | None = None) -> App.Vector:
+        raw = placement.get(name, default)
+        if not isinstance(raw, (list, tuple)) or len(raw) != 3:
+            raise HTTPException(422, f"placement.{name} must be three numbers")
+        values = []
+        for value in raw:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise HTTPException(422, f"placement.{name} must be three numbers")
+            if not math.isfinite(float(value)) or abs(float(value)) > 100_000:
+                raise HTTPException(422, f"placement.{name} is outside supported bounds")
+            values.append(float(value))
+        return App.Vector(*values)
+
+    origin = vector("origin")
+    axis = vector("axis")
+    if axis.Length < 1e-9:
+        raise HTTPException(422, "placement.axis must not be zero")
+    axis.normalize()
+    ref = vector("ref", [1.0, 0.0, 0.0])
+    ref = ref - axis * ref.dot(axis)
+    if ref.Length < 1e-6:
+        ref = App.Vector(0.0, 0.0, 1.0) - axis * axis.z
+        if ref.Length < 1e-6:
+            ref = App.Vector(1.0, 0.0, 0.0) - axis * axis.x
+    ref.normalize()
+    side = axis.cross(ref)
+    return App.Matrix(
+        ref.x, side.x, axis.x, origin.x,
+        ref.y, side.y, axis.y, origin.y,
+        ref.z, side.z, axis.z, origin.z,
+        0.0, 0.0, 0.0, 1.0,
+    )
+
+
+def _placed_tool(shape: Part.Shape, feature: "Feature", *, adds_material: bool) -> Part.Shape:
+    """Инструмент элемента с ``placement``: круг, прямоугольник или капсула."""
+    params = feature.params
+    # Не _placement_matrix: так уже названо размещение ТЕЛ (ниже), и
+    # одноимённая функция молча перекрывала эту — элемент вставал в (0; 0).
+    matrix = _feature_frame_matrix(params)
+    diagonal = shape.BoundBox.DiagonalLength
+    if feature.kind == "hole":
+        radius = _number(params, "diameter_mm", maximum=diagonal) / 2
+        if params.get("through", True) is not False:
+            tool = Part.makeCylinder(radius, 2 * diagonal + 2, App.Vector(0, 0, -diagonal - 1))
+        else:
+            depth = _number(params, "depth_mm", maximum=diagonal)
+            tool = Part.makeCylinder(radius, depth + 1.0, App.Vector(0, 0, -1.0))
+    else:
+        depth = _number(params, "depth_mm", maximum=diagonal)
+        # Вырез начинается над поверхностью (на кривой поверхности иначе
+        # остаётся тонкая корка); прибавление уходит в материал на полразмера
+        # следа, чтобы слиться с кривой поверхностью.
+        profile = params.get("profile") or "circle"
+        if profile == "circle":
+            half = _number(params, "diameter_mm", maximum=diagonal) / 2
+        else:
+            half = min(
+                _number(params, "width_mm", maximum=diagonal),
+                _number(params, "height_mm", maximum=diagonal),
+            ) / 2
+        start = -min(half, 5.0) if adds_material else -1.0
+        height = depth - start
+        if profile == "circle":
+            tool = Part.makeCylinder(half, height, App.Vector(0, 0, start))
+        elif profile in ("rectangle", "slot"):
+            width = _number(params, "width_mm", maximum=diagonal)
+            length = _number(params, "height_mm", maximum=diagonal)
+            if profile == "rectangle":
+                tool = Part.makeBox(width, length, height, App.Vector(-width / 2, -length / 2, start))
+            else:
+                # Капсула: ``width_mm`` — габарит вдоль опорного направления,
+                # ``height_mm`` — ширина прорези.
+                r = length / 2
+                straight = max(width - length, 0.0)
+                tool = Part.makeBox(straight, length, height, App.Vector(-straight / 2, -r, start))
+                for end in (-straight / 2, straight / 2):
+                    tool = tool.fuse(Part.makeCylinder(r, height, App.Vector(end, 0, start)))
+                tool = tool.removeSplitter()
+        else:
+            raise HTTPException(422, f"Unsupported placed {feature.kind} profile {profile!r}")
+    tool = tool.transformShape(matrix, True)
+    if not adds_material and tool.common(shape).Volume <= 1e-6:
+        raise HTTPException(422, f"placed {feature.kind} does not reach any material")
+    return tool
+
+
 def _edge_key(edge: Part.Edge) -> str:
     bounds = edge.BoundBox
     payload = {
@@ -1603,6 +1701,21 @@ def _build_one_body(
         if feature_index in reused_index_set:
             continue
         adds_material = feature.kind in ("boss", "rib")
+        if feature.params.get("placement") is not None:
+            tool = _placed_tool(shape, feature, adds_material=adds_material)
+            previous = shape
+            shape = shape.fuse(tool) if adds_material else shape.cut(tool)
+            operation_audit.append({
+                "feature_index": feature_index,
+                "kind": feature.kind,
+                **_operation_localization(
+                    previous, shape,
+                    mode="add" if adds_material else "cut",
+                    expected_tool=tool,
+                ),
+            })
+            save_checkpoint("profile_operations", feature_index)
+            continue
         profile = feature.params.get("profile")
         x = _coordinate(feature.params, "center_x_mm")
         y = _coordinate(feature.params, "center_y_mm")
@@ -1822,6 +1935,17 @@ def _build_one_body(
     ))
     for feature_index, feature in hole_features:
         if feature_index in reused_index_set:
+            continue
+        if feature.params.get("placement") is not None:
+            tool = _placed_tool(shape, feature, adds_material=False)
+            previous = shape
+            shape = _cut_feature(shape, tool, f"placed hole #{feature_index}", warnings)
+            operation_audit.append({
+                "feature_index": feature_index,
+                "kind": feature.kind,
+                **_operation_localization(previous, shape, mode="cut", expected_tool=tool),
+            })
+            save_checkpoint("holes", feature_index)
             continue
         diameter = _number(feature.params, "diameter_mm", maximum=min(width, height) * 2)
         x = _coordinate(feature.params, "center_x_mm")

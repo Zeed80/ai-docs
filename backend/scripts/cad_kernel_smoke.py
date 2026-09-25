@@ -823,6 +823,169 @@ def _check_plan_view() -> None:
     check("plan view sees the rib from above", 34.0 in levels, f"levels={levels}")
 
 
+def _check_placed_features() -> None:
+    """Дорожка У (У4): элемент по 3D-размещению — один путь для любой детали.
+
+    Тот же элемент старым путём и через ``placement`` даёт тот же объём;
+    лыска на валу — прямоугольный карман на цилиндре, объём по формуле
+    сегмента; наклонное отверстие собирается валидным телом.
+    """
+    import math
+
+    def volume(*features: dict, label: str) -> float | None:
+        status, body = _compile(_candidate(*features, label=label))
+        if status != 200:
+            check(f"placement: {label} собирается", False, str(body)[:200])
+            return None
+        report = _report_from_zip(body)
+        if not (report.get("brep_valid") and report.get("solid_count") == 1):
+            check(f"placement: {label} — валидное одно тело", False, str(report.get("solid_count")))
+            return None
+        return float(report["volume_mm3"])
+
+    plate = _feature("extrude", width_mm=60.0, height_mm=40.0, depth_mm=10.0)
+    old = volume(
+        plate,
+        _feature("hole", diameter_mm=8.0, center_x_mm=20.0, center_y_mm=15.0, through=True),
+        label="plate-hole-old",
+    )
+    new = volume(
+        plate,
+        _feature(
+            "hole",
+            diameter_mm=8.0,
+            through=True,
+            placement={"origin": [20.0, 15.0, 10.0], "axis": [0.0, 0.0, -1.0]},
+        ),
+        label="plate-hole-placed",
+    )
+    if old and new:
+        check(
+            "placement: отверстие пластины = старый путь",
+            abs(old - new) <= 0.01,
+            f"{new:.3f} против {old:.3f}",
+        )
+
+    c, s_ = math.cos(math.radians(45.0)), math.sin(math.radians(45.0))
+    old = volume(
+        _base(),
+        _feature(
+            "hole",
+            axis="radial",
+            diameter_mm=10.0,
+            axial_position_mm=75.0,
+            angle_deg=45.0,
+            through=True,
+            center_x_mm=0.0,
+            center_y_mm=0.0,
+        ),
+        label="radial-old",
+    )
+    new = volume(
+        _base(),
+        _feature(
+            "hole",
+            diameter_mm=10.0,
+            through=True,
+            placement={
+                "origin": [40.0 * c, 40.0 * s_, 75.0],
+                "axis": [-c, -s_, 0.0],
+                "ref": [0.0, 0.0, 1.0],
+            },
+        ),
+        label="radial-placed",
+    )
+    if old and new:
+        check(
+            "placement: радиальное отверстие под 45° = старый путь",
+            # Точность объёма OpenCascade на пересечении двух цилиндров —
+            # около 0,5 мм³ на 2,7 млн (замерено), положение то же.
+            abs(old - new) <= 1.0,
+            f"{new:.2f} против {old:.2f}",
+        )
+
+    base_volume = volume(_base(), label="shaft")
+    flat = volume(
+        _base(),
+        _feature(
+            "pocket",
+            profile="rectangle",
+            width_mm=30.0,
+            height_mm=82.0,
+            depth_mm=5.0,
+            placement={
+                "origin": [40.0, 0.0, 75.0],
+                "axis": [-1.0, 0.0, 0.0],
+                "ref": [0.0, 0.0, 1.0],
+            },
+        ),
+        label="flat",
+    )
+    if base_volume and flat:
+        r, h = 40.0, 5.0
+        segment = r * r * math.acos((r - h) / r) - (r - h) * math.sqrt(2 * r * h - h * h)
+        expected = base_volume - segment * 30.0
+        check(
+            "placement: лыска на валу — объём по формуле сегмента",
+            abs(flat - expected) <= 0.5,
+            f"{flat:.2f} против {expected:.2f}",
+        )
+
+    slot = volume(
+        plate,
+        _feature(
+            "pocket",
+            profile="slot",
+            width_mm=20.0,
+            height_mm=6.0,
+            depth_mm=10.0,
+            placement={
+                "origin": [30.0, 20.0, 10.0],
+                "axis": [0.0, 0.0, -1.0],
+                "ref": [1.0, 0.0, 0.0],
+            },
+        ),
+        label="slot",
+    )
+    if slot:
+        area = (20.0 - 6.0) * 6.0 + math.pi * 9.0
+        check(
+            "placement: прорезь-капсула — объём по формуле",
+            abs(60 * 40 * 10 - area * 10 - slot) <= 0.5,
+            f"{slot:.2f}",
+        )
+
+    inclined = volume(
+        plate,
+        _feature(
+            "hole",
+            diameter_mm=5.0,
+            through=True,
+            placement={"origin": [30.0, 20.0, 10.0], "axis": [0.0, 0.5, -math.sqrt(0.75)]},
+        ),
+        label="inclined",
+    )
+    check(
+        "placement: наклонное отверстие собирается",
+        bool(inclined) and inclined < 60 * 40 * 10,
+        str(inclined),
+    )
+
+    status, body = _compile(
+        _candidate(
+            plate,
+            _feature(
+                "hole",
+                diameter_mm=5.0,
+                through=True,
+                placement={"origin": [500.0, 0.0, 10.0], "axis": [0.0, 0.0, -1.0]},
+            ),
+            label="nowhere",
+        )
+    )
+    check("placement: отверстие мимо материала отвергнуто (422)", status == 422, str(body)[:120])
+
+
 def main() -> int:
     status, health = _post("/health", {}) if False else (200, None)
     with urllib.request.urlopen(f"{KERNEL}/health", timeout=30) as response:
@@ -872,6 +1035,7 @@ def main() -> int:
     )
     _check_operation_checkpoints()
     _check_incremental_body_cache()
+    _check_placed_features()
 
     # A rounded plate is a different base B-Rep, not a square box whose read R
     # disappeared before OpenCascade. Its volume is the rounded-rectangle area
