@@ -1008,7 +1008,38 @@ def eval_hole_depth(png: bytes, truth: dict) -> list[dict]:
     return outcomes
 
 
+def eval_plate_slot(png: bytes, truth: dict) -> list[dict]:
+    """Прорези пластины: верное чтение, центр +3 мм по y, ширина +2 мм."""
+    import copy
+
+    import numpy as np
+    from PIL import Image
+
+    from app.ai.cad_recognize.verifiers.plate_slot import verify_plate_slots
+
+    profile = (truth["spec"].get("main_view") or {}).get("profile") or {}
+    if profile.get("shape") != "rectangle" or not profile.get("slots"):
+        return []
+    gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))
+    outcomes = []
+    for index, _slot in enumerate(profile["slots"]):
+        for case, key, delta in (
+            ("truth", None, 0.0),
+            ("shift_y", "center_y_mm", 3.0),
+            ("width", "width_mm", 2.0),
+        ):
+            read = copy.deepcopy(profile)
+            if key:
+                read["slots"][index][key] = float(read["slots"][index][key]) + delta
+            verdict = verify_plate_slots(gray, read)[index]
+            found = verdict["status"] != "unmeasurable"
+            want = "confirmed" if case == "truth" else "refuted"
+            outcomes.append({"case": case, "found": found, "correct": verdict["status"] == want})
+    return outcomes
+
+
 _VERIFIERS = {
+    "plate_slot": eval_plate_slot,
     "hole_depth": eval_hole_depth,
     "keyway_discovery": eval_keyway_discovery,
     "sheet_profile": eval_sheet_profile,

@@ -1069,7 +1069,10 @@
       "assurance_verify_kind_assembly_position": "Позиция {index}",
       "assurance_verify_kind_assembly_position_found": "Позиция {index} (найдена на полке)",
       "assurance_verify_kind_hole_depth": "Глубина отверстия {index}",
-      "assurance_field_depth_mm": "глубина"
+      "assurance_field_depth_mm": "глубина",
+      "assurance_verify_kind_plate_slot": "Прорезь {index}",
+      "assurance_field_center_x_mm": "x центра",
+      "assurance_field_center_y_mm": "y центра"
     },
     "workflow": {
       "loading": "Загрузка воркфлоу…",

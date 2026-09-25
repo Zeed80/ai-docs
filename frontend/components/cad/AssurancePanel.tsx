@@ -42,6 +42,7 @@ const VERIFY_KINDS = new Set([
   "assembly_position_found",
   // Глубина отверстия пластины по виду на толщину.
   "hole_depth",
+  "plate_slot",
 ]);
 
 /** Вырез листа вокруг элемента проверки с обведённой рамкой (Ф9). Индекс —

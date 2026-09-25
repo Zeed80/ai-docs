@@ -1069,7 +1069,10 @@
       "assurance_verify_kind_assembly_position": "Position {index}",
       "assurance_verify_kind_assembly_position_found": "Position {index} (found on a shelf)",
       "assurance_verify_kind_hole_depth": "Hole depth {index}",
-      "assurance_field_depth_mm": "depth"
+      "assurance_field_depth_mm": "depth",
+      "assurance_verify_kind_plate_slot": "Slot {index}",
+      "assurance_field_center_x_mm": "centre x",
+      "assurance_field_center_y_mm": "centre y"
     },
     "workflow": {
       "loading": "Loading workflows…",

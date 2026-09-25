@@ -47,6 +47,7 @@ def verify_spec_against_sheet(image_bytes: bytes, spec: dict[str, Any]) -> dict[
     if shape == "rectangle":
         reason = _plate_holes(image_bytes, profile, report)
         _hole_depths(image_bytes, profile, report)
+        _plate_slots(image_bytes, profile, report)
     elif shape == "circle":
         reason = _circular(image_bytes, profile, report)
     elif ((spec or {}).get("main_view") or {}).get("outer"):
@@ -71,6 +72,14 @@ def verify_spec_against_sheet(image_bytes: bytes, spec: dict[str, Any]) -> dict[
         reason = None
     _sheet_scale(image_bytes, spec or {}, report)
     return _finish(report, started, reason)
+
+
+def _plate_slots(image_bytes: bytes, profile: dict[str, Any], report: dict[str, Any]) -> None:
+    """Прорези пластины — по плану: центр, длина, ширина (X1)."""
+    from app.ai.cad_recognize.verifiers.plate_slot import verify_plate_slots
+
+    if profile.get("slots"):
+        report["items"].extend(verify_plate_slots(_gray(image_bytes), profile))
 
 
 def _hole_depths(image_bytes: bytes, profile: dict[str, Any], report: dict[str, Any]) -> None:
@@ -1518,7 +1527,7 @@ def _record_verdict(item: dict[str, Any], verdict: Any) -> None:
         item["evidence_bbox_px"] = [round(float(v), 1) for v in verdict.evidence_bbox_px]
 
 
-_OTHER_OBJECT_KINDS = frozenset({"plate_hole", "bolt_circle", "concentric_hole"})
+_OTHER_OBJECT_KINDS = frozenset({"plate_hole", "bolt_circle", "concentric_hole", "plate_slot"})
 
 
 def attach_sheet_evidence(spec: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
