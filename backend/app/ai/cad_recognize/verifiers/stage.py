@@ -1052,12 +1052,27 @@ def _shaft(
                 f"{_mm(measured['length_mm']) if 'length_mm' in measured else '—'} — проверить"
             )
     _sections(gray, frame, body, spec, report)
+    _placed_on_sections(gray, frame, profile, body, report)
     if _sheet_profile(profile, total, body, spec, report):
         return None
     return verdict.reason if whole_unmeasurable else None
 
 
 _SECTION_KINDS = {"section", "cut", "разрез", "сечение"}
+
+
+def _placed_on_sections(
+    gray: Any, frame: Any, profile: Any, body: dict[str, Any], report: dict[str, Any]
+) -> None:
+    """Лыски и радиальные отверстия по размещению — по контуру сечений (дорожка У)."""
+    from app.ai.cad_recognize.verifiers.section_outline import verify_placed_on_sections
+
+    if frame is None or not body.get("placed_features"):
+        return
+    line_px = float(getattr(profile, "line_px", 0.0) or 0.0)
+    report["items"].extend(
+        verify_placed_on_sections(gray, frame.bbox_px, frame.mm_per_px, body, line_px=line_px)
+    )
 
 
 def _sections(
@@ -1527,7 +1542,9 @@ def _record_verdict(item: dict[str, Any], verdict: Any) -> None:
         item["evidence_bbox_px"] = [round(float(v), 1) for v in verdict.evidence_bbox_px]
 
 
-_OTHER_OBJECT_KINDS = frozenset({"plate_hole", "bolt_circle", "concentric_hole", "plate_slot"})
+_OTHER_OBJECT_KINDS = frozenset(
+    {"plate_hole", "bolt_circle", "concentric_hole", "plate_slot", "placed_feature"}
+)
 
 
 def attach_sheet_evidence(spec: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
@@ -1810,6 +1827,9 @@ _GRAPH_FIELDS = {
     "cross_hole": (("axial_position_mm", "position"), ("diameter_mm", "diameter")),
     "groove": (("axial_position_mm", "position"), ("width_mm", "width"), ("depth_mm", "depth")),
     "chamfer": (("size_mm", "size"),),
+    # Элемент по размещению поперёк оси (дорожка У): угол — не поле спека
+    # (он в origin/axis), в граф идут Ø и глубина.
+    "placed_feature": (("diameter_mm", "diameter"), ("depth_mm", "depth")),
 }
 
 
