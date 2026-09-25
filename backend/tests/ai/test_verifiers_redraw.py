@@ -98,6 +98,7 @@ def test_seeds_that_disagree_are_refused():
         SPEC,
         before,
         comfy_url="",
+        seeds=(1, 2),
         redraw=lambda crop, seed: (first if seed == 1 else second)(crop, seed),
         verify=_verify,
     )

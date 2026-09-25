@@ -35,8 +35,10 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
-# Сиды — подобраны на корпусе спорных вырезов (см. журнал плана, E30c).
-DEFAULT_SEEDS = (1, 2)
+# Сиды — подобраны на корпусе спорных вырезов (E30d: 20 вырезов — торцы с
+# фасками и сечения с лысками, копия и 150 dpi, 8 сидов): пара 1234 + 2 —
+# оба проходят фильтр на 16 из 20; сид Студии 532597672269531 — 10 из 20.
+DEFAULT_SEEDS = (1234, 2)
 # Вырезов на лист: ~60 с на вырез и сид (FLUX.2 dev 20 шагов, 0,15 Мп).
 DEFAULT_BUDGET = 3
 # Перерисовка не выдумывает: доля её осей в чернилах исходника.
@@ -223,13 +225,19 @@ def _png(gray: Any) -> bytes:
 
 
 def _same_measure(a: dict[str, Any], b: dict[str, Any]) -> bool:
-    """Два варианта мерят одно: каждое общее число — в допуске элемента."""
-    tolerance = max([float(v) for v in (a.get("tolerance_mm") or {}).values()] or [0.5])
+    """Два варианта мерят одно: каждое общее число — в половине допуска элемента.
+
+    Полного допуска мало: сиды 1234 и 2 давали глубины лыски с разницей до
+    0,7 мм при допуске 0,8, и принятый замер уходил от эталона на 0,67 мм.
+    """
+    tolerance = 0.5 * min(
+        [float(v) for k, v in (a.get("tolerance_mm") or {}).items() if k != "angle"] or [1.0]
+    )
     for key in set(a.get("measured") or {}) & set(b.get("measured") or {}):
         va, vb = a["measured"][key], b["measured"][key]
         if not isinstance(va, (int, float)) or not isinstance(vb, (int, float)):
             continue
-        limit = 6.0 if key.endswith("_deg") else tolerance
+        limit = 3.0 if key.endswith("_deg") else tolerance
         if abs(float(va) - float(vb)) > limit:
             return False
     return True
