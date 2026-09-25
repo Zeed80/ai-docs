@@ -507,3 +507,40 @@ def test_rows_under_a_view_with_cutting_plane_traces_stand_below_the_traces():
 
     # Ниже на ширину полосы следа (y листа растёт вниз).
     assert abs(label_y(6.5) - label_y(0.0) - 6.5) < 1e-6
+
+
+def test_a_hole_label_does_not_land_on_a_neighbouring_hole():
+    """plate-1 корпуса: «Ø11 гл.15» стояла поверх Ø6.6, «M5 гл.18» — поверх
+    Ø11, и ридер приписал глубины не тем отверстиям. Полка подписи диаметра
+    уходит туда, где на ней нет чужой окружности."""
+    from app.ai.cad_ir.schema import TextEntity
+    from app.ai.cad_projection import dimensions_from_kernel
+
+    dimensions = [
+        {
+            "kind": "Diameter",
+            "view_index": 0,
+            "value_mm": 4.0,
+            "label": "Ø4 гл.15",
+            "anchors_mm": [[-1.414, -1.414], [1.414, 1.414]],
+        },
+        {
+            "kind": "Diameter",
+            "view_index": 0,
+            "value_mm": 10.0,
+            "anchors_mm": [[5.0 - 3.536, 12.0 - 3.536], [5.0 + 3.536, 12.0 + 3.536]],
+        },
+    ]
+    placements = {
+        "top": {
+            "offset_u": 100.0,
+            "offset_v": 100.0,
+            "bounds_mm": {"u_min": -40.0, "u_max": 40.0, "v_min": -40.0, "v_max": 40.0},
+        }
+    }
+
+    entities = dimensions_from_kernel(dimensions, placements, ["top"], px_per_mm=1.0)
+
+    label = next(e for e in entities if isinstance(e, TextEntity) and e.text == "Ø4 гл.15")
+    # Вперёд (вверх-вправо) — окружность Ø10: подпись ушла вниз-влево.
+    assert label.position.x < 100.0 and label.position.y > 100.0

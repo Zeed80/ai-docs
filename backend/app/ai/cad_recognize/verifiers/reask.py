@@ -552,3 +552,95 @@ async def _default_thread_ask(prompt: str, crop: Any) -> dict:
         num_predict=200,
         schema=_HOLE_THREAD_SCHEMA,
     )
+
+
+_HOLE_DEPTH_PROMPT = (
+    "В центре фрагмента — отверстие детали. Если оно глухое, рядом с его "
+    "диаметром стоит глубина: «гл.15», «↧15» или «на глубину 15». Выпиши "
+    "глубину ЭТОГО отверстия в миллиметрах, число с листа; если глубины нет — "
+    'null. ОДНОЙ строкой JSON: {"depth_mm": 15} или {"depth_mm": null}. Только JSON.'
+)
+_HOLE_DEPTH_SCHEMA = {"type": "object", "properties": {"depth_mm": {"type": ["number", "null"]}}}
+
+
+async def reask_hole_depths(
+    image_bytes: bytes, spec: dict[str, Any], report: dict[str, Any], *, ask: Any = None
+) -> list[dict[str, Any]]:
+    """Глубина глухого отверстия — переспросом по вырезу, сверкой с замером (X1).
+
+    Вид на толщину показал, что отверстие глухое на d, а прочитано сквозным
+    (ридер «гл.» не читает) или с другой глубиной. Модель читает надпись у
+    отверстия по вырезу; ответ принимается, только если совпал с замером.
+    Замер «сквозное» при прочитанном глухом сюда не идёт: «надписи нет» —
+    слабое свидетельство, это решает человек.
+    """
+    import io
+
+    from PIL import Image
+
+    holes = (((spec.get("main_view") or {}).get("profile")) or {}).get("holes") or []
+    boxes = {
+        item["path"]: item.get("evidence_bbox_px")
+        for item in report.get("items") or []
+        if item.get("kind") == "plate_hole" and item.get("evidence_bbox_px")
+    }
+    image = None
+    decisions: list[dict[str, Any]] = []
+    for item in report.get("items") or []:
+        if item.get("kind") != "hole_depth" or item.get("status") != "refuted":
+            continue
+        measured = item.get("measured") or {}
+        if measured.get("through") is not False or not measured.get("depth_mm"):
+            continue
+        box = boxes.get(item["path"])
+        index = int(item["path"].split("[")[1].split("]")[0])
+        if box is None or index >= len(holes):
+            continue
+        if image is None:
+            image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        x0, y0, x1, y1 = box
+        reach = 4.0 * max(x1 - x0, y1 - y0)
+        crop = image.crop(
+            (
+                max(0, int(x0 - reach)),
+                max(0, int(y0 - reach)),
+                min(image.width, int(x1 + reach)),
+                min(image.height, int(y1 + reach)),
+            )
+        )
+        answer = await (ask or _default_depth_ask)(_HOLE_DEPTH_PROMPT, crop)
+        value = (answer or {}).get("depth_mm")
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            continue
+        depth = float(measured["depth_mm"])
+        if abs(float(value) - depth) > max(1.0, 0.1 * depth):
+            continue
+        decisions.append(
+            {
+                "kind": "hole_depth",
+                "path": item["path"],
+                "field": "depth_mm",
+                "action": "adopt",
+                "read": (item.get("read") or {}).get("depth_mm"),
+                "value": float(value),
+                "reason": (
+                    f"вид на толщину: глухое на {depth:g} мм; переспрос по вырезу: "
+                    f"глубина {float(value):g} мм — отверстие глухое"
+                ),
+            }
+        )
+    return decisions
+
+
+async def _default_depth_ask(prompt: str, crop: Any) -> dict:
+    from app.ai.cad_recognize.spec_fragments import _ask, _overview
+    from app.ai.router import ai_router
+
+    return await _ask(
+        prompt,
+        _overview(crop),
+        router=ai_router,
+        confidential=True,
+        num_predict=120,
+        schema=_HOLE_DEPTH_SCHEMA,
+    )

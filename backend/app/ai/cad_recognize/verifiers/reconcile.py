@@ -1743,3 +1743,17 @@ def settle_phantom_wall_features(spec: dict[str, Any], report: dict[str, Any]) -
         f"{n} — на листе нет вида спереди, граней корпуса нет" for n in phantom
     )
     return spec
+
+
+def apply_hole_depths(spec: dict[str, Any], decisions: list[dict[str, Any]]) -> dict[str, Any]:
+    """Глубина глухих отверстий, подтверждённая видом и надписью (X1)."""
+    import copy
+
+    spec = copy.deepcopy(spec)
+    holes = spec["main_view"]["profile"]["holes"]
+    for decision in decisions:
+        index = int(decision["path"].split("[")[1].split("]")[0])
+        holes[index]["depth_mm"] = decision["value"]
+        holes[index].pop("through", None)
+        spec.setdefault("optional_unresolved", []).append(decision["reason"])
+    return spec

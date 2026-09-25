@@ -497,6 +497,88 @@ def _length_tiers(dimensions: list[dict[str, Any]]) -> dict[int, int]:
     return tiers
 
 
+def _view_circles(dimensions: list[dict[str, Any]]) -> list[tuple[int, int, float, float, float]]:
+    """Окружности видов по их диаметрам: (вид, номер размера, u, v, радиус), мм вида."""
+    import math
+
+    found = []
+    for position, item in enumerate(dimensions):
+        anchors = item.get("anchors_mm") or []
+        if str(item.get("kind") or "") != "Diameter" or len(anchors) < 2:
+            continue
+        (u1, v1), (u2, v2) = (
+            (float(anchors[0][0]), float(anchors[0][1])),
+            (float(anchors[1][0]), float(anchors[1][1])),
+        )
+        found.append(
+            (
+                int(item.get("view_index") or 0),
+                position,
+                (u1 + u2) / 2.0,
+                (v1 + v2) / 2.0,
+                math.hypot(u2 - u1, v2 - v1) / 2.0,
+            )
+        )
+    return found
+
+
+def _label_on_circles(
+    circles: list[tuple[int, int, float, float, float]],
+    view: int,
+    own: int,
+    end_u: float,
+    end_v: float,
+    tu: float,
+    tv: float,
+    start: float,
+    reach: float,
+    bounds: dict[str, Any] | None = None,
+    placed: list[tuple[int, float, float, float, float]] | None = None,
+    normal: tuple[float, float] | None = None,
+) -> int:
+    """Сколько точек полки с подписью (от ``start`` до ``reach`` за концом
+    линии по ``(tu, tv)``) ложится на чужую окружность вида или его кромку."""
+    import math
+
+    margin = DIM_TEXT_MM
+    edges = []
+    if bounds and all(key in bounds for key in ("u_min", "u_max", "v_min", "v_max")):
+        edges = [float(bounds[key]) for key in ("u_min", "u_max", "v_min", "v_max")]
+    # Подпись горизонтальна и стоит у конца полки (см. место подписи ниже):
+    # проверяется её прямоугольник, а не наклонная линия полки.
+    label_mm = reach - start - DIM_EXTENSION_MM
+    along = reach - label_mm / 2.0
+    # Нормаль — как при отрисовке (не переворачивается с направлением полки).
+    nu, nv = normal if normal is not None else (-tv, tu)
+    centre_u = end_u + tu * along + nu * 1.5
+    centre_v = end_v + tv * along + nv * 1.5 + DIM_TEXT_MM / 2.0
+    points = [
+        (centre_u + label_mm * (k / 8.0 - 0.5), centre_v + DIM_TEXT_MM * (j / 2.0 - 0.5))
+        for k in range(9)
+        for j in range(3)
+    ]
+    hits = 0
+    for u, v in points:
+        for box_view, u0, v0, u1, v1 in placed or []:
+            if box_view == view and u0 - 1.0 <= u <= u1 + 1.0 and v0 - 1.0 <= v <= v1 + 1.0:
+                hits += 1
+        for index, position, cu, cv, radius in circles:
+            if index != view or position == own:
+                continue
+            distance = math.hypot(u - cu, v - cv)
+            if abs(distance - radius) <= margin or distance < radius:
+                hits += 1
+        if edges:
+            u_min, u_max, v_min, v_max = edges
+            inside_v = v_min - margin <= v <= v_max + margin
+            inside_u = u_min - margin <= u <= u_max + margin
+            if (inside_v and min(abs(u - u_min), abs(u - u_max)) <= margin) or (
+                inside_u and min(abs(v - v_min), abs(v - v_max)) <= margin
+            ):
+                hits += 1
+    return hits
+
+
 def dimensions_from_kernel(
     dimensions: list[dict[str, Any]],
     placements: dict[str, dict[str, float]],
@@ -524,6 +606,11 @@ def dimensions_from_kernel(
     tiers = _length_tiers(dimensions)
     witnesses = _witness_lines(dimensions, placements, view_order, tiers)
     dimension_rows = _dimension_rows(dimensions, placements, view_order, tiers)
+    circles = _view_circles(dimensions)
+    # Уже поставленные подписи диаметров: (вид, u0, v0, u1, v1), мм вида.
+    placed: list[tuple[int, float, float, float, float]] = _dimension_boxes(
+        dimensions, placements, view_order, tiers
+    )
     for position, item in enumerate(dimensions):
         anchors = item.get("anchors_mm") or []
         if len(anchors) < 2:
@@ -702,7 +789,51 @@ def dimensions_from_kernel(
                 blocked_backward = _on_dimension_row(
                     dimension_rows, index, position, row_v, backward
                 )
-                if blocked_forward and blocked_backward:
+                if through_centre:
+                    # Подпись диаметра окружности — на ту сторону, где полка
+                    # не ложится на чужую окружность вида: «Ø11 гл.15» стояла
+                    # поверх отверстия Ø6.6, «M5 гл.18» — поверх Ø11 (корпус
+                    # пластин, plate-1), и чья подпись чья — не прочесть.
+                    # Обе стороны заняты — полка удлиняется, пока подпись не
+                    # выйдет из помех (M5 на plate-1: вперёд кромка, назад Ø11).
+                    options = []
+                    for extra in (0.0, 3.0, 6.0, 9.0, 12.0, 18.0, 24.0, 30.0):
+                        longer = reach + extra
+                        forward_hits = _label_on_circles(
+                            circles,
+                            index,
+                            position,
+                            u2 + ou,
+                            v2 + ov,
+                            tu,
+                            tv,
+                            start,
+                            longer,
+                            bounds,
+                            placed=placed,
+                            normal=(tnu, tnv),
+                        )
+                        backward_hits = _label_on_circles(
+                            circles,
+                            index,
+                            position,
+                            u1 + ou,
+                            v1 + ov,
+                            -tu,
+                            -tv,
+                            start,
+                            longer,
+                            bounds,
+                            placed=placed,
+                            normal=(tnu, tnv),
+                        )
+                        options.append((forward_hits, extra, 0, 1.0))
+                        options.append((backward_hits, extra, 1, -1.0))
+                    _hits, extra, _order, direction = min(options)
+                    reach += extra
+                    if direction < 0:
+                        end_u, end_v, sign = u1, v1, -1.0
+                elif blocked_forward and blocked_backward:
                     # Звено в середине цепочки: полке некуда — подпись над своим
                     # размером, ближе всего к нему.
                     start = None
@@ -723,6 +854,16 @@ def dimensions_from_kernel(
                 along = reach - label_mm / 2.0
                 mid_u = end_u + ou + sign * tu * along + tnu * 1.5
                 mid_v = end_v + ov + sign * tv * along + tnv * 1.5
+            if through_centre:
+                placed.append(
+                    (
+                        index,
+                        mid_u - label_mm / 2.0,
+                        mid_v,
+                        mid_u + label_mm / 2.0,
+                        mid_v + DIM_TEXT_MM,
+                    )
+                )
             entities.append(
                 TextEntity(
                     position=to_point(mid_u, mid_v),
@@ -790,6 +931,58 @@ def _witness_lines(
             end_v = base_v + offset + (-DIM_EXTENSION_MM if item.get("below") else DIM_EXTENSION_MM)
             lines.append((index, position, anchor_u, min(anchor_v, end_v), max(anchor_v, end_v)))
     return lines
+
+
+def _dimension_boxes(
+    dimensions: list[dict[str, Any]],
+    placements: dict[str, dict[str, float]],
+    view_order: list[str],
+    tiers: dict[int, int],
+) -> list[tuple[int, float, float, float, float]]:
+    """Полосы линейных размеров вида (линия и место под её число), мм вида.
+
+    Подпись диаметра, вынесенная за контур, уезжала в ряды координат над
+    планом (Ø6.6 на plate-1) — ряды размеров для неё тоже препятствие.
+    """
+    import math
+
+    boxes: list[tuple[int, float, float, float, float]] = []
+    for position, item in enumerate(dimensions):
+        anchors = item.get("anchors_mm") or []
+        kind = str(item.get("kind") or "")
+        index = int(item.get("view_index") or 0)
+        if len(anchors) < 2 or kind not in ("DistanceX", "DistanceY") or index >= len(view_order):
+            continue
+        bounds = (placements.get(view_order[index]) or {}).get("bounds_mm") or {}
+        (_a, (u1, v1)), (_b, (u2, v2)) = _projected_dimension_points(
+            kind,
+            (float(anchors[0][0]), float(anchors[0][1])),
+            (float(anchors[1][0]), float(anchors[1][1])),
+            top=float(bounds["v_max"]) if "v_max" in bounds else None,
+            bottom=_below_level(bounds) if item.get("below") and "v_min" in bounds else None,
+            tier=tiers.get(position, 0),
+            place_u=_placed_u(item, tiers.get(position, 0)),
+        )
+        span = math.hypot(u2 - u1, v2 - v1)
+        if span <= 1e-6:
+            continue
+        across_step = kind == "DistanceY" and isinstance(item.get("place_u"), (int, float))
+        offset = 0.0 if across_step and not item.get("outside") else DIM_OFFSET_MM
+        nu, nv = -(v2 - v1) / span, (u2 - u1) / span
+        if item.get("below"):
+            nu, nv = -nu, -nv
+        ou, ov = nu * offset, nv * offset
+        pad = DIM_TEXT_MM + 1.0
+        boxes.append(
+            (
+                index,
+                min(u1, u2) + ou - pad,
+                min(v1, v2) + ov - pad,
+                max(u1, u2) + ou + pad,
+                max(v1, v2) + ov + pad,
+            )
+        )
+    return boxes
 
 
 def _dimension_rows(

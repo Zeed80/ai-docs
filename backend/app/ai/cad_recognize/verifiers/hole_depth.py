@@ -24,8 +24,15 @@ _GAP_FACTOR = 2.2
 _BLUR_SHARE = 0.86
 
 
-def verify_hole_depths(gray: Any, profile: dict[str, Any]) -> list[dict[str, Any]]:
-    """Вердикт «сквозное / глухое на глубину» каждому отверстию пластины."""
+def verify_hole_depths(
+    gray: Any, profile: dict[str, Any], measured: dict[int, dict[str, float]] | None = None
+) -> list[dict[str, Any]]:
+    """Вердикт «сквозное / глухое на глубину» каждому отверстию пластины.
+
+    ``measured`` — центр и Ø отверстия, измеренные по плану (`plate_hole`):
+    строки вида берутся от них. Живая пластина: y резьбового M5 прочитан с
+    ошибкой 6 мм, и по прочитанному строки отверстия уходили мимо.
+    """
     import numpy as np
 
     from app.ai.cad_recognize.verifiers.housing_views import locate_housing_views
@@ -75,8 +82,9 @@ def verify_hole_depths(gray: Any, profile: dict[str, Any]) -> list[dict[str, Any
     half_h = float(height) / 2.0
     rows_of = {}
     for index, hole in holes:
-        radius = _drawn_hole_diameter(hole) / 2.0
-        centre = float(hole["center_y_mm"]) + half_h
+        known = (measured or {}).get(index) or {}
+        radius = float(known.get("diameter_mm") or _drawn_hole_diameter(hole)) / 2.0
+        centre = float(known.get("center_y_mm", hole["center_y_mm"])) + half_h
         rows_of[index] = (plan.to_px(0.0, centre + radius)[1], plan.to_px(0.0, centre - radius)[1])
     gap = _typical_gap(ink, [row for pair in rows_of.values() for row in pair], sx0, sx1)
     results = []

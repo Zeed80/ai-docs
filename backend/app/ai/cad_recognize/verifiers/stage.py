@@ -83,7 +83,25 @@ def _hole_depths(image_bytes: bytes, profile: dict[str, Any], report: dict[str, 
 
     if not profile.get("holes") or not _is_number(profile.get("thickness_mm")):
         return
-    report["items"].extend(verify_hole_depths(_gray(image_bytes), profile))
+    # Центр и Ø — по замеру плана, где он есть: прочитанный y бывает мимо.
+    # Ø у замера — нарисованный (у резьбы — впадин), как и нужно строкам вида.
+    measured: dict[int, dict[str, float]] = {}
+    for item in report.get("items") or []:
+        if item.get("kind") != "plate_hole" or not item.get("measured"):
+            continue
+        index = int(item["path"].split("[")[1].split("]")[0])
+        hole = (
+            (profile.get("holes") or [])[index] if index < len(profile.get("holes") or []) else {}
+        )
+        values = item["measured"]
+        if _is_number(values.get("center_y_mm")) and _is_number(values.get("diameter_mm")):
+            measured[index] = {
+                "center_y_mm": float(values["center_y_mm"]),
+                "diameter_mm": float(values["diameter_mm"])
+                - float(hole.get("diameter_mm") or 0.0)
+                + _drawn_hole_diameter(hole),
+            }
+    report["items"].extend(verify_hole_depths(_gray(image_bytes), profile, measured))
 
 
 def _bent_section(image_bytes: bytes, sheet: dict[str, Any], report: dict[str, Any]) -> None:

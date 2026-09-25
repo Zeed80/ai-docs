@@ -95,3 +95,44 @@ def test_a_blurred_sheet_is_not_measured(monkeypatch):
     items = hole_depth.verify_hole_depths(blurred, _profile())
 
     assert {item["status"] for item in items} == {"unmeasurable"}
+
+
+def test_a_depth_is_adopted_only_when_the_label_matches_the_measurement():
+    """Переспрос по вырезу: «гл.15» при замере 15 — принято; «гл.8» — нет."""
+    import asyncio
+    import io
+
+    from app.ai.cad_recognize.verifiers.reask import reask_hole_depths
+    from app.ai.cad_recognize.verifiers.reconcile import apply_hole_depths
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (400, 400), "white").save(buffer, format="PNG")
+    spec = {"main_view": {"profile": {"holes": [{"diameter_mm": 11.0}]}}}
+    report = {
+        "items": [
+            {
+                "kind": "plate_hole",
+                "path": "main_view.profile.holes[0]",
+                "evidence_bbox_px": [180, 180, 220, 220],
+            },
+            {
+                "kind": "hole_depth",
+                "path": "main_view.profile.holes[0]",
+                "status": "refuted",
+                "read": {"through": True},
+                "measured": {"through": False, "depth_mm": 14.8},
+            },
+        ]
+    }
+
+    async def says(value):
+        async def ask(_prompt, _crop):
+            return {"depth_mm": value}
+
+        return await reask_hole_depths(buffer.getvalue(), spec, report, ask=ask)
+
+    adopted = asyncio.run(says(15))
+    assert [d["value"] for d in adopted] == [15.0]
+    assert apply_hole_depths(spec, adopted)["main_view"]["profile"]["holes"][0]["depth_mm"] == 15.0
+    assert asyncio.run(says(8)) == []
+    assert asyncio.run(says(None)) == []

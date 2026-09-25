@@ -4597,7 +4597,12 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         spec = _revalidated_spec(apply_threads(spec, thread_decisions))
                         adopted_paths = {d["path"] for d in thread_decisions}
                         for entry in verification.get("items") or []:
-                            if entry.get("path") in adopted_paths:
+                            # У вердикта глубины тот же путь отверстия — его
+                            # резьба не подтверждает.
+                            if (
+                                entry.get("path") in adopted_paths
+                                and entry.get("kind") == "plate_hole"
+                            ):
                                 entry["status"] = "confirmed"
                                 entry["adopted"] = True
                                 entry["reason"] = "резьбовое — по замеру и обозначению на листе"
@@ -4606,6 +4611,36 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                             "completed",
                             f"Резьбовых отверстий по листу: {len(thread_decisions)}",
                             {"decisions": thread_decisions},
+                        )
+                    # Глухое отверстие, прочитанное сквозным (ридер «гл.» не
+                    # читает): вид на толщину дал глубину, надпись у отверстия
+                    # переспрашивается по вырезу и принимается при совпадении.
+                    from app.ai.cad_recognize.verifiers.reask import reask_hole_depths
+                    from app.ai.cad_recognize.verifiers.reconcile import apply_hole_depths
+
+                    try:
+                        depth_decisions = await reask_hole_depths(content, spec, verification)
+                    except Exception as exc:  # noqa: BLE001 — переспрос не валит прогон
+                        depth_decisions = []
+                        await _record(
+                            "reconcile.hole_depth", "failed", f"Переспрос глубины: {exc}"[:200]
+                        )
+                    if depth_decisions:
+                        spec = _revalidated_spec(apply_hole_depths(spec, depth_decisions))
+                        adopted_depths = {d["path"] for d in depth_decisions}
+                        for entry in verification.get("items") or []:
+                            if (
+                                entry.get("kind") == "hole_depth"
+                                and entry.get("path") in adopted_depths
+                            ):
+                                entry["status"] = "confirmed"
+                                entry["adopted"] = True
+                                entry["reason"] = "глухое — по виду на толщину и надписи на листе"
+                        await _record(
+                            "reconcile.hole_depth",
+                            "completed",
+                            f"Глубин глухих отверстий по листу: {len(depth_decisions)}",
+                            {"decisions": depth_decisions},
                         )
                     decisions = reconcile(spec, verification)
                     if decisions:
