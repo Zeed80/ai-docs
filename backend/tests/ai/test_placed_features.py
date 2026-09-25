@@ -128,3 +128,37 @@ def test_the_schema_refuses_a_placed_feature_without_its_sizes():
     ]
     with pytest.raises(ValueError, match="axis must not be zero"):
         EngineeringDrawingSpec.model_validate(spec)
+
+
+def test_the_generator_makes_multiaxis_turned_parts_and_the_sheet_metric_requires_them():
+    """Шаг У5: вал с лысками и радиальными отверстиями под углом, отверстия в
+    торце не по оси. Метрика полноты требует станцию, длину и D − h лыски, Ø
+    и угол отверстия, Ø и расстояние от оси отверстия в торце — иначе лист
+    без них засчитывался полным (1,00 при штриховом контуре лыски)."""
+    import sys
+    from pathlib import Path
+
+    from app.ai.cad_ir.sheet_from_solid import _axial_placed, _radial_placed
+    from app.ai.verify_corpus.synth import synth_spec
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+    from build_verify_corpus import _shaft_feature_values
+
+    kinds = set()
+    for seed in range(30):
+        spec = synth_spec("turned_multiaxis", seed)
+        EngineeringDrawingSpec.model_validate(spec)
+        body = spec["main_view"]
+        radial, axial = _radial_placed(spec), _axial_placed(spec)
+        assert len(radial) + len(axial) == len(body["placed_features"])
+        values = _shaft_feature_values(body, [s["length_mm"] for s in body["outer"]])
+        for item in radial:
+            kinds.add(item["kind"])
+            if item["kind"] == "pocket":
+                assert item["width_mm"] in values["lengths"]
+            else:
+                assert item["diameter_mm"] in values["diameters"]
+        for item in axial:
+            kinds.add("axial")
+            assert item["diameter_mm"] in values["diameters"]
+    assert kinds == {"pocket", "hole", "axial"}

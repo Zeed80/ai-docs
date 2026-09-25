@@ -362,7 +362,55 @@ def plan_views(part_class: str, spec: dict) -> list[dict[str, Any]]:
                     "section_symbol": letter,
                 }
             )
+    if part_class in ("solid_rotation", "hollow_rotation"):
+        # Дорожка У: лыски и радиальные отверстия под углом — на вынесенном
+        # сечении поперёк оси на своей станции (хорда лыски, направление и Ø
+        # отверстия, угол); отверстия в торце — на виде с торца.
+        radial = [item for item in _radial_placed(spec) if len(views) < _MAX_KERNEL_VIEWS]
+        used = {str(v.get("label") or "") for v in views}
+        letters = [c for c in "БВГДЕЖИКЛМН" if f"{c}-{c}" not in used]
+        for item, letter in zip(radial, letters, strict=False):
+            if len(views) >= _MAX_KERNEL_VIEWS:
+                break
+            views.append(
+                {
+                    "kind": "section",
+                    "presentation_kind": "removed_section",
+                    "section_normal": "axis",
+                    "section_station_mm": round(float(item["origin_mm"][2]), 3),
+                    "label": f"{letter}-{letter}",
+                    "section_symbol": letter,
+                }
+            )
+        if _axial_placed(spec) and not any(v["kind"] == "side" for v in views):
+            views.append({"kind": "side"})
     return views
+
+
+def _radial_placed(spec: dict) -> list[dict]:
+    """Элементы по размещению поперёк оси тела вращения (лыска, радиальное отверстие)."""
+    body = spec.get("main_view") or {}
+    return [
+        item
+        for item in body.get("placed_features") or []
+        if isinstance(item, dict)
+        and len(item.get("axis") or []) == 3
+        and len(item.get("origin_mm") or []) == 3
+        and abs(float(item["axis"][2])) < 0.2
+    ]
+
+
+def _axial_placed(spec: dict) -> list[dict]:
+    """Элементы по размещению вдоль оси (отверстия в торце не по оси)."""
+    body = spec.get("main_view") or {}
+    return [
+        item
+        for item in body.get("placed_features") or []
+        if isinstance(item, dict)
+        and len(item.get("axis") or []) == 3
+        and len(item.get("origin_mm") or []) == 3
+        and abs(float(item["axis"][2])) > 0.9
+    ]
 
 
 def _keyway_section_station(keyway: dict) -> float:
@@ -2241,6 +2289,202 @@ def _turned_detail_dimensions(drawing: dict, spec: dict, plan: SheetPlan) -> Non
         dimensions.append(below(first, second, round(size, 3), f"{size:g}×{angle:g}°", "chamfer"))
 
 
+def _placed_feature_dimensions(drawing: dict, spec: dict, plan: SheetPlan) -> None:
+    """Размеры элементов по размещению тела вращения (дорожка У, шаг У5).
+
+    * главный вид — станция от уступа своей ступени и длина лыски (под видом,
+      как у паза);
+    * вынесенное сечение на станции — лыска: размер от лыски до
+      противоположной образующей (D − h); радиальное отверстие: Ø и глубина
+      глухого; и тому и другому — угол от оси u сечения, если он не 0;
+    * вид с торца — Ø отверстия в торце (с глубиной) и его расстояние от оси.
+
+    Числа — из спека (как у сечения паза): лист несёт то, что построено.
+    """
+    import math
+
+    if plan.part_class not in ("solid_rotation", "hollow_rotation"):
+        return
+    body = spec.get("main_view") or {}
+    outer = [s for s in body.get("outer") or [] if isinstance(s, dict)]
+    lengths = [float(s.get("length_mm") or 0.0) for s in outer]
+    if not lengths or not all(lengths):
+        return
+    starts = [sum(lengths[:i]) for i in range(len(lengths))]
+    radial, axial = _radial_placed(spec), _axial_placed(spec)
+    if not radial and not axial:
+        return
+    ratio = plan.ratio or 1.0
+    dimensions = drawing.setdefault("dimensions", [])
+    views = drawing.get("views") or []
+
+    def radius_at(z: float) -> float:
+        for start, length, step in zip(starts, lengths, outer, strict=False):
+            if start - 1e-6 <= z <= start + length + 1e-6:
+                return float(step.get("diameter_mm") or 0.0) / 2.0
+        return 0.0
+
+    main = next(
+        (
+            i
+            for i, view in enumerate(views)
+            if view.get("kind") in ("bottom", "front")
+            and i not in plan.scaffold_views
+            and view.get("bounds_mm")
+        ),
+        None,
+    )
+    if main is not None:
+        bounds = views[main]["bounds_mm"]
+        u_min, v_min = float(bounds["u_min"]), float(bounds["v_min"])
+
+        def below(z1: float, z2: float, value: float, measured_by: str) -> None:
+            dimensions.append(
+                {
+                    "view_index": main,
+                    "kind": "DistanceX",
+                    "label": f"{value:g}",
+                    "anchors_mm": [[u_min + z1 * ratio, v_min], [u_min + z2 * ratio, v_min]],
+                    "value_mm": value,
+                    "measured_by": measured_by,
+                    "ir_kind": "linear",
+                    "below": True,
+                }
+            )
+
+        for item in radial:
+            z = float(item["origin_mm"][2])
+            base = max((st for st in starts if st <= z + 1e-6), default=0.0)
+            if item.get("kind") == "pocket":
+                half = float(item.get("width_mm") or 0.0) / 2.0
+                if z - half - base > 0.05:
+                    below(base, z - half, round(z - half - base, 3), "placed_station")
+                below(z - half, z + half, round(2 * half, 3), "placed_length")
+            elif z - base > 0.05:
+                below(base, z, round(z - base, 3), "placed_station")
+
+    stations = {
+        round(float(view["section_station_mm"]), 3): i
+        for i, view in enumerate(views)
+        if view.get("section_station_mm") is not None and view.get("bounds_mm")
+    }
+    for item in radial:
+        index = stations.get(round(float(item["origin_mm"][2]), 3))
+        if index is None:
+            continue
+        ox, oy = float(item["origin_mm"][0]), float(item["origin_mm"][1])
+        radius = math.hypot(ox, oy) or radius_at(float(item["origin_mm"][2]))
+        d = (ox / radius, oy / radius) if radius else (1.0, 0.0)
+        perp = (-d[1], d[0])
+        # До десятых: из синусов угол приходил «29.9999°».
+        angle = round(math.degrees(math.atan2(d[1], d[0])) % 360.0, 1) % 360.0
+
+        def at(a: float, c: float = 0.0) -> list[float]:
+            return [
+                round((a * d[0] + c * perp[0]) * ratio, 6),
+                round((a * d[1] + c * perp[1]) * ratio, 6),
+            ]
+
+        def kind_of(first: list[float], second: list[float]) -> str:
+            du, dv = abs(first[0] - second[0]), abs(first[1] - second[1])
+            if dv <= 1e-6 * max(du, 1.0):
+                return "DistanceX"
+            if du <= 1e-6 * max(dv, 1.0):
+                return "DistanceY"
+            return "Distance"
+
+        if item.get("kind") == "pocket":
+            depth = float(item.get("depth_mm") or 0.0)
+            first, second = at(radius - depth), at(-radius)
+            value = round(2 * radius - depth, 3)
+            dimensions.append(
+                {
+                    "view_index": index,
+                    "kind": kind_of(first, second),
+                    "label": f"{value:g}",
+                    "anchors_mm": [first, second],
+                    "value_mm": value,
+                    "measured_by": "placed_flat",
+                    "ir_kind": "linear",
+                }
+            )
+        else:
+            diameter = float(item.get("diameter_mm") or 0.0)
+            first, second = at(radius, -diameter / 2.0), at(radius, diameter / 2.0)
+            label = f"Ø{diameter:g}"
+            if item.get("through") is False and item.get("depth_mm"):
+                label += f" гл.{float(item['depth_mm']):g}"
+            dimensions.append(
+                {
+                    "view_index": index,
+                    "kind": kind_of(first, second),
+                    "label": label,
+                    "anchors_mm": [first, second],
+                    "value_mm": diameter,
+                    "measured_by": "placed_hole",
+                    # Ø отверстия поперёк канала на сечении: размер — диаметр.
+                    "ir_kind": "diameter",
+                }
+            )
+        if abs(angle) > 0.5 and abs(angle - 360.0) > 0.5:
+            reach = 0.7 * radius
+            dimensions.append(
+                {
+                    "view_index": index,
+                    "kind": "Angle",
+                    "label": f"{angle:g}°",
+                    "anchors_mm": [
+                        [round(reach * ratio, 6), 0.0],
+                        [round(reach * d[0] * ratio, 6), round(reach * d[1] * ratio, 6)],
+                    ],
+                    "value_mm": round(angle, 3),
+                    "measured_by": "placed_angle",
+                    "ir_kind": "angular",
+                }
+            )
+
+    side = next(
+        (i for i, view in enumerate(views) if view.get("kind") == "side" and view.get("bounds_mm")),
+        None,
+    )
+    if side is not None:
+        for item in axial:
+            x, y = float(item["origin_mm"][0]), float(item["origin_mm"][1])
+            diameter = float(item.get("diameter_mm") or 0.0)
+            label = f"Ø{diameter:g}"
+            if item.get("through") is False and item.get("depth_mm"):
+                label += f" гл.{float(item['depth_mm']):g}"
+            r = diameter / 2.0 * ratio
+            u, v = x * ratio, y * ratio
+            dimensions.append(
+                {
+                    "view_index": side,
+                    "kind": "Diameter",
+                    "label": label,
+                    "anchors_mm": [
+                        [u - r * 0.7071, v - r * 0.7071],
+                        [u + r * 0.7071, v + r * 0.7071],
+                    ],
+                    "value_mm": diameter,
+                    "measured_by": "placed_axial_hole",
+                    "ir_kind": "diameter",
+                }
+            )
+            distance = round(math.hypot(x, y), 3)
+            if distance > 0.05:
+                dimensions.append(
+                    {
+                        "view_index": side,
+                        "kind": "Distance",
+                        "label": f"{distance:g}",
+                        "anchors_mm": [[0.0, 0.0], [u, v]],
+                        "value_mm": distance,
+                        "measured_by": "placed_axial_offset",
+                        "ir_kind": "linear",
+                    }
+                )
+
+
 def _keyway_section_dimensions(drawing: dict, spec: dict, plan: SheetPlan) -> None:
     """Ширина b и глубина t1 паза — на его вынесенном сечении (X1b).
 
@@ -2844,6 +3088,7 @@ async def build_sheet_from_solid(
     _shaft_feature_dimensions(drawing, spec, plan)
     _turned_detail_dimensions(drawing, spec, plan)
     _keyway_section_dimensions(drawing, spec, plan)
+    _placed_feature_dimensions(drawing, spec, plan)
     _sheet_metal_dimensions(drawing, spec, plan)
     weldment_dimensions(drawing, spec, plan)
 

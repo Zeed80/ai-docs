@@ -41,6 +41,7 @@ def synth_spec(kind: str, seed: int) -> dict[str, Any]:
         "housing": _housing,
         "sheet_metal": _sheet_metal,
         "weldment": _weldment,
+        "turned_multiaxis": _turned_multiaxis,
     }
     if kind not in builders:
         raise ValueError(f"генератор для типа «{kind}» ещё не написан")
@@ -79,6 +80,105 @@ def _shaft(rng: random.Random) -> dict[str, Any]:
         },
         "unresolved": [],
     }
+
+
+def _turned_multiaxis(rng: random.Random) -> dict[str, Any]:
+    """Тело вращения с многоосевой обработкой (дорожка У, шаг У5).
+
+    Лыски под разными углами, радиальные отверстия под углом (не только 0°),
+    глухие отверстия на торце не по оси — всё через ``placed_features`` в
+    системе детали (ось +Z от левого торца, угол от +X). Элементы не
+    пересекаются вдоль оси: у каждого свой участок ступени.
+    """
+    import math
+
+    spec = _shaft(rng)
+    body = spec["main_view"]
+    body["keyways"], body["cross_holes"], body["grooves"] = [], [], []
+    body.pop("bore", None)
+    stations = _stations(body["outer"])
+    total = stations[-1][1]
+    busy: list[tuple[float, float]] = []
+    placed: list[dict[str, Any]] = []
+
+    def free(low: float, high: float, size: float) -> float | None:
+        for _attempt in range(12):
+            middle = round(rng.uniform(low + size / 2 + 2, high - size / 2 - 2), 1)
+            if not any(a - 2 < middle + size / 2 and middle - size / 2 < b + 2 for a, b in busy):
+                busy.append((middle - size / 2, middle + size / 2))
+                return middle
+        return None
+
+    # `_stations` отдаёт диаметр ступени, не радиус.
+    for start, end, diameter in stations:
+        radius = diameter / 2.0
+        length = end - start
+        if length < 20:
+            continue
+        roll = rng.random()
+        if roll < 0.45:
+            # Лыска: хорда на глубину 10…25 % радиуса.
+            flat_length = round(min(length - 6, rng.uniform(10, 30)), 1)
+            middle = free(start, end, flat_length)
+            if middle is None:
+                continue
+            angle = float(rng.choice((0, 90, 180, 270, 45, 135)))
+            depth = round(radius * rng.uniform(0.1, 0.25), 1)
+            c, s_ = math.cos(math.radians(angle)), math.sin(math.radians(angle))
+            placed.append(
+                {
+                    "kind": "pocket",
+                    "profile": "rectangle",
+                    "origin_mm": [round(radius * c, 4), round(radius * s_, 4), middle],
+                    "axis": [round(-c, 6), round(-s_, 6), 0.0],
+                    "ref": [0.0, 0.0, 1.0],
+                    "width_mm": flat_length,
+                    "height_mm": round(2 * radius + 2, 1),
+                    "depth_mm": depth,
+                }
+            )
+        elif roll < 0.85:
+            hole = float(rng.choice((3, 4, 5, 6, 8)))
+            if hole >= radius * 0.8:
+                continue
+            middle = free(start, end, hole + 2)
+            if middle is None:
+                continue
+            angle = float(rng.choice((30, 45, 60, 90, 120, 135, 150)))
+            c, s_ = math.cos(math.radians(angle)), math.sin(math.radians(angle))
+            item = {
+                "kind": "hole",
+                "origin_mm": [round(radius * c, 4), round(radius * s_, 4), middle],
+                "axis": [round(-c, 6), round(-s_, 6), 0.0],
+                "ref": [0.0, 0.0, 1.0],
+                "diameter_mm": hole,
+                "through": True,
+            }
+            if rng.random() < 0.4:
+                item["through"] = False
+                item["depth_mm"] = round(radius * rng.uniform(0.5, 0.9), 1)
+            placed.append(item)
+    last_radius = stations[-1][2] / 2.0
+    if last_radius >= 12 and rng.random() < 0.5:
+        # Глухие отверстия на правом торце не по оси — параллельно оси.
+        pcd = round(last_radius * rng.uniform(0.9, 1.2), 1)
+        hole = float(rng.choice((3, 4, 5)))
+        for angle in (0.0, 180.0) if rng.random() < 0.5 else (90.0,):
+            c, s_ = math.cos(math.radians(angle)), math.sin(math.radians(angle))
+            placed.append(
+                {
+                    "kind": "hole",
+                    "origin_mm": [round(pcd / 2 * c, 4), round(pcd / 2 * s_, 4), total],
+                    "axis": [0.0, 0.0, -1.0],
+                    "diameter_mm": hole,
+                    "through": False,
+                    "depth_mm": round(rng.uniform(5, 12), 1),
+                }
+            )
+    body["placed_features"] = placed
+    body["name"] = rng.choice(("Вал", "Ось", "Шпиндель", "Валик"))
+    spec["title_block"]["name"] = body["name"]
+    return spec
 
 
 def _stepped_profile(rng: random.Random) -> list[dict[str, Any]]:

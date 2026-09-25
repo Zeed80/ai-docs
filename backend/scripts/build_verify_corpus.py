@@ -169,6 +169,32 @@ def _shaft_feature_values(body: dict, lengths: list[float]) -> dict[str, list[fl
     for chamfer in body.get("chamfers") or []:
         if chamfer.get("location") in ("left_end", "right_end"):
             values["lengths"].append(chamfer["size_mm"])
+    # Дорожка У: элементы по размещению. Поперёк оси — станция от уступа
+    # (у лыски — начало и длина), на сечении — D − h лыски или Ø отверстия и
+    # угол, если он не 0; вдоль оси (в торце) — Ø и расстояние от оси.
+    import math
+
+    for item in body.get("placed_features") or []:
+        (ox, oy, oz), axis = item["origin_mm"], item["axis"]
+        if abs(axis[2]) < 0.2:
+            radius = math.hypot(ox, oy)
+            angle = round(math.degrees(math.atan2(oy, ox)) % 360.0, 1) % 360.0
+            if item["kind"] == "pocket":
+                start = oz - item["width_mm"] / 2.0
+                values["lengths"] += [item["width_mm"], round(2 * radius - item["depth_mm"], 3)]
+                if from_shoulder(start) > 0.05:
+                    values["lengths"].append(from_shoulder(start))
+            else:
+                values["diameters"].append(item["diameter_mm"])
+                if from_shoulder(oz) > 0.05:
+                    values["lengths"].append(from_shoulder(oz))
+            if angle > 0.5:
+                values["lengths"].append(angle)
+        elif abs(axis[2]) > 0.9:
+            values["diameters"].append(item["diameter_mm"])
+            distance = round(math.hypot(ox, oy), 3)
+            if distance > 0.05:
+                values["lengths"].append(distance)
     return values
 
 
