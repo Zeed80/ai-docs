@@ -654,3 +654,56 @@ def test_the_thickness_measured_by_the_views_is_adopted_when_the_sheet_states_it
     assert (decision["action"], decision["value"]) == ("adopt", 50.0)
     updated, _ = apply_reconciliation(spec, report, [decision])
     assert updated["main_view"]["profile"]["thickness_mm"] == 50.0
+
+
+def test_plate_hole_y_coordinates_swapped_by_the_reader_are_taken_from_the_sheet():
+    """Живой plate-1: x отверстий верны, y переставлены парами (7 ↔ 1);
+    проверка мерит y по окружности, выбранной по x, координата от кромки
+    совпадает с надписью — принимается, хотя прочитанное «32» на листе тоже
+    есть (у соседа). На место, где уже стоит другое отверстие, — нет."""
+    from app.ai.cad_recognize.verifiers.reconcile import reconcile
+
+    spec = {
+        "dimensions": ["80", "50", "26", "32", "19", "Ø6.6", "Ø11"],
+        "main_view": {
+            "profile": {
+                "shape": "rectangle",
+                "width_mm": 80.0,
+                "height_mm": 50.0,
+                "holes": [
+                    {"center_x_mm": 12.0, "center_y_mm": 1.0, "diameter_mm": 6.6},
+                    {"center_x_mm": 24.0, "center_y_mm": 7.0, "diameter_mm": 6.6},
+                    {"center_x_mm": 12.0, "center_y_mm": 7.0, "diameter_mm": 6.6},
+                ],
+            }
+        },
+    }
+
+    def refuted(index, read_y, measured_y, measured_d=6.6):
+        return {
+            "kind": "plate_hole",
+            "path": f"main_view.profile.holes[{index}]",
+            "status": "refuted",
+            "read": {
+                "center_x_mm": spec["main_view"]["profile"]["holes"][index]["center_x_mm"],
+                "center_y_mm": read_y,
+                "diameter_mm": 6.6,
+            },
+            "measured": {
+                "center_x_mm": spec["main_view"]["profile"]["holes"][index]["center_x_mm"],
+                "center_y_mm": measured_y,
+                "diameter_mm": measured_d,
+            },
+            "tolerance_mm": {"position": 0.5, "diameter": 0.4},
+        }
+
+    report = {"items": [refuted(0, 1.0, 7.02), refuted(1, 7.0, 1.03, measured_d=11.01)]}
+
+    decisions = {(d["path"], d["field"]): d for d in reconcile(spec, report)}
+
+    # Отверстие 0: на (12; 7) уже стоит отверстие 2 — задвоение не принимается.
+    assert decisions.get(("main_view.profile.holes[0]", "center_y_mm"), {}).get("action") != "adopt"
+    moved = decisions[("main_view.profile.holes[1]", "center_y_mm")]
+    assert moved["action"] == "adopt" and moved["value"] == 1.0
+    diameter = decisions[("main_view.profile.holes[1]", "diameter_mm")]
+    assert diameter["action"] == "adopt" and diameter["value"] == 11.0

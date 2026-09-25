@@ -79,8 +79,13 @@ def reconcile(spec: dict[str, Any], report: dict[str, Any]) -> list[dict[str, An
         swap = _keyway_swap(spec, item)
         decisions.extend(swap)
         decisions.extend(_keyway_position(spec, item, report))
+        plate = _plate_hole_position(spec, item, numbers)
+        decisions.extend(plate)
+        decided = {d["field"] for d in plate}
         for field, tolerance_kind in ADOPTABLE.get(item.get("kind"), ()):
             if swap and field == "width_mm":
+                continue
+            if field in decided:
                 continue
             read = (item.get("read") or {}).get(field)
             measured = (item.get("measured") or {}).get(field)
@@ -480,7 +485,9 @@ def apply_reconciliation(
     if not isinstance(provenance, dict):
         provenance = {}
         spec["provenance"] = provenance
-    items = {item.get("path"): item for item in report.get("items") or []}
+    # По виду и пути: у проверки глубины отверстия путь тот же, что у проверки
+    # самого отверстия, и принятый Ø записывался бы в вердикт глубины.
+    items = {(item.get("kind"), item.get("path")): item for item in report.get("items") or []}
     for decision in decisions:
         if decision.get("action") != "adopt":
             continue
@@ -494,7 +501,7 @@ def apply_reconciliation(
             "value_mm": decision["value"],
             "read_mm": decision["read"],
         }
-        item = items.get(decision["path"])
+        item = items.get((decision.get("kind"), decision["path"]))
         if item is None:
             continue
         item.setdefault("reconciled", {})[decision["field"]] = {
@@ -1757,3 +1764,115 @@ def apply_hole_depths(spec: dict[str, Any], decisions: list[dict[str, Any]]) -> 
         holes[index].pop("through", None)
         spec.setdefault("optional_unresolved", []).append(decision["reason"])
     return spec
+
+
+def _plate_hole_position(
+    spec: dict[str, Any], item: dict[str, Any], numbers: list[float]
+) -> list[dict[str, Any]]:
+    """Координата отверстия пластины — по замеру, объяснённому надписью (X1, Ф4).
+
+    Живой plate-1: x отверстий ридер читает верно, а y переставляет (y M5 — 7
+    вместо 1). Проверка выбирает окружность по x и меряет её y; на листе
+    координаты стоят от левой и нижней кромок плана. Замер принимается, если
+    его координата от кромки совпала с надписью листа. «Прочитанного на листе
+    нет» здесь не требуется: координатные надписи общие для нескольких
+    отверстий, прочитанное 32 на листе есть — у соседа. Не принимается, если
+    на новом месте уже стоит другое прочитанное отверстие (задвоение).
+    """
+    if item.get("kind") != "plate_hole":
+        return []
+    profile = ((spec.get("main_view") or {}).get("profile")) or {}
+    width, height = profile.get("width_mm"), profile.get("height_mm")
+    tolerance = (item.get("tolerance_mm") or {}).get("position")
+    read, measured = item.get("read") or {}, item.get("measured") or {}
+    if not all(isinstance(v, (int, float)) for v in (width, height, tolerance)):
+        return []
+    keys = ("center_x_mm", "center_y_mm")
+    if not all(isinstance(read.get(k), (int, float)) for k in keys):
+        return []
+    if not all(isinstance(measured.get(k), (int, float)) for k in keys):
+        return []
+    holes = profile.get("holes") or []
+    index = int(str(item["path"]).split("[")[1].split("]")[0])
+    decisions = []
+    adopted_position: dict[str, float] = {}
+    for key, half in (("center_x_mm", float(width) / 2.0), ("center_y_mm", float(height) / 2.0)):
+        other = "center_y_mm" if key == "center_x_mm" else "center_x_mm"
+        # Отверстие опознано по другой координате: она сошлась с листом.
+        if abs(float(measured[other]) - float(read[other])) > float(tolerance):
+            continue
+        if abs(float(measured[key]) - float(read[key])) <= float(tolerance):
+            continue
+        edge = float(measured[key]) + half
+        near = sorted(
+            (n for n in numbers if abs(n - edge) <= float(tolerance)), key=lambda n: abs(n - edge)
+        )
+        if not near:
+            continue
+        value = round(near[0] - half, 3)
+        target = {key: value, other: float(read[other])}
+        taken = any(
+            i != index
+            and isinstance(hole, dict)
+            and all(isinstance(hole.get(k), (int, float)) for k in keys)
+            and all(abs(float(hole[k]) - target[k]) <= float(tolerance) for k in keys)
+            for i, hole in enumerate(holes)
+        )
+        if taken:
+            continue
+        adopted_position[key] = value
+        decisions.append(
+            {
+                "kind": "plate_hole",
+                "path": item["path"],
+                "feature_id": item.get("feature_id"),
+                "field": key,
+                "read": float(read[key]),
+                "measured": float(measured[key]),
+                "action": "adopt",
+                "value": value,
+                "reason": (
+                    f"координата {near[0]:g} от кромки — замер {edge:g} совпал с надписью на "
+                    f"листе; прочитано было {float(read[key]) + half:g}"
+                ),
+            }
+        )
+    # Ø своей окружности: отверстие опознано по обеим координатам (сошлись с
+    # листом или приняты выше), и замер совпал с надписью — принимается, даже
+    # если прочитанный Ø на листе тоже есть: Ø, как и координаты, бывают общими
+    # (живой plate-1: Ø6,6 прочитан у отверстия Ø11, 6,6 на листе — у соседа).
+    diameter_tolerance = (item.get("tolerance_mm") or {}).get("diameter")
+    located = all(
+        k in adopted_position or abs(float(measured[k]) - float(read[k])) <= float(tolerance)
+        for k in keys
+    )
+    read_d, measured_d = read.get("diameter_mm"), measured.get("diameter_mm")
+    if (
+        located
+        and isinstance(diameter_tolerance, (int, float))
+        and isinstance(read_d, (int, float))
+        and isinstance(measured_d, (int, float))
+        and abs(float(measured_d) - float(read_d)) > float(diameter_tolerance)
+    ):
+        near = sorted(
+            (n for n in numbers if abs(n - float(measured_d)) <= float(diameter_tolerance)),
+            key=lambda n: abs(n - float(measured_d)),
+        )
+        if near:
+            decisions.append(
+                {
+                    "kind": "plate_hole",
+                    "path": item["path"],
+                    "feature_id": item.get("feature_id"),
+                    "field": "diameter_mm",
+                    "read": float(read_d),
+                    "measured": float(measured_d),
+                    "action": "adopt",
+                    "value": near[0],
+                    "reason": (
+                        f"отверстие опознано по координатам; замер Ø{float(measured_d):g} совпал "
+                        f"с надписью «{near[0]:g}», прочитано было {float(read_d):g}"
+                    ),
+                }
+            )
+    return decisions
