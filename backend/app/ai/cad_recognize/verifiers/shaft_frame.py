@@ -31,10 +31,24 @@ from typing import Any
 
 from app.ai.cad_recognize.verifiers.view_frame import ViewFrame
 
-# Допуск симметрии пары, пиксели листа.
+# Допуск симметрии пары, пиксели листа — не меньше трети толщины основной
+# линии: асимметрия кромок растёт с разрешением (скан 600 dpi, лист после
+# увеличения), и при ×2 последние ступени теряли пару — вид обрывался на
+# 18 % раньше торца. При 300 dpi (линия 6 px) допуск тот же — 2 px.
 _SYMMETRY_PX = 2.0
+_SYMMETRY_LINE_SHARE = 1.0 / 3.0
+# …но только на заметно увеличенном листе (линия от 9 px ≈ 450 dpi): живой
+# z4-r4 (фото, линия 8,2 px) при допуске 2,7 px складывал лишнюю пару кромок —
+# «паз», которого нет (гейт реальных листов).
+_SYMMETRY_FROM_LINE_PX = 9.0
 # Основная линия — не тоньше этой доли эталонной толщины (тонкая — вдвое тоньше).
 _MAIN_SHARE = 0.6
+# Торцы и грани — строже: по длине линий толщины листа лежат кластерами
+# 0,48 (тонкие), 0,60–0,67 (штрихи надписей, стрелки — и куски контура),
+# провал 0,68–0,79, 0,96–1,0 (основные). На 0,6 уточнение торца цеплялось за
+# повёрнутую надпись у торца, когда лист увеличен в 1,25 раза; профилю же
+# куски среднего кластера нужны (0,7 для всех линий — 4 регрессии храповика).
+_FACE_SHARE = 0.7
 # Внутренние разрывы профиля заполняются парами с таким кратным допуском.
 _LOOSE_SYMMETRY_SHARE = 2.5
 # Лист годен для замера — основная линия не тоньше (`shaft_profile._MIN_LINE_PX`).
@@ -81,6 +95,8 @@ class _Sheet:
     gray: Any
     ink: Any
     main_weight: float
+    # Порог торцов — строже (`_FACE_SHARE`).
+    end_weight: float = 0.0
 
 
 def locate_shaft_frame(sheet: Any, total_length_mm: float) -> tuple[ViewFrame, ShaftProfile] | None:
@@ -123,16 +139,33 @@ def locate_shaft_views(
     long_lines = [line for line in lines if line.end - line.start >= 4 * min_length]
     main_ref = float(np.percentile([weight[id(line)] for line in (long_lines or lines)], 90))
     main = [line for line in lines if weight[id(line)] >= _MAIN_SHARE * main_ref]
+    # Запасной набор — только уверенно основные: штрихи надписи у торца
+    # (0,60–0,67 эталона) продлевали профиль наружу, и торец там не находился.
+    strict = [line for line in lines if weight[id(line)] >= _FACE_SHARE * main_ref]
     vertical = _lines(ink, min_length, axis=1)
-    context = _Sheet(gray=gray, ink=ink, main_weight=_MAIN_SHARE * main_ref)
+    context = _Sheet(
+        gray=gray,
+        ink=ink,
+        main_weight=_MAIN_SHARE * main_ref,
+        end_weight=_FACE_SHARE * main_ref,
+    )
 
     passing = []
-    for axis_y in _axis_candidates(main, weight, min_length):
-        found = _profile(main, axis_y, gray.shape[1], min_length, main_ref)
-        if found is None:
-            continue
-        x0, x1, half = found
-        faces = _end_faces(vertical, axis_y, x0, x1, half, context)
+    symmetry = (
+        max(_SYMMETRY_PX, _SYMMETRY_LINE_SHARE * main_ref)
+        if main_ref >= _SYMMETRY_FROM_LINE_PX
+        else _SYMMETRY_PX
+    )
+    for axis_y in _axis_candidates(main, weight, min_length, symmetry):
+        faces = None
+        for candidates in (main, strict):
+            found = _profile(candidates, axis_y, gray.shape[1], min_length, main_ref, symmetry)
+            if found is None:
+                continue
+            x0, x1, half = found
+            faces = _end_faces(vertical, axis_y, x0, x1, half, context)
+            if faces is not None:
+                break
         if faces is None:
             continue
         x0, x1 = faces
@@ -297,12 +330,14 @@ def _segments(ink: Any, min_length: int) -> list[Any]:
     return sorted(result, key=lambda line: line.position)
 
 
-def _axis_candidates(lines: list[Any], weight: dict[int, float], min_length: int) -> list[float]:
+def _axis_candidates(
+    lines: list[Any], weight: dict[int, float], min_length: int, symmetry: float = _SYMMETRY_PX
+) -> list[float]:
     """Середины симметричных пар с наибольшим весом — лучшие первыми."""
     votes: dict[int, float] = {}
     for i, top in enumerate(lines):
         for bottom in lines[i + 1 :]:
-            if bottom.position - top.position < 2 * _SYMMETRY_PX:
+            if bottom.position - top.position < 2 * symmetry:
                 continue
             overlap = top.overlap(bottom.start, bottom.end)
             if overlap < min_length:
@@ -325,17 +360,24 @@ def _axis_candidates(lines: list[Any], weight: dict[int, float], min_length: int
     return result
 
 
-def _profile(lines: list[Any], axis_y: float, width: int, min_length: int, main_ref: float = 0.0):
+def _profile(
+    lines: list[Any],
+    axis_y: float,
+    width: int,
+    min_length: int,
+    main_ref: float = 0.0,
+    symmetry: float = _SYMMETRY_PX,
+):
     """Самая внешняя симметричная пара на каждом столбце, самый длинный участок."""
     import numpy as np
 
     half = np.full(width, np.nan)
-    above = [line for line in lines if line.position < axis_y - _SYMMETRY_PX]
-    below = [line for line in lines if line.position > axis_y + _SYMMETRY_PX]
+    above = [line for line in lines if line.position < axis_y - symmetry]
+    below = [line for line in lines if line.position > axis_y + symmetry]
     for top in above:
         mirror = 2.0 * axis_y - top.position
         for bottom in below:
-            if abs(bottom.position - mirror) > _SYMMETRY_PX:
+            if abs(bottom.position - mirror) > symmetry:
                 continue
             start, end = max(top.start, bottom.start), min(top.end, bottom.end)
             if end - start < min_length:
@@ -360,7 +402,7 @@ def _profile(lines: list[Any], axis_y: float, width: int, min_length: int, main_
     inner[int(columns[0]) : int(columns[-1]) + 1] = True
     inner &= np.isnan(half)
     if inner.any() and main_ref >= _MEASURABLE_LINE_PX:
-        loose = _LOOSE_SYMMETRY_SHARE * _SYMMETRY_PX
+        loose = _LOOSE_SYMMETRY_SHARE * symmetry
         for top in above:
             mirror = 2.0 * axis_y - top.position
             for bottom in below:
@@ -457,8 +499,12 @@ def _end_faces(
         return None
     band = 0.2 * min(left_height, right_height)
     rows = (axis_y - band, axis_y + band)
-    x_left = _outer_x(sheet.ink, min(left), rows, reach, side=-1, min_width=sheet.main_weight)
-    x_right = _outer_x(sheet.ink, max(right), rows, reach, side=1, min_width=sheet.main_weight)
+    x_left = _outer_x(
+        sheet.ink, min(left), rows, reach, side=-1, min_width=sheet.end_weight or sheet.main_weight
+    )
+    x_right = _outer_x(
+        sheet.ink, max(right), rows, reach, side=1, min_width=sheet.end_weight or sheet.main_weight
+    )
     return int(round(x_left)), int(round(x_right))
 
 

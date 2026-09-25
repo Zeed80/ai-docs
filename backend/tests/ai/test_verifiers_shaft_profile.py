@@ -240,3 +240,21 @@ def test_a_step_with_an_asymmetric_edge_inside_the_view_does_not_split_it():
     frame, _profile = located
     assert abs(frame.origin_px[0] - X0) <= 3
     assert abs(frame.mm_per_px - 1.0 / PX) <= 0.01 / PX
+
+
+def test_the_view_is_found_the_same_on_a_sheet_scanned_at_a_higher_resolution():
+    """Скан 600 dpi / лист после увеличения: вид вала и масштаб — те же.
+
+    Допуск симметрии пары и порог торца были пиксельными: при ×2 кромки,
+    несимметричные на 2 px при 300 dpi, теряли пару, и вид обрывался.
+    """
+    import cv2
+
+    base = _sheet(lowered=1.5)
+    total = sum(length for _d, length in STEPS)
+    for factor in (1.5, 2.0):
+        sheet = cv2.resize(base, None, fx=factor, fy=factor, interpolation=cv2.INTER_CUBIC)
+        located = locate_shaft_frame(sheet, total)
+        assert located is not None, factor
+        frame, _profile = located
+        assert abs(frame.mm_per_px * factor - 1.0 / PX) <= 0.01 / PX, (factor, frame.mm_per_px)
