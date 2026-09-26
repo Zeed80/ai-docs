@@ -43,6 +43,8 @@ PROMPT = (
     "зубчатого венца); notes — технические требования или текст;\n"
     "label — надпись, которая относится к другой рамке (обозначение «А-А», "
     "«Б (4:1)», «Вид В», подпись рисунка) — укажи номер той рамки в of;\n"
+    "Если рамка — лишь часть изображения, которое продолжается в другой рамке, "
+    "дай ей ту же роль и в of — номер рамки с основной частью этого изображения.\n"
     "other — прочее (размерная надпись, оторванная от вида, рамка листа).\n"
     "Для видов, разрезов и сечений дай name — как этот вид назвал бы инженер "
     "(«главный вид», «вид слева», «А-А», «Б (4:1)») — и part — название детали, "
@@ -104,23 +106,66 @@ class SheetReading:
 
 
 def propose_regions(gray: Any) -> list[tuple[int, int, int, int]]:
-    """Кандидатные области: скопления линий, штамп, колонка текста.
+    """Кандидатные области: изображения — по основным линиям, прочее — отдельно.
 
-    Берутся из общей разметки листа (`sheet_layout`); дробление на подписи
-    допустимо — модель склеит их ролью ``label``.
+    Рамка листа и линии штампа, идущие почти через весь лист, убираются —
+    иначе они склеивают главный вид с собой в одну «область» (вал и втулка из
+    методички: главного вида среди рамок не было вовсе). Изображения
+    собираются по ОСНОВНЫМ линиям: тонкие размерные и выносные тянутся между
+    видами и сшивали бы их. Остаток (таблицы, текст, штамп) — своими рамками.
+    Дробление одного изображения на части допустимо: модель связывает части
+    ссылкой ``of``.
     """
+    import cv2
     import numpy as np
-    from PIL import Image
 
-    from app.ai.cad_recognize.sheet_layout import detect_sheet_layout
+    g = np.asarray(gray)
+    height, width = g.shape
+    threshold, _ = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    ink = (g < min(threshold, 200)).astype(np.uint8)
+    long_h = cv2.morphologyEx(
+        ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (int(width * 0.45), 1))
+    )
+    long_v = cv2.morphologyEx(
+        ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, int(height * 0.45)))
+    )
+    work = ink & (1 - cv2.dilate(long_h | long_v, np.ones((5, 5), np.uint8)))
+    runs: list[int] = []
+    for y in range(0, height, max(1, height // 200)):
+        edges = np.diff(np.concatenate([[0], work[y], [0]]))
+        starts, ends = np.where(edges == 1)[0], np.where(edges == -1)[0]
+        runs.extend(int(r) for r in ends - starts if 1 <= r <= 40)
+    thin = float(np.percentile(runs, 30)) if runs else 2.0
+    thick = float(np.percentile(runs, 85)) if runs else 4.0
+    kernel = max(2, int(round((thin + thick) / 2.0)))
+    main = cv2.morphologyEx(work, cv2.MORPH_OPEN, np.ones((kernel, kernel), np.uint8))
+    gap = max(8, int(0.012 * float(np.hypot(height, width))))
 
-    layout = detect_sheet_layout(Image.fromarray(np.asarray(gray)))
-    boxes = []
-    for box in (layout.title_block, layout.notes_column, *layout.views):
-        if box is not None:
-            boxes.append((int(box.x0), int(box.y0), int(box.x1), int(box.y1)))
+    def clusters(mask: Any, min_share: float) -> list[tuple[int, int, int, int]]:
+        grouped = cv2.dilate(mask, np.ones((gap, gap), np.uint8))
+        count, _labels, stats, _ = cv2.connectedComponentsWithStats(grouped, 8)
+        found = []
+        for index in range(1, count):
+            x, y, w, h, _area = stats[index]
+            if w * h >= min_share * width * height:
+                found.append(
+                    (
+                        int(x + gap // 2),
+                        int(y + gap // 2),
+                        int(x + w - gap // 2),
+                        int(y + h - gap // 2),
+                    )
+                )
+        return found
+
+    pictures = clusters(main, 0.002)
+    rest = work.copy()
+    for x0, y0, x1, y1 in pictures:
+        rest[max(0, y0 - gap) : y1 + gap, max(0, x0 - gap) : x1 + gap] = 0
+    boxes = pictures + clusters(rest, 0.004)
     # Сверху вниз, слева направо — номера читаются как текст.
-    boxes.sort(key=lambda b: (b[1] // 200, b[0]))
+    band = max(1, height // 12)
+    boxes.sort(key=lambda b: (b[1] // band, b[0]))
     return boxes
 
 
