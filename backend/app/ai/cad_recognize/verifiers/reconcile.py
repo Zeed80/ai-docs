@@ -37,6 +37,13 @@ ADOPTABLE: dict[str, tuple[tuple[str, str], ...]] = {
     # и замер принимается по тому же правилу, что и размер.
     # Толщина корпуса и пластины, измеренная по видам листа (Ф5).
     "plate_thickness": (("thickness_mm", "thickness"),),
+    # Элемент по размещению поперёк оси (дорожка У): угол и размер — по
+    # сечению. Угол хранится в origin/axis — принятое поворачивает размещение.
+    "placed_feature": (
+        ("angle_deg", "angle"),
+        ("diameter_mm", "diameter"),
+        ("depth_mm", "depth"),
+    ),
     "wall_feature": (
         ("diameter_mm", "size"),
         ("width_mm", "size"),
@@ -68,9 +75,20 @@ def sheet_numbers(spec: dict[str, Any]) -> list[float]:
     return sorted(values)
 
 
+def sheet_angles(spec: dict[str, Any]) -> list[float]:
+    """Угловые надписи листа («60°»), без фасок «1×45°»."""
+    values: set[float] = set()
+    for item in spec.get("dimensions") or []:
+        text = str((item.get("value") if isinstance(item, dict) else item) or "")
+        for match in re.finditer(r"(?<![×xх*\d.,])(\d+(?:[.,]\d+)?)\s*°", text):
+            values.add(round(float(match.group(1).replace(",", ".")), 3))
+    return sorted(values)
+
+
 def reconcile(spec: dict[str, Any], report: dict[str, Any]) -> list[dict[str, Any]]:
     """Решения по опровергнутым надписанным полям: принять замер или человеку."""
     numbers = sheet_numbers(spec)
+    angles = sheet_angles(spec)
     decisions: list[dict[str, Any]] = []
     for item in report.get("items") or []:
         if item.get("status") != "refuted":
@@ -94,11 +112,16 @@ def reconcile(spec: dict[str, Any], report: dict[str, Any]) -> list[dict[str, An
                 continue
             if abs(float(measured) - float(read)) <= float(tolerance):
                 continue  # это поле сходится — опровергнуто другое
+            # Угол — только среди угловых надписей (замер 59,8° не «совпадает»
+            # с длиной 60 мм); прочитанный 0° — «не проставлен», на листе его нет.
+            pool = angles if field == "angle_deg" else numbers
             near = sorted(
-                (n for n in numbers if abs(n - float(measured)) <= float(tolerance)),
+                (n for n in pool if abs(n - float(measured)) <= float(tolerance)),
                 key=lambda n: abs(n - float(measured)),
             )
-            read_on_sheet = any(abs(n - float(read)) <= 0.05 for n in numbers)
+            read_on_sheet = any(abs(n - float(read)) <= 0.05 for n in pool) and not (
+                field == "angle_deg" and abs(float(read)) < 0.5
+            )
             decision = {
                 "kind": item["kind"],
                 "path": item["path"],
@@ -494,7 +517,10 @@ def apply_reconciliation(
         node = _resolve(spec, decision["path"])
         if node is None:
             continue
-        node[decision["field"]] = decision["value"]
+        if decision.get("kind") == "placed_feature" and decision["field"] == "angle_deg":
+            _rotate_placed(node, float(decision["value"]))
+        else:
+            node[decision["field"]] = decision["value"]
         provenance[f"{decision['path']}.{decision['field']}"] = {
             "origin": "sheet_measurement",
             "detail": decision["reason"],
@@ -565,6 +591,18 @@ def apply_reconciliation(
                 1 for item in report.get("items") or [] if item.get("status") == status
             )
     return spec, report
+
+
+def _rotate_placed(node: dict[str, Any], angle_deg: float) -> None:
+    """Элемент поперёк оси — на новый угол: origin по окружности своего
+    радиуса, ось — внутрь, станция и ref не меняются."""
+    import math
+
+    ox, oy, oz = (float(v) for v in node["origin_mm"])
+    radius = math.hypot(ox, oy)
+    a = math.radians(angle_deg)
+    node["origin_mm"] = [round(radius * math.cos(a), 4), round(radius * math.sin(a), 4), oz]
+    node["axis"] = [round(-math.cos(a), 6), round(-math.sin(a), 6), 0.0]
 
 
 def cavity_addition(spec: dict[str, Any], report: dict[str, Any]) -> dict[str, Any] | None:

@@ -1813,6 +1813,253 @@ def _matches_callout(value: float, candidates: list[float], tol: float = 0.02) -
     return any(abs(value - candidate) <= window for candidate in candidates)
 
 
+_SECTIONS_PROMPT = (
+    "Перед тобой чертёж тела вращения с ВЫНЕСЕННЫМИ СЕЧЕНИЯМИ (круги со "
+    "штриховкой, подписанные «Б-Б», «В-В»…; на главном виде им отвечают следы "
+    "секущих плоскостей — штрихи с теми же буквами). Контур уже прочитан; "
+    "нужны ТОЛЬКО элементы поперёк оси, видные на сечениях: лыски (срез круга "
+    "прямой хордой) и радиальные отверстия (канал от поверхности к оси). "
+    "Для КАЖДОГО сечения с таким элементом — ОДНОЙ строкой JSON:\n"
+    '{"sections":[{"label":"Б-Б","step_diameter_mm":0,'
+    '"flats":[{"angle_deg":0,"across_mm":0,"from_shoulder_mm":0,"length_mm":0}],'
+    '"holes":[{"angle_deg":0,"diameter_mm":0,"from_shoulder_mm":0,'
+    '"through":true,"depth_mm":null}]}]}\n'
+    "ПРАВИЛА:\n"
+    "1) step_diameter_mm — диаметр ступени, через которую проходит сечение "
+    "(найди след секущей плоскости с той же буквой на главном виде).\n"
+    "2) angle_deg — угол направления на элемент на сечении: от горизонтали "
+    "ВПРАВО, ПРОТИВ часовой стрелки (вверх — 90, влево — 180, вниз — 270). "
+    "Угловой размер на сечении не проставлен — элемент справа, angle_deg=0.\n"
+    "3) Лыска: across_mm — размер на сечении от плоскости лыски до "
+    "противоположной стороны круга (меньше диаметра ступени); length_mm — "
+    "длина лыски вдоль оси на главном виде.\n"
+    "4) Отверстие: diameter_mm — «Ø…» у канала; «гл.N» — глухое, through=false, "
+    "depth_mm=N.\n"
+    "5) from_shoulder_mm — размер на главном виде от ЛЕВОГО уступа (или торца) "
+    "этой ступени: до оси отверстия, до начала лыски. Бери число КАК НАПИСАНО "
+    "на чертеже, ничего не складывай.\n"
+    "6) Числа — только с чертежа. Сечения без лысок и отверстий не перечисляй.\n"
+    "Только JSON."
+)
+_SECTIONS_SCHEMA = {
+    "type": "object",
+    "properties": {"sections": {"type": "array", "maxItems": 12, "items": {"type": "object"}}},
+}
+# Любой дефис и тире: модель пишет «Б‑Б» неразрывным дефисом U+2011 (живой
+# turned_multiaxis-0 — вопрос из-за этого не задавался вовсе).
+_SECTION_LABEL = re.compile(r"(?<![А-ЯA-Z])([А-ЯЁA-Z])\s*[-\u2010-\u2015\u2212]\s*\1(?![А-ЯA-Z])")
+
+
+def _sheet_texts(callouts: dict) -> list[str]:
+    return [
+        str((item or {}).get("value") or (item or {}).get("text") or "")
+        for item in (callouts.get("dimensions") or []) + (callouts.get("annotations") or [])
+        if isinstance(item, dict)
+    ]
+
+
+def _on_sheet(value: float, texts: list[str]) -> bool:
+    """Число стоит на листе среди выписанных надписей (с точностью записи)."""
+    for text in texts:
+        for match in re.finditer(r"\d+(?:[.,]\d+)?", text):
+            number = float(match.group().replace(",", "."))
+            if abs(number - value) <= 0.051:
+                return True
+    return False
+
+
+async def _read_section_features(
+    image,
+    outer: list[dict],
+    callouts: dict,
+    *,
+    router: Any,
+    confidential: bool,
+    audit: list[dict[str, Any]] | None,
+    notes: list[str],
+) -> list[dict]:
+    """Лыски и радиальные отверстия по вынесенным сечениям → ``placed_features``
+    (дорожка У, У6).
+
+    Спрашивается, только когда на листе есть подписи сечений. Модель называет
+    Ø ступени сечения, угол, размер и число «от уступа» КАК НАПИСАНО: сумму
+    цепочки она не считает (живой turned_multiaxis-0: «63,4» от уступа вместо
+    145,4 от торца). Станцию считает код — по однозначной ступени этого Ø.
+    Каждое число принимается, только если оно стоит на листе (угол 0 — не
+    проставляется). Проверка по контуру сечений (`section_outline`) затем
+    подтверждает или опровергает угол и размер.
+    """
+    import math
+
+    texts = _sheet_texts(callouts)
+    # Признаки вынесенных сечений: подпись «Б-Б», слово, или угловой размер сам
+    # по себе, не в составе фаски «×45°» (живой turned_multiaxis-1: подписи
+    # сечения ридер не выписал, а «45°» на сечении — выписал).
+    if not any(
+        _SECTION_LABEL.search(text)
+        or re.search(r"сечени|разрез", text, re.IGNORECASE)
+        or re.fullmatch(r"\s*\d+(?:[.,]\d+)?\s*°\s*", text)
+        for text in texts
+    ):
+        return []
+    answer = await _ask(
+        _SECTIONS_PROMPT,
+        image,
+        num_predict=1500,
+        schema=_SECTIONS_SCHEMA,
+        router=router,
+        confidential=confidential,
+        audit=audit,
+    )
+    lengths = [_num(step.get("length_mm")) or 0.0 for step in outer]
+    starts = [sum(lengths[:i]) for i in range(len(lengths))]
+
+    def fits_of(section: dict, offset: float, extent: float) -> list[tuple[float, float]]:
+        """Ступени по Ø сечения, в которые помещается размер от уступа: (начало, R)."""
+        diameter = _num(section.get("step_diameter_mm"))
+        return [
+            (start, (_num(step.get("diameter_mm")) or 0.0) / 2.0)
+            for step, start, length in zip(outer, starts, lengths, strict=False)
+            if diameter
+            and abs((_num(step.get("diameter_mm")) or 0.0) - diameter) <= 0.05
+            and 0.0 <= offset
+            and offset + extent <= length + 1e-6
+        ]
+
+    sections = [s for s in (answer or {}).get("sections") or [] if isinstance(s, dict)]
+
+    def first_offset(section: dict) -> tuple[float, float] | None:
+        for item in (section.get("holes") or []) + (section.get("flats") or []):
+            offset = _num((item or {}).get("from_shoulder_mm"))
+            if offset is not None:
+                return offset, _num((item or {}).get("length_mm")) or 0.0
+        return None
+
+    # Однозначные станции сечений; неоднозначные — по порядку букв: следы
+    # секущих плоскостей на главном виде идут слева направо по алфавиту (Б, В,
+    # Г…), и сечение между двумя известными лежит между ними (живой
+    # turned_multiaxis-0: лыска на Г-Г при двух ступенях Ø25).
+    known: dict[str, float] = {}
+    for section in sections:
+        found = first_offset(section)
+        fits = fits_of(section, *found) if found else []
+        if len(fits) == 1:
+            known[str(section.get("label") or "")] = fits[0][0] + found[0]
+
+    def order(label: str) -> int:
+        letter = (label.strip()[:1] or "?").upper()
+        alphabet = "АБВГДЕЖЗИКЛМНОПРСТУФХЦЧШЩЭЮЯABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        return alphabet.index(letter) if letter in alphabet else -1
+
+    def station_of(section: dict, offset: float, extent: float) -> tuple[float, float] | None:
+        fits = fits_of(section, offset, extent)
+        if len(fits) <= 1:
+            return fits[0] if fits else None
+        rank = order(str(section.get("label") or ""))
+        if rank < 0:
+            return None
+        before = [z for lab, z in known.items() if 0 <= order(lab) < rank]
+        after = [z for lab, z in known.items() if order(lab) > rank]
+        low, high = max(before, default=-1e9), min(after, default=1e9)
+        between = [fit for fit in fits if low < fit[0] + offset < high]
+        return between[0] if len(between) == 1 else None
+
+    def angle_of(item: dict) -> float | None:
+        angle = _num(item.get("angle_deg"))
+        if angle is None:
+            return 0.0
+        angle %= 360.0
+        if abs(angle) < 0.5 or abs(angle - 360.0) < 0.5:
+            return 0.0
+        return angle if _on_sheet(angle, texts) else None
+
+    def placement(radius: float, angle: float, station: float) -> dict:
+        a = math.radians(angle)
+        return {
+            "origin_mm": [
+                round(radius * math.cos(a), 4),
+                round(radius * math.sin(a), 4),
+                round(station, 3),
+            ],
+            "axis": [round(-math.cos(a), 6), round(-math.sin(a), 6), 0.0],
+            "ref": [0.0, 0.0, 1.0],
+        }
+
+    placed: list[dict] = []
+    for section in sections:
+        label = str(section.get("label") or "")
+        for flat in section.get("flats") or []:
+            if not isinstance(flat, dict):
+                continue
+            angle = angle_of(flat)
+            across = _num(flat.get("across_mm"))
+            offset = _num(flat.get("from_shoulder_mm"))
+            length = _num(flat.get("length_mm"))
+            if angle is None or not across or offset is None or not length:
+                notes.append(f"лыска на сечении {label}: неполный ответ или угол не с листа")
+                continue
+            numbers = [across, length] + ([offset] if offset > 0.05 else [])
+            located = station_of(section, offset, length)
+            if not all(_on_sheet(value, texts) for value in numbers) or located is None:
+                notes.append(
+                    f"лыска {across:g} на сечении {label}: числа не с листа "
+                    "или ступень не определяется однозначно"
+                )
+                continue
+            start, radius = located
+            if not radius < across < 2 * radius:
+                notes.append(f"лыска {across:g} на сечении {label}: не меньше Ø ступени")
+                continue
+            placed.append(
+                {
+                    "kind": "pocket",
+                    "profile": "rectangle",
+                    **placement(radius, angle, start + offset + length / 2.0),
+                    "width_mm": round(length, 3),
+                    "height_mm": round(2.0 * radius + 2.0, 3),
+                    "depth_mm": round(2.0 * radius - across, 3),
+                }
+            )
+        for hole in section.get("holes") or []:
+            if not isinstance(hole, dict):
+                continue
+            angle = angle_of(hole)
+            diameter = _num(hole.get("diameter_mm"))
+            offset = _num(hole.get("from_shoulder_mm"))
+            if angle is None or not diameter or offset is None:
+                notes.append(f"отверстие на сечении {label}: неполный ответ или угол не с листа")
+                continue
+            located = station_of(section, offset, 0.0)
+            if (
+                not _on_sheet(diameter, texts)
+                or (offset > 0.05 and not _on_sheet(offset, texts))
+                or located is None
+            ):
+                notes.append(
+                    f"отверстие Ø{diameter:g} на сечении {label}: числа не с листа "
+                    "или ступень не определяется однозначно"
+                )
+                continue
+            start, radius = located
+            if diameter >= 2 * radius:
+                notes.append(f"отверстие Ø{diameter:g} на сечении {label}: больше Ø ступени")
+                continue
+            item = {
+                "kind": "hole",
+                **placement(radius, angle, start + offset),
+                "diameter_mm": diameter,
+                "through": hole.get("through") is not False,
+            }
+            depth = _num(hole.get("depth_mm"))
+            if item["through"] is False and depth and _on_sheet(depth, texts):
+                item["depth_mm"] = depth
+            elif item["through"] is False:
+                item["through"] = True
+                notes.append(f"отверстие Ø{diameter:g}: глубина не с листа — принято сквозным")
+            placed.append(item)
+    return placed
+
+
 async def _read_cut_features(
     image,
     outer: list[dict],
@@ -5329,6 +5576,33 @@ async def read_spec_by_fragments(
                 f"малые элементы: {item}"
                 for item in profile_evidence.get("feature_unresolved") or []
             )
+            placed = await _read_section_features(
+                # Весь лист: вынесенные сечения стоят вне выреза главного вида
+                # (`geometry_view`) — по нему модель их не видела вовсе.
+                _overview(image, side=2400),
+                outer,
+                callouts or {},
+                router=router,
+                confidential=confidential,
+                audit=fragment_answers,
+                notes=unresolved,
+            )
+            if placed:
+                body["placed_features"] = placed
+                # Радиальное отверстие, выписанное и поперечным, и по сечению, —
+                # одно отверстие: поперечное на той же станции снимается.
+                stations = [
+                    float(item["origin_mm"][2]) for item in placed if item["kind"] == "hole"
+                ]
+                if body.get("cross_holes"):
+                    body["cross_holes"] = [
+                        hole
+                        for hole in body["cross_holes"]
+                        if not any(
+                            abs((_num(hole.get("axial_position_mm")) or -1e9) - z) <= 1.0
+                            for z in stations
+                        )
+                    ]
     elif kind in ("plate", "flange"):
         profile = await _profile_by_assignment(
             geometry_view,
@@ -5685,15 +5959,12 @@ def _merge_fragment_truth(whole: dict, fragments: dict) -> dict:
         merged_body["profile"] = copy.deepcopy(fragment_body["profile"])
 
     fragment_unresolved = [str(item) for item in (fragments.get("unresolved") or []) if str(item)]
-    feature_fields = (
-        "chamfers",
-        "fillets",
-        "grooves",
-        "keyways",
-        "cross_holes",
-        "axial_holes",
-        "circular_hole_patterns",
-    )
+    # Тот же список полей тела, что у схемы и консенсуса: своя копия здесь
+    # молча теряла каждое новое поле (placed_features, 2026-09-26 — вопрос о
+    # сечениях отвечал верно, а в итоговом спеке элементов не было).
+    from app.ai.cad_recognize.spec_vectorize import _BODY_FEATURE_FIELDS
+
+    feature_fields = _BODY_FEATURE_FIELDS
     # Only clear the specific feature_fields a "малые элементы: ..." message
     # actually names (e.g. "поперечное отверстие Ø10 указано, но не
     # локализовано" -> cross_holes only) — clearing every field whenever any

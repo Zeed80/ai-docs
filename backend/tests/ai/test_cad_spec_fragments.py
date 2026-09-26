@@ -2010,3 +2010,19 @@ async def test_the_sheet_metal_question_gets_time_to_reason(monkeypatch):
 
     assert seen["timeout_seconds"] >= 150.0
     assert {"sheet_metal", "weldment"} <= fragments._NO_ROTATION_PASSES
+
+
+def test_every_body_feature_field_survives_the_whole_sheet_merge():
+    """Контракт семейства: поле элементов тела, прочитанное фрагментами, не
+    теряется при слиянии с полным чтением (placed_features терялись молча)."""
+    from app.ai.cad_recognize.spec_fragments import _merge_fragment_truth
+    from app.ai.cad_recognize.spec_vectorize import _BODY_FEATURE_FIELDS
+
+    fragments = {
+        "main_view": {field: [{"marker": field}] for field in _BODY_FEATURE_FIELDS},
+        "unresolved": [],
+    }
+    merged = _merge_fragment_truth({"main_view": {}}, fragments)
+
+    lost = [f for f in _BODY_FEATURE_FIELDS if not merged["main_view"].get(f)]
+    assert lost == [], lost
