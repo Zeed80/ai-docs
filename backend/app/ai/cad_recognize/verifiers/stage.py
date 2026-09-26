@@ -992,7 +992,13 @@ def _shaft(
     lengths = [float(step["length_mm"]) for _, step in steps]
     views = [(chain_frame(view, shape, lengths), shape) for view, shape in views]
     frame, profile = profile_view(gray, views)
-    spans = _keyways(gray, [view_frame for view_frame, _profile in views], body, report)
+    spans = _keyways(
+        gray,
+        [view_frame for view_frame, _profile in views],
+        body,
+        report,
+        view_line_px=max(float(getattr(shape, "line_px", 0.0) or 0.0) for _f, shape in views),
+    )
     _unclaimed_keyways(gray, [view_frame for view_frame, _profile in views], body, spans, report)
     _cross_holes(gray, [view_frame for view_frame, _profile in views], body, report)
     _turned_details(gray, views, body, report)
@@ -1115,6 +1121,7 @@ def _placed_on_sections(
         return
     report["section_traces_mm"] = traces
     _absent_without_trace(gray, frame, profile, body, items, report, traces=traces)
+    _keyways_without_trace(frame, profile, body, report, traces)
     try:
         proposals = propose_placed(
             gray, frame.bbox_px, frame.mm_per_px, body, traces, profile=profile
@@ -1243,6 +1250,78 @@ def _absent_without_trace(
         )
 
 
+def _keyways_without_trace(
+    frame: Any, profile: Any, body: dict[str, Any], report: dict[str, Any], traces: list[float]
+) -> None:
+    """Паз, которого на листе нет: капсулы нет, а на его пролёте нет свободного
+    следа секущей — опровергнут как отсутствующий (``absent``).
+
+    По ГОСТ паз образмеривают на вынесенном сечении; ридер выдаёт за паз числа
+    лыски или ступени (живые turned_multiaxis-0/1: «паз 12…82 × 5» и «33…48 ×
+    8» на валах без пазов держали сборку). Две улики, как у элементов по
+    размещению: капсула не найдена на измеримом листе, и детектор следов на
+    этом листе полон (каждый найденный элемент — на своём следе), а на
+    пролёте паза нет следа, не занятого другим найденным элементом.
+    """
+    from app.ai.cad_recognize.verifiers.keyway import NOT_FOUND_REASON
+
+    if not traces or profile is None:
+        return
+    tolerance = max(1.5, 3.0 * float(getattr(profile, "line_px", 0.0) or 0.0) * frame.mm_per_px)
+    keyways = body.get("keyways") or []
+    placed = body.get("placed_features") or []
+
+    def index_of(item: dict[str, Any]) -> int:
+        return int(str(item["path"]).split("[")[1].split("]")[0])
+
+    taken: list[tuple[float, float]] = []  # занятые найденным участки оси
+    complete = True
+    for item in report.get("items") or []:
+        if item.get("status") not in ("confirmed", "refuted") or item.get("absent"):
+            continue
+        if item.get("kind") == "placed_feature":
+            index = index_of(item)
+            origin = (placed[index] or {}).get("origin_mm") if index < len(placed) else None
+            if not origin or len(origin) != 3:
+                continue
+            z = float(origin[2])
+            taken.append((z, z))
+        elif item.get("kind") == "keyway":
+            got = item.get("measured") or {}
+            if not _is_number(got.get("axial_start_mm")) or not _is_number(got.get("length_mm")):
+                continue
+            start = float(got["axial_start_mm"])
+            taken.append((start, start + float(got["length_mm"])))
+        else:
+            continue
+        low, high = taken[-1]
+        complete &= any(low - tolerance <= t <= high + tolerance for t in traces)
+    if not taken or not complete:
+        return
+    free = [
+        t
+        for t in traces
+        if not any(low - tolerance <= t <= high + tolerance for low, high in taken)
+    ]
+    for item in report.get("items") or []:
+        if item.get("kind") != "keyway" or item.get("reason") != NOT_FOUND_REASON:
+            continue
+        index = index_of(item)
+        key = keyways[index] if index < len(keyways) else None
+        if not isinstance(key, dict):
+            continue
+        start = float(key["axial_start_mm"])
+        end = start + float(key["length_mm"])
+        if any(start - tolerance <= t <= end + tolerance for t in free):
+            continue
+        item["status"] = "refuted"
+        item["absent"] = True
+        item["reason"] = (
+            f"паза {_mm(start)}…{_mm(end)} на листе нет: капсулы на главном виде нет, "
+            "на его пролёте нет следа секущей плоскости"
+        )
+
+
 def _sections(
     gray: Any, frame: Any, body: dict[str, Any], spec: dict[str, Any], report: dict[str, Any]
 ) -> None:
@@ -1349,7 +1428,12 @@ _KEYWAY_KEYS = ("axial_start_mm", "length_mm", "width_mm")
 
 
 def _keyways(
-    gray: Any, frames: list[Any], body: dict[str, Any], report: dict[str, Any]
+    gray: Any,
+    frames: list[Any],
+    body: dict[str, Any],
+    report: dict[str, Any],
+    *,
+    view_line_px: float = 0.0,
 ) -> list[dict[str, float]]:
     """Шпоночные пазы главного вида: капсула — начало, длина, ширина (Ф3).
 
@@ -1396,7 +1480,11 @@ def _keyways(
             item["reason"] = "проверяется только закрытый призматический паз"
             spans.append(read_span)
             continue
-        hypothesis = Hypothesis("keyway", item["path"], {k: float(key[k]) for k in _KEYWAY_KEYS})
+        hypothesis = Hypothesis(
+            "keyway",
+            item["path"],
+            {**{k: float(key[k]) for k in _KEYWAY_KEYS}, "view_line_px": view_line_px},
+        )
         frame, verdict = _first_measured(hypothesis, frames, gray)
         if verdict.reason == NOT_FOUND_REASON:
             frame, verdict = _keyway_other_width(

@@ -162,3 +162,30 @@ def test_without_the_shaft_view_the_keyway_is_unmeasurable():
     verdict = verify(Hypothesis("keyway", "main_view.keyways[0]", KEY), None, _sheet())
 
     assert verdict.status == "unmeasurable"
+
+
+def test_a_keyway_where_there_is_none_is_not_found_not_a_coarse_sheet():
+    """Живые turned_multiaxis-0/1: выдуманный паз на ступени без паза — в его
+    области одни тонкие линии, и лист объявлялся «грубым» (3 px при линии
+    вида 6 px), а паз оставался «не измерим» навсегда. Вид измерим — значит,
+    паза здесь нет."""
+    from app.ai.cad_recognize.verifiers.keyway import NOT_FOUND_REASON
+
+    image = Image.new("L", (2800, 2000), 255)
+    draw = ImageDraw.Draw(image)
+    _shaft(draw, MAIN)
+    # Тонкая размерная через ступень 1 (там паза нет) — единственная длинная линия.
+    draw.line([(X0 + 5 * PX, AXIS - 8), (X0 + 28 * PX, AXIS - 8)], fill=0, width=THIN)
+    sheet = np.asarray(image)
+    frame = locate_shaft_frame(sheet, sum(length for _d, length in STEPS))[0]
+    ghost = {"axial_start_mm": 5.0, "length_mm": 20.0, "width_mm": 4.0}
+
+    coarse = verify(Hypothesis("keyway", "main_view.keyways[0]", ghost), frame, sheet)
+    measurable = verify(
+        Hypothesis("keyway", "main_view.keyways[0]", {**ghost, "view_line_px": 6.0}),
+        frame,
+        sheet,
+    )
+
+    assert "грубый" in coarse.reason, coarse.reason
+    assert measurable.status == "unmeasurable" and measurable.reason == NOT_FOUND_REASON

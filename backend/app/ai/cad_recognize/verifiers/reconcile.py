@@ -94,10 +94,10 @@ def reconcile(spec: dict[str, Any], report: dict[str, Any]) -> list[dict[str, An
     for item in report.get("items") or []:
         if item.get("status") != "refuted":
             continue
-        if item.get("kind") == "placed_feature" and item.get("absent"):
+        if item.get("kind") in ("placed_feature", "keyway") and item.get("absent"):
             decisions.append(
                 {
-                    "kind": "placed_feature",
+                    "kind": item["kind"],
                     "path": item["path"],
                     "feature_id": item.get("feature_id"),
                     "field": "exists",
@@ -615,6 +615,35 @@ def apply_reconciliation(
                 f"{float((removed.get('origin_mm') or [0, 0, 0])[2]):g} мм) снят: на главном "
                 "виде нет следа секущей плоскости на этой станции"
             )
+    # Паз, которого на листе нет (`absent`: ни капсулы, ни следа секущей на
+    # его пролёте), — снимается; замечания ГОСТ о пазах считаются заново.
+    missing = sorted(
+        (
+            int(str(item["path"]).split("[")[1].split("]")[0])
+            for item in report.get("items") or []
+            if item.get("kind") == "keyway" and item.get("absent")
+        ),
+        reverse=True,
+    )
+    keyways = (spec.get("main_view") or {}).get("keyways") or []
+    for index in missing:
+        if index < len(keyways):
+            removed = keyways.pop(index)
+            _shift_indexed_provenance(provenance, "main_view.keyways", index)
+            start = float(removed.get("axial_start_mm") or 0.0)
+            spec.setdefault("unresolved", []).append(
+                f"шпоночный паз {start:g}…{start + float(removed.get('length_mm') or 0.0):g} мм "
+                "снят: на листе нет ни его контура, ни следа секущей плоскости на его пролёте"
+            )
+    if missing:
+        from app.ai.cad_recognize.keyway_standard import ground_keyways
+
+        spec["unresolved"] = [
+            note
+            for note in spec.get("unresolved") or []
+            if not str(note).startswith("шпоночный паз ") or "снят:" in str(note)
+        ]
+        ground_keyways(spec.get("main_view") or {}, spec["unresolved"])
     # Сводка — по статусам после согласования: иначе панель показывает
     # опровергнутым то, что уже принято по листу.
     summary = report.get("summary")
@@ -2236,7 +2265,12 @@ def _shift_placed_provenance(provenance: dict[str, Any], removed: int) -> None:
     """Происхождение по индексу элемента: снятый уходит, следующие сдвигаются.
 
     Иначе «найдено по листу» у элемента за снятым повисает на чужом индексе."""
-    pattern = re.compile(r"^main_view\.placed_features\[(\d+)\](.*)$")
+    _shift_indexed_provenance(provenance, "main_view.placed_features", removed)
+
+
+def _shift_indexed_provenance(provenance: dict[str, Any], prefix: str, removed: int) -> None:
+    """То же для любого списка спека: ``prefix[i]…`` — снятый уходит, дальше сдвиг."""
+    pattern = re.compile(r"^" + re.escape(prefix) + r"\[(\d+)\](.*)$")
     moved: dict[str, Any] = {}
     for key in list(provenance):
         match = pattern.match(key)
@@ -2245,7 +2279,7 @@ def _shift_placed_provenance(provenance: dict[str, Any], removed: int) -> None:
         index = int(match.group(1))
         value = provenance.pop(key)
         if index > removed:
-            moved[f"main_view.placed_features[{index - 1}]{match.group(2)}"] = value
+            moved[f"{prefix}[{index - 1}]{match.group(2)}"] = value
         elif index < removed:
             moved[key] = value
     provenance.update(moved)

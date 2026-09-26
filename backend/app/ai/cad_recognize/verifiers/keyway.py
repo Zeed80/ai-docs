@@ -111,6 +111,15 @@ def verify_keyway(hypothesis: Hypothesis, frame: ViewFrame | None, sheet: Any) -
         else 0.0
     )
     if 0.0 < line_px < _MIN_LINE_PX:
+        # Вид измерим, а в области паза основных линий нет — паза здесь нет,
+        # лист не грубый (живые turned_multiaxis-0/1: выдуманный ридером паз
+        # на ступени без паза — «линия 3 px» при линии вида 6 px).
+        if float(expected.get("view_line_px") or 0.0) >= _MIN_LINE_PX:
+            return Verdict(
+                status="unmeasurable",
+                evidence_bbox_px=(left, top, right, bottom),
+                reason=NOT_FOUND_REASON,
+            )
         return Verdict(
             status="unmeasurable",
             evidence_bbox_px=(left, top, right, bottom),
