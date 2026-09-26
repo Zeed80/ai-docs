@@ -53,9 +53,11 @@ def test_a_feature_off_every_trace_is_refuted_and_dropped(monkeypatch):
     spec = {"main_view": {"placed_features": [dict(f) for f in BODY["placed_features"]]}}
     decisions = reconcile(spec, report)
     assert [(d["field"], d["action"]) for d in decisions] == [("exists", "drop")]
-    spec2, _report = apply_reconciliation(spec, report, decisions)
+    spec2, report2 = apply_reconciliation(spec, report, decisions)
     assert [f["kind"] for f in spec2["main_view"]["placed_features"]] == ["pocket"]
-    assert any("снят" in note for note in spec2["unresolved"])
+    # Сведение оператору — в заметках проверки, не блокер сборки.
+    assert any("снят" in note for note in report2["notes"])
+    assert not any("снят" in note for note in spec2.get("unresolved") or [])
 
 
 def test_an_incomplete_trace_detector_does_not_drop_anything(monkeypatch):

@@ -123,4 +123,5 @@ def test_a_reader_feature_left_without_a_trace_by_the_finding_is_dropped_after_i
     assert report["placed_additions"][0]["feature"] == flat
     # «найдено по листу» переехало на новый индекс лыски, снятое не висит
     assert settled["provenance"]["main_view.placed_features[0]"]["origin"] == "sheet_measurement"
-    assert any("снят" in note for note in settled["unresolved"])
+    assert any("снят" in note for note in report["notes"])
+    assert not any("снят" in note for note in settled.get("unresolved") or [])

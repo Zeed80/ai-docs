@@ -610,7 +610,9 @@ def apply_reconciliation(
         if index < len(placed):
             removed = placed.pop(index)
             _shift_placed_provenance(provenance, index)
-            spec.setdefault("unresolved", []).append(
+            # Сведение оператору, не сомнение в геометрии: в заметки проверки,
+            # а не в `unresolved` (там каждая строка — блокер сборки).
+            report.setdefault("notes", []).append(
                 f"элемент по сечению ({removed.get('kind')}, станция "
                 f"{float((removed.get('origin_mm') or [0, 0, 0])[2]):g} мм) снят: на главном "
                 "виде нет следа секущей плоскости на этой станции"
@@ -631,7 +633,7 @@ def apply_reconciliation(
             removed = keyways.pop(index)
             _shift_indexed_provenance(provenance, "main_view.keyways", index)
             start = float(removed.get("axial_start_mm") or 0.0)
-            spec.setdefault("unresolved", []).append(
+            report.setdefault("notes", []).append(
                 f"шпоночный паз {start:g}…{start + float(removed.get('length_mm') or 0.0):g} мм "
                 "снят: на листе нет ни его контура, ни следа секущей плоскости на его пролёте"
             )
@@ -1292,6 +1294,10 @@ _STALE_PROFILE = (
     "резьбы указаны, но не привязаны",
     "наружные диаметры не подтверждены",
     "шпоночный паз ",
+    # Цепочка и сумма ступеней — прежнего профиля (живой turned_multiaxis-0:
+    # «ступени дают 180 мм, а габарит 262» после профиля 12·70·70·40·70).
+    "профиль короче листа",
+    "цепочка не сходится с числом ступеней",
 )
 _CROSS_HOLE_NOTE = re.compile(
     r"поперечное отверстие Ø(\d+(?:[.,]\d+)?) указано, но не локализовано"
@@ -1349,6 +1355,85 @@ def _stale_profile_note(note: str, diameters: set[float]) -> bool:
     # или проточки на выносном виде (z4-r4: Ø24,5 у Ø25, Ø21,7 у Ø22, Ø15,7
     # у M18). Поперечное отверстие много меньше вала, в котором сверлится.
     return any(0.8 * d <= value <= d for d in diameters)
+
+
+_DANGLING_CODE = re.compile(
+    r"^(outer|bore|keyways|grooves|cross_holes|axial_holes|placed_features|flanges):(\d+):\w+$"
+)
+_SECTION_NOTE = re.compile(r"^(лыска|отверстие)\b[^:]*на сечении [^:]+:")
+_PLACED_HOLE_NOTE = re.compile(r"^отверстие Ø(\d+(?:[.,]\d+)?) на сечении [^:]+:")
+
+
+def settle_stale_notes(
+    spec: dict[str, Any], report: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Замечания, у которых не осталось предмета, — снимаются.
+
+    Живые turned_multiaxis-0/1 держали сборку тем, что уже решено листом:
+    код «bore:0:length_mm» при пустой расточке (его вписала сама модель),
+    «расточка: … Ø8» без расточки (Ø8 — радиальное отверстие), «поперечное
+    отверстие Ø3 не локализовано», когда оба Ø3 поставлены по сечениям,
+    «лыска 35 на сечении Б-Б: числа не с листа», когда лыска найдена по листу.
+    Замечание о сечении снимается, только если каждый след секущей на листе
+    занят подтверждённым элементом: незанятый след — возможно, тот самый
+    непоставленный элемент (turned_multiaxis-0: лыска на 173,5).
+    """
+    spec = copy.deepcopy(spec)
+    body = spec.get("main_view") or {}
+    placed = [item for item in body.get("placed_features") or [] if isinstance(item, dict)]
+    provenance = spec.get("provenance") if isinstance(spec.get("provenance"), dict) else {}
+    steps = [
+        float(step["diameter_mm"])
+        for step in body.get("outer") or []
+        if isinstance(step, dict) and isinstance(step.get("diameter_mm"), (int, float))
+    ]
+    placed_holes = {
+        round(float(item["diameter_mm"]), 3)
+        for item in placed
+        if item.get("kind") == "hole" and isinstance(item.get("diameter_mm"), (int, float))
+    }
+    sheet_holes = {
+        round(float(item["diameter_mm"]), 3)
+        for index, item in enumerate(placed)
+        if item.get("kind") == "hole"
+        and isinstance(item.get("diameter_mm"), (int, float))
+        and (provenance.get(f"main_view.placed_features[{index}]") or {}).get("origin")
+        == "sheet_measurement"
+    }
+    sections_settled = False
+    if report:
+        traces = report.get("section_traces_mm") or []
+        confirmed = []
+        for item in report.get("items") or []:
+            if item.get("kind") != "placed_feature" or item.get("status") != "confirmed":
+                continue
+            index = int(str(item["path"]).split("[")[1].split("]")[0])
+            origin = placed[index].get("origin_mm") if index < len(placed) else None
+            if origin and len(origin) == 3:
+                confirmed.append(float(origin[2]))
+        sections_settled = bool(traces) and all(
+            any(abs(t - z) <= 1.5 for z in confirmed) for t in traces
+        )
+
+    def stale(note: str) -> bool:
+        code = _DANGLING_CODE.match(note)
+        if code:
+            return int(code.group(2)) >= len(body.get(code.group(1)) or [])
+        if note.startswith("расточка:") and not body.get("bore"):
+            return True
+        cross = _CROSS_HOLE_NOTE.search(note)
+        if cross:
+            value = round(float(cross.group(1).replace(",", ".")), 3)
+            # Ø ступени (или чуть меньше — дно канавки) — не отверстие;
+            # поставленное по сечению — локализовано.
+            return value in placed_holes or any(0.8 * d <= value <= d for d in steps)
+        hole = _PLACED_HOLE_NOTE.match(note)
+        if hole and round(float(hole.group(1).replace(",", ".")), 3) in sheet_holes:
+            return True
+        return bool(sections_settled and _SECTION_NOTE.match(note))
+
+    spec["unresolved"] = [note for note in spec.get("unresolved") or [] if not stale(str(note))]
+    return spec
 
 
 def _profile_text(steps: list[dict[str, Any]]) -> str:
@@ -2301,9 +2386,14 @@ def settle_placed_additions(
     report = verify(spec)
     drops = [d for d in reconcile(spec, report) if d.get("action") == "drop"]
     if drops:
-        spec, _ = apply_reconciliation(spec, report, drops)
+        spec, dropped = apply_reconciliation(spec, report, drops)
         report = verify(spec)
         report["reconciliation"] = drops
+        # Что снято и почему — заметкой проверки, новая проверка её не знает.
+        report["notes"] = [
+            *(report.get("notes") or []),
+            *(note for note in dropped.get("notes") or [] if "снят" in str(note)),
+        ]
     report["placed_additions"] = additions
     return spec, report, drops
 

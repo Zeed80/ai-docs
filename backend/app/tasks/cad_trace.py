@@ -4784,6 +4784,18 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                                 f"принято {how}: {decision['path']}.{decision['field']} "
                                 f"{decision['read']:g} → {decision['value']:g}"
                             )
+                        # Снятое (нет на листе) — проверка заново: индексы
+                        # сдвинулись, а опровергнутое снятое держало бы «лист
+                        # подтвердил всё» (живой turned_multiaxis-1: паз 33…48).
+                        if any(d.get("action") == "drop" for d in decisions):
+                            kept = {
+                                key: verification[key]
+                                for key in ("reconciliation", "notes", "reask")
+                                if key in verification
+                            }
+                            spec = _revalidated_spec(spec)
+                            verification = _verify_checked()
+                            verification.update(kept)
                     # Пазы, которые проверка нашла на листе, а ридер не выписал
                     # (живой z4-r4: второй паз на Ø22), — по надписям листа.
                     from app.ai.cad_recognize.verifiers.reconcile import (
@@ -4852,6 +4864,11 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                                 "dropped": placed_drops,
                             },
                         )
+                    # Замечания, чей предмет решён листом (висячие коды, Ø
+                    # поставленных отверстий, сечения, занятые подтверждённым).
+                    from app.ai.cad_recognize.verifiers.reconcile import settle_stale_notes
+
+                    spec = settle_stale_notes(spec, verification)
                     # Сечения на листе — сплошные круги (живой z4-r4: А-А и Б-Б
                     # через пазы): вал сплошной доказан, «разрез не прочитан»
                     # становится предупреждением (`cad_solid.solid_build_gate`).

@@ -61,11 +61,12 @@ def test_a_keyway_with_no_contour_and_no_free_trace_is_refuted_and_dropped():
         "provenance": {"main_view.keyways[0].width_mm": {"origin": "reader"}},
     }
     decisions = [d for d in reconcile(spec, report) if d["action"] == "drop"]
-    fixed, _ = apply_reconciliation(spec, report, decisions)
+    fixed, fixed_report = apply_reconciliation(spec, report, decisions)
 
     assert fixed["main_view"]["keyways"] == []
     assert not any(note.startswith("шпоночный паз 0:") for note in fixed["unresolved"])
-    assert any("снят" in note for note in fixed["unresolved"])
+    assert any("снят" in note for note in fixed_report["notes"])
+    assert not any("снят" in note for note in fixed["unresolved"])
     assert "main_view.keyways[0].width_mm" not in fixed["provenance"]
 
 
