@@ -105,6 +105,58 @@ class SheetReading:
         ]
 
 
+def _frame_lines(ink: Any) -> Any:
+    """Линии рамок листа — и вложенных (лист в странице методички, два листа
+    на слайде): длинные линии, замкнутые в большой прямоугольник.
+
+    Порог «почти через весь лист» ловил только внешнюю рамку; лист внутри
+    страницы оставался одной областью во весь чертёж (методички: 4 листа из
+    41). Одиночная длинная линия (контур вала, линия таблицы) рамкой не
+    считается — у рамки есть стороны по всем четырём краям.
+    """
+    import cv2
+    import numpy as np
+
+    height, width = ink.shape
+    long_h = cv2.morphologyEx(
+        ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (int(width * 0.2), 1))
+    )
+    long_v = cv2.morphologyEx(
+        ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, int(height * 0.2)))
+    )
+    lines = (long_h | long_v).astype(np.uint8)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        cv2.dilate(lines, np.ones((7, 7), np.uint8)), 8
+    )
+    frames = np.zeros_like(lines)
+    for index in range(1, count):
+        x, y, w, h, _area = stats[index]
+        if w * h < 0.08 * width * height:
+            continue
+        part = (labels[y : y + h, x : x + w] == index) & (lines[y : y + h, x : x + w] > 0)
+        band = max(8, int(0.02 * min(w, h)))
+        sides = (
+            part[:band].any(axis=0).mean(),
+            part[-band:].any(axis=0).mean(),
+            part[:, :band].any(axis=1).mean(),
+            part[:, -band:].any(axis=1).mean(),
+        )
+        if min(sides) >= 0.7:
+            # Только полоса по периметру: длинные кромки вала, касающиеся рамки,
+            # иначе снимались вместе с ней, и вид вала пропадал.
+            rim = np.zeros_like(part)
+            rim[:band], rim[-band:], rim[:, :band], rim[:, -band:] = True, True, True, True
+            frames[y : y + h, x : x + w] |= (part & rim).astype(np.uint8)
+    # И линии почти через весь лист (рамка без одной стороны, линейка страницы).
+    very_h = cv2.morphologyEx(
+        ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (int(width * 0.45), 1))
+    )
+    very_v = cv2.morphologyEx(
+        ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, int(height * 0.45)))
+    )
+    return frames | very_h | very_v
+
+
 def propose_regions(gray: Any) -> list[tuple[int, int, int, int]]:
     """Кандидатные области: изображения — по основным линиям, прочее — отдельно.
 
@@ -123,13 +175,7 @@ def propose_regions(gray: Any) -> list[tuple[int, int, int, int]]:
     height, width = g.shape
     threshold, _ = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     ink = (g < min(threshold, 200)).astype(np.uint8)
-    long_h = cv2.morphologyEx(
-        ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (int(width * 0.45), 1))
-    )
-    long_v = cv2.morphologyEx(
-        ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, int(height * 0.45)))
-    )
-    work = ink & (1 - cv2.dilate(long_h | long_v, np.ones((5, 5), np.uint8)))
+    work = ink & (1 - cv2.dilate(_frame_lines(ink), np.ones((5, 5), np.uint8)))
     runs: list[int] = []
     for y in range(0, height, max(1, height // 200)):
         edges = np.diff(np.concatenate([[0], work[y], [0]]))
@@ -234,6 +280,21 @@ def parse_reading(answer: dict[str, Any], boxes: list[tuple[int, int, int, int]]
     main = answer.get("main") if isinstance(answer.get("main"), int) else None
     if main is not None and not 1 <= main <= len(boxes):
         main = None
+    pictures_all = {r.n: r for r in regions if r.role in ("view", "section")}
+    if main is not None and main not in pictures_all:
+        # Номер не изображения (подпись, штамп): живой лист вала — «main» указал
+        # на подпись, а «главный вид» модель назвала у другой рамки.
+        main = None
+    named = [r.n for r in pictures_all.values() if r.name and "главн" in r.name.lower()]
+    if main is None and named:
+        main = named[0]
+    if main is None and kind == "detail":
+        # Чертёж одной детали без названного главного вида (вал и корпус из
+        # методичек): по ГОСТ 2.305 главное изображение даёт наибольшее
+        # представление о детали — берётся наибольший вид или разрез.
+        pictures = [r for r in regions if r.role in ("view", "section")]
+        if pictures:
+            main = max(pictures, key=lambda r: (r.box[2] - r.box[0]) * (r.box[3] - r.box[1])).n
     return SheetReading(sheet_kind=kind, main=main, regions=regions, raw=answer)
 
 

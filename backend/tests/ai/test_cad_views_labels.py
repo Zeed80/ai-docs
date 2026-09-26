@@ -54,3 +54,25 @@ def test_thread_chamfer_depth_and_count():
 def test_tolerance_of_a_hole_fit():
     assert parse_label("Ø8,5H10(+0,058)").tolerance == (0.058, 0.0)
     assert parse_label("21,2 -0,1").tolerance == (0.0, -0.1)
+
+
+def test_main_view_falls_back_to_the_view_the_model_named_main():
+    from app.ai.cad_views.sheet_reading import parse_reading
+
+    boxes = [(0, 0, 10, 10), (20, 0, 200, 300), (220, 0, 260, 40)]
+    answer = {
+        "sheet_kind": "detail",
+        "main": 3,  # подпись, не изображение
+        "regions": [
+            {"n": 1, "role": "section", "name": "А-А"},
+            {"n": 2, "role": "view", "name": "главный вид"},
+            {"n": 3, "role": "label", "of": 1},
+        ],
+    }
+    assert parse_reading(answer, boxes).main == 2
+
+    answer = {
+        "sheet_kind": "detail",
+        "regions": [{"n": 1, "role": "view"}, {"n": 2, "role": "section"}],
+    }
+    assert parse_reading(answer, boxes).main == 2  # наибольшее изображение
