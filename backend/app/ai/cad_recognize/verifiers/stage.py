@@ -1040,7 +1040,7 @@ def _shaft(
     length_tol, diameter_tol = shaft_tolerances(frame.scale_mean)
     measured_steps = verdict.measured.get("steps") or []
     whole_unmeasurable = verdict.status == "unmeasurable"
-    for index, step in steps:
+    for position, (index, step) in enumerate(steps):
         got = measured_steps[index] if index < len(measured_steps) else {}
         measured = {key: value for key, value in got.items() if value is not None}
         own = [
@@ -1068,6 +1068,20 @@ def _shaft(
             "diameter": round(diameter_tol, 3),
             "length": round(length_tol, 3),
         }
+        if status == "confirmed":
+            # Участок вида, где ступень измерена, — её свидетельство на листе
+            # (живой turned_multiaxis-1: три ступени подтверждены листом, а
+            # сборку держало «геометрия без локализованного evidence»).
+            start = sum(float(other["length_mm"]) for _, other in steps[:position])
+            half = float(measured.get("diameter_mm") or step["diameter_mm"]) / 2.0
+            length = float(measured.get("length_mm") or step["length_mm"])
+            x0, axis = frame.origin_px
+            item["evidence_bbox_px"] = [
+                round(x0 + start / frame.mm_per_px, 1),
+                round(axis - half / frame.mm_per_px, 1),
+                round(x0 + (start + length) / frame.mm_per_px, 1),
+                round(axis + half / frame.mm_per_px, 1),
+            ]
         report["items"].append(item)
         if status == "refuted":
             report["notes"].append(

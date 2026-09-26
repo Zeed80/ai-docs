@@ -288,3 +288,30 @@ def test_an_end_step_under_a_flat_stays_in_the_view():
     frame, _profile = located
     assert abs(frame.origin_px[0] - X0) <= 3
     assert abs(frame.mm_per_px - 1.0 / PX) <= 0.01 / PX, frame.mm_per_px
+
+
+def test_a_confirmed_step_carries_its_place_on_the_sheet_as_evidence():
+    """Живой turned_multiaxis-1: ступени подтверждены листом, а сборку держало
+    «геометрия без локализованного evidence» — рамки у вердикта не было."""
+    import io
+
+    from app.ai.cad_recognize.verifiers.stage import (
+        attach_sheet_evidence,
+        verify_spec_against_sheet,
+    )
+
+    buffer = io.BytesIO()
+    Image.fromarray(_sheet()).save(buffer, format="PNG")
+    spec = {
+        "main_view": {
+            "outer": [{"diameter_mm": d, "length_mm": length} for d, length in STEPS],
+        }
+    }
+    report = verify_spec_against_sheet(buffer.getvalue(), spec)
+    steps = [item for item in report["items"] if item["kind"] == "shaft_step"]
+
+    assert [item["status"] for item in steps] == ["confirmed"] * len(STEPS), steps
+    left, _top, right, _bottom = steps[1]["evidence_bbox_px"]
+    assert abs(left - (X0 + 30 * PX)) <= 3 and abs(right - (X0 + 70 * PX)) <= 3
+    attached = attach_sheet_evidence(spec, report)
+    assert all(step["evidence"] for step in attached["main_view"]["outer"])
