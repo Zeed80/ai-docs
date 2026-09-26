@@ -32,9 +32,17 @@ def locate_section_traces(gray: Any, frame: Any, profile: Any) -> list[float]:
     extent = float(np.nanmax(half))
     axis_y = float(profile.axis_y)
     min_length = max(6, int(round(2.0 * line)))
-    top_edge, bottom_edge = axis_y - extent, axis_y + extent
+    import cv2
+
+    # Только толстые вертикальные штрихи: тонкая линия на том же столбце
+    # (размерная Ø тонкой ступени, выносная станции) сливалась со штрихом в
+    # один отрезок, и толщина выходила тонкой (эталон, листы 29, 10, 5).
+    width = max(2, int(round(_STROKE_SHARE * line)))
+    thick = cv2.morphologyEx(
+        ink.astype(np.uint8), cv2.MORPH_OPEN, np.ones((1, width), np.uint8)
+    ).astype(bool)
     above, below = [], []
-    for segment in _lines(ink, min_length, axis=1):
+    for segment in _lines(thick, min_length, axis=1):
         if not profile.x0 - 2 * line <= segment.position <= profile.x1 + 2 * line:
             continue
         length = float(segment.end - segment.start)
@@ -42,10 +50,15 @@ def locate_section_traces(gray: Any, frame: Any, profile: Any) -> list[float]:
             continue
         if _stroke(gray, ink, segment, (segment.start, segment.end), axis=1) < _STROKE_SHARE * line:
             continue
-        # Вне силуэта; расстояние ближнего конца до оси — для симметрии пары.
-        if segment.end <= top_edge + line:
+        # Вне силуэта СВОЕЙ ступени (у тонкой ступени след стоит внутри
+        # габарита толстой — лист 25 эталона); расстояние ближнего конца до
+        # оси — для симметрии пары.
+        column = int(round(segment.position)) - int(profile.x0)
+        local = half[column] if 0 <= column < half.size else float("nan")
+        reach = float(local) if np.isfinite(local) else extent
+        if segment.end <= axis_y - reach + line:
             above.append((float(segment.position), axis_y - segment.end, length))
-        elif segment.start >= bottom_edge - line:
+        elif segment.start >= axis_y + reach - line:
             below.append((float(segment.position), segment.start - axis_y, length))
 
     def thick_at(x: float, top: float, bottom: float) -> bool:

@@ -1058,7 +1058,7 @@ def _shaft(
                 f"{_mm(measured['length_mm']) if 'length_mm' in measured else '—'} — проверить"
             )
     _sections(gray, frame, body, spec, report)
-    _placed_on_sections(gray, frame, profile, body, report)
+    _placed_on_sections(gray, frame, profile, body, report, views=views)
     if _sheet_profile(profile, total, body, spec, report):
         return None
     return verdict.reason if whole_unmeasurable else None
@@ -1068,7 +1068,13 @@ _SECTION_KINDS = {"section", "cut", "разрез", "сечение"}
 
 
 def _placed_on_sections(
-    gray: Any, frame: Any, profile: Any, body: dict[str, Any], report: dict[str, Any]
+    gray: Any,
+    frame: Any,
+    profile: Any,
+    body: dict[str, Any],
+    report: dict[str, Any],
+    *,
+    views: list | None = None,
 ) -> None:
     """Лыски и радиальные отверстия по размещению — по контуру сечений (дорожка У)."""
     from app.ai.cad_recognize.verifiers.section_outline import (
@@ -1084,11 +1090,18 @@ def _placed_on_sections(
     line_px = float(getattr(profile, "line_px", 0.0) or 0.0)
     items = verify_placed_on_sections(gray, frame.bbox_px, frame.mm_per_px, body, line_px=line_px)
     report["items"].extend(items)
-    _absent_without_trace(gray, frame, profile, body, items, report)
+    _absent_without_trace(gray, frame, profile, body, items, report, views=views)
 
 
 def _absent_without_trace(
-    gray: Any, frame: Any, profile: Any, body: dict[str, Any], items: list, report: dict[str, Any]
+    gray: Any,
+    frame: Any,
+    profile: Any,
+    body: dict[str, Any],
+    items: list,
+    report: dict[str, Any],
+    *,
+    views: list | None = None,
 ) -> None:
     """Элемент по сечению, не стоящий ни на одном следе секущей — опровергнут.
 
@@ -1103,8 +1116,16 @@ def _absent_without_trace(
 
     if profile is None or not items:
         return
+    # Следы — на любом виде того же вала: у полого вала главный вид — разрез,
+    # а следы стоят на виде под ним.
     try:
-        traces = locate_section_traces(gray, frame, profile)
+        traces = sorted(
+            {
+                round(station, 2)
+                for view_frame, view_profile in (views or [(frame, profile)])
+                for station in locate_section_traces(gray, view_frame, view_profile)
+            }
+        )
     except Exception:  # noqa: BLE001 — улика, а не проверка: без неё — как было
         return
     report["section_traces_mm"] = traces
