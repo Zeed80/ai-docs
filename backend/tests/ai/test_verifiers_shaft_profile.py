@@ -17,7 +17,9 @@ STEPS = [(30.0, 30.0), (20.0, 40.0), (25.0, 30.0)]
 MAIN, THIN = 6, 3
 
 
-def _sheet(main: int = MAIN, thin: int = THIN, lowered: float = 0.0) -> np.ndarray:
+def _sheet(
+    main: int = MAIN, thin: int = THIN, lowered: float = 0.0, lowered_last: float = 0.0
+) -> np.ndarray:
     # Размер как у листа: ядро поиска кромок (0,6 % меньшей стороны) должно
     # быть толще основной линии, как на настоящем листе при любом dpi.
     image = Image.new("L", (2800, 2000), 255)
@@ -30,6 +32,8 @@ def _sheet(main: int = MAIN, thin: int = THIN, lowered: float = 0.0) -> np.ndarr
         # ``lowered`` — верхняя кромка средней ступени ниже на столько px:
         # кромка и опущенная кромка лыски, слитые в одну линию.
         top = AXIS - r + (lowered if (diameter, length) == STEPS[1] else 0.0)
+        # ``lowered_last`` — лыска на всю концевую ступень: верхняя кромка ниже.
+        top += lowered_last if (diameter, length) == STEPS[-1] else 0.0
         draw.line([(x, top), (x_end, top)], fill=0, width=main)
         draw.line([(x, AXIS + r), (x_end, AXIS + r)], fill=0, width=main)
         # грань уступа / торец — от меньшего радиуса до большего
@@ -272,3 +276,15 @@ def test_a_flat_lowering_one_edge_does_not_make_a_step():
     assert len(steps) == len(STEPS), steps
     middle = 2.0 * steps[1][2] * frame.mm_per_px
     assert abs(middle - STEPS[1][0]) < 0.5, middle
+
+
+def test_an_end_step_under_a_flat_stays_in_the_view():
+    """Живой turned_multiaxis-5: лыска 3,5 мм на всю концевую ступень — пары
+    кромок там нет, вид кончался на уступе, и масштаб выходил в 1,4 раза
+    мельче; профиль по листу отказывал «Ø не совпадают даже приблизительно»."""
+    located = locate_shaft_frame(_sheet(lowered_last=3.5 * PX), sum(length for _d, length in STEPS))
+
+    assert located is not None
+    frame, _profile = located
+    assert abs(frame.origin_px[0] - X0) <= 3
+    assert abs(frame.mm_per_px - 1.0 / PX) <= 0.01 / PX, frame.mm_per_px

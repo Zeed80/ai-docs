@@ -32,8 +32,10 @@ def _section(
     *,
     flat: tuple[float, float] | None = None,
     hole: tuple[float, float] | None = None,
+    hole_depth: float | None = None,
 ) -> None:
-    """Сечение Ø40: ``flat`` — (угол, глубина мм), ``hole`` — (угол, Ø мм), сквозное."""
+    """Сечение Ø40: ``flat`` — (угол, глубина мм), ``hole`` — (угол, Ø мм), сквозное
+    или глухое на ``hole_depth`` мм от поверхности."""
     height, width = image.shape
     yy, xx = np.mgrid[0:height, 0:width]
     u, v = (xx - cx) / PX, -(yy - cy) / PX
@@ -45,7 +47,10 @@ def _section(
     if hole:
         angle, diameter = hole
         nx, ny = math.cos(math.radians(angle)), math.sin(math.radians(angle))
-        material &= np.abs(-u * ny + v * nx) >= diameter / 2.0
+        channel = np.abs(-u * ny + v * nx) < diameter / 2.0
+        if hole_depth is not None:
+            channel &= u * nx + v * ny >= STEP / 2.0 - hole_depth
+        material &= ~channel
     mask = material.astype(np.uint8)
     outline = cv2.morphologyEx(mask, cv2.MORPH_GRADIENT, np.ones((5, 5), np.uint8)).astype(bool)
     hatch = ((xx + yy) % 12 < 2) & material
@@ -214,3 +219,27 @@ def test_without_a_shaft_view_every_placed_feature_still_gets_a_verdict():
     ]
 
     assert [item["status"] for item in items] == ["unmeasurable", "unmeasurable"], items
+
+
+def test_a_blind_hole_is_not_taken_for_a_through_one_by_the_hatching_beyond():
+    """Живой turned_multiaxis-0: «Ø3 гл.8,3» — за осью полосы штриховки давали
+    «стенки канала», и глухое записывалось сквозным (корпус: 11 из 42 находок).
+    Сквозной: центр пуст и стенки идут через него основной линией; под 45°
+    штриховка параллельна каналу, центр глухого пуст — но штрихи тонкие."""
+    from app.ai.cad_recognize.verifiers.section_outline import (
+        _centre_ink,
+        _walls_through_centre,
+    )
+
+    radius = STEP / 2.0 * PX
+    for angle in (90.0, 45.0):
+        through = np.full((300, 300), 255, np.uint8)
+        _section(through, 150, 150, hole=(angle, 8.0))
+        blind = np.full((300, 300), 255, np.uint8)
+        _section(blind, 150, 150, hole=(angle, 8.0), hole_depth=8.0)
+
+        assert _centre_ink(_ink(through), 150, 150, radius, angle) <= 0.15
+        assert _walls_through_centre(_ink(through), 150, 150, radius, angle, 5.0)
+        assert _centre_ink(_ink(blind), 150, 150, radius, angle) > 0.15 or not (
+            _walls_through_centre(_ink(blind), 150, 150, radius, angle, 5.0)
+        ), angle

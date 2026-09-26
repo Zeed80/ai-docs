@@ -25,6 +25,10 @@ _ANGLE_TOLERANCE = 6.0
 _OTHER_OBJECT_DEG = 25.0
 # Основная линия тоньше — лист грубый (та же мера, что у профиля вала).
 _MIN_LINE_PX = 4.5
+# Сквозной канал пуст и в центре сечения: доля чернил на его оси в пределах
+# 0,3 R от центра — у сквозных корпуса до 0,13, у глухих от 0,17 (штриховка).
+_CENTRE_INK_SHARE = 0.15
+_CENTRE_REACH = 0.3
 
 
 def boundary_profile(ink: Any, cx: float, cy: float, radius: float) -> list[float | None]:
@@ -748,6 +752,48 @@ def _plausible_length(length: float | None, step_length: float) -> float | None:
     return length if length is not None and 0.0 < length <= step_length + 0.5 else None
 
 
+def _centre_ink(ink: Any, cx: float, cy: float, r: float, angle_deg: float) -> float:
+    """Доля чернил на оси канала под углом ``angle_deg`` в пределах 0,3 R от центра."""
+    import numpy as np
+
+    ux, uy = math.cos(math.radians(angle_deg)), -math.sin(math.radians(angle_deg))
+    samples = np.linspace(-_CENTRE_REACH * r, _CENTRE_REACH * r, 60)
+    height, width = ink.shape
+    hits = 0
+    for t in samples:
+        x, y = int(round(cx + ux * t)), int(round(cy + uy * t))
+        hits += bool(0 <= x < width and 0 <= y < height and ink[y, x])
+    return hits / len(samples)
+
+
+def _walls_through_centre(
+    ink: Any, cx: float, cy: float, r: float, angle_deg: float, line: float
+) -> bool:
+    """Стенки сквозного канала идут через центр сечения основной линией.
+
+    Штриховка параллельна каналу под 45° (корпус, turned_multiaxis-15: центр
+    глухого пуст между двумя штрихами) — но штрихи тонкие: у сквозного по обе
+    стороны центра (±0,2 R) поперёк канала два прогона не тоньше 0,8 линии."""
+    ux, uy = math.cos(math.radians(angle_deg)), -math.sin(math.radians(angle_deg))
+    px, py = -uy, ux
+    height, width = ink.shape
+    for t in (-0.2 * r, 0.2 * r):
+        runs, current = [], 0
+        for step in range(int(-0.6 * r), int(0.6 * r) + 1):
+            s = step * 0.5
+            x, y = int(round(cx + ux * t + px * s)), int(round(cy + uy * t + py * s))
+            if 0 <= x < width and 0 <= y < height and ink[y, x]:
+                current += 1
+            elif current:
+                runs.append(current * 0.5)
+                current = 0
+        if current:
+            runs.append(current * 0.5)
+        if sum(1 for run in runs if run >= 0.8 * line) < 2:
+            return False
+    return True
+
+
 def propose_placed(
     gray: Any,
     main_view_bbox: tuple[float, float, float, float],
@@ -882,10 +928,18 @@ def propose_placed(
                         )
                         continue
                     # Второй разрыв закрыт размерами — сквозной канал видно и
-                    # за центром: стенки канала по ту сторону оси.
+                    # за центром: стенки канала по ту сторону оси и пустой
+                    # центр. Стенки «за осью» дают и полосы штриховки (живой
+                    # turned_multiaxis-0: «Ø3 гл.8,3» записывалось сквозным;
+                    # корпус — 11 из 42 находок), центр глухого заштрихован.
                     beyond = channel_width(
                         ink, cx, cy, r, (hole["angle_deg"] + 180.0) % 360.0, line
                     )
+                    if beyond is not None and (
+                        _centre_ink(ink, cx, cy, r, hole["angle_deg"]) > _CENTRE_INK_SHARE
+                        or not _walls_through_centre(ink, cx, cy, r, hole["angle_deg"], line)
+                    ):
+                        beyond = None
                     proposals.append(
                         {
                             **base,

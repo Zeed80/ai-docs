@@ -63,6 +63,9 @@ _GAP_TOTAL_SHARE = 0.05
 _AXIS_CANDIDATES = 12
 # Второй вид того же вала: торцы на тех же столбцах в пределах этой доли длины.
 _SAME_VIEW_SHARE = 0.02
+# Концевая ступень с лыской: пара кромок несимметрична (одна опущена лыской),
+# меньшая — не ближе к оси, чем эта доля большей (лыски корпуса — до 25 % R).
+_END_FLAT_SHARE = 0.5
 
 
 @dataclass(frozen=True)
@@ -150,29 +153,45 @@ def locate_shaft_views(
         end_weight=_FACE_SHARE * main_ref,
     )
 
-    passing = []
     symmetry = (
         max(_SYMMETRY_PX, _SYMMETRY_LINE_SHARE * main_ref)
         if main_ref >= _SYMMETRY_FROM_LINE_PX
         else _SYMMETRY_PX
     )
-    for axis_y in _axis_candidates(main, weight, min_length, symmetry):
-        faces = None
-        for candidates in (main, strict):
-            found = _profile(candidates, axis_y, gray.shape[1], min_length, main_ref, symmetry)
-            if found is None:
+    raw: dict[int, tuple[list[Any], tuple[int, int, Any]]] = {}
+
+    def collect(extend: bool) -> list[tuple]:
+        found_views = []
+        for axis_y in _axis_candidates(main, weight, min_length, symmetry):
+            faces = None
+            for candidates in (main, strict):
+                found = _profile(candidates, axis_y, gray.shape[1], min_length, main_ref, symmetry)
+                if found is None:
+                    continue
+                if extend:
+                    found = _extend_flat_ends(
+                        candidates, axis_y, found, min_length, main_ref, symmetry
+                    )
+                x0, x1, half = found
+                faces = _end_faces(vertical, axis_y, x0, x1, half, context)
+                if faces is not None:
+                    break
+            if faces is None:
                 continue
-            x0, x1, half = found
-            faces = _end_faces(vertical, axis_y, x0, x1, half, context)
-            if faces is not None:
-                break
-        if faces is None:
-            continue
-        x0, x1 = faces
-        if x1 - x0 < 4 * min_length:
-            continue
-        segment = _slice(half, x0, x1)
-        passing.append((axis_y, x0, x1, segment, float(np.nansum(segment))))
+            x0, x1 = faces
+            if x1 - x0 < 4 * min_length:
+                continue
+            segment = _slice(half, x0, x1)
+            item = (axis_y, x0, x1, segment, float(np.nansum(segment)))
+            raw[id(item)] = (candidates, found)
+            found_views.append(item)
+        return found_views
+
+    passing = collect(extend=False)
+    if not passing:
+        # Ни одного вида — может быть, обе концевые ступени без пары кромок
+        # (лыска на всю ступень, живой turned_multiaxis-28).
+        passing = collect(extend=True)
     if not passing:
         return []
     # Главный вид — тот, чьи ступени совпадают с диаметрами листа (прочитанные
@@ -187,6 +206,18 @@ def locate_shaft_views(
             item[2] - item[1],
         ),
     )
+    # Концевая ступень под лыской — продлевается только выбранный вид и только
+    # до торца: продление всех осей давало смещённым осям полную длину, и
+    # такая набирала больше совпадений Ø, чем настоящая (turned_multiaxis-19).
+    lines_used, found = raw[id(primary)]
+    extended = _extend_flat_ends(lines_used, primary[0], found, min_length, main_ref, symmetry)
+    if extended is not found:
+        faces = _end_faces(vertical, primary[0], *extended, context)
+        if faces is not None and faces[1] - faces[0] > primary[2] - primary[1]:
+            segment = _slice(extended[2], *faces)
+            index = passing.index(primary)
+            primary = (primary[0], faces[0], faces[1], segment, float(np.nansum(segment)))
+            passing[index] = primary
     reach = _SAME_VIEW_SHARE * (primary[2] - primary[1])
     same_shaft = [
         item
@@ -434,6 +465,59 @@ def _profile(
         else:
             runs.append([x, x])
     x0, x1 = max(runs, key=lambda run: run[1] - run[0])
+    return x0, x1, half
+
+
+def _extend_flat_ends(
+    lines: list[Any],
+    axis_y: float,
+    found: tuple[int, int, Any],
+    min_length: int,
+    main_ref: float,
+    symmetry: float,
+) -> tuple[int, int, Any]:
+    """Профиль, продлённый за конец концевой ступенью под лыской.
+
+    Лыска на концевой ступени опускает одну кромку на всю её длину (живой
+    turned_multiaxis-5: Ø28 × 25 с лыской 3,5 справа): симметричной пары там
+    нет, вид кончался на уступе Ø35, и масштаб вида выходил в 1,4 раза мельче.
+    Продолжение — пара основных линий по обе стороны оси, меньшая не ближе
+    половины большей, примыкающая к концу; ступень задаёт целая кромка. Торец
+    у нового конца проверяет вызывающий — без него остаётся прежний профиль.
+    """
+    import numpy as np
+
+    x0, x1, half = found
+    if main_ref < _MEASURABLE_LINE_PX:
+        return found
+    pairs = []
+    for top in (line for line in lines if line.position < axis_y - symmetry):
+        for bottom in (line for line in lines if line.position > axis_y + symmetry):
+            near, far = sorted((axis_y - top.position, bottom.position - axis_y))
+            if near < _END_FLAT_SHARE * far:
+                continue
+            start, end = max(top.start, bottom.start), min(top.end, bottom.end)
+            if end - start >= min_length:
+                pairs.append((int(start), int(end), far))
+    if not pairs:
+        return found
+    x0_before, x1_before = x0, x1
+    half = half.copy()
+    gap = max(3.0, _GAP_TOTAL_SHARE * float(x1 - x0))
+    grown = True
+    while grown:
+        grown = False
+        for start, end, value in pairs:
+            if x0 <= start <= x1 + gap and end > x1 + min_length:
+                span = slice(x1 + 1, end + 1)
+                half[span] = np.where(np.isnan(half[span]), value, half[span])
+                x1, grown = end, True
+            if x0 - gap <= end <= x1 and start < x0 - min_length:
+                span = slice(start, x0)
+                half[span] = np.where(np.isnan(half[span]), value, half[span])
+                x0, grown = start, True
+    if (x0, x1) == (x0_before, x1_before):
+        return found
     return x0, x1, half
 
 
