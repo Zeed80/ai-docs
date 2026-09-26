@@ -1809,6 +1809,13 @@ def _cut_features(body: dict, outer: list[dict], missing: list[str]) -> list[Fea
         if not diameter or position is None:
             missing.append("поперечное отверстие прочитано не полностью — не построено")
             continue
+        if hole.get("through") is False and not _num(hole.get("depth_mm")):
+            # Глухое без глубины ядро не построит и отклонит всё дерево (живой
+            # studio_flux2dev: «Feature parameter 'depth_mm' must be numeric»).
+            missing.append(
+                f"поперечное отверстие Ø{diameter:g} глухое, глубина не прочитана — не построено"
+            )
+            continue
         count = int(hole.get("count") or 1)
         spacing = _num(hole.get("spacing_deg"))
         base_angle = _num(hole.get("angle_deg")) or 0.0

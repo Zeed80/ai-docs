@@ -486,3 +486,18 @@ def test_a_fully_stated_shaft_never_carries_a_guessed_provenance():
     candidate = feature_tree_from_spec(_SHAFT)
     revolve = _of_kind(candidate, "revolve")[0]
     assert revolve.param_provenance["profile_points"].origin == "stated"
+
+
+def test_a_blind_cross_hole_without_depth_is_not_sent_to_the_kernel():
+    """Живой studio_flux2dev: глухое поперечное без глубины уходило в ядро без
+    depth_mm, и ядро отклоняло всё дерево («must be numeric»)."""
+    candidate = _tree(
+        cross_holes=[
+            {"diameter_mm": 2.8, "axial_position_mm": 12.5, "through": False, "depth_mm": None},
+            {"diameter_mm": 5.0, "axial_position_mm": 60.0, "through": True},
+        ]
+    )
+
+    holes = _of_kind(candidate, "hole")
+    assert [hole.params["diameter_mm"] for hole in holes] == [5.0]
+    assert any("глубина не прочитана" in note for note in candidate.missing_data)

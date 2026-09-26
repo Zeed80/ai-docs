@@ -1360,6 +1360,7 @@ def _stale_profile_note(note: str, diameters: set[float]) -> bool:
 _DANGLING_CODE = re.compile(
     r"^(outer|bore|keyways|grooves|cross_holes|axial_holes|placed_features|flanges):(\d+):\w+$"
 )
+_FLAT_ACROSS_NOTE = re.compile(r"^лыска (\d+(?:[.,]\d+)?) на сечении ")
 _SECTION_NOTE = re.compile(r"^(лыска|отверстие)\b[^:]*на сечении [^:]+:")
 _PLACED_HOLE_NOTE = re.compile(r"^отверстие Ø(\d+(?:[.,]\d+)?) на сечении [^:]+:")
 
@@ -1415,7 +1416,23 @@ def settle_stale_notes(
             any(abs(t - z) <= 1.5 for z in confirmed) for t in traces
         )
 
+    # Числа, которые на листе стоят только с Ø/φ: это диаметры, а размер
+    # лыски «поперёк» с Ø не пишут (живой z4-r4: Ø15,7 / 21,7 / 24,5 / 29,5 —
+    # дно канавок на выносных элементах — ридер сечений выдал «лысками»).
+    diameter_only: set[float] = set()
+    bare: set[float] = set()
+    for item in spec.get("dimensions") or []:
+        text = str(item.get("value") if isinstance(item, dict) else item or "").strip()
+        match = re.fullmatch(r"([ØøФφ⌀]\s*)?(\d+(?:[.,]\d+)?)", text)
+        if match:
+            value = round(float(match.group(2).replace(",", ".")), 3)
+            (diameter_only if match.group(1) else bare).add(value)
+    diameter_only -= bare
+
     def stale(note: str) -> bool:
+        flat = _FLAT_ACROSS_NOTE.match(note)
+        if flat and round(float(flat.group(1).replace(",", ".")), 3) in diameter_only:
+            return True
         code = _DANGLING_CODE.match(note)
         if code:
             return int(code.group(2)) >= len(body.get(code.group(1)) or [])
