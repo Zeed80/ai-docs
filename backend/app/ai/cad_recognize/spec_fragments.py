@@ -1800,6 +1800,7 @@ async def read_callouts_with_ocr(image, *, router: Any = None, source_size=None)
 # Живой z4-r4.jpg недобирал 27 % — это потерянная длина, а не округление.
 _PROFILE_SHORTFALL_TOLERANCE = 0.1
 
+_DESIGNATION = re.compile(r"\d+(?:[.,]\d+){2,}")
 _STANDARD_REFERENCE = re.compile(
     r"(?:ГОСТ|ОСТ|СТП|ТУ|ISO|DIN|EN|ANSI|ASME)\s*[Рр]?\s*[\d]+"
     r"(?:[.\u2010-\u2015\u2212\-]\d+)*",
@@ -4181,6 +4182,10 @@ def _callout_entries(callouts: dict, kind: str = "all") -> list[tuple[float, lis
         )
         annotation_kind = str((item or {}).get("kind") or "").lower()
         text = _STANDARD_REFERENCE.sub(" ", text)
+        # Обозначение документа по ЕСКД («ПТС 170.10.03.008») — не размер:
+        # «170.1» становилось габаритом листа, и «профиль короче листа»
+        # блокировал сборку (живая «Опора пружин»).
+        text = _DESIGNATION.sub(" ", text)
         # Fits are diameter callouts even when OCR drops the leading Ø. The
         # case is semantic: H is a hole and h is a shaft, so ``50h7`` must not
         # fall into the axial-length pool. Limit the repair to common precision

@@ -2026,3 +2026,15 @@ def test_every_body_feature_field_survives_the_whole_sheet_merge():
 
     lost = [f for f in _BODY_FEATURE_FIELDS if not merged["main_view"].get(f)]
     assert lost == [], lost
+
+
+def test_a_document_designation_is_not_a_linear_size():
+    """Живая «Опора пружин»: «ПТС 170.10.03.008» давал габарит 170,1 и
+    блокировал сборку замечанием «профиль короче листа»."""
+    from app.ai.cad_recognize.spec_fragments import _callout_numbers
+
+    callouts = {
+        "dimensions": [{"value": "ПТС 170.10.03.008"}, {"value": "29"}, {"value": "21,2 -0,1"}]
+    }
+
+    assert _callout_numbers(callouts, "linear") == [29.0, 21.2, 0.1]
