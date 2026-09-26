@@ -258,3 +258,17 @@ def test_the_view_is_found_the_same_on_a_sheet_scanned_at_a_higher_resolution():
         assert located is not None, factor
         frame, _profile = located
         assert abs(frame.mm_per_px * factor - 1.0 / PX) <= 0.01 / PX, (factor, frame.mm_per_px)
+
+
+def test_a_flat_lowering_one_edge_does_not_make_a_step():
+    """Лыска опускает одну кромку силуэта: ступень — по целой кромке, а не
+    Ø = 2R − глубина (turned_multiaxis-0: ложная ступень Ø23,7 посреди Ø25)."""
+    from app.ai.cad_recognize.verifiers.sheet_profile import _main_steps
+
+    located = locate_shaft_frame(_sheet(lowered=3.5), sum(length for _d, length in STEPS))
+    frame, profile = located
+    steps = _main_steps(profile)
+
+    assert len(steps) == len(STEPS), steps
+    middle = 2.0 * steps[1][2] * frame.mm_per_px
+    assert abs(middle - STEPS[1][0]) < 0.5, middle

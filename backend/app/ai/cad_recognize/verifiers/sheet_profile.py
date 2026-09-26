@@ -148,10 +148,14 @@ def propose_profile(
 
     length_px = float(profile.x1 - profile.x0)
     pool = list(labels.axial)
+    # Отданные другим элементам надписи — не свободны, но годятся запасному
+    # повтору звена (`_reused_link`): у выдуманного ридером паза «12…82 × 5»
+    # (turned_multiaxis-0 — это ступень Ø25) «70» иначе пропадала совсем.
+    spare: list[tuple[float, float | None]] = []
     for value in reserved:
         index = next((i for i, (v, _c) in enumerate(pool) if abs(v - value) <= 1e-6), None)
         if index is not None:
-            pool.pop(index)
+            spare.append(pool.pop(index))
     if length_px <= 0 or not pool:
         return None, "на листе нет осевых надписей"
     line_px = float(getattr(profile, "line_px", 0.0) or 0.0)
@@ -181,18 +185,35 @@ def propose_profile(
         ]
         return bounds, marks
 
+    def spares(scale: float) -> list[tuple[float, float | None]]:
+        return [
+            (value, None if column is None else (column - profile.x0) * scale)
+            for value, column in spare
+        ]
+
     best: tuple[float, float, list[float]] | None = None
-    for total in sorted({value for value, _column in pool}):
-        scale = total / length_px
-        if base is not None and not 0.7 * base <= scale <= 1.4 * base:
-            continue
-        bounds, marks = placed(scale)
-        found = _assign(bounds, marks, total, _STATION_SHARE * total, strict=False)
-        if isinstance(found, str):
-            continue
-        cost = sum(found[1]) / len(found[1])
-        if best is None or cost < best[0]:
-            best = (cost, total, found[1])
+    # Сначала — габариты рядом с прочитанным; без коридора — только если в нём
+    # ничего не сошлось: прочитанный контур бывает неверен грубо (живой
+    # turned_multiaxis-0: 3 ступени из 5, сумма 180 при габарите 262 — ×1,46).
+    # Строгий второй проход ниже неоднозначность всё так же отвергает.
+    ungated = False
+    for gated in (True, False):
+        if not gated and (best is not None or base is None):
+            break
+        ungated = not gated
+        for total in sorted({value for value, _column in pool}):
+            scale = total / length_px
+            if gated and base is not None and not 0.7 * base <= scale <= 1.4 * base:
+                continue
+            bounds, marks = placed(scale)
+            found = _assign(
+                bounds, marks, total, _STATION_SHARE * total, strict=False, spare=spares(scale)
+            )
+            if isinstance(found, str):
+                continue
+            cost = sum(found[1]) / len(found[1])
+            if best is None or cost < best[0]:
+                best = (cost, total, found[1])
     if best is None:
         return None, "уступы вида не объясняются надписями ни при каком габарите"
     _cost, total, residuals = best
@@ -203,7 +224,18 @@ def propose_profile(
     ordered = sorted(residuals)
     tolerance = min(_STATION_SHARE * total, max(0.5, 4.0 * ordered[len(ordered) // 2]))
     bounds, marks = placed(scale)
-    found = _assign(bounds, marks, total, tolerance, strict=True)
+    # Без коридора масштаба — строже: любая вторая надпись в допуске — отказ
+    # (живой turned_multiaxis-0: «10,35» лыски объяснила уступ 12 чуть ближе,
+    # и принялась первая ступень 10,35 вместо 12).
+    found = _assign(
+        bounds,
+        marks,
+        total,
+        tolerance,
+        strict=True,
+        ambiguous=1.0 if ungated else _AMBIGUOUS,
+        spare=spares(scale),
+    )
     if isinstance(found, str):
         return None, found
     exact, residuals = found
@@ -308,6 +340,8 @@ def _assign(
     tolerance: float,
     *,
     strict: bool,
+    ambiguous: float = _AMBIGUOUS,
+    spare: list[tuple[float, float | None]] | None = None,
 ) -> tuple[list[float], list[float]] | str:
     """Точные станции уступов по графу размеров: лучшая невязка — первой.
 
@@ -328,6 +362,7 @@ def _assign(
     last = len(bounds) + 1
     known: dict[int, float] = {0: 0.0, last: total}
     residuals: dict[int, float] = {}
+    used: list[tuple[float, float | None]] = list(spare or [])
     while len(known) < last + 1:
         best = None
         for index in range(1, last):
@@ -361,18 +396,68 @@ def _assign(
             if best is None or residual < best[0]:
                 best = (residual, index, value, position, rival)
         if best is None:
+            best = _reused_link(bounds, used, known, last, tolerance)
+        if best is None:
             missing = [i for i in range(1, last) if i not in known]
             return f"уступ {missing[0]} не объясняется ни одной надписью"
+        if best[3] is None:
+            # Повторённое звено (см. `_reused_link`): надпись уже занята.
+            residual, index, value, _position, _rival = best
+            known[index] = value
+            residuals[index] = residual
+            continue
         residual, index, value, position, rival = best
-        if strict and rival is not None and rival[0] - residual < _AMBIGUOUS * tolerance:
+        if strict and rival is not None and rival[0] - residual < ambiguous * tolerance:
             return (
                 f"уступ {index}: надписи дают {value:g} и {rival[1]:g} почти одинаково "
                 f"(допуск {tolerance:.1f} мм)"
             )
         known[index] = value
         residuals[index] = residual
-        left.pop(position)
+        used.append(left.pop(position))
     return [known[i] for i in range(1, last)], [residuals[i] for i in range(1, last)]
+
+
+def _reused_link(
+    bounds: list[list[float]],
+    used: list[tuple[float, float | None]],
+    known: dict[int, float],
+    last: int,
+    tolerance: float,
+) -> tuple[float, int, float, None, None] | None:
+    """Уступ, который не объясняет ни одна свободная надпись, — звеном уже
+    занятой надписи, если на листе такая длина повторяется.
+
+    Ридер выписывает повторяющийся размер один раз (живой turned_multiaxis-0:
+    «70» у двух ступеней — выписано одно, и уступ 152 = 82 + 70 не
+    объяснялся). Только запасной ход: длина ступени — звено к СОСЕДНЕЙ
+    найденной станции (не от торца), невязка вдвое строже, без соперника.
+    Правило «одна надпись — одна станция» (z4-r4) сюда не доходит: там уступы
+    объяснены свободными надписями.
+    """
+    strict = tolerance / 2.0
+    candidates = []
+    for index in range(1, last):
+        if index in known:
+            continue
+        low = max(j for j in known if j < index)
+        high = min(j for j in known if j > index)
+        options = []
+        for label, _column in used:
+            for anchor in {low, high}:
+                if abs(anchor - index) != 1:
+                    continue
+                value = round(known[anchor] + label if anchor < index else known[anchor] - label, 3)
+                if not known[low] < value < known[high]:
+                    continue
+                residual = min(abs(value - c) for c in bounds[index - 1])
+                if residual <= strict:
+                    options.append((residual, value))
+        distinct = sorted({round(value, 3): residual for residual, value in options}.items())
+        if len(distinct) == 1:
+            value, residual = distinct[0]
+            candidates.append((residual, index, value, None, None))
+    return min(candidates) if candidates else None
 
 
 def _diameters(

@@ -411,7 +411,12 @@ def _profile(
                 start, end = max(top.start, bottom.start), min(top.end, bottom.end)
                 if end - start < min_length:
                     continue
-                value = (bottom.position - top.position) / 2.0
+                # Несимметричная пара — одна кромка опущена элементом (лыска
+                # срезает силуэт с одной стороны): ступень задаёт целая кромка.
+                # По среднему выходила ложная ступень Ø = 2R − глубина лыски
+                # (turned_multiaxis-0: Ø23,7 посреди Ø25), и профиль по листу
+                # отказывал — уступы не объяснялись надписями.
+                value = max(axis_y - top.position, bottom.position - axis_y)
                 span = slice(int(start), int(end) + 1)
                 segment = half[span]
                 half[span] = np.where(

@@ -1146,6 +1146,18 @@ def _sheet_profile(
         for key in ("length_mm", "width_mm")
         if _is_number(keyway.get(key))
     )
+    # Числа элементов по размещению (от уступа, длина и «поперёк» лыски) —
+    # не звенья цепочки ступеней: «10,35» лыски вставало первым уступом вместо 12.
+    for item in body.get("placed_features") or []:
+        station = (item or {}).get("sheet_station") or {}
+        if _is_number(station.get("from_shoulder_mm")) and station["from_shoulder_mm"] > 0.05:
+            reserved += (float(station["from_shoulder_mm"]),)
+        if item.get("kind") == "pocket" and _is_number(item.get("width_mm")):
+            reserved += (float(item["width_mm"]),)
+            if _is_number(station.get("step_diameter_mm")) and _is_number(item.get("depth_mm")):
+                reserved += (
+                    round(float(station["step_diameter_mm"]) - float(item["depth_mm"]), 3),
+                )
     proposal, why = propose_profile(
         profile,
         sheet_labels(spec),
