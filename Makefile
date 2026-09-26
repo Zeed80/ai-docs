@@ -4,7 +4,7 @@
         clean rebuild nuke \
         setup health logs ps shell-backend shell-celery shell-frontend \
         migrate migrate-new seed \
-        test test-frontend test-cov e2e regression emg-schema emg-schema-check emg-validate emg-regression emg-live-regression cad-verify-eval cad-verify-baseline cad-real-eval cad-verify-corpus agent-regression agent-test agent-ws-smoke \
+        test test-frontend test-cov e2e regression emg-schema emg-schema-check emg-validate emg-regression emg-live-regression cad-verify-eval cad-verify-baseline cad-real-eval cad-real-live cad-verify-corpus agent-regression agent-test agent-ws-smoke \
         studio-queue-smoke cad-kernel-smoke cad-regression cad-candidate-gate cad-drawing-graph-eval cad-emg-corruption emg-artifact-regression emg-mechanical-live emg-domain-builds cad-class-balanced-dev cad-class-balanced-check cad-class-balanced-cycle \
         cad-final-freeze cad-final-leakage \
         cad-corpus-acquire cad-corpus-generate cad-pmi-truth \
@@ -527,3 +527,8 @@ monitoring:
 
 monitoring-down:
 	cd infra && docker compose -f docker-compose.yml -f docker-compose.monitoring.yml down prometheus grafana
+
+# Живой гейт реальных листов: полный конвейер на текущем образе, листы по одному
+# (часы). Лист, который собирался, не должен перестать. ONLY=z4-r4,part_03_vtulka
+cad-real-live:
+	docker exec infra-celery-worker-1 python3 /app/scripts/live_real_gate.py $(if $(ONLY),--only $(ONLY),)

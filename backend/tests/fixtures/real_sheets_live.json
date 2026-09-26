@@ -1,0 +1,16 @@
+{
+ "comment": "Живой гейт: полный конвейер «по описанию» на реальных листах, по одному. built — собиралось ли тело целиком в последний раз; лист, который собирался, не должен перестать (make cad-real-live).",
+ "sheets": [
+  {"name": "z4-r4", "path": "image-gen-src/fb8c3542e2928addb63a5f27746c5c05662d555ff6c90dfa1bc6039a69b8aece/052e9c19c810445eb2e336b6ce58cdcf.jpg", "type": "auto", "built": true},
+  {"name": "part_03_vtulka", "path": "verify-live/real-part_03_vtulka_gost.png-4a2257d8.png", "type": "arbitrary_mechanical_part", "built": true},
+  {"name": "part_04_planka", "path": "verify-live/real-part_04_planka_gost.png-b5238b65.png", "type": "arbitrary_mechanical_part", "built": true},
+  {"name": "opora_pruzhin", "path": "image-gen-src/fb8c3542e2928addb63a5f27746c5c05662d555ff6c90dfa1bc6039a69b8aece/6b19efb1a71d44b2828bb944d9c3b377.jpg", "type": "auto", "built": false},
+  {"name": "detal_126", "path": "image-gen-src/fb8c3542e2928addb63a5f27746c5c05662d555ff6c90dfa1bc6039a69b8aece/dc112905d9a04147a0999614915e75ab.png", "type": "auto", "built": false},
+  {"name": "shaft_detail", "path": "image-gen-src/c8e001c36ec87957c2f7714d3243e46c206e2b86aca6872fb8c36689fd999809/a4ac0901c91c4472b4b0d65ebeb439aa.png", "type": "auto", "built": false},
+  {"name": "part_01_shaft", "path": "verify-live/real-part_01_shaft_wikimedia.jpg-ab61159d.png", "type": "arbitrary_mechanical_part", "built": false},
+  {"name": "part_02_val", "path": "verify-live/real-part_02_val_gost.png-b9b9d139.png", "type": "arbitrary_mechanical_part", "built": false},
+  {"name": "part_05_krishka", "path": "verify-live/real-part_05_krishka_gost.png-25f2382e.png", "type": "arbitrary_mechanical_part", "built": false},
+  {"name": "part_06_gear", "path": "verify-live/real-part_06_gear_gost.png-838d5956.png", "type": "arbitrary_mechanical_part", "built": false},
+  {"name": "image_00003", "path": "image-gen-src/fb8c3542e2928addb63a5f27746c5c05662d555ff6c90dfa1bc6039a69b8aece/f62717f3b92e4080b5883f9ad8f3d102.png", "type": "auto", "built": false}
+ ]
+}

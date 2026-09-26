@@ -67,7 +67,17 @@ def run_chain(png: bytes, spec: dict) -> dict:
     additions = keyway_additions(spec, report)
     if additions:
         spec = apply_keyway_additions(spec, additions)
+    from app.ai.cad_recognize.verifiers.reconcile import settle_stale_notes
+    from app.ai.cad_solid import feature_tree_from_spec, solid_build_gate
+
+    spec = settle_stale_notes(spec, report)
+    try:
+        gate = solid_build_gate(spec, feature_tree_from_spec(spec))
+        blockers = list(gate.get("blockers") or [])
+    except Exception as exc:  # noqa: BLE001 — дерево не строится: это тоже блокер
+        blockers = [f"дерево операций не построено: {exc}"]
     return {
+        "gate_blockers": blockers,
         "spec": spec,
         "report": report,
         "profile_adopted": bool(adoption),
@@ -316,6 +326,7 @@ def main() -> int:
     args = parser.parse_args()
     truth = json.loads(TRUTH.read_text())
     results = {}
+    chains: dict[str, dict] = {}
     for sheet in truth["sheets"]:
         kind = sheet.get("kind", "shaft")
         if kind not in {"shaft", "flange", "plate", "sleeve_flange"}:
@@ -327,6 +338,7 @@ def main() -> int:
             print(f"{sheet['name']}: нет листа или чтения в {args.sheets} — пропущен")
             continue
         result = run_chain(png_path.read_bytes(), json.loads(spec_path.read_text()))
+        chains[sheet["name"]] = result
         if kind == "plate":
             results[sheet["name"]] = score_plate(result, sheet)
             f = results[sheet["name"]]
@@ -364,6 +376,11 @@ def main() -> int:
             f"(подтверждено {s['steps_confirmed']}), пазы {s['keyways_right']}/{s['keyways']} "
             f"(лишних {s['keyways_extra']}), профиль по листу: {'да' if s['profile_adopted'] else 'нет'}"
         )
+    for name in results:
+        results[name]["gate_blockers"] = len(chains[name]["gate_blockers"])
+        print(f"{name:<18} блокеров сборки: {results[name]['gate_blockers']}")
+        for line in chains[name]["gate_blockers"][:4]:
+            print(f"    {line[:120]}")
     if not args.baseline:
         return 0
     if args.update:
@@ -392,8 +409,8 @@ def main() -> int:
         ):
             if key in got and got[key] < was.get(key, 0):
                 worse.append(f"{name}.{key}: {got[key]} < {was[key]}")
-        for key in ("keyways_extra", "patterns_extra", "holes_extra"):
-            if key in got and got[key] > was.get(key, 0):
+        for key in ("keyways_extra", "patterns_extra", "holes_extra", "gate_blockers"):
+            if key in got and key in was and got[key] > was[key]:
                 worse.append(f"{name}.{key}: {got[key]} > {was[key]}")
     for line in worse:
         print("ХУЖЕ:", line)

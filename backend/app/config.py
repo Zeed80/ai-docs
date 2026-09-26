@@ -172,6 +172,10 @@ class Settings(BaseSettings):
     # размерами) перерисовываются FLUX.2 dev по вырезу и принимаются только
     # проверкой (план, E30b). CAD_REDRAW_DISPUTED=false выключает.
     cad_redraw_disputed: bool = True
+    # Вопрос «напиши и исполни Python-скрипт профиля»: за 14 дней на стенде
+    # 0 успешных из 99 (43 тайм-аута по 150 с, 56 падений скрипта) — съедал
+    # ~3,5 мин бюджета чтения, и на реальных листах шёл 1 проход из 5.
+    cad_geometry_code_pass: bool = False
     # Technical-drawing line vectorizer (infra/technical-vectorizer) —
     # vendored, openly-licensed (MPL-2.0), pretrained Deep Vectorization of
     # Technical Drawings model. Validated live (2026-07-11): zero-shot

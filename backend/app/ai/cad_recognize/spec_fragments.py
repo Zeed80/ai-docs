@@ -5423,7 +5423,11 @@ async def read_spec_by_fragments(
     # description above, not a second source of truth: every diameter/length
     # it computes still has to be geometry-confirmed by diameter_dimensions
     # .py before becoming an outer[]/bore[] value.
-    if kind in _NO_ROTATION_PASSES:
+    from app.config import settings as _settings
+
+    if not _settings.cad_geometry_code_pass:
+        geometry_code_result = None
+    elif kind in _NO_ROTATION_PASSES:
         # Скрипт считает профиль ТЕЛА ВРАЩЕНИЯ: у гнутой детали и сварного узла
         # он только съедал бюджет (живой Z-профиль: 150 с до таймаута, и на
         # сам вопрос о сечении времени уже не оставалось).

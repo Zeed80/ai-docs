@@ -1,11 +1,13 @@
 {
  "flange_detail": {
   "bore_right": 1,
+  "gate_blockers": 0,
   "outer_right": 1,
   "pattern_right": 1,
   "patterns_extra": 0
  },
  "part_02_val_gost": {
+  "gate_blockers": 5,
   "keyways": 0,
   "keyways_extra": 0,
   "keyways_right": 0,
@@ -18,10 +20,12 @@
   "bore_right": 3,
   "flange_holes_right": 3,
   "flange_right": 1,
+  "gate_blockers": 2,
   "steps": 3,
   "steps_right": 3
  },
  "part_04_planka_gost": {
+  "gate_blockers": 0,
   "holes": 3,
   "holes_extra": 0,
   "holes_right": 3,
@@ -30,10 +34,12 @@
  "part_06_gear_gost": {
   "bore_right": 0,
   "face_groove_right": 0,
+  "gate_blockers": 6,
   "steps": 2,
   "steps_right": 0
  },
  "shaft_detail": {
+  "gate_blockers": 4,
   "keyways": 0,
   "keyways_extra": 1,
   "keyways_right": 0,
@@ -43,6 +49,7 @@
   "steps_right": 3
  },
  "z4-r4": {
+  "gate_blockers": 8,
   "keyways": 2,
   "keyways_extra": 0,
   "keyways_right": 2,
