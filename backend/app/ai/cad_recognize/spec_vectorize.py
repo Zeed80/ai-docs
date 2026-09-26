@@ -604,6 +604,16 @@ class SpecPlacement(BaseModel):
     angle_deg: float = 0.0
 
 
+class SpecSheetStation(BaseModel):
+    """Как станция элемента проставлена на листе: Ø ступени и размер от её
+    левого уступа. Модель сумму цепочки не считает, станцию считает код — и
+    пересчитывает, когда контур исправлен по листу (дорожка У, У6)."""
+
+    step_diameter_mm: float = Field(gt=0)
+    from_shoulder_mm: float = Field(ge=0)
+    section: str | None = None
+
+
 class SpecPlacedFeature(BaseModel):
     """Элемент по 3D-размещению в системе детали (дорожка У).
 
@@ -629,6 +639,7 @@ class SpecPlacedFeature(BaseModel):
     depth_mm: float | None = Field(default=None, gt=0)
     through: bool | None = None
     thread: SpecThread | None = None
+    sheet_station: SpecSheetStation | None = None
     evidence: list[SpecEvidence] = Field(default_factory=list)
 
     @model_validator(mode="after")

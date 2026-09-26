@@ -61,3 +61,32 @@ def test_a_linear_number_does_not_stand_for_an_angle():
     decisions = reconcile(_spec(["Ø6", "60", "0.5×45°"]), REPORT)
 
     assert [(d["field"], d["action"]) for d in decisions] == [("angle_deg", "ask_human")]
+
+
+def test_stations_follow_the_profile_accepted_by_the_sheet():
+    """Живой turned_multiaxis-0: ридер прочёл 3 ступени из 5 — станции от
+    уступов встали мимо; принятый по листу контур их пересчитывает."""
+    from app.ai.cad_recognize.verifiers.reconcile import restation_placed
+
+    spec = {
+        "main_view": {
+            "outer": [
+                {"diameter_mm": 28.0, "length_mm": 12.0},
+                {"diameter_mm": 25.0, "length_mm": 70.0},
+                {"diameter_mm": 40.0, "length_mm": 70.0},
+            ],
+            "placed_features": [
+                {
+                    "kind": "hole",
+                    "origin_mm": [0.0, 14.0, 75.4],  # стояло по неверному контуру
+                    "axis": [0.0, -1.0, 0.0],
+                    "diameter_mm": 3.0,
+                    "sheet_station": {"step_diameter_mm": 25.0, "from_shoulder_mm": 50.8},
+                }
+            ],
+        }
+    }
+    hole = restation_placed(spec)["main_view"]["placed_features"][0]
+
+    assert hole["origin_mm"][2] == 62.8
+    assert abs(hole["origin_mm"][1] - 12.5) < 1e-6 and abs(hole["origin_mm"][0]) < 1e-6

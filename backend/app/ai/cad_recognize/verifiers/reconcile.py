@@ -1221,7 +1221,9 @@ def apply_profile(spec: dict[str, Any], decision: dict[str, Any]) -> dict[str, A
         spec["value_provenance"] = {
             key: value for key, value in votes.items() if not key.startswith("main_view/outer")
         }
-    return spec
+    # Элементы по размещению стоят от уступов — уступы сдвинулись вместе с
+    # контуром (дорожка У).
+    return restation_placed(spec)
 
 
 _STALE_PROFILE = (
@@ -1232,6 +1234,46 @@ _STALE_PROFILE = (
 _CROSS_HOLE_NOTE = re.compile(
     r"поперечное отверстие Ø(\d+(?:[.,]\d+)?) указано, но не локализовано"
 )
+
+
+def restation_placed(spec: dict[str, Any]) -> dict[str, Any]:
+    """Станции элементов по размещению — заново по текущему контуру.
+
+    Станция считается от уступа ступени того Ø, что на листе (`sheet_station`);
+    контур, принятый по листу, может сдвинуть уступы (живой turned_multiaxis-0:
+    ридер прочёл 3 ступени из 5, отверстия встали на 75,4 вместо 62,8). Ступень
+    — однозначная по Ø и размеру; иначе элемент остаётся, где был.
+    """
+    import math
+
+    body = spec.get("main_view") or {}
+    outer = [step for step in body.get("outer") or [] if isinstance(step, dict)]
+    lengths = [float(step.get("length_mm") or 0.0) for step in outer]
+    starts = [sum(lengths[:i]) for i in range(len(lengths))]
+    for item in body.get("placed_features") or []:
+        station = (item or {}).get("sheet_station")
+        if not isinstance(station, dict) or len(item.get("origin_mm") or []) != 3:
+            continue
+        diameter = float(station.get("step_diameter_mm") or 0.0)
+        offset = float(station.get("from_shoulder_mm") or 0.0)
+        extent = float(item.get("width_mm") or 0.0) if item.get("kind") == "pocket" else 0.0
+        fits = [
+            (start, float(step.get("diameter_mm") or 0.0) / 2.0)
+            for step, start, length in zip(outer, starts, lengths, strict=False)
+            if abs(float(step.get("diameter_mm") or 0.0) - diameter) <= 0.05
+            and offset + extent <= length + 1e-6
+        ]
+        if len(fits) != 1:
+            continue
+        start, radius = fits[0]
+        ox, oy, _oz = (float(v) for v in item["origin_mm"])
+        angle = math.atan2(oy, ox)
+        item["origin_mm"] = [
+            round(radius * math.cos(angle), 4),
+            round(radius * math.sin(angle), 4),
+            round(start + offset + extent / 2.0, 3),
+        ]
+    return spec
 
 
 def _stale_profile_note(note: str, diameters: set[float]) -> bool:

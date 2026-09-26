@@ -2018,6 +2018,11 @@ async def _read_section_features(
                     "width_mm": round(length, 3),
                     "height_mm": round(2.0 * radius + 2.0, 3),
                     "depth_mm": round(2.0 * radius - across, 3),
+                    "sheet_station": {
+                        "step_diameter_mm": 2.0 * radius,
+                        "from_shoulder_mm": offset,
+                        "section": label or None,
+                    },
                 }
             )
         for hole in section.get("holes") or []:
@@ -2049,6 +2054,11 @@ async def _read_section_features(
                 **placement(radius, angle, start + offset),
                 "diameter_mm": diameter,
                 "through": hole.get("through") is not False,
+                "sheet_station": {
+                    "step_diameter_mm": 2.0 * radius,
+                    "from_shoulder_mm": offset,
+                    "section": label or None,
+                },
             }
             depth = _num(hole.get("depth_mm"))
             if item["through"] is False and depth and _on_sheet(depth, texts):
