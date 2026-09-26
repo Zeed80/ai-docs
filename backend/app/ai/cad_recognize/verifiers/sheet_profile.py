@@ -49,6 +49,11 @@ _SHORT_SHARE = 0.03
 # Надпись размера стоит над своим отрезком: её центр — между станциями с
 # запасом в эту долю габарита (рамки ридера на z4-r4 мимо до 12 мм из 185).
 _LABEL_MARGIN = 0.08
+# Короткое крайнее звено подписывают на полке за торцом (ГОСТ 2.307: подпись
+# длиннее своей линии выносится): её центр — за торцом не дальше этой доли.
+_SHELF_SHARE = 0.2
+# Край площадки ближе стольких толщин линии к грани уступа — край её же линии.
+_FACE_BORDER_LINES = 0.75
 
 
 @dataclass(frozen=True)
@@ -171,10 +176,21 @@ def propose_profile(
     ]
     # Кандидаты столбца каждого уступа: кромки соседних ступеней и грани
     # между ними — канавка у уступа даёт две грани, надпись стоит у одной.
-    bounds_px = [
-        sorted({float(a[1]), float(b[0]), *(s for s in shoulders if a[1] - 3 <= s <= b[0] + 3)})
-        for a, b in zip(steps, steps[1:])
-    ]
+    # Край площадки в пределах толщины линии от грани — это край самой толстой
+    # вертикали, а не отдельный кандидат (живой turned_multiaxis-0: площадка
+    # Ø28 кончалась на 10,5 при грани 11,7 и линии 2 мм, и «10,35» лыски
+    # ложилась на этот край ближе, чем «12» на грань). Дальний край остаётся:
+    # у втулки грань фланца в 2,3 мм от начала ступени.
+    border = _FACE_BORDER_LINES * (line_px or 4.0)
+    bounds_px = []
+    for a, b in zip(steps, steps[1:]):
+        faces = [float(s) for s in shoulders if a[1] - 3 <= s <= b[0] + 3]
+        edges = [
+            float(edge)
+            for edge in (a[1], b[0])
+            if not any(abs(edge - face) <= border for face in faces)
+        ]
+        bounds_px.append(sorted({*faces, *edges}))
     base = (read_total_mm / length_px) if read_total_mm else None
 
     def placed(scale: float) -> tuple[list[list[float]], list[tuple[float, float | None]]]:
@@ -381,10 +397,8 @@ def _assign(
                     residual = min(abs(value - c) for c in bounds[index - 1])
                     if residual > tolerance:
                         continue
-                    if column is not None and not (
-                        min(known[anchor], value) - margin
-                        <= column
-                        <= max(known[anchor], value) + margin
+                    if column is not None and not _over_segment(
+                        column, min(known[anchor], value), max(known[anchor], value), total, margin
                     ):
                         continue
                     options.append((residual, value, position))
@@ -416,6 +430,19 @@ def _assign(
         residuals[index] = residual
         used.append(left.pop(position))
     return [known[i] for i in range(1, last)], [residuals[i] for i in range(1, last)]
+
+
+def _over_segment(column: float, low: float, high: float, total: float, margin: float) -> bool:
+    """Надпись стоит над отрезком ``low…high`` — или на полке за торцом, от
+    которого этот отрезок начинается (живой turned_multiaxis-0: «12» первой
+    ступени — на полке в 39 мм левее торца, и уступ 12 объяснялся ещё и
+    «14,8» отверстия — неоднозначно, профиль по листу отказывал)."""
+    if low - margin <= column <= high + margin:
+        return True
+    shelf = _SHELF_SHARE * total
+    if low <= 1e-6 and -shelf <= column < 0.0:
+        return True
+    return high >= total - 1e-6 and total < column <= total + shelf
 
 
 def _reused_link(

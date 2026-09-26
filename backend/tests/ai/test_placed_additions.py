@@ -82,3 +82,45 @@ def test_an_ambiguous_pair_is_refused():
 
     assert placed_additions(spec, {"placed_proposals": [flat]}, notes) == []
     assert "однозначно" in notes[0]
+
+
+def test_a_reader_feature_left_without_a_trace_by_the_finding_is_dropped_after_it():
+    """Живой turned_multiaxis-1: до находки единственный след свободен и осевое Ø5,
+    выданное радиальным на 43,7, могло быть с него; лыска, найденная на этом
+    следе, его занимает — отверстие снимается уже после находки."""
+    from app.ai.cad_recognize.verifiers.reconcile import settle_placed_additions
+
+    reader_hole = {"kind": "hole", "origin_mm": [20.0, 0.0, 43.7], "axis": [-1, 0, 0]}
+    spec = _spec(["12", "70"])
+    spec["main_view"]["placed_features"] = [reader_hole]
+    spec["provenance"] = {"main_view.placed_features[0]": {"origin": "reader"}}
+    flat = {"kind": "pocket", "origin_mm": [0.0, 12.5, 53.5], "axis": [0, -1, 0]}
+    calls: list[int] = []
+
+    def verify(candidate: dict) -> dict:
+        placed = candidate["main_view"]["placed_features"]
+        calls.append(len(placed))
+        items = []
+        for index, feature in enumerate(placed):
+            item = {
+                "kind": "placed_feature",
+                "path": f"main_view.placed_features[{index}]",
+                "status": "confirmed",
+            }
+            if feature is not None and feature["origin_mm"][2] == 43.7 and len(placed) > 1:
+                item.update(status="refuted", absent=True, reason="нет следа на 43.7")
+            items.append(item)
+        return {"items": items, "notes": []}
+
+    settled, report, drops = settle_placed_additions(
+        spec, [{"feature": flat, "reason": "след 53.37"}], verify
+    )
+
+    assert [f["kind"] for f in settled["main_view"]["placed_features"]] == ["pocket"]
+    assert calls == [2, 1]  # после находки и после снятия
+    assert [d["action"] for d in drops] == ["drop"]
+    assert [i["status"] for i in report["items"]] == ["confirmed"]
+    assert report["placed_additions"][0]["feature"] == flat
+    # «найдено по листу» переехало на новый индекс лыски, снятое не висит
+    assert settled["provenance"]["main_view.placed_features[0]"]["origin"] == "sheet_measurement"
+    assert any("снят" in note for note in settled["unresolved"])

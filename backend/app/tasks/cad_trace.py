@@ -4157,9 +4157,11 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 checked_content = content
                 redraw_log: list[dict[str, Any]] = []
 
-                def _verify_checked() -> dict[str, Any]:
+                def _verify_checked(for_spec: dict[str, Any] | None = None) -> dict[str, Any]:
                     """Проверка по листу с заплатками; принятое перерисовкой помечено."""
-                    report = verify_spec_against_sheet(checked_content, spec)
+                    report = verify_spec_against_sheet(
+                        checked_content, spec if for_spec is None else for_spec
+                    )
                     done = {path for entry in redraw_log for path in entry.get("accepted") or []}
                     for item in report.get("items") or []:
                         if item.get("path") in done:
@@ -4802,8 +4804,8 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                     # Лыски и радиальные отверстия на сечениях, которых ридер не
                     # выписал (дорожка У): след секущей + сечение + надписи.
                     from app.ai.cad_recognize.verifiers.reconcile import (
-                        apply_placed_additions,
                         placed_additions,
+                        settle_placed_additions,
                     )
 
                     placed_notes: list[str] = []
@@ -4829,16 +4831,26 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                             }
                             placed_notes = []
                             placed_found = placed_additions(spec, verification, placed_notes)
+                    placed_drops: list[dict[str, Any]] = []
                     if placed_found:
-                        spec = _revalidated_spec(apply_placed_additions(spec, placed_found))
-                        verification = _verify_checked()
-                        verification["placed_additions"] = placed_found
+                        # Находка занимает свой след — элемент ридера без следа
+                        # снимается уже после неё (см. settle_placed_additions).
+                        spec, verification, placed_drops = settle_placed_additions(
+                            spec,
+                            placed_found,
+                            lambda candidate: _verify_checked(_revalidated_spec(candidate)),
+                        )
+                        spec = _revalidated_spec(spec)
                     if placed_found or placed_notes:
                         await _record(
                             "reconcile.placed",
                             "completed",
                             f"Элементов на сечениях найдено по листу: {len(placed_found)}",
-                            {"additions": placed_found, "notes": placed_notes},
+                            {
+                                "additions": placed_found,
+                                "notes": placed_notes,
+                                "dropped": placed_drops,
+                            },
                         )
                     # Сечения на листе — сплошные круги (живой z4-r4: А-А и Б-Б
                     # через пазы): вал сплошной доказан, «разрез не прочитан»

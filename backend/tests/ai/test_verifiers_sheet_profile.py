@@ -231,3 +231,30 @@ def test_a_sheet_profile_replaces_a_reading_the_sheet_did_not_confirm():
 def test_a_confirmed_reading_is_not_replaced_and_no_proposal_means_no_decision():
     assert profile_decision(READ_SPEC, _report(["confirmed"] * 3, PROPOSED)) is None
     assert profile_decision(READ_SPEC, _report(["refuted"] * 3, None)) is None
+
+
+def test_a_plateau_edge_at_its_own_face_line_is_not_a_separate_candidate():
+    """Живой turned_multiaxis-0 (2,96 px/мм, линия 6 px): площадка Ø28 кончается
+    на 10,5 — у края толстой линии грани 11,7; «10,35» лыски ложилась на этот
+    край ближе, чем «12» на грань, — первой ступенью шла 10,35, профиль отказывал."""
+    px = 2.96
+    drawn = [(0.0, 10.5, 28.0), (12.9, 82.0, 25.0), (82.0, 152.0, 40.0), (152.0, 192.0, 25.0), (192.0, 262.0, 50.0)]  # fmt: skip
+    end_px = int(round(262.0 * px))
+    half = np.full(end_px + 1, np.nan)
+    for start, end, diameter in drawn:
+        half[int(round(start * px)) : int(round(end * px)) + 1] = diameter / 2.0 * px
+    profile = ShaftProfile(
+        x0=100, x1=100 + end_px, axis_y=500.0, half_px=half, faces_px=(), line_px=6.0
+    )
+    labels = _dims("262", "12", "70", "70", "70", "40", "10.35", "Ø28", "Ø25", "Ø40", "Ø50")
+
+    proposal, why = propose_profile(profile, sheet_labels(labels), 262.0)
+
+    assert proposal is not None, why
+    assert _steps(proposal) == [
+        (28.0, 12.0),
+        (25.0, 70.0),
+        (40.0, 70.0),
+        (25.0, 40.0),
+        (50.0, 70.0),
+    ]

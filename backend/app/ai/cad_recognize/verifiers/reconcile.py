@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import copy
 import re
+from collections.abc import Callable
 from typing import Any
 
 # Поле → вид допуска (как в `stage._GRAPH_FIELDS`); только надписанные величины.
@@ -608,6 +609,7 @@ def apply_reconciliation(
     for index in absent:
         if index < len(placed):
             removed = placed.pop(index)
+            _shift_placed_provenance(provenance, index)
             spec.setdefault("unresolved", []).append(
                 f"элемент по сечению ({removed.get('kind')}, станция "
                 f"{float((removed.get('origin_mm') or [0, 0, 0])[2]):g} мм) снят: на главном "
@@ -2228,6 +2230,48 @@ def placed_additions(
             }
         )
     return additions
+
+
+def _shift_placed_provenance(provenance: dict[str, Any], removed: int) -> None:
+    """Происхождение по индексу элемента: снятый уходит, следующие сдвигаются.
+
+    Иначе «найдено по листу» у элемента за снятым повисает на чужом индексе."""
+    pattern = re.compile(r"^main_view\.placed_features\[(\d+)\](.*)$")
+    moved: dict[str, Any] = {}
+    for key in list(provenance):
+        match = pattern.match(key)
+        if not match:
+            continue
+        index = int(match.group(1))
+        value = provenance.pop(key)
+        if index > removed:
+            moved[f"main_view.placed_features[{index - 1}]{match.group(2)}"] = value
+        elif index < removed:
+            moved[key] = value
+    provenance.update(moved)
+
+
+def settle_placed_additions(
+    spec: dict[str, Any],
+    additions: list[dict[str, Any]],
+    verify: Callable[[dict[str, Any]], dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+    """Найденное по листу — в спек, проверка заново, затем снятие ставшего лишним.
+
+    Находка занимает свой след секущей: элемент ридера, который до неё мог быть
+    «с того же сечения», теперь без следа (живой turned_multiaxis-1: осевое Ø5,
+    выданное радиальным на 43,7, оставалось в спеке после находки лыски на
+    53,5 — согласование шло до находок). Снятое — ещё одна проверка: индексы
+    элементов сдвинулись."""
+    spec = apply_placed_additions(spec, additions)
+    report = verify(spec)
+    drops = [d for d in reconcile(spec, report) if d.get("action") == "drop"]
+    if drops:
+        spec, _ = apply_reconciliation(spec, report, drops)
+        report = verify(spec)
+        report["reconciliation"] = drops
+    report["placed_additions"] = additions
+    return spec, report, drops
 
 
 def apply_placed_additions(spec: dict[str, Any], additions: list[dict[str, Any]]) -> dict[str, Any]:
