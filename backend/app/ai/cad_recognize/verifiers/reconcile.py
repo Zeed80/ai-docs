@@ -2039,3 +2039,208 @@ def settle_placed_hole_notes(
     spec = copy.deepcopy(spec)
     spec["unresolved"] = kept
     return spec
+
+
+def placed_additions(
+    spec: dict[str, Any], report: dict[str, Any], notes: list[str] | None = None
+) -> list[dict[str, Any]]:
+    """Элементы на сечениях, которых ридер не выписал, — по надписям (У6).
+
+    Предложение проверки (`placed_proposals`: станция по следу секущей,
+    угол и размер по сечению) принимается, только если каждое число
+    объяснено надписью листа, и вариант один: Ø — надписью «Ø…», «поперёк»
+    лыски — числом; угол — угловой надписью или 0° без надписи; станция —
+    числом от левого уступа (у лыски — парой «от уступа» + «длина»); глухое
+    отверстие — надписью «гл.N» у того же Ø, сквозное — двумя разрывами.
+    """
+    import math
+
+    proposals = report.get("placed_proposals") or []
+    body = spec.get("main_view") or {}
+    outer = [s for s in body.get("outer") or [] if isinstance(s, dict)]
+    if not proposals or not outer:
+        return []
+    starts = [0.0]
+    for step in outer:
+        starts.append(starts[-1] + float(step.get("length_mm") or 0.0))
+    from app.ai.cad_recognize.verifiers.sheet_profile import sheet_labels
+
+    # Осевые числа отдельно от Ø: «от уступа 50,45» иначе совпадало и с
+    # «50,8», и с «Ø50» — и отбрасывалось как неоднозначное.
+    labels = sheet_labels(spec)
+    numbers = sorted({round(value, 3) for value, _column in labels.axial})
+    diameters = sorted(set(labels.diameters))
+    # Числа, занятые контуром (длины ступеней и габарит), — не размеры
+    # элементов: 15 + 10,6/2 длин ступеней давало станцию лыски ближе, чем её
+    # собственные 10,1 + 20,8/2 (эталон, лист 1).
+    taken = {round(float(step.get("length_mm") or 0.0), 3) for step in outer}
+    taken.add(round(starts[-1], 3))
+    free = [n for n in numbers if n not in taken]
+    angles = sheet_angles(spec)
+    texts = [
+        str((item.get("value") if isinstance(item, dict) else item) or "")
+        for item in spec.get("dimensions") or []
+    ]
+    existing = [
+        (
+            float(item["origin_mm"][2]),
+            math.degrees(math.atan2(float(item["origin_mm"][1]), float(item["origin_mm"][0]))),
+        )
+        for item in body.get("placed_features") or []
+        if len((item or {}).get("origin_mm") or []) == 3
+    ]
+
+    def gap(a: float, b: float) -> float:
+        return abs((a - b + 180.0) % 360.0 - 180.0)
+
+    def one(values: list[float], target: float, tolerance: float) -> float | None:
+        near = sorted({v for v in values if abs(v - target) <= tolerance})
+        return near[0] if len(near) == 1 else None
+
+    additions = []
+
+    def refuse(proposal: dict[str, Any], why: str) -> None:
+        if notes is not None:
+            notes.append(
+                f"{'отверстие' if proposal['kind'] == 'hole' else 'лыска'} на сечении у "
+                f"{float(proposal['station_mm']):g} мм не добавлена: {why}"
+            )
+
+    for proposal in proposals:
+        z = float(proposal["station_mm"])
+        index = proposal.get("step_index")
+        if not isinstance(index, int) or not 0 <= index < len(outer):
+            continue
+        radius = float(outer[index].get("diameter_mm") or 0.0) / 2.0
+        shoulder = starts[index]
+        tolerance = float(proposal.get("tolerance_mm") or 0.8)
+        options = []
+        for measured in proposal.get("angles_deg") or [proposal["angle_deg"]]:
+            label = next((a for a in angles if gap(a, measured) <= 6.0), None)
+            if label is not None:
+                options.append(label % 360.0)
+            elif gap(measured, 0.0) <= 6.0:
+                options.append(0.0)
+        if len(set(options)) != 1:
+            refuse(proposal, "угол не объяснён угловой надписью однозначно")
+            continue
+        angle = options[0]
+        if any(abs(z - rz) <= 1.5 and gap(angle, ra) <= 25.0 for rz, ra in existing):
+            continue  # уже прочитан или добавлен
+        a = math.radians(angle)
+        placement = {
+            "origin_mm": [round(radius * math.cos(a), 4), round(radius * math.sin(a), 4)],
+            "axis": [round(-math.cos(a), 6), round(-math.sin(a), 6), 0.0],
+            "ref": [0.0, 0.0, 1.0],
+        }
+        if proposal["kind"] == "hole":
+            diameter = one(diameters, float(proposal["diameter_mm"]), tolerance)
+            near = sorted(
+                (abs(n - (z - shoulder)), n) for n in free if abs(n - (z - shoulder)) <= 1.0
+            )
+            offset = (
+                near[0][1] if near and (len(near) == 1 or near[1][0] - near[0][0] >= 0.3) else None
+            )
+            if diameter is None or offset is None:
+                refuse(proposal, "Ø или положение от уступа не объяснены надписью")
+                continue
+            depth = None
+            for text in texts:
+                match = re.search(r"[ØøФ⌀]\s*(\d+(?:[.,]\d+)?)\s*гл\.?\s*(\d+(?:[.,]\d+)?)", text)
+                if match and abs(float(match.group(1).replace(",", ".")) - diameter) <= 1e-6:
+                    depth = float(match.group(2).replace(",", "."))
+            through = bool(proposal.get("through"))
+            if not through and depth is None:
+                refuse(proposal, "глухое, а надписи «гл.» у этого Ø нет")
+                continue
+            item = {
+                "kind": "hole",
+                **placement,
+                "diameter_mm": diameter,
+                "through": through,
+                **({} if through else {"depth_mm": depth}),
+            }
+            station = shoulder + offset
+        else:
+            ranked = sorted(
+                (abs(n - float(proposal["across_mm"])), n)
+                for n in free
+                if abs(n - float(proposal["across_mm"])) <= tolerance
+            )
+            across = (
+                ranked[0][1]
+                if ranked and (len(ranked) == 1 or ranked[1][0] - ranked[0][0] >= 0.3)
+                else None
+            )
+            # Пара «от уступа» + «длина», дающая станцию следа: ближайшая, и
+            # только если следующая заметно дальше (на листе много чисел —
+            # 14,8 + 12/2 почти равно 10,35 + 22,5/2).
+            # Длина, измеренная по главному виду (концы лыски), отсекает пары
+            # с чужой длиной.
+            seen = proposal.get("length_mm")
+            pairs = sorted(
+                (abs(shoulder + o + length / 2.0 - z), o, length)
+                for o in free
+                for length in free
+                if o != length
+                and abs(shoulder + o + length / 2.0 - z) <= 1.0
+                and (
+                    not isinstance(seen, (int, float)) or abs(length - seen) <= max(1.0, tolerance)
+                )
+            )
+            if across is None or not radius < across < 2 * radius:
+                refuse(proposal, "размер «поперёк» не объяснён надписью")
+                continue
+            if not pairs or (len(pairs) > 1 and pairs[1][0] - pairs[0][0] < 0.3):
+                refuse(proposal, "положение и длина не объяснены парой надписей однозначно")
+                continue
+            _residual, offset, length = pairs[0]
+            station = shoulder + offset + length / 2.0
+            item = {
+                "kind": "pocket",
+                "profile": "rectangle",
+                **placement,
+                "width_mm": length,
+                "height_mm": round(2.0 * radius + 2.0, 3),
+                "depth_mm": round(2.0 * radius - across, 3),
+            }
+        item["origin_mm"].append(round(station, 3))
+        item["sheet_station"] = {
+            "step_diameter_mm": 2.0 * radius,
+            "from_shoulder_mm": offset,
+            "section": None,
+        }
+        existing.append((station, angle))
+        additions.append(
+            {
+                "kind": "placed_feature",
+                "feature": item,
+                "evidence_bbox_px": proposal.get("evidence_bbox_px"),
+                "reason": (
+                    f"на листе: след секущей на {z:g} мм, на сечении "
+                    + (
+                        f"отверстие Ø{item['diameter_mm']:g}"
+                        if item["kind"] == "hole"
+                        else f"лыска «{2 * radius - item['depth_mm']:g}»"
+                    )
+                    + f" под {angle:g}° — числа с надписей листа"
+                ),
+            }
+        )
+    return additions
+
+
+def apply_placed_additions(spec: dict[str, Any], additions: list[dict[str, Any]]) -> dict[str, Any]:
+    """Найденные по листу элементы — в спек, с происхождением «по листу»."""
+    spec = copy.deepcopy(spec)
+    body = spec.setdefault("main_view", {})
+    placed = body.setdefault("placed_features", [])
+    provenance = spec.setdefault("provenance", {})
+    for addition in additions:
+        placed.append(copy.deepcopy(addition["feature"]))
+        if isinstance(provenance, dict):
+            provenance[f"main_view.placed_features[{len(placed) - 1}]"] = {
+                "origin": "sheet_measurement",
+                "detail": addition["reason"],
+            }
+    return spec

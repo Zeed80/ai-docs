@@ -695,3 +695,205 @@ def verify_placed_on_sections(
             }
         )
     return results
+
+
+def flat_length_on_view(
+    ink: Any, profile: Any, mm_per_px: float, station_mm: float
+) -> float | None:
+    """Длина лыски по главному виду: пара коротких вертикалей внутри силуэта
+    ступени, симметричная станции следа (концы лыски — открытый прямоугольник у
+    кромки). Уступы тянутся на всю высоту ступени — не пара."""
+    import numpy as np
+
+    from app.ai.cad_recognize.verifiers.plate_frame import _lines
+
+    if profile is None:
+        return None
+    line = float(getattr(profile, "line_px", 0.0) or 0.0) or 4.0
+    half = np.asarray(profile.half_px, dtype=float)
+    centre = float(profile.x0) + station_mm / mm_per_px
+    column = int(round(centre)) - int(profile.x0)
+    if not 0 <= column < half.size or not np.isfinite(half[column]):
+        return None
+    radius = float(half[column])
+    axis_y = float(profile.axis_y)
+    candidates = []
+    for segment in _lines(ink, max(4, int(round(1.5 * line))), axis=1):
+        length = float(segment.end - segment.start)
+        # Внутри силуэта и не через всю ступень: у кромки, короче её высоты.
+        if segment.start < axis_y - radius - line or segment.end > axis_y + radius + line:
+            continue
+        if length >= 1.6 * radius:
+            continue
+        candidates.append((float(segment.position), segment.start, segment.end))
+    best = None
+    for xa, sa, ea in candidates:
+        if xa >= centre:
+            continue
+        for xb, sb, eb in candidates:
+            if xb <= centre:
+                continue
+            if abs((xa + xb) / 2.0 - centre) > max(2.0, 1.0 / mm_per_px):
+                continue
+            if abs(sa - sb) > 2 * line or abs(ea - eb) > 2 * line:
+                continue
+            miss = abs((xa + xb) / 2.0 - centre)
+            if best is None or miss < best[0]:
+                best = (miss, xb - xa)
+    return None if best is None else round(best[1] * mm_per_px, 2)
+
+
+def _plausible_length(length: float | None, step_length: float) -> float | None:
+    """Длина лыски не длиннее своей ступени — иначе пара вертикалей чужая."""
+    return length if length is not None and 0.0 < length <= step_length + 0.5 else None
+
+
+def propose_placed(
+    gray: Any,
+    main_view_bbox: tuple[float, float, float, float],
+    mm_per_px: float,
+    body: dict,
+    traces_mm: list[float],
+    profile: Any = None,
+) -> list[dict[str, Any]]:
+    """Элементы на сечениях, которых ридер не выписал, — по самому листу (У6).
+
+    Живой прогон 10 многоосевых валов: ридер выписал 9 элементов из 23.
+    Станцию даёт след секущей плоскости, угол и размер — сечение: сечения
+    одной ступени сопоставляются её следам по порядку слева направо, только
+    если их поровну. Разрыв обводки, который объясняет прочитанный элемент
+    на этой станции, пропускается. Замер — предложение; принимает его
+    согласование, и только когда каждое число объяснено надписью листа.
+    """
+    import numpy as np
+
+    from app.ai.cad_recognize.verifiers.plate_frame import _ink
+
+    outer = [s for s in body.get("outer") or [] if isinstance(s, dict)]
+    if not outer or not traces_mm:
+        return []
+    lengths = [float(s.get("length_mm") or 0.0) for s in outer]
+    starts = [sum(lengths[:i]) for i in range(len(lengths))]
+
+    def step_at(z: float) -> tuple[int, float] | None:
+        for index, (start, length) in enumerate(zip(starts, lengths, strict=False)):
+            if start < z < start + length:
+                return index, float(outer[index].get("diameter_mm") or 0.0)
+        return None
+
+    ink = _ink(np.asarray(gray))
+    diameters = [float(s["diameter_mm"]) for s in outer if s.get("diameter_mm")]
+    disks = locate_sections(ink, main_view_bbox, mm_per_px, diameters)
+    read = []
+    for item in body.get("placed_features") or []:
+        origin = (item or {}).get("origin_mm") or []
+        if len(origin) == 3:
+            read.append(
+                (float(origin[2]), math.degrees(math.atan2(float(origin[1]), float(origin[0]))))
+            )
+    proposals = []
+    by_step: dict[float, list[float]] = {}
+    for z in traces_mm:
+        located = step_at(z)
+        if located is not None:
+            by_step.setdefault(located[1], []).append(z)
+    for diameter, stations in by_step.items():
+        same = sorted(
+            (d for d in disks if abs(d["step_diameter_mm"] - diameter) <= 0.05),
+            key=lambda d: d["center_px"][0],
+        )
+        if len(same) != len(stations):
+            continue
+        for z, disk in zip(sorted(stations), same, strict=False):
+            index, _d = step_at(z)
+            cx, cy, r = disk["center_px"][0], disk["center_px"][1], disk["radius_px"]
+            for found in outline_gaps(ink, cx, cy, r):
+                if any(
+                    abs(z - rz) <= 1.5 and _angle_gap(found["angle_deg"], ra) <= _OTHER_OBJECT_DEG
+                    for rz, ra in read
+                ):
+                    continue
+                flat = _measure(ink, disk, found, True, mm_per_px)
+                hole = _measure(ink, disk, found, False, mm_per_px)
+                line = disk["line_px"]
+                base = {
+                    "station_mm": round(z, 2),
+                    "step_index": index,
+                    "step_diameter_mm": diameter,
+                    "evidence_bbox_px": [
+                        round(cx - r, 1),
+                        round(cy - r, 1),
+                        round(cx + r, 1),
+                        round(cy + r, 1),
+                    ],
+                    "tolerance_mm": round(max(0.8, 0.5 * line * mm_per_px), 3),
+                    # Где след на главном виде — вырез для переспроса надписей.
+                    "trace_px": (
+                        round(float(profile.x0) + z / mm_per_px, 1) if profile is not None else None
+                    ),
+                    "view_bbox_px": [round(float(v), 1) for v in main_view_bbox],
+                }
+                # Лыска — хорда во всю ширину разрыва; отверстие — канал. Когда
+                # замерились оба: «канал» лыски — просвет между штрихами внутри
+                # сечения, заметно уже разрыва (эталон: 0,15…0,52 его хорды); у
+                # отверстия канал равен разрыву или шире (разрыв укорачивают
+                # размерные линии). Между — не решаем.
+                gap_mm = found["chord_px"] * mm_per_px
+                if "depth_mm" in flat and "diameter_mm" in hole and gap_mm > 0:
+                    ratio = hole["diameter_mm"] / gap_mm
+                    if ratio < 0.6:
+                        hole = {"angle_deg": hole["angle_deg"]}
+                    elif ratio >= 0.9:
+                        flat = {"angle_deg": flat["angle_deg"]}
+                if "depth_mm" in flat and "diameter_mm" not in hole:
+                    proposals.append(
+                        {
+                            **base,
+                            "kind": "pocket",
+                            "angle_deg": flat["angle_deg"],
+                            "depth_mm": flat["depth_mm"],
+                            "across_mm": round(diameter - flat["depth_mm"], 2),
+                            "length_mm": _plausible_length(
+                                flat_length_on_view(ink, profile, mm_per_px, z),
+                                lengths[index],
+                            ),
+                        }
+                    )
+                elif "diameter_mm" in hole and "depth_mm" not in flat:
+                    # Сквозной канал — два разрыва, θ и θ + 180°: одно
+                    # отверстие; какой из концов «его» угол — решит надпись.
+                    twin = next(
+                        (
+                            other
+                            for other in proposals
+                            if other["kind"] == "hole"
+                            and other["station_mm"] == base["station_mm"]
+                            and abs(other["diameter_mm"] - hole["diameter_mm"])
+                            <= max(1.0, 0.2 * other["diameter_mm"])
+                            and _angle_gap(other["angle_deg"], hole["angle_deg"] + 180.0) <= 8.0
+                        ),
+                        None,
+                    )
+                    if twin is not None:
+                        twin["angles_deg"] = [twin["angle_deg"], hole["angle_deg"]]
+                        twin["through"] = True
+                        twin["diameter_mm"] = round(
+                            (twin["diameter_mm"] + hole["diameter_mm"]) / 2.0, 2
+                        )
+                        continue
+                    # Второй разрыв закрыт размерами — сквозной канал видно и
+                    # за центром: стенки канала по ту сторону оси.
+                    beyond = channel_width(
+                        ink, cx, cy, r, (hole["angle_deg"] + 180.0) % 360.0, line
+                    )
+                    proposals.append(
+                        {
+                            **base,
+                            "kind": "hole",
+                            "angle_deg": hole["angle_deg"],
+                            "angles_deg": [hole["angle_deg"]],
+                            "diameter_mm": hole["diameter_mm"],
+                            "through": beyond is not None,
+                        }
+                    )
+    return proposals

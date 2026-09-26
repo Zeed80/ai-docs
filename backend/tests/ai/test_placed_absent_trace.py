@@ -7,7 +7,6 @@ from types import SimpleNamespace
 
 import app.ai.cad_recognize.verifiers.plate_frame as plate_frame
 import app.ai.cad_recognize.verifiers.section_outline as section_outline
-import app.ai.cad_recognize.verifiers.section_traces as traces
 from app.ai.cad_recognize.verifiers.reconcile import apply_reconciliation, reconcile
 from app.ai.cad_recognize.verifiers.stage import _absent_without_trace
 
@@ -35,7 +34,6 @@ def _items(first_status: str = "confirmed") -> list[dict]:
 
 
 def _run(monkeypatch, found: list[float], items: list[dict], sections: int = 1) -> dict:
-    monkeypatch.setattr(traces, "locate_section_traces", lambda gray, frame, profile: found)
     monkeypatch.setattr(plate_frame, "_ink", lambda gray: gray)
     monkeypatch.setattr(
         section_outline,
@@ -43,7 +41,7 @@ def _run(monkeypatch, found: list[float], items: list[dict], sections: int = 1) 
         lambda ink, bbox, mpp, diameters: [{"step_diameter_mm": 40.0}] * sections,
     )
     report: dict = {"items": items}
-    _absent_without_trace(None, FRAME, PROFILE, BODY, items, report)
+    _absent_without_trace(None, FRAME, PROFILE, BODY, items, report, traces=found)
     return report
 
 

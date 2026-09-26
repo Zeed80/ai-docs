@@ -1076,45 +1076,30 @@ def _placed_on_sections(
     *,
     views: list | None = None,
 ) -> None:
-    """Лыски и радиальные отверстия по размещению — по контуру сечений (дорожка У)."""
+    """Лыски и радиальные отверстия по размещению — по контуру сечений (дорожка У).
+
+    Прочитанные — проверка; не прочитанные — предложения по листу
+    (``placed_proposals``: след секущей + сечение), их принимает согласование.
+    """
     from app.ai.cad_recognize.verifiers.section_outline import (
+        propose_placed,
         unmeasurable_placed,
         verify_placed_on_sections,
     )
-
-    if not body.get("placed_features"):
-        return
-    if frame is None:
-        report["items"].extend(unmeasurable_placed(body, "главный вид вала на листе не найден"))
-        return
-    line_px = float(getattr(profile, "line_px", 0.0) or 0.0)
-    items = verify_placed_on_sections(gray, frame.bbox_px, frame.mm_per_px, body, line_px=line_px)
-    report["items"].extend(items)
-    _absent_without_trace(gray, frame, profile, body, items, report, views=views)
-
-
-def _absent_without_trace(
-    gray: Any,
-    frame: Any,
-    profile: Any,
-    body: dict[str, Any],
-    items: list,
-    report: dict[str, Any],
-    *,
-    views: list | None = None,
-) -> None:
-    """Элемент по сечению, не стоящий ни на одном следе секущей — опровергнут.
-
-    Вынесенное сечение привязано к следу на главном виде (ГОСТ 2.305); живой
-    turned_multiaxis-1: осевое «Ø5 гл.10,7» с вида с торца выдано радиальным
-    отверстием на 43,7 мм, а след на листе один — на 53,5 у лыски. Снимается
-    только при двух уликах: детектор следов на этом листе полон (каждый
-    элемент, найденный на сечении, стоит на найденном следе), а сам элемент
-    на сечении не найден. Иначе — прежний вердикт.
-    """
     from app.ai.cad_recognize.verifiers.section_traces import locate_section_traces
 
-    if profile is None or not items:
+    if frame is None:
+        if body.get("placed_features"):
+            report["items"].extend(unmeasurable_placed(body, "главный вид вала на листе не найден"))
+        return
+    line_px = float(getattr(profile, "line_px", 0.0) or 0.0)
+    items = (
+        verify_placed_on_sections(gray, frame.bbox_px, frame.mm_per_px, body, line_px=line_px)
+        if body.get("placed_features")
+        else []
+    )
+    report["items"].extend(items)
+    if 0.0 < line_px < 4.5 or profile is None:
         return
     # Следы — на любом виде того же вала: у полого вала главный вид — разрез,
     # а следы стоят на виде под ним.
@@ -1129,7 +1114,37 @@ def _absent_without_trace(
     except Exception:  # noqa: BLE001 — улика, а не проверка: без неё — как было
         return
     report["section_traces_mm"] = traces
-    if not traces:
+    _absent_without_trace(gray, frame, profile, body, items, report, traces=traces)
+    try:
+        proposals = propose_placed(
+            gray, frame.bbox_px, frame.mm_per_px, body, traces, profile=profile
+        )
+    except Exception:  # noqa: BLE001 — предложение, а не проверка
+        proposals = []
+    if proposals:
+        report["placed_proposals"] = proposals
+
+
+def _absent_without_trace(
+    gray: Any,
+    frame: Any,
+    profile: Any,
+    body: dict[str, Any],
+    items: list,
+    report: dict[str, Any],
+    *,
+    traces: list[float],
+) -> None:
+    """Элемент по сечению, не стоящий ни на одном следе секущей — опровергнут.
+
+    Вынесенное сечение привязано к следу на главном виде (ГОСТ 2.305); живой
+    turned_multiaxis-1: осевое «Ø5 гл.10,7» с вида с торца выдано радиальным
+    отверстием на 43,7 мм, а след на листе один — на 53,5 у лыски. Снимается
+    только при двух уликах: детектор следов на этом листе полон (каждый
+    элемент, найденный на сечении, стоит на найденном следе), а сам элемент
+    на сечении не найден. Иначе — прежний вердикт.
+    """
+    if profile is None or not items or not traces:
         return
     features = body.get("placed_features") or []
     tolerance = max(1.5, 3.0 * float(getattr(profile, "line_px", 0.0) or 0.0) * frame.mm_per_px)

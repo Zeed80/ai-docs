@@ -674,3 +674,87 @@ async def _default_depth_ask(prompt: str, crop: Any) -> dict:
         num_predict=120,
         schema=_HOLE_DEPTH_SCHEMA,
     )
+
+
+_PLACED_LABELS_PROMPT = (
+    "Перед тобой фрагмент чертежа вала. Выпиши ВСЕ надписи размеров, которые "
+    "видишь на этом фрагменте, ровно как на листе: угловые размеры со знаком «°» "
+    "(например «60°»), диаметры «Ø…» вместе с «гл.…», если есть, и линейные "
+    "числа. Ничего не пересчитывай и не добавляй. ОДНОЙ строкой JSON: "
+    '{"labels": ["60°", "Ø3 гл.8.3", "23.7"]}. Только JSON.'
+)
+_PLACED_LABELS_SCHEMA = {
+    "type": "object",
+    "properties": {"labels": {"type": "array", "maxItems": 24, "items": {"type": "string"}}},
+}
+
+
+async def reask_placed_labels(
+    image_bytes: bytes,
+    report: dict[str, Any],
+    *,
+    budget: int = 6,
+    ask: Any = None,
+) -> list[str]:
+    """Надписи у элементов на сечениях, которые лист нашёл, а ридер не выписал (У6).
+
+    Живые 10 многоосевых валов: предложения по листу не принимались, потому
+    что нужных чисел («60°», «35.1», «Ø4 гл.11.9») ридер в общем списке не
+    выписал, хотя видел. Модель спрашивается по вырезу — сечение и участок
+    главного вида у следа — и только выписывает надписи; принимает их то же
+    правило, что и выписанные ридером: число обязано совпасть с замером.
+    """
+    import io
+
+    from PIL import Image
+
+    proposals = report.get("placed_proposals") or []
+    if not proposals:
+        return []
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    crops = []
+    for proposal in proposals:
+        box = proposal.get("evidence_bbox_px")
+        if box:
+            x0, y0, x1, y1 = box
+            reach = 0.9 * max(x1 - x0, y1 - y0)
+            crops.append((x0 - reach, y0 - reach, x1 + reach, y1 + reach))
+        trace, view = proposal.get("trace_px"), proposal.get("view_bbox_px")
+        if trace is not None and view:
+            height = view[3] - view[1]
+            crops.append((trace - height, view[1] - height, trace + height, view[3] + height))
+    labels: list[str] = []
+    seen: set[tuple[int, int, int, int]] = set()
+    for box in crops[: max(0, int(budget))]:
+        key = tuple(int(v) // 20 for v in box)
+        if key in seen:
+            continue
+        seen.add(key)
+        crop = image.crop(
+            (
+                max(0, int(box[0])),
+                max(0, int(box[1])),
+                min(image.width, int(box[2])),
+                min(image.height, int(box[3])),
+            )
+        )
+        answer = await (ask or _default_labels_ask)(_PLACED_LABELS_PROMPT, crop)
+        for text in (answer or {}).get("labels") or []:
+            text = str(text).strip()
+            if text and text not in labels:
+                labels.append(text)
+    return labels
+
+
+async def _default_labels_ask(prompt: str, crop: Any) -> dict:
+    from app.ai.cad_recognize.spec_fragments import _ask, _overview
+    from app.ai.router import ai_router
+
+    return await _ask(
+        prompt,
+        _overview(crop),
+        router=ai_router,
+        confidential=True,
+        num_predict=300,
+        schema=_PLACED_LABELS_SCHEMA,
+    )

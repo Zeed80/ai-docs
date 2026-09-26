@@ -4799,6 +4799,47 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                             f"Пазов найдено по листу: {len(additions)}",
                             {"additions": additions},
                         )
+                    # Лыски и радиальные отверстия на сечениях, которых ридер не
+                    # выписал (дорожка У): след секущей + сечение + надписи.
+                    from app.ai.cad_recognize.verifiers.reconcile import (
+                        apply_placed_additions,
+                        placed_additions,
+                    )
+
+                    placed_notes: list[str] = []
+                    placed_found = placed_additions(spec, verification, placed_notes)
+                    if placed_notes:
+                        # Нужных надписей ридер не выписал — переспрос по вырезам
+                        # сечения и главного вида у следа; числа принимает то же
+                        # правило (совпадение с замером).
+                        from app.ai.cad_recognize.verifiers.reask import reask_placed_labels
+
+                        try:
+                            extra = await reask_placed_labels(checked_content, verification)
+                        except Exception as exc:  # noqa: BLE001 — переспрос не роняет прогон
+                            logger.warning("cad_placed_reask_failed", error=str(exc)[:200])
+                            extra = []
+                        if extra:
+                            spec = {
+                                **spec,
+                                "dimensions": [
+                                    *(spec.get("dimensions") or []),
+                                    *({"value": text, "source": "reask_placed"} for text in extra),
+                                ],
+                            }
+                            placed_notes = []
+                            placed_found = placed_additions(spec, verification, placed_notes)
+                    if placed_found:
+                        spec = _revalidated_spec(apply_placed_additions(spec, placed_found))
+                        verification = _verify_checked()
+                        verification["placed_additions"] = placed_found
+                    if placed_found or placed_notes:
+                        await _record(
+                            "reconcile.placed",
+                            "completed",
+                            f"Элементов на сечениях найдено по листу: {len(placed_found)}",
+                            {"additions": placed_found, "notes": placed_notes},
+                        )
                     # Сечения на листе — сплошные круги (живой z4-r4: А-А и Б-Б
                     # через пазы): вал сплошной доказан, «разрез не прочитан»
                     # становится предупреждением (`cad_solid.solid_build_gate`).
