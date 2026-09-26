@@ -93,6 +93,18 @@ def reconcile(spec: dict[str, Any], report: dict[str, Any]) -> list[dict[str, An
     for item in report.get("items") or []:
         if item.get("status") != "refuted":
             continue
+        if item.get("kind") == "placed_feature" and item.get("absent"):
+            decisions.append(
+                {
+                    "kind": "placed_feature",
+                    "path": item["path"],
+                    "feature_id": item.get("feature_id"),
+                    "field": "exists",
+                    "action": "drop",
+                    "reason": item.get("reason") or "",
+                }
+            )
+            continue
         tolerances = item.get("tolerance_mm") or {}
         swap = _keyway_swap(spec, item)
         decisions.extend(swap)
@@ -582,6 +594,25 @@ def apply_reconciliation(
             if not str(note).startswith("шпоночный паз ")
         ]
         ground_keyways(spec.get("main_view") or {}, spec["unresolved"])
+    # Элемент по размещению, которого на листе нет (`absent`: не стоит ни на
+    # одном следе секущей плоскости), — не строится, остаётся замечанием.
+    absent = sorted(
+        (
+            int(str(item["path"]).split("[")[1].split("]")[0])
+            for item in report.get("items") or []
+            if item.get("kind") == "placed_feature" and item.get("absent")
+        ),
+        reverse=True,
+    )
+    placed = (spec.get("main_view") or {}).get("placed_features") or []
+    for index in absent:
+        if index < len(placed):
+            removed = placed.pop(index)
+            spec.setdefault("unresolved", []).append(
+                f"элемент по сечению ({removed.get('kind')}, станция "
+                f"{float((removed.get('origin_mm') or [0, 0, 0])[2]):g} мм) снят: на главном "
+                "виде нет следа секущей плоскости на этой станции"
+            )
     # Сводка — по статусам после согласования: иначе панель показывает
     # опровергнутым то, что уже принято по листу.
     summary = report.get("summary")

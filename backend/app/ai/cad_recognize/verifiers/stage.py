@@ -1082,9 +1082,129 @@ def _placed_on_sections(
         report["items"].extend(unmeasurable_placed(body, "главный вид вала на листе не найден"))
         return
     line_px = float(getattr(profile, "line_px", 0.0) or 0.0)
-    report["items"].extend(
-        verify_placed_on_sections(gray, frame.bbox_px, frame.mm_per_px, body, line_px=line_px)
-    )
+    items = verify_placed_on_sections(gray, frame.bbox_px, frame.mm_per_px, body, line_px=line_px)
+    report["items"].extend(items)
+    _absent_without_trace(gray, frame, profile, body, items, report)
+
+
+def _absent_without_trace(
+    gray: Any, frame: Any, profile: Any, body: dict[str, Any], items: list, report: dict[str, Any]
+) -> None:
+    """Элемент по сечению, не стоящий ни на одном следе секущей — опровергнут.
+
+    Вынесенное сечение привязано к следу на главном виде (ГОСТ 2.305); живой
+    turned_multiaxis-1: осевое «Ø5 гл.10,7» с вида с торца выдано радиальным
+    отверстием на 43,7 мм, а след на листе один — на 53,5 у лыски. Снимается
+    только при двух уликах: детектор следов на этом листе полон (каждый
+    элемент, найденный на сечении, стоит на найденном следе), а сам элемент
+    на сечении не найден. Иначе — прежний вердикт.
+    """
+    from app.ai.cad_recognize.verifiers.section_traces import locate_section_traces
+
+    if profile is None or not items:
+        return
+    try:
+        traces = locate_section_traces(gray, frame, profile)
+    except Exception:  # noqa: BLE001 — улика, а не проверка: без неё — как было
+        return
+    report["section_traces_mm"] = traces
+    if not traces:
+        return
+    features = body.get("placed_features") or []
+    tolerance = max(1.5, 3.0 * float(getattr(profile, "line_px", 0.0) or 0.0) * frame.mm_per_px)
+
+    def station(item: dict[str, Any]) -> float | None:
+        index = int(str(item["path"]).split("[")[1].split("]")[0])
+        origin = (features[index] or {}).get("origin_mm") if index < len(features) else None
+        return float(origin[2]) if origin and len(origin) == 3 else None
+
+    def on_trace(item: dict[str, Any]) -> bool:
+        z = station(item)
+        return z is not None and any(abs(z - t) <= tolerance for t in traces)
+
+    import math
+
+    def step_of(item: dict[str, Any]) -> float | None:
+        index = int(str(item["path"]).split("[")[1].split("]")[0])
+        origin = (features[index] or {}).get("origin_mm") if index < len(features) else None
+        return 2.0 * math.hypot(float(origin[0]), float(origin[1])) if origin else None
+
+    def angle(item: dict[str, Any]) -> float | None:
+        value = (item.get("measured") or {}).get("angle_deg")
+        return float(value) if isinstance(value, (int, float)) else None
+
+    found = [item for item in items if item.get("status") in ("confirmed", "refuted")]
+    anchored = [item for item in found if on_trace(item)]
+    # Дубль: без следа, а тот же разрыв обводки (ступень и угол по замеру)
+    # уже объясняет элемент на следе — выдуманное рядом с настоящим
+    # «подтверждалось» его сечением (эталон: 1 из 28).
+    duplicates = [
+        item
+        for item in found
+        if not on_trace(item)
+        and angle(item) is not None
+        and any(
+            abs((step_of(item) or 0.0) - (step_of(other) or -1.0)) <= 1.0
+            and angle(other) is not None
+            and abs((angle(item) - angle(other) + 180.0) % 360.0 - 180.0) <= 6.0
+            for other in anchored
+        )
+    ]
+    found = [item for item in found if item not in duplicates]
+    if not found or not all(on_trace(item) for item in found):
+        return
+    for item in duplicates:
+        item["status"] = "refuted"
+        item["absent"] = True
+        item["reason"] = (
+            f"на главном виде нет следа секущей плоскости на {station(item):g} мм, а разрыв "
+            "на сечении объясняет другой элемент — элемент не с сечения"
+        )
+
+    import numpy as np
+
+    from app.ai.cad_recognize.verifiers.plate_frame import _ink
+    from app.ai.cad_recognize.verifiers.section_outline import locate_sections
+
+    diameters = [
+        float(step["diameter_mm"])
+        for step in body.get("outer") or []
+        if isinstance(step, dict) and _is_number(step.get("diameter_mm"))
+    ]
+    disks = locate_sections(_ink(np.asarray(gray)), frame.bbox_px, frame.mm_per_px, diameters)
+
+    def spare_section(item: dict[str, Any]) -> bool:
+        """Есть сечение этой ступени сверх занятых найденными элементами —
+        у элемента может быть своё сечение, чей след детектор пропустил."""
+        diameter = step_of(item)
+        if diameter is None:
+            return True
+        step = min(diameters, key=lambda d: abs(d - diameter)) if diameters else None
+        same = [
+            disk
+            for disk in disks
+            if step is not None and abs(disk["step_diameter_mm"] - step) <= 0.05
+        ]
+        taken = {
+            round(station(other) or 0.0, 1)
+            for other in found
+            if step is not None and abs((step_of(other) or 0.0) - step) <= 1.0
+        }
+        # Сечений этой ступени не найдено вовсе — улики нет (детектор мог
+        # пропустить и след, и круг: эталон, 3 настоящих элемента снимались).
+        return not same or len(same) > len(taken)
+
+    for item in items:
+        if item.get("status") != "unmeasurable" or on_trace(item) or station(item) is None:
+            continue
+        if "грубый" in str(item.get("reason") or "") or spare_section(item):
+            continue
+        item["status"] = "refuted"
+        item["absent"] = True
+        item["reason"] = (
+            f"на главном виде нет следа секущей плоскости на {station(item):g} мм "
+            f"(следы: {', '.join(f'{t:g}' for t in traces)}) — элемент не с сечения"
+        )
 
 
 def _sections(

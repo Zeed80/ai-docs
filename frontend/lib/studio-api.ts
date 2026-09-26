@@ -1066,9 +1066,11 @@ export interface SpecVerification {
     path: string;
     feature_id?: string | null;
     field: string;
-    read: number;
-    measured: number;
-    action: "adopt" | "ask_human";
+    read?: number;
+    measured?: number;
+    /** ``drop`` — элемент снят: на листе его нет (элемент по сечению без следа
+     * секущей плоскости). */
+    action: "adopt" | "ask_human" | "drop";
     value?: number;
     reason: string;
   }>;

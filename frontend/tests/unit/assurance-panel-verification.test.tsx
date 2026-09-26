@@ -143,6 +143,36 @@ describe("AssurancePanel — проверка прочитанного по ли
     expect(screen.getByText(/прочитанное 40 тоже есть на листе/)).toBeTruthy();
   });
 
+  it("shows a section feature removed because the sheet does not show it", () => {
+    const verification: SpecVerification = {
+      items: [
+        {
+          kind: "placed_feature",
+          path: "main_view.placed_features[1]",
+          read: { angle_deg: 0, diameter_mm: 5 },
+          status: "refuted",
+          measured: {},
+          reason: "на главном виде нет следа секущей плоскости на 43.7 мм",
+        },
+      ],
+      summary: { checked: 1, confirmed: 0, refuted: 1, unmeasurable: 0 },
+      reconciliation: [
+        {
+          kind: "placed_feature",
+          path: "main_view.placed_features[1]",
+          field: "exists",
+          action: "drop",
+          reason: "на главном виде нет следа секущей плоскости на 43.7 мм",
+        },
+      ],
+    };
+    render(<AssurancePanel verification={verification} t={t} />);
+
+    expect(
+      screen.getByText("Снято: Элемент по сечению 2 — на листе такого элемента нет"),
+    ).toBeTruthy();
+  });
+
   it("shows a shaft profile assembled from the sheet instead of the reading", () => {
     const verification: SpecVerification = {
       items: [

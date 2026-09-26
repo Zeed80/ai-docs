@@ -23,6 +23,8 @@ const VERIFY_KINDS = new Set([
   "cross_hole",
   "groove",
   "chamfer",
+  // Дорожка У: лыска или радиальное отверстие, проверенные по сечению.
+  "placed_feature",
   // Корпуса (Ф5): элементы граней и толщина, измеренная по видам листа.
   "wall_feature",
   "plate_thickness",
@@ -349,7 +351,14 @@ export default function AssurancePanel({
                 key={`reconcile-${decision.path}-${decision.field}`}
                 ok={decision.action === "adopt"}
                 label={
-                  decision.action === "adopt"
+                  decision.action === "drop"
+                    ? t("vector.assurance_reconcile_dropped", {
+                        element: verifyElement(
+                          { ...decision, read: {}, measured: {}, status: "refuted" },
+                          t,
+                        ),
+                      })
+                    : decision.action === "adopt"
                     ? t("vector.assurance_reconcile_adopted", {
                         element: verifyElement(
                           {
@@ -361,8 +370,8 @@ export default function AssurancePanel({
                           t,
                         ),
                         field: fieldLabel(decision.field, t),
-                        read: decision.read,
-                        value: decision.value ?? decision.measured,
+                        read: decision.read ?? "—",
+                        value: decision.value ?? decision.measured ?? "—",
                       })
                     : t("vector.assurance_reconcile_ask", {
                         element: verifyElement(
@@ -375,8 +384,8 @@ export default function AssurancePanel({
                           t,
                         ),
                         field: fieldLabel(decision.field, t),
-                        read: decision.read,
-                        measured: decision.measured,
+                        read: decision.read ?? "—",
+                        measured: decision.measured ?? "—",
                       })
                 }
                 detail={decision.reason}
