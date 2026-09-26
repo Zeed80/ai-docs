@@ -659,8 +659,10 @@ def eval_keyway(png: bytes, truth: dict) -> list[dict[str, Any]]:
         return []
     total = sum(float(step["length_mm"]) for step in outer)
     gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))
-    # Как в стадии: виды вала по очереди (у полого первый — разрез).
-    frames = [frame for frame, _profile in locate_shaft_views(gray, total)]
+    # Как в стадии: виды вала по очереди, без штриховки — первыми.
+    from app.ai.cad_recognize.verifiers.stage import unhatched_first
+
+    frames = unhatched_first(gray, [frame for frame, _profile in locate_shaft_views(gray, total)])
     scale = frames[0].scale_mean if frames else 0.2
     length_tol, width_tol = shaft_tolerances(scale)
     outcomes = []
@@ -722,7 +724,9 @@ def eval_cross_hole(png: bytes, truth: dict) -> list[dict[str, Any]]:
         return []
     total = sum(float(step["length_mm"]) for step in outer)
     gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))
-    frames = [frame for frame, _profile in locate_shaft_views(gray, total)]
+    from app.ai.cad_recognize.verifiers.stage import unhatched_first
+
+    frames = unhatched_first(gray, [frame for frame, _profile in locate_shaft_views(gray, total)])
     scale = frames[0].scale_mean if frames else 0.2
     position_tol, diameter_tol = plate_hole_tolerances(scale)
     outcomes = []

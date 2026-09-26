@@ -614,6 +614,18 @@ def profile_view(gray: Any, views: list[tuple[Any, Any]]) -> tuple[Any, Any]:
     return views[0]
 
 
+def unhatched_first(gray: Any, frames: list[Any]) -> list[Any]:
+    """Виды вала для элементов лицом (паз): сначала без штриховки.
+
+    У полого вала первый по площади — разрез; на нём паз лицом не виден, а
+    стенки расточки со штриховкой дают чужую «капсулу» — верное чтение
+    опровергалось, не дойдя до вида под разрезом (корпус v10: паз на чистом
+    листе верно 15 из 31, shaft-11: «80,5…110 × 4,7» при 64,3…95,3 × 8).
+    """
+    plain = [frame for frame in frames if not _hatched(gray, frame.bbox_px)]
+    return plain + [frame for frame in frames if frame not in plain]
+
+
 def _frame_fits(box: Any, mm_per_px: float, thickness: float) -> bool:
     """Рамка вида с ребра: её высота — толщина корпуса (± 8 %)."""
     if not box or mm_per_px <= 0 or thickness <= 0:
@@ -994,13 +1006,14 @@ def _shaft(
     frame, profile = profile_view(gray, views)
     spans = _keyways(
         gray,
-        [view_frame for view_frame, _profile in views],
+        unhatched_first(gray, [view_frame for view_frame, _profile in views]),
         body,
         report,
         view_line_px=max(float(getattr(shape, "line_px", 0.0) or 0.0) for _f, shape in views),
     )
-    _unclaimed_keyways(gray, [view_frame for view_frame, _profile in views], body, spans, report)
-    _cross_holes(gray, [view_frame for view_frame, _profile in views], body, report)
+    faced = unhatched_first(gray, [view_frame for view_frame, _profile in views])
+    _unclaimed_keyways(gray, faced, body, spans, report)
+    _cross_holes(gray, faced, body, report)
     _turned_details(gray, views, body, report)
     verdict = verify(
         Hypothesis(
