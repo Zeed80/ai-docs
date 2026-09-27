@@ -123,6 +123,57 @@ def _symmetric_orientation(gray: Any, line: float) -> tuple[bool, float]:
     return (turned > 1.05 * straight), max(straight, turned)
 
 
+def lifted_rim(gray: Any, profile: Any, line: float) -> Any:
+    """Площадка материала, поднятая до основной линии над незаштрихованной
+    полосой (зубья в разрезе не штрихуют, ГОСТ 2.402: штриховка кончается у
+    впадин, вершины — основная линия выше). None — такой линии нет."""
+    import cv2
+    import numpy as np
+
+    from app.ai.cad_views.extrude_body import main_line_mask
+    from app.ai.cad_views.revolve_profile import HalfProfile, plateaus
+
+    # Только основные линии: тонкие (выносная знака шероховатости, делительная
+    # окружность штрихпунктиром) лежат в той же полосе над штриховкой.
+    _ink, thick, _line = main_line_mask(gray)
+    horizontal = cv2.morphologyEx(
+        thick, cv2.MORPH_OPEN, np.ones((1, max(3, int(3 * line))), np.uint8)
+    )
+    axis = int(round(profile.axis_y))
+    lifted = list(profile.outer)
+    changed = False
+    for xa, xb, radius in plateaus(profile.outer, 3 * line):
+        found = []
+        columns = range(int(xa) + int(line), int(xb) - int(line))
+        for x in columns:
+            top = int(axis - radius - 1.5 * line)
+            limit = int(axis - 1.3 * radius)
+            hit = None
+            for y in range(top, max(limit, 0), -1):
+                if horizontal[y, x]:
+                    hit = axis - y
+                    break
+            if hit is not None:
+                found.append(hit)
+        if len(columns) < 3 or len(found) < 0.8 * len(columns):
+            continue
+        level = float(np.median(found))
+        if np.std(found) > line or level - radius < 2 * line:
+            continue
+        lifted = [(x, level if xa <= x <= xb and abs(r - radius) < line else r) for x, r in lifted]
+        changed = True
+    if not changed:
+        return None
+    return HalfProfile(
+        axis_y=profile.axis_y,
+        line_px=profile.line_px,
+        x0=profile.x0,
+        x1=profile.x1,
+        outer=lifted,
+        inner=profile.inner,
+    )
+
+
 def silhouette_profile(gray: Any, line: float) -> Any:
     """Профиль тела вращения по неразрезанному виду: силуэт, без расточки."""
     import cv2
@@ -288,6 +339,10 @@ def build_revolve(
             by_material = profile_from_material(material, axis, line, ink=ink_mask(crop, line))
             if by_material is not None:
                 variants.append((by_material, True))
+        if variants:
+            rim = lifted_rim(crop, variants[0][0], line)
+            if rim is not None:
+                variants.append((rim, True))
         by_silhouette = silhouette_profile(crop, line)
         if by_silhouette is not None:
             variants.append((by_silhouette, False))
@@ -302,26 +357,39 @@ def build_revolve(
                 from app.ai.cad_views.revolve_profile import HalfProfile
 
                 hatched = variants[0][0]
-                # Границы детали — по силуэту (основные линии торцов): материал
-                # за торцом бывает ложным (скосы стрелок размеров Ø у торца
-                # вала-шестерни p018), и расточка тогда «не выходила» к торцу.
-                x0, x1 = by_silhouette.x0, by_silhouette.x1
-                inner = [(x, r) for x, r in hatched.inner if x0 <= x <= x1]
-                if inner:
-                    inner = [(float(x0), inner[0][1]), *inner, (float(x1), inner[-1][1])]
-                    variants.append(
-                        (
-                            HalfProfile(
-                                axis_y=by_silhouette.axis_y,
-                                line_px=line,
-                                x0=x0,
-                                x1=x1,
-                                outer=by_silhouette.outer,
-                                inner=inner,
-                            ),
-                            True,
+                # Границы детали — где есть и контур, и материал: за торец
+                # уходит то материал (скосы стрелок Ø у торца вала-шестерни
+                # p018), то силуэт (выносные у колеса part_06).
+                x0 = max(by_silhouette.x0, hatched.x0)
+                x1 = min(by_silhouette.x1, hatched.x1)
+                if x1 - x0 > 4 * line:
+
+                    def clip(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+                        kept = [(x, r) for x, r in points if x0 <= x <= x1]
+                        if not kept:
+                            return kept
+                        xs = [x for x, _r in points]
+                        rs = [r for _x, r in points]
+                        head = (float(x0), float(np.interp(x0, xs, rs)))
+                        tail = (float(x1), float(np.interp(x1, xs, rs)))
+                        return [head, *[p for p in kept if x0 < p[0] < x1], tail]
+
+                    inner = clip(hatched.inner)
+                    outer = clip(by_silhouette.outer)
+                    if inner and outer:
+                        variants.append(
+                            (
+                                HalfProfile(
+                                    axis_y=by_silhouette.axis_y,
+                                    line_px=line,
+                                    x0=x0,
+                                    x1=x1,
+                                    outer=outer,
+                                    inner=inner,
+                                ),
+                                True,
+                            )
                         )
-                    )
         if not variants:
             tried.append(f"{region.name or region.n}: профиль не найден")
             continue
@@ -364,7 +432,12 @@ def build_revolve(
             count = len(plateaus(profile.outer, 3 * profile.line_px)) + len(
                 [p for p in plateaus(profile.inner, 3 * profile.line_px) if p[2] > 0]
             )
-            key = (hits, round(hits / max(1, count), 2), hatched)
+            # Наибольшая надпись Ø — габарит по диаметру: при равном счёте
+            # выигрывает профиль, чья наибольшая площадка её объясняет
+            # (колесо part_06: вершины Ø46, а не впадины, совпавшие с Ø38).
+            overall_d = max(shafts or diameters, default=0.0)
+            fits_overall = bool(overall_d) and abs(widest - overall_d) <= 0.03 * overall_d
+            key = (hits, fits_overall, round(hits / max(1, count), 2), hatched)
             if best is None or key > best[0]:
                 best = (key, region, crop, factor, origin, line, vertical, profile, radial, hits)
                 chosen_sets = (diameters, holes, shafts, linear)
