@@ -203,18 +203,18 @@ def build_prismatic(
         )
     _key, main, views, scale, what = best
     mx, my, mw, mh = main.box
-    # Габарит по оси — наименьший из видов, которые его показывают: контур
-    # раздувают стрелки и цифры у кромок, но никогда не уменьшают (корпус:
-    # главный вид 99,8 при боковом 90).
     widths = [mw] + [views[k].box[2] for k in ("below", "above") if k in views]
     heights = [mh] + [views[k].box[3] for k in ("right", "left") if k in views]
     depths = [views[k].box[3] for k in ("below", "above") if k in views] + [
         views[k].box[2] for k in ("right", "left") if k in views
     ]
+    # Заготовка — по наибольшему габариту: форму задают пересечения с
+    # контурами видов, а выступ стрелки на одном виде срезает контур другого;
+    # по наименьшему терялись приливы, видные не на всех видах.
     width, height, depth = (
-        min(widths) * scale,
-        min(heights) * scale,
-        min(depths) * scale,
+        max(widths) * scale,
+        max(heights) * scale,
+        max(depths) * scale,
     )
     width = _match(width, linear, 0.03) or round(width, 3)
     height = _match(height, linear, 0.03) or round(height, 3)
