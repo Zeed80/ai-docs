@@ -2781,8 +2781,9 @@ async def _store_domain_reading(
         await db.commit()
 
 
-async def _store_views_result(factory, gen_uuid, result: dict) -> None:
-    """Метод `views`: тело и отчёт — в параметры прогона; прогон завершён."""
+async def _store_views_result(factory, gen_uuid, result: dict, *, done: bool = True) -> None:
+    """Метод `views`: тело и отчёт — в параметры прогона; ``done`` — прогон
+    завершён (иначе дальше идёт пересборка общим путём спека)."""
     from app.db.models import ImageGeneration, ImageGenStatus
     from app.services import studio_queue
 
@@ -2791,10 +2792,11 @@ async def _store_views_result(factory, gen_uuid, result: dict) -> None:
         if gen is None:
             return
         gen.params = {**(gen.params or {}), **result}
-        gen.status = ImageGenStatus.done
-        gen.error = None
-        job = await studio_queue.job_for_generation(db, gen_uuid)
-        await studio_queue.mark_job_done(db, job)
+        if done:
+            gen.status = ImageGenStatus.done
+            gen.error = None
+            job = await studio_queue.job_for_generation(db, gen_uuid)
+            await studio_queue.mark_job_done(db, job)
         await db.commit()
 
 
@@ -3831,9 +3833,10 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                 logger.exception("cad_views_failed", generation_id=generation_id)
                 return await _fail(f"Метод «по видам»: {type(exc).__name__}: {str(exc)[:200]}")
             views_spec = views_result.pop("views_spec", None)
-            await _store_views_result(factory, gen_uuid, views_result)
             solid = views_result["solid_3d"]
-            if solid.get("built") and views_spec:
+            rebuild = bool(solid.get("built") and views_spec)
+            await _store_views_result(factory, gen_uuid, views_result, done=not rebuild)
+            if rebuild:
                 # Через общий путь спека: граф модели, лист по ЕСКД из тела,
                 # 3D-редактор. Отказ — остаётся прямое тело метода.
                 async with factory() as db:
@@ -3868,6 +3871,11 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
                         + str(rebuilt.get("error") or "")[:300],
                         {},
                     )
+
+            if rebuild:
+                # Прогон и задание очереди завершаются после пересборки в
+                # любом её исходе (при отказе — прямым телом метода).
+                await _store_views_result(factory, gen_uuid, {}, done=True)
             message = (
                 "Метод «по видам»: тело построено — проверьте по листу"
                 if solid.get("built")
