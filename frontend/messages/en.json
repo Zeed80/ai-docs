@@ -1075,7 +1075,15 @@
       "assurance_field_depth_mm": "depth",
       "assurance_verify_kind_plate_slot": "Slot {index}",
       "assurance_field_center_x_mm": "centre x",
-      "assurance_field_center_y_mm": "centre y"
+      "assurance_field_center_y_mm": "centre y",
+      "views_title": "Method “by sheet views”",
+      "views_base_revolve": "Body of revolution from view “{view}”",
+      "views_base_extrude": "View outline extruded by {thickness} mm",
+      "views_refused": "No body built: {reason}",
+      "views_coverage": "Sheet labels found on the body: {found} of {total}",
+      "views_missing": "Not on the body (missing feature or misread): {list}",
+      "views_features": "Features from views: {count}",
+      "views_notes": "How the sheet was read"
     },
     "workflow": {
       "loading": "Loading workflows…",

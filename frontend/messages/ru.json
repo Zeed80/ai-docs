@@ -1075,7 +1075,15 @@
       "assurance_field_depth_mm": "глубина",
       "assurance_verify_kind_plate_slot": "Прорезь {index}",
       "assurance_field_center_x_mm": "x центра",
-      "assurance_field_center_y_mm": "y центра"
+      "assurance_field_center_y_mm": "y центра",
+      "views_title": "Метод «по видам листа»",
+      "views_base_revolve": "Тело вращения по изображению «{view}»",
+      "views_base_extrude": "Выдавливание контура вида на {thickness} мм",
+      "views_refused": "Тело не построено: {reason}",
+      "views_coverage": "Надписи листа на теле: {found} из {total}",
+      "views_missing": "Нет на теле (пропущенный элемент или ошибка чтения): {list}",
+      "views_features": "Элементов по видам: {count}",
+      "views_notes": "Как читался лист"
     },
     "workflow": {
       "loading": "Загрузка воркфлоу…",

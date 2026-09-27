@@ -6,6 +6,10 @@ import { useParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 
 import CadWorkspace from "@/components/cad/CadWorkspace";
+import {
+  ViewsResultView,
+  type ViewsReading,
+} from "@/components/cad/ViewsReadingPanel";
 import EngineeringModelGraphPanel from "@/components/engineering/EngineeringModelGraphPanel";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { Generation, getGeneration } from "@/lib/studio-api";
@@ -384,7 +388,19 @@ export default function CadEditorPage() {
             </div>
           ) : (
             <div className="min-h-0 flex-1">
-              <CadWorkspace gen={gen} onChanged={load} />
+              {gen.params?.views_reading ? (
+                <ViewsResultView
+                  generationId={gen.id}
+                  reading={gen.params.views_reading as ViewsReading}
+                  solid={
+                    gen.params?.solid_3d as
+                      | { built?: boolean; paths?: Record<string, string> }
+                      | undefined
+                  }
+                />
+              ) : (
+                <CadWorkspace gen={gen} onChanged={load} />
+              )}
             </div>
           )}
         </div>
