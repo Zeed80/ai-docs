@@ -59,7 +59,9 @@ def symmetry_axis(mask: Any) -> int:
     return best[1]
 
 
-def section_material(gray: Any, line: float, *, revolve: bool = True) -> tuple[Any, int]:
+def section_material(
+    gray: Any, line: float, *, revolve: bool = True, axis: int | None = None
+) -> tuple[Any, int]:
     """Маска материала разреза и (для тела вращения) строка оси."""
     import cv2
     import numpy as np
@@ -75,17 +77,25 @@ def section_material(gray: Any, line: float, *, revolve: bool = True) -> tuple[A
         if index in border:
             continue
         x, y, w, h, area = stats[index]
-        if area < 4 or area >= 0.05 * size:
+        if area < 4:
             continue
         pad = 4
         window = (slice(max(0, y - pad), y + h + pad), slice(max(0, x - pad), x + w + pad))
         face = (labels[window] == index).astype(np.uint8)
         ring = cv2.dilate(face, np.ones((5, 5), np.uint8)) & (1 - face)
         share = float((ring & strokes[window]).sum()) / max(1.0, float(ring.sum()))
-        if share > 0.15:
+        # Крупная ячейка — обычно фон вида; но при светлой тонкой штриховке,
+        # не попавшей в чернила, вся заштрихованная полоса — одна ячейка
+        # (втулка p015: 54 тыс. px, штрихи на 73 % границы).
+        if share > (0.5 if area >= 0.05 * size else 0.15):
             material[labels == index] = 1
-    axis = symmetry_axis(material)
-    if revolve:
+    if axis is None:
+        axis = symmetry_axis(material)
+    # Половина вида + половина разреза (ЕСКД): штриховка только с одной
+    # стороны оси — зеркальной пары у неё нет по устройству чертежа.
+    rows = np.nonzero(material)[0]
+    one_sided = rows.size > 0 and ((rows < axis).mean() > 0.9 or (rows > axis).mean() > 0.9)
+    if revolve and not one_sided:
         mirrored = np.zeros_like(material)
         height = material.shape[0]
         for y in range(height):

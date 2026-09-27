@@ -174,7 +174,42 @@ def lifted_rim(gray: Any, profile: Any, line: float) -> Any:
     )
 
 
-def silhouette_profile(gray: Any, line: float) -> Any:
+def tolerant_axis(mask: Any, line: float) -> int:
+    """Ось симметрии горизонталей с допуском в толщину линии.
+
+    Попиксельное совпадение зеркальных линий ломается о разницу в толщину:
+    у втулки p015 (половина вида и половина разреза) верная ось проигрывала
+    ложной, относительно которой симметричны образующая и линия расточки."""
+    import cv2
+    import numpy as np
+
+    small = mask[::2, ::2]
+    kernel = max(3, int(line)) | 1
+    wide = cv2.dilate(small, np.ones((kernel, 1), np.uint8))
+    height = small.shape[0]
+    best = (-1.0, height // 2)
+    for y in range(height // 5, 4 * height // 5):
+        half = min(y, height - y)
+        above, below = small[y - half : y], small[y : y + half][::-1]
+        wide_above, wide_below = wide[y - half : y], wide[y : y + half][::-1]
+        score = float((above & wide_below).sum()) + float((below & wide_above).sum())
+        if score > best[0]:
+            best = (score, y)
+    # Уточнение: точное совпадение в окне ± толщина линии вокруг грубой оси.
+    coarse = 2 * best[1]
+    full_height = mask.shape[0]
+    refined = (-1.0, coarse)
+    for y in range(max(1, coarse - int(line) - 1), min(full_height - 1, coarse + int(line) + 2)):
+        half = min(y, full_height - y)
+        above = mask[y - half : y].astype(np.float32)
+        below = mask[y : y + half][::-1].astype(np.float32)
+        score = float((above * below).sum()) / (float(above.sum() + below.sum()) + 1.0)
+        if score > refined[0]:
+            refined = (score, y)
+    return refined[1]
+
+
+def silhouette_profile(gray: Any, line: float, axis: int | None = None) -> Any:
     """Профиль тела вращения по неразрезанному виду: силуэт, без расточки."""
     import cv2
     import numpy as np
@@ -186,7 +221,7 @@ def silhouette_profile(gray: Any, line: float) -> Any:
         _simplify,
         drop_fins,
     )
-    from app.ai.cad_views.section_material import ink_mask, symmetry_axis
+    from app.ai.cad_views.section_material import ink_mask
     from app.ai.cad_views.view_features import _silhouette
 
     ink = ink_mask(gray, line)
@@ -203,7 +238,8 @@ def silhouette_profile(gray: Any, line: float) -> Any:
     horizontal = cv2.morphologyEx(
         ink, cv2.MORPH_OPEN, np.ones((1, max(3, int(3 * line))), np.uint8)
     )
-    axis = symmetry_axis(horizontal)
+    if axis is None:
+        axis = tolerant_axis(horizontal, line)
     half = drop_fins(
         _median(_despike(_silhouette(ink, axis, line), int(2 * line)), int(2 * line) + 1),
         int(2.5 * line),
@@ -329,12 +365,16 @@ def build_revolve(
                 line = _line_px(crop)
                 if vertical:
                     crop = np.ascontiguousarray(np.rot90(crop))
+                probe = silhouette_profile(crop, line)
         # Разрез узнаётся по штриховке, а не по роли: роль от прогона к
         # прогону плавает («Опора»: главный вид в разрезе назван видом, вид
         # с торца — разрезом). Пробуются оба профиля, берётся лучше
         # объяснённый надписями.
         variants = []
-        material, axis = section_material(crop, line)
+        # Ось — по всему изображению (силуэт основных линий): у половины
+        # разреза штриховка с одной стороны, и ось по ней находится неверно.
+        probe_axis = int(round(probe.axis_y)) if probe is not None else None
+        material, axis = section_material(crop, line, axis=probe_axis)
         if material.sum() > 0:
             by_material = profile_from_material(material, axis, line, ink=ink_mask(crop, line))
             if by_material is not None:
@@ -422,7 +462,9 @@ def build_revolve(
             # может не попасть («Опора», вид сверху: 12,5 при габарите 29).
             longest = (profile.x1 - profile.x0) * radial
             bound = max(linear + sheet_sets[3], default=0.0)
-            if bound and longest > 1.15 * bound:
+            # Вдвое длиннее наибольшей надписи — не захват линий за торцом, а
+            # непрочитанный габарит (втулка p015: 18 при наибольшей «9»).
+            if bound and 1.15 * bound < longest <= 1.6 * bound:
                 tried[-1] += f", но профиль длиннее габарита ({longest:.1f} > {bound:g})"
                 continue
             # Равное число объяснённых площадок — выигрывает профиль, у
