@@ -135,6 +135,16 @@ def silhouette_profile(gray: Any, line: float) -> Any:
     from app.ai.cad_views.view_features import _silhouette
 
     ink = ink_mask(gray, line)
+    # Контур детали связан выносными в одну крупную фигуру; буквы
+    # обозначений сечений («А», «Б») и подписи — отдельные мелкие фигуры, а
+    # их горизонтальные штрихи симметричны оси и давали ложные бурты (p121:
+    # Ø65 при наибольшем Ø50).
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+    if count > 2:
+        areas = stats[1:, cv2.CC_STAT_AREA]
+        keep = np.zeros(count, bool)
+        keep[1:] = areas >= 0.2 * areas.max()
+        ink = (keep[labels] & (ink > 0)).astype(ink.dtype)
     horizontal = cv2.morphologyEx(
         ink, cv2.MORPH_OPEN, np.ones((1, max(3, int(3 * line))), np.uint8)
     )
@@ -302,7 +312,7 @@ def build_revolve(
             overall = max(linear) / max(1, profile.x1 - profile.x0) if linear else None
             if overall is not None:
                 along, along_hits = fit_scale(profile, shafts, holes, near=overall)
-                if along is not None and along_hits + 1 >= hits and along_hits >= 1:
+                if along is not None and along_hits + 1 > hits and along_hits >= 1:
                     radial, hits = along, along_hits + 1
             source = "разрез" if hatched else "силуэт"
             tried.append(f"{region.name or region.n} ({source}): объяснено надписей {hits}")

@@ -12,6 +12,34 @@ from typing import Any
 from app.ai.cad_views.revolve_profile import HalfProfile
 
 
+def accessible_inner(profile: HalfProfile) -> list[tuple[float, float]]:
+    """Внутренний контур без полостей, не выходящих ни на один торец.
+
+    Осевое отверстие тела вращения обрабатывается с торца: полость внутри,
+    не открытая к торцам, — это местный разрез шпоночного паза или след
+    радиального отверстия (part_02: «расточка» 3,3 мм на станциях 32–38 у
+    сплошного вала), а не расточка. Радиальные отверстия — дело видов (D3).
+    """
+    points = list(profile.inner)
+    if not points:
+        return points
+    near = 2.0 * profile.line_px
+    runs: list[list[int]] = []
+    for index, (_x, r) in enumerate(points):
+        if r > 0.5 * profile.line_px:
+            if runs and runs[-1][1] == index - 1:
+                runs[-1][1] = index
+            else:
+                runs.append([index, index])
+    out = list(points)
+    for start, end in runs:
+        opens = points[start][0] <= profile.x0 + near or points[end][0] >= profile.x1 - near
+        if not opens:
+            for index in range(start, end + 1):
+                out[index] = (points[index][0], 0.0)
+    return out
+
+
 def revolve_points(
     profile: HalfProfile, axial_mm_per_px: float, radial_mm_per_px: float
 ) -> tuple[list[dict[str, float]], list[dict[str, float]]]:
@@ -30,7 +58,9 @@ def revolve_points(
         return out
 
     outer = convert(profile.outer)
-    bore = convert(profile.inner) if profile.inner else []
+    bore = convert(accessible_inner(profile)) if profile.inner else []
+    if bore and not any(p["r"] > 0 for p in bore):
+        bore = []
     if bore:
         # Расточка насквозь: торцы расточки чуть за торцами тела, иначе
         # вычитание оставляет плёнку нулевой толщины.

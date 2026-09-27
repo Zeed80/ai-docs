@@ -90,3 +90,22 @@ def test_fit_scale_near_restricts_candidates():
     labels = [8.0, 12.0, 20.0, 30.0]
     scale, hits = fit_scale(profile, labels, [], near=0.25)
     assert abs(scale - 0.25) < 1e-6 and hits == 2
+
+
+def test_inner_cavity_not_open_to_an_end_is_dropped():
+    from app.ai.cad_views.revolve_body import accessible_inner
+    from app.ai.cad_views.revolve_profile import HalfProfile
+
+    # Сплошной вал: «полость» в середине — местный разрез паза, не расточка;
+    # расточка от правого торца — настоящая.
+    profile = HalfProfile(
+        axis_y=0.0,
+        line_px=4.0,
+        x0=0,
+        x1=400,
+        outer=[(0, 60), (400, 60)],
+        inner=[(0, 0), (150, 0), (150, 20), (200, 20), (200, 0), (300, 0), (300, 30), (400, 30)],
+    )
+    inner = accessible_inner(profile)
+    assert [r for _x, r in inner[2:4]] == [0.0, 0.0]
+    assert [r for _x, r in inner[-2:]] == [30, 30]
