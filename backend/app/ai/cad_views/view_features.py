@@ -48,6 +48,7 @@ def _circles(
     *,
     threshold: int = 18,
     radius: tuple[float, float] | None = None,
+    min_radius_lines: float = 3.0,
 ) -> list[tuple[float, float, float]]:
     """Окружности (центр x, y, радиус по середине штриха).
 
@@ -96,7 +97,7 @@ def _circles(
             while right < len(shares) - 1 and shares[right + 1] >= top - 0.02:
                 right += 1
             best = (top, float(radii[left] + radii[right]) / 2.0)
-        if best[1] is None or best[0] < 0.7 or best[1] < 3 * line:
+        if best[1] is None or best[0] < 0.7 or best[1] < min_radius_lines * line:
             continue
         if any(
             math.hypot(cx - ox, cy - oy) < line and abs(best[1] - orad) < 2 * line
@@ -213,7 +214,8 @@ def side_view_features(
     if run:
         flush()
     # Отверстия: окружность в силуэте с центром на оси.
-    for cx, cy, r in _circles(ink, line):
+    # Мелкое отверстие (Ø1,5 «Опоры» — 19 px при линии 7,6) — от двух толщин.
+    for cx, cy, r in _circles(ink, line, min_radius_lines=2.0):
         if not v0 <= cx <= v1 or abs(cy - axis_y) > max(2 * line, 0.1 * r):
             continue
         z = z_of(cx)

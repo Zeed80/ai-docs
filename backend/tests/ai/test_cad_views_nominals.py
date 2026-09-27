@@ -57,3 +57,37 @@ def test_bore_step_is_not_merged_onto_outer_step():
     outer_step = [p["z"] for p in new_outer][1]
     bore_step = [p["z"] for p in new_bore][1]
     assert outer_step == 14 and bore_step != outer_step
+
+
+def test_cross_hole_zone_is_a_cylinder_not_the_intersection_arcs():
+    from app.ai.cad_views.nominals import bridge_cross_holes
+
+    # Профиль по дугам пересечения отверстия Ø5 с цилиндром Ø11,5.
+    outer = [
+        {"r": 5.75, "z": 6.5},
+        {"r": 5.75, "z": 9.5},
+        {"r": 5.4, "z": 11.1},
+        {"r": 5.4, "z": 12.3},
+        {"r": 5.75, "z": 14.6},
+        {"r": 5.75, "z": 16.2},
+    ]
+    hole = {"kind": "hole", "diameter_mm": 5.0, "origin_mm": [0.0, 7.0, 11.9], "axis": [0, -1, 0]}
+    new_outer, _bore, bridged = bridge_cross_holes(outer, [], [hole])
+    assert bridged == 1
+    inside = [p["r"] for p in new_outer if 8.5 <= p["z"] <= 15.3]
+    assert inside and all(r == 5.75 for r in inside)
+
+
+def test_chamfer_goes_to_the_threaded_end():
+    from app.ai.cad_views.nominals import chamfer_threaded_end
+
+    outer = [
+        {"r": 5.0, "z": 0.0},
+        {"r": 5.0, "z": 3.9},
+        {"r": 6.4, "z": 3.9},
+        {"r": 6.4, "z": 29.0},
+    ]
+    new_outer, note = chamfer_threaded_end(outer, [0.5], [10.0])
+    assert note and new_outer[0] == {"r": 4.5, "z": 0.0} and new_outer[1]["z"] == 0.5
+    same, none = chamfer_threaded_end(outer, [0.5], [])
+    assert none is None and same == outer

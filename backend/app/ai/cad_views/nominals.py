@@ -254,8 +254,13 @@ def nominal_revolve(
     bore_diameters: list[float],
     *,
     tolerance: float,
+    bore_share: float = 0.03,
 ) -> tuple[list[dict], list[dict], int]:
-    """Профиль тела вращения — в номиналах: станции вдоль оси и Ø площадок."""
+    """Профиль тела вращения — в номиналах: станции вдоль оси и Ø площадок.
+
+    ``bore_share`` — допуск привязки Ø расточки: у надписей с полем допуска
+    отверстия (H) шире — это заведомо отверстия, а внутренний контур по
+    штриховке систематически меньше («Опора»: 8,07 при Ø8,5H10)."""
     # Концы расточки выведены за торцы на 0,05 мм (иначе ядро оставляет
     # плёнку) — их станции не номинализуются.
     stations = [p["z"] for p in outer] + [p["z"] for p in bore[1:-1]]
@@ -266,13 +271,15 @@ def nominal_revolve(
     mapping = snap_axis(stations, labels, tolerance=tolerance, overall=total)
     changed = 0
 
-    def fix_points(points: list[dict], diameters: list[float], ends: bool) -> list[dict]:
+    def fix_points(
+        points: list[dict], diameters: list[float], ends: bool, share: float = 0.03
+    ) -> list[dict]:
         nonlocal changed
         out = [dict(p) for p in points]
         # Площадка — две соседние точки с одним радиусом: Ø по надписи.
         for a, b in zip(out, out[1:]):
             if abs(a["r"] - b["r"]) <= 0.02 * max(a["r"], b["r"], 1.0) and b["z"] - a["z"] > 0.3:
-                nominal = snap_diameter(a["r"] + b["r"], diameters) / 2.0
+                nominal = snap_diameter(a["r"] + b["r"], diameters, share) / 2.0
                 if abs(nominal - a["r"]) > 1e-6 or abs(nominal - b["r"]) > 1e-6:
                     a["r"] = b["r"] = round(nominal, 4)
                     changed += 1
@@ -298,7 +305,7 @@ def nominal_revolve(
         return out
 
     new_outer = fix_points(outer, outer_diameters, True)
-    new_bore = fix_points(bore, bore_diameters, False)
+    new_bore = fix_points(bore, bore_diameters, False, bore_share)
     # Станция расточки, сведённая номиналом на станцию уступа снаружи, —
     # стенка нулевой толщины и тело из двух частей («Опора»: уступ Ø7,6→Ø11,5
     # и расточка Ø9,8 на одной станции 13,9). Такая станция — замер.
@@ -340,7 +347,96 @@ def nominal_revolve(
     return new_outer, new_bore, changed
 
 
+def _replace_zone(points: list[dict], z0: float, z1: float) -> list[dict] | None:
+    """Точки внутри [z0; z1] — прямой цилиндр по соседям, если соседи равны
+    (в 3 %); иначе — прямая между соседними значениями. None — зона не
+    внутри контура."""
+    left = [p for p in points if p["z"] < z0]
+    right = [p for p in points if p["z"] > z1]
+    if not left or not right:
+        return None
+    r_left, r_right = left[-1]["r"], right[0]["r"]
+    if abs(r_left - r_right) <= 0.03 * max(r_left, r_right, 1e-6):
+        radius = max(r_left, r_right)
+        return [*left, {"r": radius, "z": z0}, {"r": radius, "z": z1}, *right]
+    # Соседи разные — уступ на краю зоны, а не конус через неё (конус в
+    # расточке под отверстием — выдумка).
+    return [
+        *left,
+        {"r": r_left, "z": z0},
+        {"r": r_left, "z": z1},
+        {"r": r_right, "z": z1},
+        *right,
+    ]
+
+
+def bridge_cross_holes(
+    outer: list[dict], bore: list[dict], holes: list[dict]
+) -> tuple[list[dict], list[dict], int]:
+    """В зоне поперечного отверстия профиль — цилиндр по соседним участкам.
+
+    В разрезе поперечное отверстие видно дугами — линиями его пересечения с
+    цилиндром и расточкой — и незаштрихованной полосой. Профиль шёл по дугам,
+    и тело вращения получало фасонную «талию» («Опора»: Ø11,5 → Ø10,8 → Ø11,5
+    на зоне Ø5). Отверстие — отдельный элемент по второму виду; поверхность
+    под ним продолжается как у соседей.
+    """
+    bridged = 0
+    for hole in holes:
+        diameter = hole.get("diameter_mm")
+        origin = hole.get("origin_mm")
+        axis = hole.get("axis") or [0.0, 0.0, 1.0]
+        if not diameter or not origin or abs(axis[2]) > 0.5:
+            continue  # только поперечные (ось поперёк оси детали)
+        z = float(origin[2])
+        margin = 0.3 + 0.1 * float(diameter)
+        z0, z1 = z - diameter / 2.0 - margin, z + diameter / 2.0 + margin
+        new_outer = _replace_zone(outer, z0, z1)
+        if new_outer is not None:
+            outer = new_outer
+            bridged += 1
+        if bore:
+            new_bore = _replace_zone(bore, z0, z1)
+            if new_bore is not None:
+                bore = new_bore
+    return outer, bore, bridged
+
+
+def chamfer_threaded_end(
+    outer: list[dict], chamfers: list[float], threads: list[float]
+) -> tuple[list[dict], str | None]:
+    """Фаска «c×45°» — у торца, где начинается резьба (вход резьбы по ГОСТ
+    всегда с фаской): «Опора» — 0,5×45° у M10×0,5. Без резьбы у торца фаска
+    не ставится наугад."""
+    if not chamfers or not threads or len(outer) < 2:
+        return outer, None
+    size = chamfers[0]
+    for side in ("left", "right"):
+        points = outer if side == "left" else list(reversed(outer))
+        end, nxt = points[0], points[1]
+        diameter = 2.0 * end["r"]
+        if not any(abs(diameter - t) <= 0.12 * t for t in threads):
+            continue
+        length = abs(nxt["z"] - end["z"])
+        if abs(nxt["r"] - end["r"]) > 0.02 * end["r"] or length <= 1.5 * size or end["r"] <= size:
+            continue
+        step = size if side == "left" else -size
+        chamfered = [
+            {"r": round(end["r"] - size, 4), "z": end["z"]},
+            {"r": end["r"], "z": round(end["z"] + step, 4)},
+            *points[1:],
+        ]
+        result = chamfered if side == "left" else list(reversed(chamfered))
+        return (
+            result,
+            f"фаска {size:g}×45° у {'левого' if side == 'left' else 'правого'} торца (вход резьбы)",
+        )
+    return outer, None
+
+
 __all__ = [
+    "bridge_cross_holes",
+    "chamfer_threaded_end",
     "nominal_revolve",
     "nominal_round_holes",
     "nominal_sketch",

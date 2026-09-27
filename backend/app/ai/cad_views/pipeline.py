@@ -524,6 +524,7 @@ def build_revolve(
         shafts or diameters,
         holes or diameters,
         tolerance=max(1.2 * line * axial, 0.006 * length),
+        bore_share=0.07 if holes else 0.03,
     )
     if snapped:
         notes.append(f"номиналы надписей: исправлено {snapped} значений замера")
@@ -572,6 +573,27 @@ def build_revolve(
             if any(_same_feature(item, other) for other in features):
                 continue
             features.append(item)
+    # Поверхность под поперечным отверстием — цилиндр по соседям, а не дуги
+    # пересечения из разреза; фаска «c×45°» — у входа резьбы.
+    from app.ai.cad_views.nominals import bridge_cross_holes, chamfer_threaded_end
+
+    outer, bore, bridged = bridge_cross_holes(
+        outer, bore, [f for f in features if f.get("kind") == "hole"]
+    )
+    if bridged:
+        notes.append(f"зона поперечного отверстия — цилиндр по соседям: {bridged}")
+    every = [parse_label(t) for t in [*label_texts, *sum((region_labels or {}).values(), [])]]
+    chamfer_sizes = [
+        lab.value
+        for lab in every
+        if lab.kind == "chamfer" and lab.value and abs((lab.angle or 45.0) - 45.0) < 1.0
+    ]
+    thread_sizes = [lab.value for lab in every if lab.kind == "thread" and lab.value]
+    outer, chamfer_note = chamfer_threaded_end(outer, chamfer_sizes, thread_sizes)
+    if chamfer_note:
+        notes.append(chamfer_note)
+    if bridged or chamfer_note:
+        candidate = revolve_candidate(outer, bore, part or main.part or "деталь")
     for item in features:
         params: dict[str, Any] = {
             "placement": {"origin": item["origin_mm"], "axis": item["axis"], "ref": item["ref"]}
