@@ -176,23 +176,8 @@ def build_revolve(
     pictures = [r for r in reading.regions if r.role in ("view", "section")]
     if part:
         pictures = [r for r in pictures if (r.part or "") == part] or pictures
-    main = next((r for r in pictures if r.n == reading.main), None) or (
-        max(pictures, key=lambda r: (r.box[2] - r.box[0]) * (r.box[3] - r.box[1]))
-        if pictures
-        else None
-    )
-    if main is None:
+    if not pictures:
         return ViewsResult(False, "на листе не найдено изображения детали")
-    crop, factor, origin = prepare(gray, main.box)
-    line = _line_px(crop)
-    vertical, symmetry = _symmetric_orientation(crop, line)
-    if symmetry < 0.2:
-        return ViewsResult(
-            False,
-            f"главное изображение не симметрично оси (сила {symmetry:.2f}) — не тело вращения",
-        )
-    if vertical:
-        crop = np.ascontiguousarray(np.rot90(crop))
     labels = [parse_label(t) for t in label_texts]
     diameters = [lab.value for lab in labels if lab.kind in ("diameter", "thread") and lab.value]
     holes = [
@@ -202,21 +187,57 @@ def build_revolve(
     ]
     shafts = [v for v in diameters if v not in holes]
     linear = [lab.value for lab in labels if lab.kind == "linear" and lab.value]
+    # Изображение для профиля: названное моделью главным — первым, затем
+    # разрезы и виды по площади; берётся то, чей профиль надписи Ø объясняют
+    # лучше всего. Живой /cad: модель назвала главным вид с торца, и тело
+    # вышло по нему; порог — две объяснённые площадки (одна «Ø0,05» знака
+    # биения давала деталь размером 0,05 мм).
+    ordered = sorted(
+        pictures,
+        key=lambda r: (
+            r.n != reading.main,
+            r.role != "section",
+            -(r.box[2] - r.box[0]) * (r.box[3] - r.box[1]),
+        ),
+    )
     notes: list[str] = []
-    profile = None
-    if main.role == "section":
-        material, axis = section_material(crop, line)
-        if material.sum() > 0:
-            profile = profile_from_material(material, axis, line, ink=ink_mask(crop, line))
-        else:
-            notes.append("разрез без штриховки — профиль по силуэту")
-    if profile is None:
-        profile = silhouette_profile(crop, line)
-    if profile is None:
-        return ViewsResult(False, "профиль главного изображения не найден", notes=notes)
-    radial, hits = fit_scale(profile, shafts, holes)
-    if radial is None:
-        return ViewsResult(False, "ни одна надпись Ø не объясняет площадки профиля", notes=notes)
+    best = None
+    tried: list[str] = []
+    for region in ordered[:6]:
+        crop, factor, origin = prepare(gray, region.box)
+        line = _line_px(crop)
+        vertical, symmetry = _symmetric_orientation(crop, line)
+        if symmetry < 0.2:
+            tried.append(f"{region.name or region.n}: нет оси симметрии")
+            continue
+        if vertical:
+            crop = np.ascontiguousarray(np.rot90(crop))
+        profile = None
+        if region.role == "section":
+            material, axis = section_material(crop, line)
+            if material.sum() > 0:
+                profile = profile_from_material(material, axis, line, ink=ink_mask(crop, line))
+        if profile is None:
+            profile = silhouette_profile(crop, line)
+        if profile is None:
+            tried.append(f"{region.name or region.n}: профиль не найден")
+            continue
+        radial, hits = fit_scale(profile, shafts, holes)
+        tried.append(f"{region.name or region.n}: объяснено площадок {hits}")
+        if radial is None or hits < 2:
+            continue
+        key = (hits, region.role == "section")
+        if best is None or key > best[0]:
+            best = (key, region, crop, factor, origin, line, vertical, profile, radial, hits)
+    if best is None:
+        return ViewsResult(
+            False,
+            "ни одно изображение детали не объяснено надписями Ø (нужно от двух площадок): "
+            + "; ".join(tried),
+            notes=notes,
+        )
+    _key, main, crop, factor, origin, line, vertical, profile, radial, hits = best
+    notes.append("выбор изображения: " + "; ".join(tried))
     axial, _ = fit_axial_scale(profile, linear, near=radial)
     axial = axial or radial
     outer, bore = revolve_points(profile, axial, radial)
