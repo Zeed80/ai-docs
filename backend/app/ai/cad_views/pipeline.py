@@ -21,8 +21,10 @@ from typing import Any
 LABELS_PROMPT = (
     "Выпиши с чертежа ВСЕ размерные надписи и обозначения ровно так, как они "
     "написаны (с Ø, R, M, допусками, «гл.», «N отв.», фасками «1×45°», углами). "
-    "Не пересчитывай и не придумывай. Ответ — ОДНОЙ строкой JSON: "
-    '{"labels": ["...", "..."]}'
+    "Не пересчитывай и не придумывай. Только надписи у изображений детали: "
+    "содержимое таблиц (параметры зубчатого венца, спецификация), основной "
+    "надписи (штампа) и технических требований НЕ выписывай — это не размеры. "
+    'Ответ — ОДНОЙ строкой JSON: {"labels": ["...", "..."]}'
 )
 LABELS_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -262,6 +264,18 @@ def build_revolve(
             continue
         if vertical:
             crop = np.ascontiguousarray(np.rot90(crop))
+        # Контур упирается в край выреза — рамка области обрезала деталь
+        # (колесо part_06: вершины зубьев Ø46 выше рамки). Инженер смотрит
+        # шире: тот же вид с запасом побольше. Всем подряд запас не
+        # расширяется — в вырез тогда попадают соседние размеры (part_02).
+        probe = silhouette_profile(crop, line)
+        if probe is not None:
+            reach = max((r for _x, r in probe.outer), default=0.0)
+            if min(probe.axis_y, crop.shape[0] - probe.axis_y) - reach <= 2 * line:
+                crop, factor, origin = prepare(gray, region.box, margin=0.12)
+                line = _line_px(crop)
+                if vertical:
+                    crop = np.ascontiguousarray(np.rot90(crop))
         # Разрез узнаётся по штриховке, а не по роли: роль от прогона к
         # прогону плавает («Опора»: главный вид в разрезе назван видом, вид
         # с торца — разрезом). Пробуются оба профиля, берётся лучше
@@ -286,19 +300,26 @@ def build_revolve(
                 from app.ai.cad_views.revolve_profile import HalfProfile
 
                 hatched = variants[0][0]
-                variants.append(
-                    (
-                        HalfProfile(
-                            axis_y=by_silhouette.axis_y,
-                            line_px=line,
-                            x0=min(hatched.x0, by_silhouette.x0),
-                            x1=max(hatched.x1, by_silhouette.x1),
-                            outer=by_silhouette.outer,
-                            inner=hatched.inner,
-                        ),
-                        True,
+                # Границы детали — по силуэту (основные линии торцов): материал
+                # за торцом бывает ложным (скосы стрелок размеров Ø у торца
+                # вала-шестерни p018), и расточка тогда «не выходила» к торцу.
+                x0, x1 = by_silhouette.x0, by_silhouette.x1
+                inner = [(x, r) for x, r in hatched.inner if x0 <= x <= x1]
+                if inner:
+                    inner = [(float(x0), inner[0][1]), *inner, (float(x1), inner[-1][1])]
+                    variants.append(
+                        (
+                            HalfProfile(
+                                axis_y=by_silhouette.axis_y,
+                                line_px=line,
+                                x0=x0,
+                                x1=x1,
+                                outer=by_silhouette.outer,
+                                inner=inner,
+                            ),
+                            True,
+                        )
                     )
-                )
         if not variants:
             tried.append(f"{region.name or region.n}: профиль не найден")
             continue
@@ -450,7 +471,8 @@ LABELS_VIEW_PROMPT = (
     "Это вырез технического чертежа: одно изображение детали с размерами вокруг. "
     "Выпиши ВСЕ размерные надписи на этом вырезе ровно так, как они написаны "
     "(с Ø, R, M, допусками, «гл.», «N отв.», фасками «1×45°», углами). Числа "
-    "переписывай цифра в цифру; обрезанную краем надпись не выписывай. Ответ — "
+    "переписывай цифра в цифру; обрезанную краем надпись не выписывай; "
+    "содержимое таблиц, штампа и технических требований не выписывай. Ответ — "
     'ОДНОЙ строкой JSON: {"labels": ["...", "..."]}'
 )
 
