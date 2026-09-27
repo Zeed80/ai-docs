@@ -1,0 +1,129 @@
+"""Этап B2: материал разреза — где деталь, а где пусто, как видит инженер.
+
+Не по толщине линий (на скане она ненадёжна), а по смыслу штриховки:
+лист делится линиями на ячейки фона; ячейка — материал, если её граница
+в заметной доле из штрихов под 45°/135°. Штрихи штриховки часто не доходят
+до кромок — ячейка стенки одна, со штрихами внутри; это тоже материал.
+Тонкая полоса без штриховки, упирающаяся обоими концами в материал (шейка
+между дугами), — материал по непрерывности. Разрез тела вращения
+симметричен оси: материал без зеркальной пары (треугольник у выноски) —
+не материал.
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+
+def ink_mask(gray: Any, line: float) -> Any:
+    import cv2
+    import numpy as np
+
+    g = np.asarray(gray)
+    background = cv2.medianBlur(g, 31).astype(float)
+    ink = ((background - g) > 25).astype(np.uint8)
+    kernel = max(3, int(line))
+    return cv2.morphologyEx(ink, cv2.MORPH_CLOSE, np.ones((kernel, kernel), np.uint8))
+
+
+def hatch_strokes(ink: Any, line: float) -> Any:
+    """Штрихи под 45°/135° (детектор отрезков, допуск угла ±20°)."""
+    import cv2
+    import numpy as np
+
+    out = np.zeros_like(ink)
+    found = cv2.createLineSegmentDetector(0).detect(((1 - ink) * 255).astype(np.uint8))[0]
+    if found is None:
+        return out
+    for x0, y0, x1, y1 in found.reshape(-1, 4):
+        length = math.hypot(x1 - x0, y1 - y0)
+        angle = (math.degrees(math.atan2(y1 - y0, x1 - x0)) + 180.0) % 180.0
+        if length >= 1.5 * line and (25 <= angle <= 65 or 115 <= angle <= 155):
+            cv2.line(out, (int(x0), int(y0)), (int(x1), int(y1)), 1, max(2, int(line)))
+    return out
+
+
+def symmetry_axis(mask: Any) -> int:
+    """Строка наибольшей зеркальной симметрии маски."""
+    height = mask.shape[0]
+    best = (-1.0, height // 2)
+    for y in range(height // 5, 4 * height // 5):
+        half = min(y, height - y)
+        above = mask[y - half : y].astype(float)
+        below = mask[y : y + half][::-1].astype(float)
+        score = float((above * below).sum()) / (float(above.sum() + below.sum()) + 1.0)
+        if score > best[0]:
+            best = (score, y)
+    return best[1]
+
+
+def section_material(gray: Any, line: float, *, revolve: bool = True) -> tuple[Any, int]:
+    """Маска материала разреза и (для тела вращения) строка оси."""
+    import cv2
+    import numpy as np
+
+    g = np.asarray(gray)
+    ink = ink_mask(g, line)
+    strokes = cv2.dilate(hatch_strokes(ink, line), np.ones((3, 3), np.uint8))
+    count, labels, stats, _ = cv2.connectedComponentsWithStats((1 - ink).astype(np.uint8), 4)
+    border = set(np.unique(np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]])))
+    size = g.size
+    material = np.zeros_like(ink)
+    small = []
+    for index in range(1, count):
+        if index in border:
+            continue
+        x, y, w, h, area = stats[index]
+        if area < 4 or area >= 0.05 * size:
+            continue
+        pad = 4
+        window = (slice(max(0, y - pad), y + h + pad), slice(max(0, x - pad), x + w + pad))
+        face = (labels[window] == index).astype(np.uint8)
+        ring = cv2.dilate(face, np.ones((5, 5), np.uint8)) & (1 - face)
+        share = float((ring & strokes[window]).sum()) / max(1.0, float(ring.sum()))
+        if share > 0.15:
+            material[labels == index] = 1
+        elif area < 0.03 * size:
+            small.append(index)
+    # По непрерывности: цепочки незаштрихованных полос поперёк разделяющих
+    # линий (центровая режет шейку надвое), упёртые обоими концами в материал.
+    candidates = np.isin(labels, small).astype(np.uint8)
+    reach = int(1.5 * line) + 1
+    chains_n, chains = cv2.connectedComponents(
+        cv2.dilate(candidates, np.ones((reach, reach), np.uint8)), 8
+    )
+    grown = cv2.dilate(material, np.ones((int(3 * line), int(3 * line)), np.uint8))
+    for chain in range(1, chains_n):
+        member = (chains == chain) & (candidates > 0)
+        if not member.any():
+            continue
+        ys, xs = np.nonzero(member)
+        x0, width, height = xs.min(), xs.max() - xs.min() + 1, ys.max() - ys.min() + 1
+        touch = grown[member] > 0
+        if not touch.any() or touch.mean() > 0.35 or width < 2 * height:
+            continue
+        touching = xs[touch]
+        if touching.min() <= x0 + 0.2 * width and touching.max() >= x0 + 0.8 * width:
+            material[member] = 1
+    axis = symmetry_axis(material)
+    if revolve:
+        mirrored = np.zeros_like(material)
+        height = material.shape[0]
+        for y in range(height):
+            twin = 2 * axis - y
+            if 0 <= twin < height:
+                mirrored[y] = material[twin]
+        mirrored = cv2.dilate(mirrored, np.ones((int(3 * line), int(3 * line)), np.uint8))
+        parts_n, parts = cv2.connectedComponents(material, 8)
+        for part in range(1, parts_n):
+            member = parts == part
+            if (mirrored[member] > 0).mean() < 0.5:
+                material[member] = 0
+    # Штрихи и линии внутри стенки — тоже материал: без этого столбец рвётся
+    # на каждом штрихе, и «расточкой» становится первый треугольник штриховки.
+    near = cv2.dilate(material, np.ones((9, 9), np.uint8))
+    material = material | (strokes & near)
+    closing = max(3, int(line))
+    material = cv2.morphologyEx(material, cv2.MORPH_CLOSE, np.ones((closing, closing), np.uint8))
+    return material, axis

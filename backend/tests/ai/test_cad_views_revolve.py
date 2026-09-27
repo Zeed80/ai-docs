@@ -5,8 +5,6 @@ from __future__ import annotations
 import numpy as np
 from PIL import Image, ImageDraw
 
-from app.ai.cad_views.revolve_profile import half_profile
-
 PX, AXIS, X0 = 10.0, 300, 100
 # Полая деталь: Ø30×20, Ø40×30 (расточка Ø20 насквозь), штриховка стенок.
 STEPS = [(30.0, 20.0), (40.0, 30.0)]
@@ -21,9 +19,10 @@ def _section() -> np.ndarray:
         r, xe = diameter / 2 * PX, x + length * PX
         for sign in (-1, 1):
             draw.line([(x, AXIS + sign * r), (xe, AXIS + sign * r)], fill=0, width=6)
-            for hx in range(int(x), int(xe), 24):  # штриховка 45° в стенке
+            wall = r - BORE / 2 * PX
+            for hx in range(int(x), int(xe - wall), 24):  # штриховка 45° в стенке
                 draw.line(
-                    [(hx, AXIS + sign * r), (hx + 20, AXIS + sign * (BORE / 2 * PX))],
+                    [(hx, AXIS + sign * r), (hx + wall, AXIS + sign * (BORE / 2 * PX))],
                     fill=0,
                     width=2,
                 )
@@ -39,12 +38,24 @@ def _section() -> np.ndarray:
     return np.asarray(image)
 
 
-def test_outer_steps_bore_and_axis_are_read_from_a_hatched_section():
-    profile = half_profile(_section())
+def test_section_material_gives_outer_and_bore_in_mm_with_both_scales():
+    """Материал разреза по штриховке → полупрофиль → масштабы по надписям."""
+    from app.ai.cad_views.revolve_body import revolve_points
+    from app.ai.cad_views.revolve_profile import fit_axial_scale, fit_scale, profile_from_material
+    from app.ai.cad_views.section_material import ink_mask, section_material
 
-    assert profile is not None
-    assert abs(profile.axis_y - AXIS) <= 2
-    assert abs((profile.x1 - profile.x0) / PX - 50.0) <= 1.0
-    radii = sorted({round(2 * r / PX) for _x, r in profile.outer})
-    assert 30 in radii and 40 in radii, radii
-    assert {round(2 * r / PX) for _x, r in profile.inner} == {20}
+    image = _section()
+    material, axis = section_material(image, 6.0)
+    profile = profile_from_material(material, axis, 6.0, ink=ink_mask(image, 6.0))
+
+    assert profile is not None and abs(axis - AXIS) <= 2
+    radial, hits = fit_scale(profile, [30.0, 40.0], [20.0])
+    axial, _ = fit_axial_scale(profile, [50.0, 20.0, 30.0], near=radial)
+    assert hits >= 2 and abs(radial - 1 / PX) < 0.01 / PX
+    assert abs(axial - 1 / PX) < 0.02 / PX
+    outer, bore = revolve_points(profile, axial, radial)
+    assert abs(outer[-1]["z"] - 50.0) < 0.6
+    assert {round(2 * p["r"]) for p in outer} >= {30, 40}
+    import statistics
+
+    assert bore and abs(2 * statistics.median(p["r"] for p in bore) - 20.0) < 0.6

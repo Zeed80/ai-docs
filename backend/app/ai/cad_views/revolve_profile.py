@@ -10,10 +10,9 @@
 
 Выход в пикселях изображения; в миллиметры его переводит этап C (надписи Ø).
 
-Прототип (2026-09-26): на «Опоре пружин» шейка, конус, уступы и трубка
-находятся верно, тонкая стенка со штриховкой вплотную к кромке (левое кольцо)
-— нет: столбцовый разбор путает кромку со штрихом. Надёжный путь — по
-векторному контуру вида (этап B1), этот модуль станет его потребителем.
+Постолбцовый разбор по линиям (первый прототип) путал штрихи штриховки с
+кромкой тонкой стенки; профиль строится по маске материала разреза
+(`section_material`): верх участка материала — наружный контур, низ — расточка.
 """
 
 from __future__ import annotations
@@ -32,43 +31,6 @@ class HalfProfile:
     inner: list[tuple[float, float]] = field(default_factory=list)  # пусто — сплошное
 
 
-def _ink(gray: Any) -> Any:
-    import cv2
-    import numpy as np
-
-    g = np.asarray(gray)
-    background = cv2.medianBlur(g, 31).astype(float)
-    return ((background - g) > 35).astype(np.uint8)
-
-
-def _line_px(ink: Any) -> float:
-    import numpy as np
-
-    runs: list[int] = []
-    for x in range(0, ink.shape[1], 3):
-        edges = np.diff(np.concatenate([[0], ink[:, x], [0]]))
-        runs.extend(int(r) for r in np.where(edges == -1)[0] - np.where(edges == 1)[0] if r < 40)
-    return float(np.median(runs)) if runs else 3.0
-
-
-def _axis(horizontal: Any) -> int:
-    """Строка наибольшей зеркальной симметрии горизонтальных штрихов."""
-    height = horizontal.shape[0]
-    best = (-1.0, height // 2)
-    for y in range(height // 5, 4 * height // 5):
-        half = min(y, height - y)
-        above = horizontal[y - half : y].astype(float)
-        below = horizontal[y : y + half][::-1].astype(float)
-        score = float((above * below).sum()) / (float(above.sum() + below.sum()) + 1.0)
-        if score > best[0]:
-            best = (score, y)
-    return best[1]
-
-
-# Основная линия — не тоньше этой доли медианной толщины штрихов.
-_MAIN_SHARE = 0.6
-
-
 def _despike(values: list[float | None], width: int) -> list[float | None]:
     """Уровни короче ``width`` столбцов между двумя одинаковыми соседями —
     стыки граней и пересечения со штриховкой, а не ступени: заменяются соседом."""
@@ -85,9 +47,29 @@ def _despike(values: list[float | None], width: int) -> list[float | None]:
         start, end, _level = runs[i]
         before, after = runs[i - 1][2], runs[i + 1][2]
         if end - start + 1 < width and before is not None and after is not None:
-            if abs(before - after) <= 2.0 or runs[i][2] is None:
-                for x in range(start, end + 1):
-                    out[x] = before if abs(before - after) <= 2.0 else None
+            # Выброс между соседями: одинаковыми — их уровень, разными —
+            # плавный переход (стрелка размера у конуса, «Опора пружин»:
+            # расточка закрывалась до оси на 0,6 мм — перемычка, которой нет).
+            span = end - start + 2
+            for x in range(start, end + 1):
+                t = (x - start + 1) / span
+                out[x] = before if abs(before - after) <= 2.0 else before + (after - before) * t
+    return out
+
+
+def _median(values: list[float | None], window: int) -> list[float | None]:
+    """Скользящая медиана по присутствующим значениям: выброс уже половины окна
+    (стрелка размерной линии у грани) уходит, уступ остаётся уступом."""
+    import numpy as np
+
+    half = max(1, window // 2)
+    out: list[float | None] = []
+    for x, v in enumerate(values):
+        if v is None:
+            out.append(None)
+            continue
+        near = [u for u in values[max(0, x - half) : x + half + 1] if u is not None]
+        out.append(float(np.median(near)))
     return out
 
 
@@ -101,37 +83,63 @@ def _simplify(points: list[tuple[float, float]], tolerance: float) -> list[tuple
     return [(float(p[0][0]), float(p[0][1])) for p in cv2.approxPolyDP(curve, tolerance, False)]
 
 
-def half_profile(gray: Any) -> HalfProfile | None:
-    """Полупрофиль по изображению тела вращения (ось горизонтальна)."""
-    import cv2
+def _end_face(
+    ink: Any, axis_y: int, x: int, r_out: float, r_in: float, line: float, side: int
+) -> int:
+    """Торец за краем материала: самая дальняя вертикаль, перекрывающая
+    стенку по высоте, не дальше 6 толщин линии (край кольца с фаской в маску
+    материала не попадает — «Опора пружин»: 30 px, длина 26,8 вместо 29)."""
+
+    top = int(axis_y - r_out + 0.3 * line)
+    bottom = int(axis_y - max(r_in, 0.0) - 0.3 * line)
+    if bottom - top < 2:
+        return x
+    best = x
+    reach = int(6 * line)
+    for dx in range(1, reach + 1):
+        col = x + side * dx
+        if not 0 <= col < ink.shape[1]:
+            break
+        window = ink[top:bottom, max(0, col - 1) : col + 2].any(axis=1)
+        if window.mean() >= 0.8:
+            best = col
+    return best
+
+
+def profile_from_material(
+    material: Any, axis_y: int, line: float, ink: Any = None
+) -> HalfProfile | None:
+    """Полупрофиль по маске материала разреза (`section_material`).
+
+    В каждом столбце над осью — участок материала, самый удалённый от оси:
+    его верх — наружный контур, низ — стенка расточки (у сплошной детали
+    участок доходит до оси — расточки нет). Граница материала идёт по краю
+    линии, сама линия — на полтолщины дальше. Короткие разрывы вдоль оси
+    (линии поперечного отверстия, стыки граней) перекрываются.
+    """
     import numpy as np
 
-    ink = _ink(gray)
-    line = _line_px(ink)
-    step = max(3, int(round(3 * line)))
-    horizontal = cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((1, step), np.uint8))
-    axis_y = _axis(horizontal)
-    outer: list[float | None] = []
-    inner: list[float | None] = []
-    for x in range(horizontal.shape[1]):
-        edges = np.diff(np.concatenate([[0], horizontal[:, x], [0]]))
-        # Только основные линии: тонкие выносные продолжают контур за торцом
-        # на том же радиусе («Опора пружин»: трубка и её выносная справа).
-        centres = [
-            (a + b - 1) / 2.0
-            for a, b in zip(np.where(edges == 1)[0], np.where(edges == -1)[0])
-            if b - a >= _MAIN_SHARE * line
-        ]
-        up = sorted(axis_y - c for c in centres if c < axis_y - line)
-        down = [c - axis_y for c in centres if c > axis_y + line]
-        pairs = [r for r in up if any(abs(r - q) <= 1.5 * line for q in down)]
-        outer.append(max(pairs) if pairs else None)
-        inner.append(pairs[-2] if len(pairs) > 1 else None)
-    outer = _despike(outer, int(2 * line))
-    inner = _despike(inner, int(2 * line))
-    # Деталь — самый длинный непрерывный участок наружного контура: выносные
-    # и размерные линии за торцами рвутся от него разрывами.
-    gap = max(4, int(4 * line))
+    width = material.shape[1]
+    outer: list[float | None] = [None] * width
+    inner: list[float | None] = [None] * width
+    for x in range(width):
+        column = material[:axis_y, x]
+        edges = np.diff(np.concatenate([[0], column, [0]]))
+        starts, ends = np.where(edges == 1)[0], np.where(edges == -1)[0]
+        if not len(starts):
+            continue
+        top, bottom = int(starts[0]), int(ends[0])
+        outer[x] = axis_y - top + line / 2.0
+        inner[x] = max(0.0, axis_y - bottom - line / 2.0) if bottom < axis_y - line else 0.0
+    gap = int(10 * line)
+    present = [x for x, v in enumerate(outer) if v is not None]
+    for a, b in zip(present, present[1:]):
+        if 1 < b - a <= gap:
+            for x in range(a + 1, b):
+                outer[x] = max(outer[a], outer[b])
+                inner[x] = min(inner[a], inner[b])
+    outer = _median(_despike(outer, int(2 * line)), int(2 * line) + 1)
+    inner = _median(_despike(inner, int(4 * line)), int(2 * line) + 1)
     runs: list[list[int]] = []
     for x, r in enumerate(outer):
         if r is None:
@@ -143,14 +151,126 @@ def half_profile(gray: Any) -> HalfProfile | None:
     if not runs:
         return None
     x0, x1 = max(runs, key=lambda run: run[1] - run[0])
+    if ink is not None:
+        new0 = _end_face(ink, axis_y, x0, outer[x0], inner[x0] or 0.0, line, -1)
+        new1 = _end_face(ink, axis_y, x1, outer[x1], inner[x1] or 0.0, line, 1)
+        for x in range(new0, x0):
+            outer[x], inner[x] = outer[x0], inner[x0]
+        for x in range(x1 + 1, new1 + 1):
+            outer[x], inner[x] = outer[x1], inner[x1]
+        x0, x1 = new0, new1
     tolerance = max(1.0, 0.5 * line)
     outer_pts = [(float(x), float(outer[x])) for x in range(x0, x1 + 1) if outer[x] is not None]
-    inner_pts = [(float(x), float(inner[x])) for x in range(x0, x1 + 1) if inner[x] is not None]
+    inner_pts = [
+        (float(x), float(inner[x] or 0.0)) for x in range(x0, x1 + 1) if outer[x] is not None
+    ]
+    hollow = any(r > line for _x, r in inner_pts)
     return HalfProfile(
         axis_y=float(axis_y),
         line_px=line,
         x0=int(x0),
         x1=int(x1),
         outer=_simplify(outer_pts, tolerance),
-        inner=_simplify(inner_pts, tolerance) if len(inner_pts) > 0.3 * (x1 - x0) else [],
+        inner=_simplify(inner_pts, tolerance) if hollow else [],
     )
+
+
+def plateaus(
+    points: list[tuple[float, float]], min_length: float
+) -> list[tuple[float, float, float]]:
+    """Участки постоянного радиуса ломаной: (x начала, x конца, r)."""
+    out = []
+    for (xa, ra), (xb, rb) in zip(points, points[1:]):
+        if xb - xa >= min_length and abs(rb - ra) <= 0.02 * max(ra, rb, 1.0):
+            out.append((xa, xb, (ra + rb) / 2.0))
+    return out
+
+
+def fit_scale(
+    profile: HalfProfile, outer_labels: list[float], inner_labels: list[float]
+) -> tuple[float | None, int]:
+    """мм/px, при котором больше всего площадок профиля объяснены надписями Ø.
+
+    Надпись с квалитетом отверстия (H) — внутренняя поверхность, прочие —
+    наружная или любая (`labels.parse_label`). Совпадение — в пределах 2 %.
+    Возвращает (масштаб, число объяснённых площадок); без надписей — (None, 0).
+    """
+    import numpy as np
+
+    min_length = 3 * profile.line_px
+    outer_d = [2 * r for _a, _b, r in plateaus(profile.outer, min_length)]
+    inner_d = [2 * r for _a, _b, r in plateaus(profile.inner, min_length) if r > 0]
+    labels_any = sorted(set(outer_labels) | set(inner_labels))
+    if not labels_any or not (outer_d or inner_d):
+        return None, 0
+    candidates = [lab / d for lab in labels_any for d in outer_d + inner_d if d > 0]
+    best: tuple[int, float, float] | None = None
+    for scale in candidates:
+        hits, residual = 0, 0.0
+        for diameters, pool in (
+            (outer_d, outer_labels or labels_any),
+            (inner_d, inner_labels or labels_any),
+        ):
+            for d in diameters:
+                mm = d * scale
+                nearest = min(pool, key=lambda v: abs(v - mm))
+                if abs(nearest - mm) <= 0.02 * nearest:
+                    hits += 1
+                    residual += abs(nearest - mm) / nearest
+        key = (hits, -residual)
+        if best is None or key > (best[0], -best[1]):
+            best = (hits, residual, scale)
+    return (float(np.round(best[2], 6)), best[0]) if best else (None, 0)
+
+
+def fit_axial_scale(
+    profile: HalfProfile, linear_labels: list[float], near: float | None = None
+) -> tuple[float | None, int]:
+    """мм/px вдоль оси: линейные надписи — расстояния между изломами профиля.
+
+    Вдоль оси масштаб свой: выпрямленное фото анизотропно до нескольких
+    процентов («Опора пружин»: 0,0278 вдоль при 0,0266 поперёк), и длины по
+    радиальному масштабу уезжали на 4 %. ``near`` — радиальный масштаб:
+    кандидаты дальше ±15 % от него не рассматриваются.
+    """
+    xs = sorted(
+        {round(x) for x, _r in profile.outer}
+        | {round(x) for x, _r in profile.inner}
+        | {profile.x0, profile.x1}
+    )
+    distances = [
+        b - a for i, a in enumerate(xs) for b in xs[i + 1 :] if b - a > 2 * profile.line_px
+    ]
+    labels = [v for v in linear_labels if v > 0]
+    if not labels or not distances:
+        return None, 0
+    # Габарит: наибольший линейный размер — длина детали (ГОСТ 2.307 требует
+    # габаритный размер). По изломам профиля подбор неразличим — их десятки,
+    # и любой масштаб «объясняет» почти все надписи.
+    overall = max(labels) / max(1, profile.x1 - profile.x0)
+    if near is None or 0.9 * near <= overall <= 1.1 * near:
+        hits = sum(
+            1
+            for other in labels
+            if min(abs(dd * overall - other) for dd in distances)
+            <= max(0.015 * other, 0.6 * profile.line_px * overall)
+        )
+        return overall, hits
+    best: tuple[float, float, float, int] | None = None
+    for label in labels:
+        for d in distances:
+            scale = label / d
+            if near and not 0.85 * near <= scale <= 1.15 * near:
+                continue
+            # Мелкая надпись (фаска 0,5, канавка 2) совпадёт со случайным
+            # расстоянием при любом масштабе — вес совпадения по величине.
+            weight, residual, hits = 0.0, 0.0, 0
+            for other in labels:
+                gap = min(abs(dd * scale - other) for dd in distances)
+                if gap <= max(0.015 * other, 0.6 * profile.line_px * scale):
+                    hits += 1
+                    weight += other
+                    residual += gap / other
+            if best is None or (weight, -residual) > (best[0], -best[1]):
+                best = (weight, residual, scale, hits)
+    return (best[2], best[3]) if best else (None, 0)
