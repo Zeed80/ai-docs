@@ -786,7 +786,9 @@ replay или completion; E10 определяет такой контракт �
 
 ### E10 — Контракт продолжения после проверенного commit
 
-**Статус:** TODO, сначала docs + failing tests. **После:** REVIEWED E09.
+**Статус:** REVIEWED, контракт и red tests в
+`docs/agent-employee-delivery/E10-verified-commit-continuation-contract.md`.
+**После:** REVIEWED E09.
 **Читать:** `domain/chat_continuation.py`, `api/chat_runs.py::resume_chat_run`,
 `tasks/durable_chat.py`, checkpoint и action journal.
 
