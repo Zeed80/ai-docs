@@ -53,7 +53,7 @@ def test_views_method_builds_and_stores_the_body(monkeypatch):
         )
 
     uploaded = []
-    monkeypatch.setattr(pipeline, "digitize_revolve", fake_digitize)
+    monkeypatch.setattr(pipeline, "digitize", fake_digitize)
     monkeypatch.setattr(kernel, "compile_candidate", fake_compile)
     monkeypatch.setattr(storage, "upload_file", lambda data, path, ctype: uploaded.append(path))
     events = []

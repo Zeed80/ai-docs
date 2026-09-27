@@ -42,7 +42,13 @@ def _silhouette(ink: Any, axis_y: int, line: float) -> list[float | None]:
     return half
 
 
-def _circles(ink: Any, line: float) -> list[tuple[float, float, float]]:
+def _circles(
+    ink: Any,
+    line: float,
+    *,
+    threshold: int = 18,
+    radius: tuple[float, float] | None = None,
+) -> list[tuple[float, float, float]]:
     """Окружности (центр x, y, радиус по середине штриха).
 
     Центры — Хафом; контуром нельзя: центровые линии перечёркивают
@@ -59,9 +65,9 @@ def _circles(ink: Any, line: float) -> list[tuple[float, float, float]]:
         dp=1,
         minDist=3 * line,
         param1=120,
-        param2=18,
-        minRadius=int(1.5 * line),
-        maxRadius=int(40 * line),
+        param2=threshold,
+        minRadius=int(radius[0]) if radius else int(1.5 * line),
+        maxRadius=int(radius[1]) + 1 if radius else int(40 * line),
     )
     if found is None:
         return []

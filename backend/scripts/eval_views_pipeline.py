@@ -70,7 +70,7 @@ async def main() -> int:
     import cv2
     import httpx
 
-    from app.ai.cad_views.pipeline import digitize_revolve
+    from app.ai.cad_views.pipeline import digitize
     from app.config import settings
 
     parser = argparse.ArgumentParser()
@@ -90,7 +90,7 @@ async def main() -> int:
     for sheet in args.sheet:
         name = pathlib.Path(sheet).stem
         gray = cv2.imread(sheet, cv2.IMREAD_GRAYSCALE)
-        result, reading, labels = await digitize_revolve(gray)
+        result, reading, labels = await digitize(gray)
         record = {
             "sheet": name,
             "ok": result.ok,
@@ -154,6 +154,11 @@ def body_verdict(record: dict, expected: dict) -> str:
         targets = target if isinstance(target, list) else [target]
         return any(abs(value - t) <= 0.03 * t for t in targets)
 
+    if expected.get("bounds_mm"):
+        # Выдавливание: габарит по трём осям без учёта их порядка.
+        got = sorted(bounds[k] for k in ("x", "y", "z"))
+        want = sorted(expected["bounds_mm"])
+        return "верно" if all(close(g, w) for g, w in zip(got, want)) else "неверно"
     length, diameter = bounds["z"], max(bounds["x"], bounds["y"])
     for value, target in (
         (length, expected.get("length_mm")),

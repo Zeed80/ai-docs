@@ -533,6 +533,21 @@ async def digitize_revolve(gray: Any, *, router: Any = None) -> tuple[ViewsResul
     pictures = [r for r in reading.regions if r.role in ("view", "section")]
     region_labels = await read_region_labels(gray, pictures, router=router) if pictures else {}
     result = build_revolve(gray, reading, labels, region_labels=region_labels)
+    if not result.ok:
+        # Не тело вращения — деталь выдавливанием: контур вида в плане и
+        # толщина (надпись «sN» или второй вид).
+        from app.ai.cad_views.extrude_body import build_extrude
+
+        extruded = build_extrude(gray, reading, labels, region_labels=region_labels)
+        if extruded.ok:
+            extruded.notes.insert(0, "тело вращения: " + result.reason)
+            result = extruded
+        else:
+            result = ViewsResult(
+                False,
+                f"тело вращения: {result.reason}; выдавливание: {extruded.reason}",
+                notes=result.notes + extruded.notes,
+            )
     seen = set(labels)
     merged = list(labels)
     for texts in region_labels.values():
@@ -543,9 +558,14 @@ async def digitize_revolve(gray: Any, *, router: Any = None) -> tuple[ViewsResul
     return result, reading, merged
 
 
+# Лист → тело любой поддержанной основы (вращение, выдавливание).
+digitize = digitize_revolve
+
+
 __all__ = [
     "ViewsResult",
     "build_revolve",
+    "digitize",
     "digitize_revolve",
     "read_labels",
     "read_region_labels",

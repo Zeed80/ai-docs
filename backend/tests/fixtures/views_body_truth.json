@@ -1,13 +1,58 @@
 {
-  "comment": "Габарит тела вращения по надписям листа (метод views): длина вдоль оси и наибольший Ø. Выведено вручную по надписям; null — не установлено. Допуск оценки — 3 %.",
+  "comment": "Габарит тела (вращения — длина и наибольший Ø; выдавливания — bounds_mm) по надписям листа (метод views): длина вдоль оси и наибольший Ø. Выведено вручную по надписям; null — не установлено. Допуск оценки — 3 %.",
   "sheets": {
-    "opora": {"length_mm": 29.0, "max_diameter_mm": 12.8, "source": "Опора пружин, исходное фото (IMG_20260920), 29 и Ø12,8"},
-    "z4-r4": {"length_mm": [185.0, 195.0], "max_diameter_mm": 35.0, "source": "цепочка 185, габарит надписан 195 — лист несогласован"},
-    "part_02_val_gost": {"length_mm": 58.0, "max_diameter_mm": 6.5, "source": "17,5 + 16 + 24,5; Ø6,5"},
-    "part_06_gear_gost": {"length_mm": null, "max_diameter_mm": 46.0, "source": "обод Ø46"},
-    "4264de9f_p009": {"length_mm": 54.0, "max_diameter_mm": 78.0, "source": "колесо зубчатое: 54, Ø78, ступица Ø50, расточка Ø30"},
-    "5c7d2ba9_p121": {"length_mm": 207.0, "max_diameter_mm": 50.0, "source": "вал: 207, бурт Ø50"},
-    "c8d8313e_p018": {"length_mm": 146.0, "max_diameter_mm": 70.0, "source": "вал-шестерня: 146, Ø70"},
-    "1c411279_p003": {"length_mm": null, "max_diameter_mm": null, "expect_refusal": true, "source": "учебная схема вала с буквенными размерами (d, l, L0) — чисел нет, строить нечего"}
+    "opora": {
+      "length_mm": 29.0,
+      "max_diameter_mm": 12.8,
+      "source": "Опора пружин, исходное фото (IMG_20260920), 29 и Ø12,8"
+    },
+    "z4-r4": {
+      "length_mm": [
+        185.0,
+        195.0
+      ],
+      "max_diameter_mm": 35.0,
+      "source": "цепочка 185, габарит надписан 195 — лист несогласован"
+    },
+    "part_02_val_gost": {
+      "length_mm": 58.0,
+      "max_diameter_mm": 6.5,
+      "source": "17,5 + 16 + 24,5; Ø6,5"
+    },
+    "part_06_gear_gost": {
+      "length_mm": null,
+      "max_diameter_mm": 46.0,
+      "source": "обод Ø46"
+    },
+    "4264de9f_p009": {
+      "length_mm": 54.0,
+      "max_diameter_mm": 78.0,
+      "source": "колесо зубчатое: 54, Ø78, ступица Ø50, расточка Ø30"
+    },
+    "5c7d2ba9_p121": {
+      "length_mm": 207.0,
+      "max_diameter_mm": 50.0,
+      "source": "вал: 207, бурт Ø50"
+    },
+    "c8d8313e_p018": {
+      "length_mm": 146.0,
+      "max_diameter_mm": 70.0,
+      "source": "вал-шестерня: 146, Ø70"
+    },
+    "1c411279_p003": {
+      "length_mm": null,
+      "max_diameter_mm": null,
+      "expect_refusal": true,
+      "source": "учебная схема вала с буквенными размерами (d, l, L0) — чисел нет, строить нечего"
+    },
+    "part_04_planka_gost": {
+      "bounds_mm": [
+        90.0,
+        100.0,
+        3.0
+      ],
+      "holes": 3,
+      "source": "планка Г-образная: 90 × 100, s3; Ø16 и 2 отв. Ø10"
+    }
   }
 }

@@ -2801,17 +2801,18 @@ async def _run_views_method(
 
     Первая стратегия — тело вращения: профиль по разрезу (материал по
     штриховке) или силуэту вида, масштабы по надписям, элементы по связанным
-    видам. Не тело вращения — честный отказ с причиной.
+    видам. Не тело вращения — выдавливание контура вида в плане на толщину
+    (надпись «sN» или второй вид). Ни то, ни другое — честный отказ с причиной.
     """
     import numpy as np
 
     from app.ai.cad_ir.feature_tree import FeatureTreeCandidate
-    from app.ai.cad_views.pipeline import digitize_revolve
+    from app.ai.cad_views.pipeline import digitize
     from app.services.cad_kernel import CadKernelError, compile_candidate
     from app.storage import upload_file
 
     gray = np.asarray(_gray_sheet(content))
-    result, reading, labels = await digitize_revolve(gray)
+    result, reading, labels = await digitize(gray)
     await record(
         "views.sheet",
         "completed",
@@ -2843,7 +2844,13 @@ async def _run_views_method(
     await record(
         "views.body",
         "completed",
-        f"Тело вращения по {result.profile.get('role')} «{result.profile.get('main_view')}»; элементов по видам: {len(result.features)}",
+        (
+            f"Выдавливание контура вида на {result.profile.get('thickness_mm'):g} мм; "
+            f"отверстий: {len(result.features)}"
+            if result.profile.get("kind") == "extrude"
+            else f"Тело вращения по {result.profile.get('role')} «{result.profile.get('main_view')}»; "
+            f"элементов по видам: {len(result.features)}"
+        ),
         {"scales": result.scales, "features": result.features},
     )
     candidate = FeatureTreeCandidate.model_validate(result.candidate["candidate"])
