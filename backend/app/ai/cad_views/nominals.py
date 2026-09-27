@@ -297,11 +297,47 @@ def nominal_revolve(
             index = end + 1
         return out
 
-    return (
-        fix_points(outer, outer_diameters, True),
-        fix_points(bore, bore_diameters, False),
-        changed,
-    )
+    new_outer = fix_points(outer, outer_diameters, True)
+    new_bore = fix_points(bore, bore_diameters, False)
+    # Станция расточки, сведённая номиналом на станцию уступа снаружи, —
+    # стенка нулевой толщины и тело из двух частей («Опора»: уступ Ø7,6→Ø11,5
+    # и расточка Ø9,8 на одной станции 13,9). Такая станция — замер.
+    steps = {
+        round(a["z"], 6)
+        for a, b in zip(new_outer, new_outer[1:])
+        if abs(a["z"] - b["z"]) <= 1e-6 and abs(a["r"] - b["r"]) > 1e-6
+    }
+    for index, (old_point, point) in enumerate(zip(bore, new_bore)):
+        if (
+            round(point["z"], 6) in steps
+            and abs(old_point["z"] - point["z"]) > 1e-6
+            and 0 < index < len(new_bore) - 1
+        ):
+            point["z"] = old_point["z"]
+    if any(q["z"] < p["z"] - 1e-6 for p, q in zip(new_bore, new_bore[1:])):
+        new_bore = [dict(p) for p in bore]
+
+    # Стенка не тоньше 0,05 мм строго внутри каждого участка расточки: радиус
+    # контура — на тех же z (у уступа — с той стороны, где лежит участок).
+    def outer_at(z: float) -> float | None:
+        for a, b in zip(new_outer, new_outer[1:]):
+            if a["z"] < z < b["z"]:
+                t = (z - a["z"]) / (b["z"] - a["z"])
+                return a["r"] + t * (b["r"] - a["r"])
+        return None
+
+    for a, b in zip(new_bore, new_bore[1:]):
+        if b["z"] - a["z"] <= 1e-6:
+            continue
+        for t in (0.02, 0.5, 0.98):
+            z = a["z"] + t * (b["z"] - a["z"])
+            limit = outer_at(z)
+            radius = a["r"] + t * (b["r"] - a["r"])
+            if limit is not None and radius > limit - 0.05:
+                # Нарушение — расточка этого участка по контуру минус стенка.
+                a["r"] = round(max(0.0, min(a["r"], limit - 0.05)), 4)
+                b["r"] = round(max(0.0, min(b["r"], limit - 0.05)), 4)
+    return new_outer, new_bore, changed
 
 
 __all__ = [

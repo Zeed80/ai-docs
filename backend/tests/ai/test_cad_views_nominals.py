@@ -34,3 +34,26 @@ def test_revolve_profile_nominals_keep_bore_ends_outside_faces():
     assert [p["r"] for p in new_outer] == [10.0, 10.0, 15.0, 15.0]
     assert [p["z"] for p in new_bore] == [-0.05, 50.25]
     assert changed > 0
+
+
+def test_bore_step_is_not_merged_onto_outer_step():
+    from app.ai.cad_views.nominals import nominal_revolve
+
+    # Уступ снаружи на 13,9 и уступ расточки на 13,95: номинал 14 свёл бы их
+    # в одну станцию — стенка нулевой толщины, тело из двух частей.
+    outer = [
+        {"r": 3.8, "z": 0.0},
+        {"r": 3.8, "z": 13.9},
+        {"r": 5.75, "z": 13.9},
+        {"r": 5.75, "z": 29.0},
+    ]
+    bore = [
+        {"r": 2.0, "z": -0.05},
+        {"r": 2.0, "z": 13.95},
+        {"r": 4.9, "z": 13.95},
+        {"r": 4.9, "z": 29.05},
+    ]
+    new_outer, new_bore, _ = nominal_revolve(outer, bore, [14, 29], [], [], tolerance=0.3)
+    outer_step = [p["z"] for p in new_outer][1]
+    bore_step = [p["z"] for p in new_bore][1]
+    assert outer_step == 14 and bore_step != outer_step
