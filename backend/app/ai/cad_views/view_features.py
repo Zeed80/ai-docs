@@ -28,8 +28,12 @@ def _silhouette(ink: Any, axis_y: int, line: float) -> list[float | None]:
     half: list[float | None] = []
     for x in range(horizontal.shape[1]):
         edges = np.diff(np.concatenate([[0], horizontal[:, x], [0]]))
+        # Только основные линии: размерные линии Ø тоже симметричны оси и
+        # давали ложные «бурты» до 9 мм шириной (z4-r4: Ø37, Ø40, Ø44).
         centres = [
-            (a + b - 1) / 2.0 for a, b in zip(np.where(edges == 1)[0], np.where(edges == -1)[0])
+            (a + b - 1) / 2.0
+            for a, b in zip(np.where(edges == 1)[0], np.where(edges == -1)[0])
+            if b - a >= 0.6 * line
         ]
         up = [axis_y - c for c in centres if c < axis_y - line]
         down = [c - axis_y for c in centres if c > axis_y + line]
@@ -176,7 +180,7 @@ def side_view_features(
             )
         run.clear()
 
-    for x in range(v0, v1 + 1):
+    for x in range(max(0, v0), min(len(half) - 1, v1) + 1):
         h = half[x]
         z = z_of(x)
         if h is None:

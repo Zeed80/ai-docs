@@ -73,6 +73,43 @@ def _median(values: list[float | None], window: int) -> list[float | None]:
     return out
 
 
+def drop_fins(values: list[float | None], width: int, rise: float = 0.15) -> list[float | None]:
+    """Узкий выступ (короче ``width`` столбцов, выше обоих соседей на долю
+    ``rise``) — линия, симметричная оси (выноска, рамка допуска), а не бурт:
+    на валу из методички такие «диски» вырастали в теле."""
+    out = list(values)
+    x = 0
+    n = len(out)
+    while x < n:
+        if out[x] is None:
+            x += 1
+            continue
+        left = out[x - 1] if x > 0 else None
+        end = x
+        while (
+            end + 1 < n
+            and out[end + 1] is not None
+            and left is not None
+            and out[end + 1] > left * (1 + rise)
+        ):
+            end += 1
+        right = out[end + 1] if end + 1 < n else None
+        if (
+            left is not None
+            and right is not None
+            and out[x] > left * (1 + rise)
+            and out[x] > right * (1 + rise)
+            and end - x + 1 < width
+        ):
+            level = max(left, right)
+            for k in range(x, end + 1):
+                out[k] = level
+            x = end + 1
+            continue
+        x += 1
+    return out
+
+
 def _simplify(points: list[tuple[float, float]], tolerance: float) -> list[tuple[float, float]]:
     import cv2
     import numpy as np
@@ -152,7 +189,7 @@ def profile_from_material(
             for x in range(a + 1, b):
                 outer[x] = max(outer[a], outer[b])
                 inner[x] = min(inner[a], inner[b])
-    outer = _median(_despike(outer, int(2 * line)), int(2 * line) + 1)
+    outer = drop_fins(_median(_despike(outer, int(2 * line)), int(2 * line) + 1), int(2.5 * line))
     inner = _median(_despike(inner, int(4 * line)), int(2 * line) + 1)
     runs: list[list[int]] = []
     for x, r in enumerate(outer):

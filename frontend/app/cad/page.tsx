@@ -66,7 +66,7 @@ export default function CadListPage() {
   >("");
   // Default = redraw-from-understanding; tracing stays as the auxiliary
   // fallback (see StudioComposer for the same two-method contract).
-  const [vectorizeMethod, setVectorizeMethod] = useState<"trace" | "spec">(
+  const [vectorizeMethod, setVectorizeMethod] = useState<"trace" | "spec" | "views">(
     "spec",
   );
   // How many times the sheet is read before the answers are intersected. The
@@ -253,12 +253,13 @@ export default function CadListPage() {
           <select
             value={vectorizeMethod}
             onChange={(e) =>
-              setVectorizeMethod(e.target.value as "trace" | "spec")
+              setVectorizeMethod(e.target.value as "trace" | "spec" | "views")
             }
             className="rounded border border-white/15 bg-zinc-950 px-2 py-2 text-xs text-zinc-200"
             title={t("vectorize_method")}
           >
             <option value="spec">{t("method_spec")}</option>
+            <option value="views">{t("method_views")}</option>
             <option value="trace">{t("method_trace")}</option>
           </select>
           {vectorizeMethod === "spec" && (

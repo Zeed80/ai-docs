@@ -2777,6 +2777,137 @@ async def _store_domain_reading(
         await db.commit()
 
 
+async def _store_views_result(factory, gen_uuid, result: dict) -> None:
+    """Метод `views`: тело и отчёт — в параметры прогона; прогон завершён."""
+    from app.db.models import ImageGeneration, ImageGenStatus
+    from app.services import studio_queue
+
+    async with factory() as db:
+        gen = await db.get(ImageGeneration, gen_uuid)
+        if gen is None:
+            return
+        gen.params = {**(gen.params or {}), **result}
+        gen.status = ImageGenStatus.done
+        gen.error = None
+        job = await studio_queue.job_for_generation(db, gen_uuid)
+        await studio_queue.mark_job_done(db, job)
+        await db.commit()
+
+
+async def _run_views_method(
+    content: bytes, generation_id: str, owner_sub: str | None, record
+) -> dict:
+    """Метод `views` (CAD_DIGITIZATION_AUDIT.md): лист как у инженера → тело.
+
+    Первая стратегия — тело вращения: профиль по разрезу (материал по
+    штриховке) или силуэту вида, масштабы по надписям, элементы по связанным
+    видам. Не тело вращения — честный отказ с причиной.
+    """
+    import numpy as np
+
+    from app.ai.cad_ir.feature_tree import FeatureTreeCandidate
+    from app.ai.cad_views.pipeline import digitize_revolve
+    from app.services.cad_kernel import CadKernelError, compile_candidate
+    from app.storage import upload_file
+
+    gray = np.asarray(_gray_sheet(content))
+    result, reading, labels = await digitize_revolve(gray)
+    await record(
+        "views.sheet",
+        "completed",
+        f"Лист: {reading.sheet_kind}; изображений {len(reading.views())}, главное — рамка {reading.main}",
+        {"regions": [r.__dict__ for r in reading.regions], "main": reading.main, "labels": labels},
+    )
+    report = {
+        "method": "views",
+        "ok": result.ok,
+        "reason": result.reason,
+        "profile": result.profile,
+        "features": result.features,
+        "scales": result.scales,
+        "notes": result.notes,
+        "labels": labels,
+        "sheet_kind": reading.sheet_kind,
+    }
+    if not result.ok:
+        await record("views.body", "failed", result.reason, {})
+        return {
+            "views_reading": report,
+            "solid_3d": {
+                "built": False,
+                "build_status": "blocked",
+                "error": result.reason,
+                "method": "views",
+            },
+        }
+    await record(
+        "views.body",
+        "completed",
+        f"Тело вращения по {result.profile.get('role')} «{result.profile.get('main_view')}»; элементов по видам: {len(result.features)}",
+        {"scales": result.scales, "features": result.features},
+    )
+    candidate = FeatureTreeCandidate.model_validate(result.candidate["candidate"])
+    try:
+        artifacts = await compile_candidate(
+            candidate, confirm_assumptions=True, metadata={"source": "cad_views"}
+        )
+    except CadKernelError as exc:
+        await record(
+            "kernel.compile",
+            "failed",
+            "CAD-ядро отклонило тело метода views",
+            {"error": str(exc)[:300]},
+        )
+        return {
+            "views_reading": report,
+            "solid_3d": {
+                "built": False,
+                "build_status": "blocked",
+                "error": str(exc)[:400],
+                "method": "views",
+                "feature_tree": candidate.model_dump(mode="json"),
+            },
+        }
+    kernel_report = artifacts.report or {}
+    prefix = f"image-gen/{owner_sub or 'shared'}/{generation_id}_views"
+    paths: dict[str, str] = {}
+    for suffix, extension, payload, content_type in (
+        ("step", "step", artifacts.step, "application/step"),
+        ("iges", "iges", artifacts.iges, "application/iges"),
+        ("stl", "stl", artifacts.stl, "model/stl"),
+    ):
+        if payload:
+            path = f"{prefix}.{extension}"
+            upload_file(payload, path, content_type)
+            paths[suffix] = path
+    await record(
+        "kernel.compile",
+        "completed",
+        "CAD-ядро построило тело метода views",
+        {
+            "volume_mm3": kernel_report.get("volume_mm3"),
+            "bounds_mm": kernel_report.get("bounds_mm"),
+        },
+    )
+    return {
+        "views_reading": report,
+        "solid_3d": {
+            "built": True,
+            # Масштаб и надписи сверены, но независимая проверка проекции тела
+            # с листом ещё не встроена — черновик под проверку человеком.
+            "build_status": "built_unverified",
+            "complete": True,
+            "method": "views",
+            "label": candidate.label,
+            "paths": paths,
+            "volume_mm3": kernel_report.get("volume_mm3"),
+            "bounds_mm": kernel_report.get("bounds_mm"),
+            "feature_tree": candidate.model_dump(mode="json"),
+            "blockers": [],
+        },
+    }
+
+
 async def _store_assembly_reading(
     factory, gen_uuid, assembly: dict, *, verification: dict | None = None
 ) -> None:
@@ -3662,6 +3793,21 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             )
             return {"assembly": assembly}
         domain_reader = _DOMAIN_READERS.get(digitization_type.normalized)
+        if vectorize_method == "views":
+            try:
+                views_result = await _run_views_method(content, generation_id, owner_sub, _record)
+            except Exception as exc:  # noqa: BLE001 — новый метод не валит прогон молча
+                logger.exception("cad_views_failed", generation_id=generation_id)
+                return await _fail(f"Метод «по видам»: {type(exc).__name__}: {str(exc)[:200]}")
+            await _store_views_result(factory, gen_uuid, views_result)
+            solid = views_result["solid_3d"]
+            message = (
+                "Метод «по видам»: тело построено — проверьте по листу"
+                if solid.get("built")
+                else f"Метод «по видам»: тело не построено — {solid.get('error')}"
+            )
+            await _record("pipeline", "completed", message, {"terminal": True})
+            return {"views": solid.get("built", False)}
         if vectorize_method == "spec" and domain_reader is not None:
             # Строительные и схемы (план, X5/Ф7): у них не B-Rep, а модель
             # здания или системы (EMG). Ридеры `construction_reader` и
