@@ -49,15 +49,26 @@ def body_measures(result: Any) -> tuple[list[float], list[float]]:
         diameters = [float(f["diameter_mm"]) for f in result.features or [] if f.get("diameter_mm")]
         return diameters, lengths
     if profile.get("kind") == "extrude":
-        xs: list[float] = [0.0]
-        ys: list[float] = [0.0]
+        # Как у призматики: координаты кромок вдоль осей и центры отверстий —
+        # попарные разности всех вершин ломаной (точки дуг) объясняли почти
+        # любую надпись, и выдавливание несправедливо выигрывало выбор основы.
+        xs: list[float] = []
+        ys: list[float] = []
+        previous = (0.0, 0.0)
         for segment in profile.get("sketch") or []:
-            x, y = segment["to"]
-            xs.append(float(x))
-            ys.append(float(y))
+            x, y = (float(v) for v in segment["to"])
             if segment.get("kind") == "arc" and segment.get("center"):
                 cx, cy = segment["center"]
                 diameters.append(2.0 * ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5)
+                xs += [cx, cx - abs(x - cx), cx + abs(x - cx)]
+                ys += [cy]
+            else:
+                dx, dy = abs(x - previous[0]), abs(y - previous[1])
+                if dx <= 0.035 * dy and dy > 0.5:
+                    xs += [x, previous[0]]
+                if dy <= 0.035 * dx and dx > 0.5:
+                    ys += [y, previous[1]]
+            previous = (x, y)
         for feature in result.features or []:
             params = feature.get("params") or {}
             if "diameter_mm" in params:
