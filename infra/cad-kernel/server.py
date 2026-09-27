@@ -51,6 +51,9 @@ class Feature(BaseModel):
         # technology-process reader can tell "structural rib" from
         # "bolt boss" without re-deriving it from shape heuristics.
         "rib",
+        # Призматическая деталь по трём видам (метод views): контур вида,
+        # выдавленный насквозь вдоль оси взгляда, пересекается с телом.
+        "intersect",
     ]
     source_entity_ids: list[str] = Field(default_factory=list, max_length=500)
     # Ф2.6c: native EMG Feature node id(s) this operation realizes — a
@@ -355,6 +358,48 @@ def _feature_frame_matrix(params: dict) -> App.Matrix:
     )
 
 
+def _view_prism(shape: Part.Shape, feature: "Feature") -> Part.Shape:
+    """Контур вида в координатах детали, выдавленный насквозь вдоль оси взгляда.
+
+    ``normal`` — ось взгляда ("x" | "y" | "z"); ``polygon_mm`` — вершины
+    контура в двух остальных координатах: для "z" — (x, y), для "y" — (x, z),
+    для "x" — (y, z). Направления видов листа приводит к детали вызывающий
+    (он знает раскладку ЕСКД); ядро не угадывает знаки.
+    """
+    normal = feature.params.get("normal")
+    if normal not in ("x", "y", "z"):
+        raise HTTPException(422, "intersect.normal must be 'x', 'y' or 'z'")
+    raw = feature.params.get("polygon_mm")
+    if not isinstance(raw, list) or not (3 <= len(raw) <= 400):
+        raise HTTPException(422, "intersect.polygon_mm must list 3..400 points")
+    points = [_sketch_point(item, f"intersect.polygon_mm[{i}]") for i, item in enumerate(raw)]
+
+    def lift(a: float, b: float) -> App.Vector:
+        if normal == "z":
+            return App.Vector(a, b, 0.0)
+        if normal == "y":
+            return App.Vector(a, 0.0, b)
+        return App.Vector(0.0, a, b)
+
+    vertices = [lift(a, b) for a, b in points]
+    if (vertices[0] - vertices[-1]).Length > 1e-6:
+        vertices.append(vertices[0])
+    try:
+        wire = Part.makePolygon(vertices)
+        face = Part.Face(wire)
+    except Exception as exc:
+        raise HTTPException(422, f"OpenCascade rejected the intersect outline: {exc}") from exc
+    if face.isNull() or not face.isValid() or face.Area <= 1e-6:
+        raise HTTPException(422, "intersect outline is not a valid face")
+    reach = shape.BoundBox.DiagonalLength + 10.0
+    direction = {"x": App.Vector(1, 0, 0), "y": App.Vector(0, 1, 0), "z": App.Vector(0, 0, 1)}[normal]
+    face.translate(direction * (-reach))
+    prism = face.extrude(direction * (2 * reach))
+    if prism.isNull() or not prism.isValid() or prism.Volume <= 0:
+        raise HTTPException(422, "intersect prism is not a valid solid")
+    return prism
+
+
 def _placed_tool(shape: Part.Shape, feature: "Feature", *, adds_material: bool) -> Part.Shape:
     """Инструмент элемента с ``placement``: круг, прямоугольник или капсула."""
     params = feature.params
@@ -592,7 +637,7 @@ def _operation_checkpoint_plan(
         "base": [(index, feature) for index, feature in body_features if index == base_index],
         "profile_operations": [
             (index, feature) for index, feature in body_features
-            if feature.kind in ("boss", "pocket", "rib")
+            if feature.kind in ("boss", "pocket", "rib", "intersect")
         ],
         "turned_cuts": [
             (index, feature) for index, feature in body_features
@@ -1696,6 +1741,21 @@ def _build_one_body(
         # as its own kind purely so a downstream DFM/technology-process
         # reader can tell "structural rib" from "bolt boss" without
         # re-deriving it from shape heuristics.
+        if feature.kind == "intersect":
+            if feature_index in reused_index_set:
+                continue
+            tool = _view_prism(shape, feature)
+            previous = shape
+            shape = shape.common(tool)
+            if shape.isNull() or shape.Volume <= 1e-6:
+                raise HTTPException(422, "intersect removed the whole body")
+            operation_audit.append({
+                "feature_index": feature_index,
+                "kind": feature.kind,
+                **_operation_localization(previous, shape, mode="cut", expected_tool=None),
+            })
+            save_checkpoint("profile_operations", feature_index)
+            continue
         if feature.kind not in ("boss", "pocket", "rib"):
             continue
         if feature_index in reused_index_set:

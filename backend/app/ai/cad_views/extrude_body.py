@@ -54,7 +54,9 @@ def main_line_mask(gray: Any) -> tuple[Any, Any, float]:
     return ink, thick, line
 
 
-def outlines(gray: Any, view_boxes: list[tuple[int, int, int, int]]) -> list[Outline]:
+def outlines(
+    gray: Any, view_boxes: list[tuple[int, int, int, int]], *, opening_lines: float = 3.0
+) -> list[Outline]:
     """Замкнутые контуры основных линий, пересекающиеся с областями видов."""
     import cv2
     import numpy as np
@@ -130,7 +132,7 @@ def outlines(gray: Any, view_boxes: list[tuple[int, int, int, int]]) -> list[Out
         # контуру: размыкание кругом в пару толщин линии.
         filled = np.zeros((h + 2, w + 2), np.uint8)
         cv2.drawContours(filled, [contour - [x - 1, y - 1]], -1, 1, cv2.FILLED)
-        opening = int(3 * line) | 1
+        opening = int(opening_lines * line) | 1
         filled = cv2.morphologyEx(
             filled,
             cv2.MORPH_OPEN,

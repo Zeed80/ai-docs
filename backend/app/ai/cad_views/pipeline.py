@@ -707,8 +707,8 @@ async def read_region_labels(
 
 # Ниже этой доли надписей на теле основа не принимается: у заведомо неверных
 # тел реальных листов (литой корпус как тело вращения, «вал» 6 × 14) на теле
-# 22–31 % надписей, у верных — от 44 % (сплошной вал-шестерня) до 100 %.
-_MIN_COVERAGE = 0.35
+# 22–38 % надписей, у верных — от 44 % (сплошной вал-шестерня) до 100 %.
+_MIN_COVERAGE = 0.40
 _COVERAGE_MIN_LABELS = 5
 
 
@@ -723,25 +723,37 @@ def choose_body(
     надписей листа (E1); если и на лучшей их мало — честный отказ."""
     from app.ai.cad_views.checks import label_coverage
     from app.ai.cad_views.extrude_body import build_extrude
+    from app.ai.cad_views.prismatic import build_prismatic
 
     revolved = build_revolve(gray, reading, labels, region_labels=region_labels)
     extruded = build_extrude(gray, reading, labels, region_labels=region_labels)
-    built = [r for r in (revolved, extruded) if r.ok]
+    prismatic = build_prismatic(gray, reading, labels, region_labels=region_labels)
+    built = [r for r in (revolved, extruded, prismatic) if r.ok]
     if not built:
         return ViewsResult(
             False,
-            f"тело вращения: {revolved.reason}; выдавливание: {extruded.reason}",
-            notes=revolved.notes + extruded.notes,
+            f"тело вращения: {revolved.reason}; выдавливание: {extruded.reason}; "
+            f"по трём видам: {prismatic.reason}",
+            notes=revolved.notes + extruded.notes + prismatic.notes,
         )
     for candidate in built:
         candidate.coverage = label_coverage(candidate, merged)
     best = max(built, key=lambda r: r.coverage.get("share") or 0.0)
-    for other in (revolved, extruded):
+    names = {
+        id(revolved): "тело вращения",
+        id(extruded): "выдавливание",
+        id(prismatic): "по трём видам",
+    }
+    for other in (revolved, extruded, prismatic):
         if other is not best:
             share = other.coverage.get("share") if other.ok else None
             best.notes.append(
-                ("выдавливание" if other is extruded else "тело вращения")
-                + (f": надписей на теле {share:.0%}" if share is not None else f": {other.reason}")
+                names[id(other)]
+                + (
+                    f": надписей на теле {share:.0%}"
+                    if share is not None
+                    else f": {other.reason[:160]}"
+                )
             )
     coverage = best.coverage
     total = len(coverage.get("explained") or []) + len(coverage.get("missing") or [])

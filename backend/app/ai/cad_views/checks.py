@@ -29,6 +29,25 @@ def body_measures(result: Any) -> tuple[list[float], list[float]]:
     profile = result.profile or {}
     diameters: list[float] = []
     lengths: list[float] = []
+    if profile.get("kind") == "prismatic":
+        # Длины — расстояния между вершинами контуров видов по каждой из
+        # двух координат вида; Ø — отверстия.
+        # Только кромки вдоль осей вида: попарные разности всех вершин (точки
+        # дуг, наклонных граней) объясняли почти любую надпись.
+        for polygon in profile.get("polygons") or []:
+            points = polygon.get("points") or []
+            ring = points + points[:1]
+            across: list[float] = []
+            along: list[float] = []
+            for (ax, ay), (bx, by) in zip(ring, ring[1:]):
+                if abs(ax - bx) <= 0.035 * abs(ay - by) and abs(ay - by) > 0.5:
+                    across.append((ax + bx) / 2.0)
+                if abs(ay - by) <= 0.035 * abs(ax - bx) and abs(ax - bx) > 0.5:
+                    along.append((ay + by) / 2.0)
+            lengths += _differences(across) + _differences(along)
+        lengths += [float(v) for v in profile.get("bounds_mm") or []]
+        diameters = [float(f["diameter_mm"]) for f in result.features or [] if f.get("diameter_mm")]
+        return diameters, lengths
     if profile.get("kind") == "extrude":
         xs: list[float] = [0.0]
         ys: list[float] = [0.0]

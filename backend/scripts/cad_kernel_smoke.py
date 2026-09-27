@@ -823,6 +823,36 @@ def _check_plan_view() -> None:
     check("plan view sees the rib from above", 34.0 in levels, f"levels={levels}")
 
 
+def _check_view_intersect() -> None:
+    """Метод views: призматическая деталь — брусок ∩ контуры видов насквозь."""
+    base = _feature(
+        "extrude",
+        sketch_profile=[
+            {"kind": "line", "to": [60, 0]},
+            {"kind": "line", "to": [60, 40]},
+            {"kind": "line", "to": [0, 40]},
+            {"kind": "line", "to": [0, 0]},
+        ],
+        depth_mm=30,
+    )
+    front = _feature(
+        "intersect",
+        normal="y",
+        polygon_mm=[[0, 0], [60, 0], [60, 10], [10, 10], [10, 30], [0, 30]],
+    )
+    status, payload = _compile(_candidate(base, front, label="уголок по видам"))
+    volume = _report_from_zip(payload).get("volume_mm3") if status == 200 else None
+    check(
+        "intersect cuts the block to the front-view outline",
+        status == 200 and volume is not None and abs(volume - 32000.0) < 1.0,
+        f"status={status} volume={volume}",
+    )
+    status, _payload = _compile(
+        _candidate(base, _feature("intersect", normal="q", polygon_mm=[[0, 0], [1, 0], [0, 1]]))
+    )
+    check("intersect rejects an unknown view axis", status == 422, f"status={status}")
+
+
 def _check_placed_features() -> None:
     """Дорожка У (У4): элемент по 3D-размещению — один путь для любой детали.
 
@@ -1036,6 +1066,7 @@ def main() -> int:
     _check_operation_checkpoints()
     _check_incremental_body_cache()
     _check_placed_features()
+    _check_view_intersect()
 
     # A rounded plate is a different base B-Rep, not a square box whose read R
     # disappeared before OpenCascade. Its volume is the rounded-rectangle area
