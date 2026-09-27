@@ -44,6 +44,8 @@ class ViewsResult:
     features: list[dict[str, Any]] = field(default_factory=list)
     scales: dict[str, float] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+    # E1: надписи листа, найденные / не найденные на построенном теле.
+    coverage: dict[str, Any] = field(default_factory=dict)
 
 
 def _line_px(gray: Any) -> float:
@@ -555,6 +557,10 @@ async def digitize_revolve(gray: Any, *, router: Any = None) -> tuple[ViewsResul
             if text not in seen:
                 seen.add(text)
                 merged.append(text)
+    if result.ok:
+        from app.ai.cad_views.checks import label_coverage
+
+        result.coverage = label_coverage(result, merged)
     return result, reading, merged
 
 

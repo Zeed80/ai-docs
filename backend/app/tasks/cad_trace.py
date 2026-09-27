@@ -2829,6 +2829,7 @@ async def _run_views_method(
         "notes": result.notes,
         "labels": labels,
         "sheet_kind": reading.sheet_kind,
+        "coverage": result.coverage,
     }
     if not result.ok:
         await record("views.body", "failed", result.reason, {})
@@ -2853,6 +2854,17 @@ async def _run_views_method(
         ),
         {"scales": result.scales, "features": result.features},
     )
+    coverage = result.coverage or {}
+    if coverage.get("share") is not None:
+        missing = coverage.get("missing") or []
+        await record(
+            "views.check",
+            "completed" if not missing else "warning",
+            f"Надписи листа на теле: {len(coverage.get('explained') or [])} из "
+            f"{len(coverage.get('explained') or []) + len(missing)}"
+            + (f"; нет на теле: {', '.join(missing[:12])}" if missing else ""),
+            coverage,
+        )
     candidate = FeatureTreeCandidate.model_validate(result.candidate["candidate"])
     try:
         artifacts = await compile_candidate(

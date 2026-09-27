@@ -102,6 +102,7 @@ async def main() -> int:
             "scales": result.scales,
             "features": result.features,
             "notes": result.notes,
+            "coverage": result.coverage,
         }
         if result.ok:
             async with httpx.AsyncClient(timeout=180) as client:
