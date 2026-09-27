@@ -338,7 +338,10 @@ export default function CadEditorPage() {
               </div>
               {!(gen.params?.spec as Record<string, unknown> | undefined) && (
                 <div className="min-h-0 space-y-2 overflow-auto lg:w-[46%]">
-                  <PartialRead generationId={gen.id} note={t("reading_kept_note")} />
+                  <PartialRead
+                    generationId={gen.id}
+                    note={t("reading_kept_note")}
+                  />
                 </div>
               )}
               {(gen.params?.spec as Record<string, unknown> | undefined) && (
@@ -388,7 +391,7 @@ export default function CadEditorPage() {
             </div>
           ) : (
             <div className="min-h-0 flex-1">
-              {gen.params?.views_reading ? (
+              {gen.params?.views_reading && !gen.params?.rebuilt_from_spec ? (
                 <ViewsResultView
                   generationId={gen.id}
                   reading={gen.params.views_reading as ViewsReading}

@@ -559,7 +559,17 @@ def build_extrude(
     return ViewsResult(
         True,
         candidate=candidate,
-        profile={"kind": "extrude", "sketch": segments, "thickness_mm": thickness},
+        profile={
+            "kind": "extrude",
+            "sketch": segments,
+            "thickness_mm": thickness,
+            "source_box": [
+                outline.box[0],
+                outline.box[1],
+                outline.box[0] + outline.box[2],
+                outline.box[1] + outline.box[3],
+            ],
+        },
         features=[f for f in features if f["kind"] == "hole"],
         scales={"x_mm_per_px": sx, "y_mm_per_px": sy, "labels_explained": hits},
         notes=notes,

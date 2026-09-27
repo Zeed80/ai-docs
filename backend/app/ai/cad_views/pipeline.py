@@ -521,7 +521,13 @@ def build_revolve(
     return ViewsResult(
         True,
         candidate=candidate,
-        profile={"outer": outer, "bore": bore, "main_view": main.name or main.n, "role": main.role},
+        profile={
+            "outer": outer,
+            "bore": bore,
+            "main_view": main.name or main.n,
+            "role": main.role,
+            "source_box": list(main.box),
+        },
         features=features,
         scales={
             "radial_mm_per_px": radial / factor,

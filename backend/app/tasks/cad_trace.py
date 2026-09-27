@@ -436,6 +436,9 @@ def rebuild_from_spec(
 async def _rebuild_from_spec(
     generation_id: str,
     correction_event_id: str | None = None,
+    *,
+    revision_origin: str = "human",
+    reading_source: str | None = None,
 ) -> dict:
     import uuid as _uuid
 
@@ -633,7 +636,8 @@ async def _rebuild_from_spec(
                 "unresolved": list(spec.get("unresolved") or []),
                 "assumptions": [item.as_dict() for item in assumptions],
                 "dimension_graph": dimension_graph,
-                "source": "human_correction" if params.get("spec_corrected") else "stored_read",
+                "source": reading_source
+                or ("human_correction" if params.get("spec_corrected") else "stored_read"),
             },
             "spec_dimension_check": dim_check,
             "dimension_graph": dimension_graph,
@@ -653,7 +657,7 @@ async def _rebuild_from_spec(
             db,
             gen,
             spec_ir,
-            origin="human",
+            origin=revision_origin,
             created_by=owner_sub,
             keep_raster=None,
             thin_px=2,
@@ -2908,8 +2912,14 @@ async def _run_views_method(
             "bounds_mm": kernel_report.get("bounds_mm"),
         },
     )
+    # Спек в схеме ридера: общий путь `_rebuild_from_spec` даёт граф модели,
+    # 3D-редактор и лист по ЕСКД из тела; прямое тело метода — запасное.
+    from app.ai.cad_views.to_spec import views_to_spec
+
+    views_spec = views_to_spec(result, labels, source_box=result.profile.get("source_box"))
     return {
         "views_reading": report,
+        **({"views_spec": views_spec} if views_spec else {}),
         "solid_3d": {
             "built": True,
             # Масштаб и надписи сверены, но независимая проверка проекции тела
@@ -3820,8 +3830,44 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
             except Exception as exc:  # noqa: BLE001 — новый метод не валит прогон молча
                 logger.exception("cad_views_failed", generation_id=generation_id)
                 return await _fail(f"Метод «по видам»: {type(exc).__name__}: {str(exc)[:200]}")
+            views_spec = views_result.pop("views_spec", None)
             await _store_views_result(factory, gen_uuid, views_result)
             solid = views_result["solid_3d"]
+            if solid.get("built") and views_spec:
+                # Через общий путь спека: граф модели, лист по ЕСКД из тела,
+                # 3D-редактор. Отказ — остаётся прямое тело метода.
+                async with factory() as db:
+                    gen_row = await db.get(ImageGeneration, gen_uuid)
+                    if gen_row is not None:
+                        gen_row.params = {
+                            **(gen_row.params or {}),
+                            "spec": views_spec,
+                            "spec_source": "views",
+                        }
+                        await db.commit()
+                try:
+                    rebuilt = await _rebuild_from_spec(
+                        generation_id, revision_origin="auto", reading_source="views"
+                    )
+                except Exception as exc:  # noqa: BLE001 — запасное тело уже сохранено
+                    logger.exception("cad_views_rebuild_failed", generation_id=generation_id)
+                    rebuilt = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+                if rebuilt.get("ok"):
+                    await _record(
+                        "views.spec",
+                        "completed",
+                        "Тело метода «по видам» собрано общим путём спека: граф модели, "
+                        "лист по ЕСКД из тела",
+                        {"entities": rebuilt.get("entities")},
+                    )
+                else:
+                    await _record(
+                        "views.spec",
+                        "warning",
+                        "Общий путь спека не собрал тело метода — оставлено прямое тело: "
+                        + str(rebuilt.get("error") or "")[:300],
+                        {},
+                    )
             message = (
                 "Метод «по видам»: тело построено — проверьте по листу"
                 if solid.get("built")
