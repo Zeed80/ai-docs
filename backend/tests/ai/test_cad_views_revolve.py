@@ -109,3 +109,19 @@ def test_inner_cavity_not_open_to_an_end_is_dropped():
     inner = accessible_inner(profile)
     assert [r for _x, r in inner[2:4]] == [0.0, 0.0]
     assert [r for _x, r in inner[-2:]] == [30, 30]
+
+
+def test_same_feature_from_overlapping_views_is_merged():
+    from app.ai.cad_views.pipeline import _same_feature
+
+    flat = {
+        "kind": "pocket",
+        "origin_mm": [6.47, 0.0, 23.75],
+        "axis": [-1.0, 0.0, 0.0],
+        "width_mm": 10.255,
+        "height_mm": 13.944,
+        "depth_mm": 3.972,
+    }
+    assert _same_feature(flat, dict(flat))
+    assert not _same_feature(flat, {**flat, "origin_mm": [-6.47, 0.0, 23.75]})
+    assert not _same_feature(flat, {**flat, "depth_mm": 2.0})

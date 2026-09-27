@@ -2873,9 +2873,34 @@ async def _run_views_method(
         )
     candidate = FeatureTreeCandidate.model_validate(result.candidate["candidate"])
     try:
-        artifacts = await compile_candidate(
-            candidate, confirm_assumptions=True, metadata={"source": "cad_views"}
-        )
+        try:
+            artifacts = await compile_candidate(
+                candidate, confirm_assumptions=True, metadata={"source": "cad_views"}
+            )
+        except CadKernelError as first:
+            # Элемент по второму виду, отвергнутый ядром, не губит основу:
+            # тело строится без элементов, и это видно оператору.
+            if len(candidate.features) <= 1:
+                raise
+            base_only = candidate.model_copy(update={"features": candidate.features[:1]})
+            artifacts = await compile_candidate(
+                base_only, confirm_assumptions=True, metadata={"source": "cad_views"}
+            )
+            dropped = [f.kind for f in candidate.features[1:]]
+            candidate = base_only
+            result.features = []
+            report["features"] = []
+            report["notes"] = [
+                *(report.get("notes") or []),
+                f"ядро отвергло элементы по видам ({', '.join(dropped)}): {str(first)[:160]}"
+                " — тело построено без них",
+            ]
+            await record(
+                "kernel.compile",
+                "warning",
+                "Элементы по видам отвергнуты ядром — тело построено без них",
+                {"error": str(first)[:300], "dropped": dropped},
+            )
     except CadKernelError as exc:
         await record(
             "kernel.compile",

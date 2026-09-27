@@ -270,6 +270,23 @@ def silhouette_profile(gray: Any, line: float, axis: int | None = None) -> Any:
     )
 
 
+def _same_feature(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    """Тот же элемент: вид, ось, начало ближе 0,5 мм, размеры в 3 %."""
+    import math
+
+    if a.get("kind") != b.get("kind") or a.get("axis") != b.get("axis"):
+        return False
+    if math.dist(a["origin_mm"], b["origin_mm"]) > 0.5:
+        return False
+    for key in ("diameter_mm", "width_mm", "height_mm", "depth_mm"):
+        va, vb = a.get(key), b.get(key)
+        if (va is None) != (vb is None):
+            return False
+        if va is not None and abs(va - vb) > 0.03 * max(abs(va), abs(vb), 1e-6):
+            return False
+    return True
+
+
 def build_revolve(
     gray: Any,
     reading: Any,
@@ -549,7 +566,12 @@ def build_revolve(
         found = side_view_features(view_crop, profile, axial, radial, diameters, linear)
         for item in found:
             item["view"] = region.name or f"рамка {region.n}"
-        features.extend(found)
+            # Один и тот же элемент с двух перекрывающихся изображений
+            # («вид сверху» дважды в разметке) — одна лыска, а не две: второй
+            # карман «не касается материала», и ядро отвергало всё тело.
+            if any(_same_feature(item, other) for other in features):
+                continue
+            features.append(item)
     for item in features:
         params: dict[str, Any] = {
             "placement": {"origin": item["origin_mm"], "axis": item["axis"], "ref": item["ref"]}
