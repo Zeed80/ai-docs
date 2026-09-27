@@ -66,6 +66,30 @@ def draw_projection(views: dict, path: pathlib.Path) -> None:
     cv2.imwrite(str(path), out)
 
 
+def prepare_like_product(gray):
+    """Выпрямление фото и увеличение SeedVR2, как стадии 0.9–0.95 `cad_trace`."""
+    import cv2
+    import numpy as np
+
+    from app.ai.cad_recognize.sheet_upscale import upscale_sheet
+    from app.config import settings
+    from app.tasks.cad_trace import _dewarp_photo
+
+    ok, encoded = cv2.imencode(".png", gray)
+    content = _dewarp_photo(encoded.tobytes())
+    note = ""
+    try:
+        result = upscale_sheet(
+            content, comfy_url=settings.comfyui_url, timeout_s=settings.cad_upscale_timeout_s
+        )
+        if result.applied:
+            content, note = result.content, result.reason
+    except Exception as exc:  # noqa: BLE001 — без увеличения, как продукт при сбое
+        note = f"увеличение недоступно: {exc}"[:120]
+    image = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_GRAYSCALE)
+    return image, note
+
+
 async def main() -> int:
     import cv2
     import httpx
@@ -82,6 +106,11 @@ async def main() -> int:
         default=pathlib.Path(__file__).resolve().parents[1]
         / "tests/fixtures/views_body_truth.json",
     )
+    parser.add_argument(
+        "--raw",
+        action="store_true",
+        help="без подготовки продукта (выпрямление фото, увеличение грубого листа)",
+    )
     args = parser.parse_args()
     truth = json.loads(args.truth.read_text())["sheets"] if args.truth.exists() else {}
     score = {"верно": 0, "неверно": 0, "отказ": 0}
@@ -90,6 +119,12 @@ async def main() -> int:
     for sheet in args.sheet:
         name = pathlib.Path(sheet).stem
         gray = cv2.imread(sheet, cv2.IMREAD_GRAYSCALE)
+        if not args.raw:
+            # Тот же путь, что в /cad: грубый лист мерить сырым — мерить не то,
+            # что делает продукт (слайд с валом: линии 1–2 px).
+            gray, prepared = prepare_like_product(gray)
+            if prepared:
+                print(f"{name:<20} подготовка: {prepared}", flush=True)
         result, reading, labels = await digitize(gray)
         record = {
             "sheet": name,
