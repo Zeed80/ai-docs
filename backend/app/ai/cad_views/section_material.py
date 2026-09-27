@@ -4,8 +4,9 @@
 лист делится линиями на ячейки фона; ячейка — материал, если её граница
 в заметной доле из штрихов под 45°/135°. Штрихи штриховки часто не доходят
 до кромок — ячейка стенки одна, со штрихами внутри; это тоже материал.
-Тонкая полоса без штриховки, упирающаяся обоими концами в материал (шейка
-между дугами), — материал по непрерывности. Разрез тела вращения
+Незаштрихованное — не материал, даже тонкая полоса между линиями: в
+разрезе это поверхность за секущей плоскостью («Опора пружин»: полоса между
+дугами — стенки отверстия Ø5, а не шейка). Разрез тела вращения
 симметричен оси: материал без зеркальной пары (треугольник у выноски) —
 не материал.
 """
@@ -70,7 +71,6 @@ def section_material(gray: Any, line: float, *, revolve: bool = True) -> tuple[A
     border = set(np.unique(np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]])))
     size = g.size
     material = np.zeros_like(ink)
-    small = []
     for index in range(1, count):
         if index in border:
             continue
@@ -84,28 +84,6 @@ def section_material(gray: Any, line: float, *, revolve: bool = True) -> tuple[A
         share = float((ring & strokes[window]).sum()) / max(1.0, float(ring.sum()))
         if share > 0.15:
             material[labels == index] = 1
-        elif area < 0.03 * size:
-            small.append(index)
-    # По непрерывности: цепочки незаштрихованных полос поперёк разделяющих
-    # линий (центровая режет шейку надвое), упёртые обоими концами в материал.
-    candidates = np.isin(labels, small).astype(np.uint8)
-    reach = int(1.5 * line) + 1
-    chains_n, chains = cv2.connectedComponents(
-        cv2.dilate(candidates, np.ones((reach, reach), np.uint8)), 8
-    )
-    grown = cv2.dilate(material, np.ones((int(3 * line), int(3 * line)), np.uint8))
-    for chain in range(1, chains_n):
-        member = (chains == chain) & (candidates > 0)
-        if not member.any():
-            continue
-        ys, xs = np.nonzero(member)
-        x0, width, height = xs.min(), xs.max() - xs.min() + 1, ys.max() - ys.min() + 1
-        touch = grown[member] > 0
-        if not touch.any() or touch.mean() > 0.35 or width < 2 * height:
-            continue
-        touching = xs[touch]
-        if touching.min() <= x0 + 0.2 * width and touching.max() >= x0 + 0.8 * width:
-            material[member] = 1
     axis = symmetry_axis(material)
     if revolve:
         mirrored = np.zeros_like(material)

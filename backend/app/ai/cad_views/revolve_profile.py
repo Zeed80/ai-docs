@@ -122,17 +122,31 @@ def profile_from_material(
     width = material.shape[1]
     outer: list[float | None] = [None] * width
     inner: list[float | None] = [None] * width
+    columns = []
     for x in range(width):
         column = material[:axis_y, x]
         edges = np.diff(np.concatenate([[0], column, [0]]))
-        starts, ends = np.where(edges == 1)[0], np.where(edges == -1)[0]
+        columns.append((np.where(edges == 1)[0], np.where(edges == -1)[0]))
+    # Полая деталь (у большинства столбцов материал не доходит до оси) —
+    # материала у оси нет: такой участок — надписи внутри расточки («Ø7,6»
+    # со штрихами цифр), а не сплошное сечение.
+    reaching = [len(e) and e[-1] >= axis_y - line for _s, e in columns if len(e)]
+    hollow_part = bool(reaching) and sum(reaching) < 0.3 * len(reaching)
+    for x in range(width):
+        starts, ends = columns[x]
+        if hollow_part:
+            keep = [i for i in range(len(ends)) if ends[i] < axis_y - line]
+            starts, ends = starts[keep], ends[keep]
         if not len(starts):
             continue
         top, bottom = int(starts[0]), int(ends[0])
         outer[x] = axis_y - top + line / 2.0
         inner[x] = max(0.0, axis_y - bottom - line / 2.0) if bottom < axis_y - line else 0.0
-    gap = int(10 * line)
     present = [x for x, v in enumerate(outer) if v is not None]
+    # Разрыв материала — отверстие поперёк оси (стенки не заштрихованы) или
+    # стык граней; до четверти длины детали — та же деталь.
+    span = (present[-1] - present[0]) if present else 0
+    gap = max(int(10 * line), int(0.25 * span))
     for a, b in zip(present, present[1:]):
         if 1 < b - a <= gap:
             for x in range(a + 1, b):
