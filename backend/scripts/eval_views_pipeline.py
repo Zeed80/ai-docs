@@ -76,7 +76,15 @@ async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--sheet", action="append", required=True)
     parser.add_argument("--out", type=pathlib.Path, required=True)
+    parser.add_argument(
+        "--truth",
+        type=pathlib.Path,
+        default=pathlib.Path(__file__).resolve().parents[1]
+        / "tests/fixtures/views_body_truth.json",
+    )
     args = parser.parse_args()
+    truth = json.loads(args.truth.read_text())["sheets"] if args.truth.exists() else {}
+    score = {"верно": 0, "неверно": 0, "отказ": 0}
     args.out.mkdir(parents=True, exist_ok=True)
     kernel = settings.cad_kernel_url.rstrip("/")
     for sheet in args.sheet:
@@ -90,6 +98,7 @@ async def main() -> int:
             "labels": labels,
             "main": reading.main,
             "sheet_kind": reading.sheet_kind,
+            "regions": [dict(region.__dict__) for region in reading.regions],
             "scales": result.scales,
             "features": result.features,
             "notes": result.notes,
@@ -117,13 +126,42 @@ async def main() -> int:
                 else:
                     record["kernel_error"] = compiled.text[:300]
             record["profile"] = result.profile
+        expected = truth.get(name)
+        if expected:
+            record["truth"] = verdict = body_verdict(record, expected)
+            score[verdict] = score.get(verdict, 0) + 1
         (args.out / f"{name}.json").write_text(json.dumps(record, ensure_ascii=False, indent=1))
         print(
             f"{name:<20} {'тело' if record.get('kernel_status') == 200 else ('ядро ' + str(record.get('kernel_status')) if result.ok else 'нет: ' + result.reason)}"
-            f"  {record.get('bounds_mm') or ''}  элементов {len(result.features)}",
+            f"  {record.get('bounds_mm') or ''}  элементов {len(result.features)}"
+            f"  {('эталон: ' + record['truth']) if 'truth' in record else ''}",
             flush=True,
         )
+    if truth:
+        print("по эталону:", score, flush=True)
     return 0
+
+
+def body_verdict(record: dict, expected: dict) -> str:
+    """верно / неверно / отказ — габарит тела против надписей (допуск 3 %)."""
+    bounds = record.get("bounds_mm")
+    if not bounds:
+        return "верно" if expected.get("expect_refusal") else "отказ"
+    if expected.get("expect_refusal"):
+        return "неверно"
+
+    def close(value: float, target) -> bool:
+        targets = target if isinstance(target, list) else [target]
+        return any(abs(value - t) <= 0.03 * t for t in targets)
+
+    length, diameter = bounds["z"], max(bounds["x"], bounds["y"])
+    for value, target in (
+        (length, expected.get("length_mm")),
+        (diameter, expected.get("max_diameter_mm")),
+    ):
+        if target is not None and not close(value, target):
+            return "неверно"
+    return "верно"
 
 
 if __name__ == "__main__":

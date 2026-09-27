@@ -59,3 +59,34 @@ def test_section_material_gives_outer_and_bore_in_mm_with_both_scales():
     import statistics
 
     assert bore and abs(2 * statistics.median(p["r"] for p in bore) - 20.0) < 0.6
+
+
+def test_fit_scale_counts_distinct_labels_not_plateaus():
+    from app.ai.cad_views.revolve_profile import HalfProfile, fit_scale
+
+    # Две шейки одного Ø и третья другого: одна надпись Ø25 не должна
+    # «объяснять» две площадки.
+    profile = HalfProfile(
+        axis_y=0.0,
+        line_px=2.0,
+        x0=0,
+        x1=300,
+        outer=[(0, 50), (100, 50), (100, 80), (200, 80), (200, 50), (300, 50)],
+    )
+    scale, hits = fit_scale(profile, [25.0], [])
+    assert scale is not None and hits == 1
+    scale, hits = fit_scale(profile, [25.0, 40.0], [])
+    assert abs(scale - 0.25) < 1e-6 and hits == 2
+
+
+def test_fit_scale_near_restricts_candidates():
+    from app.ai.cad_views.revolve_profile import HalfProfile, fit_scale
+
+    profile = HalfProfile(
+        axis_y=0.0, line_px=2.0, x0=0, x1=200, outer=[(0, 40), (100, 40), (100, 60), (200, 60)]
+    )
+    # Надписи объясняют обе площадки и при 0,1, и при 0,25 (подобие);
+    # габарит задаёт масштаб около 0,25.
+    labels = [8.0, 12.0, 20.0, 30.0]
+    scale, hits = fit_scale(profile, labels, [], near=0.25)
+    assert abs(scale - 0.25) < 1e-6 and hits == 2

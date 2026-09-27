@@ -238,13 +238,19 @@ def plateaus(
 
 
 def fit_scale(
-    profile: HalfProfile, outer_labels: list[float], inner_labels: list[float]
+    profile: HalfProfile,
+    outer_labels: list[float],
+    inner_labels: list[float],
+    *,
+    near: float | None = None,
+    spread: float = 0.06,
 ) -> tuple[float | None, int]:
     """мм/px, при котором больше всего площадок профиля объяснены надписями Ø.
 
     Надпись с квалитетом отверстия (H) — внутренняя поверхность, прочие —
     наружная или любая (`labels.parse_label`). Совпадение — в пределах 2 %.
-    Возвращает (масштаб, число объяснённых площадок); без надписей — (None, 0).
+    Возвращает (масштаб, число различных надписей, объяснивших площадки);
+    без надписей — (None, 0).
     """
     import numpy as np
 
@@ -255,9 +261,17 @@ def fit_scale(
     if not labels_any or not (outer_d or inner_d):
         return None, 0
     candidates = [lab / d for lab in labels_any for d in outer_d + inner_d if d > 0]
+    if near is not None:
+        # Масштаб рядом с заданным (габарит вдоль оси; фото анизотропно на
+        # несколько процентов).
+        candidates = [c for c in candidates if abs(c - near) <= spread * near]
     best: tuple[int, float, float] | None = None
     for scale in candidates:
-        hits, residual = 0, 0.0
+        # Счёт — различные надписи, объяснившие площадки: две шейки Ø25 —
+        # одно подтверждение масштаба, а не два (иначе одна надпись на листе
+        # без чисел «объясняла» весь вал).
+        matched: set[float] = set()
+        residual = 0.0
         for diameters, pool in (
             (outer_d, outer_labels or labels_any),
             (inner_d, inner_labels or labels_any),
@@ -266,8 +280,9 @@ def fit_scale(
                 mm = d * scale
                 nearest = min(pool, key=lambda v: abs(v - mm))
                 if abs(nearest - mm) <= 0.02 * nearest:
-                    hits += 1
+                    matched.add(nearest)
                     residual += abs(nearest - mm) / nearest
+        hits = len(matched)
         key = (hits, -residual)
         if best is None or key > (best[0], -best[1]):
             best = (hits, residual, scale)

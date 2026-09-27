@@ -85,26 +85,38 @@ def prepare(
 
 
 def _symmetric_orientation(gray: Any, line: float) -> tuple[bool, float]:
-    """(вертикальная ли ось, сила симметрии) — по горизонтальным штрихам."""
+    """(вертикальная ли ось, сила симметрии) — по горизонтальным штрихам.
+
+    Пара линий, зеркальных относительно оси, на скане и после увеличения
+    расходится на 1–2 px: попиксельное совпадение давало ей оценку не выше
+    случайной, и колесо p009 (ось горизонтальна) поворачивалось набок.
+    Совпадение — с допуском в толщину линии поперёк.
+    """
     import cv2
     import numpy as np
 
-    from app.ai.cad_views.section_material import ink_mask, symmetry_axis
+    from app.ai.cad_views.section_material import ink_mask
 
     def strength(image: Any) -> float:
         ink = ink_mask(image, line)
         horizontal = cv2.morphologyEx(
             ink, cv2.MORPH_OPEN, np.ones((1, max(3, int(3 * line))), np.uint8)
-        )
-        axis = symmetry_axis(horizontal)
-        half = min(axis, horizontal.shape[0] - axis)
-        above = horizontal[axis - half : axis].astype(float)
-        below = horizontal[axis : axis + half][::-1].astype(float)
-        return float((above * below).sum()) / (float(above.sum() + below.sum()) + 1.0)
+        )[::2, ::2]
+        kernel = max(3, int(line)) | 1
+        wide = cv2.dilate(horizontal, np.ones((kernel, 1), np.uint8))
+        height = horizontal.shape[0]
+        best = 0.0
+        for y in range(height // 5, 4 * height // 5):
+            half = min(y, height - y)
+            above, below = horizontal[y - half : y], horizontal[y : y + half][::-1]
+            wide_above, wide_below = wide[y - half : y], wide[y : y + half][::-1]
+            matched = float((above & wide_below).sum()) + float((below & wide_above).sum())
+            best = max(best, matched / (float(above.sum() + below.sum()) + 1.0))
+        return best
 
     straight = strength(gray)
-    turned = strength(np.rot90(gray))
-    return (turned > 1.2 * straight), max(straight, turned)
+    turned = strength(np.ascontiguousarray(np.rot90(gray)))
+    return (turned > 1.05 * straight), max(straight, turned)
 
 
 def silhouette_profile(gray: Any, line: float) -> Any:
@@ -163,13 +175,19 @@ def build_revolve(
     label_texts: list[str],
     *,
     part: str | None = None,
+    region_labels: dict[int, list[str]] | None = None,
 ) -> ViewsResult:
     """Тело вращения по главному изображению и связанным видам листа."""
     import numpy as np
 
     from app.ai.cad_views.labels import parse_label
     from app.ai.cad_views.revolve_body import revolve_candidate, revolve_points
-    from app.ai.cad_views.revolve_profile import fit_axial_scale, fit_scale, profile_from_material
+    from app.ai.cad_views.revolve_profile import (
+        fit_axial_scale,
+        fit_scale,
+        plateaus,
+        profile_from_material,
+    )
     from app.ai.cad_views.section_material import ink_mask, section_material
     from app.ai.cad_views.view_features import side_view_features
 
@@ -178,15 +196,37 @@ def build_revolve(
         pictures = [r for r in pictures if (r.part or "") == part] or pictures
     if not pictures:
         return ViewsResult(False, "на листе не найдено изображения детали")
-    labels = [parse_label(t) for t in label_texts]
-    diameters = [lab.value for lab in labels if lab.kind in ("diameter", "thread") and lab.value]
-    holes = [
-        lab.value
-        for lab in labels
-        if lab.kind == "diameter" and lab.surface == "hole" and lab.value
-    ]
-    shafts = [v for v in diameters if v not in holes]
-    linear = [lab.value for lab in labels if lab.kind == "linear" and lab.value]
+
+    def label_sets(texts: list[str]) -> tuple[list[float], list[float], list[float], list[float]]:
+        parsed = [parse_label(t) for t in texts]
+        diameters = [
+            lab.value for lab in parsed if lab.kind in ("diameter", "thread") and lab.value
+        ]
+        holes = [
+            lab.value
+            for lab in parsed
+            if lab.kind == "diameter" and lab.surface == "hole" and lab.value
+        ]
+        shafts = [v for v in diameters if v not in holes]
+        linear = [lab.value for lab in parsed if lab.kind == "linear" and lab.value]
+        return diameters, holes, shafts, linear
+
+    sheet_sets = label_sets(label_texts)
+
+    def sets_for(region: Any) -> tuple[list[float], list[float], list[float], list[float]]:
+        # Надписи своего изображения (вырез с полями под размеры) читаются
+        # точнее: на плотном листе, ужатом целиком, числа пропадают. Диаметры
+        # — объединением с листом (в вырез попадают не все Ø отверстий),
+        # длины — свои, если они есть: габарит соседней детали деталировки
+        # не должен становиться длиной этой.
+        own = (region_labels or {}).get(region.n) or []
+        if not own:
+            return sheet_sets
+        own_sets = label_sets(own)
+        both = label_sets(own + list(label_texts))
+        linear = own_sets[3] if len(set(own_sets[3])) >= 2 else both[3]
+        return both[0], both[1], both[2], linear
+
     # Изображение для профиля: названное моделью главным — первым, затем
     # разрезы и виды по площади; берётся то, чей профиль надписи Ø объясняют
     # лучше всего. Живой /cad: модель назвала главным вид с торца, и тело
@@ -207,36 +247,100 @@ def build_revolve(
         crop, factor, origin = prepare(gray, region.box)
         line = _line_px(crop)
         vertical, symmetry = _symmetric_orientation(crop, line)
-        if symmetry < 0.2:
+        if symmetry < 0.4:
             tried.append(f"{region.name or region.n}: нет оси симметрии")
             continue
         if vertical:
             crop = np.ascontiguousarray(np.rot90(crop))
-        profile = None
-        if region.role == "section":
-            material, axis = section_material(crop, line)
-            if material.sum() > 0:
-                profile = profile_from_material(material, axis, line, ink=ink_mask(crop, line))
-        if profile is None:
-            profile = silhouette_profile(crop, line)
-        if profile is None:
+        # Разрез узнаётся по штриховке, а не по роли: роль от прогона к
+        # прогону плавает («Опора»: главный вид в разрезе назван видом, вид
+        # с торца — разрезом). Пробуются оба профиля, берётся лучше
+        # объяснённый надписями.
+        variants = []
+        material, axis = section_material(crop, line)
+        if material.sum() > 0:
+            by_material = profile_from_material(material, axis, line, ink=ink_mask(crop, line))
+            if by_material is not None:
+                variants.append((by_material, True))
+        by_silhouette = silhouette_profile(crop, line)
+        if by_silhouette is not None:
+            variants.append((by_silhouette, False))
+            # Зубья в осевом разрезе не штрихуют (ГОСТ 2.402): штриховка
+            # кончается у впадин, наружный контур — основные линии силуэта,
+            # расточка — по материалу (колесо p009: Ø78 по зубьям).
+            if (
+                variants[0][1]
+                and variants[0][0].inner
+                and (abs(variants[0][0].axis_y - by_silhouette.axis_y) <= 2 * line)
+            ):
+                from app.ai.cad_views.revolve_profile import HalfProfile
+
+                hatched = variants[0][0]
+                variants.append(
+                    (
+                        HalfProfile(
+                            axis_y=by_silhouette.axis_y,
+                            line_px=line,
+                            x0=min(hatched.x0, by_silhouette.x0),
+                            x1=max(hatched.x1, by_silhouette.x1),
+                            outer=by_silhouette.outer,
+                            inner=hatched.inner,
+                        ),
+                        True,
+                    )
+                )
+        if not variants:
             tried.append(f"{region.name or region.n}: профиль не найден")
             continue
-        radial, hits = fit_scale(profile, shafts, holes)
-        tried.append(f"{region.name or region.n}: объяснено площадок {hits}")
-        if radial is None or hits < 2:
-            continue
-        key = (hits, region.role == "section")
-        if best is None or key > best[0]:
-            best = (key, region, crop, factor, origin, line, vertical, profile, radial, hits)
+        diameters, holes, shafts, linear = sets_for(region)
+        for profile, hatched in variants:
+            radial, hits = fit_scale(profile, shafts, holes)
+            # Габарит — самая надёжная надпись: масштаб, при котором длина
+            # профиля с ним не сходится, объясняет Ø случайно («Опора»: 5 из
+            # 11 Ø при длине 21 вместо 29). Габарит засчитывается как ещё одна
+            # объяснённая надпись.
+            overall = max(linear) / max(1, profile.x1 - profile.x0) if linear else None
+            if overall is not None:
+                along, along_hits = fit_scale(profile, shafts, holes, near=overall)
+                if along is not None and along_hits + 1 >= hits and along_hits >= 1:
+                    radial, hits = along, along_hits + 1
+            source = "разрез" if hatched else "силуэт"
+            tried.append(f"{region.name or region.n} ({source}): объяснено надписей {hits}")
+            if radial is None or hits < 2:
+                continue
+            # По ЕСКД каждый диаметр образмерен: площадка намного больше
+            # наибольшей надписи Ø — чужие линии в профиле (размерные,
+            # выносные, соседний вид), а не деталь (p007: Ø192 при Ø56).
+            widest = 2 * max((r for _x, r in profile.outer), default=0.0) * radial
+            if diameters and widest > 1.15 * max(diameters):
+                tried[-1] += f", но профиль шире наибольшего Ø ({widest:.1f} > {max(diameters):g})"
+                continue
+            # Вдоль оси то же: длиннее габарита деталь быть не может (p018:
+            # профиль 220 при габарите 146 — захвачены линии за торцом).
+            longest = (profile.x1 - profile.x0) * radial
+            if linear and longest > 1.15 * max(linear):
+                tried[-1] += f", но профиль длиннее габарита ({longest:.1f} > {max(linear):g})"
+                continue
+            # Равное число объяснённых площадок — выигрывает профиль, у
+            # которого они составляют большую долю: случайный масштаб
+            # объясняет две площадки из многих (колесо p009 — 2 из 4 при
+            # диаметре 92 вместо 78), верный — почти все.
+            count = len(plateaus(profile.outer, 3 * profile.line_px)) + len(
+                [p for p in plateaus(profile.inner, 3 * profile.line_px) if p[2] > 0]
+            )
+            key = (hits, round(hits / max(1, count), 2), hatched)
+            if best is None or key > best[0]:
+                best = (key, region, crop, factor, origin, line, vertical, profile, radial, hits)
+                chosen_sets = (diameters, holes, shafts, linear)
     if best is None:
         return ViewsResult(
             False,
-            "ни одно изображение детали не объяснено надписями Ø (нужно от двух площадок): "
+            "ни одно изображение детали не объяснено надписями Ø (нужно от двух разных, габарит считается): "
             + "; ".join(tried),
             notes=notes,
         )
     _key, main, crop, factor, origin, line, vertical, profile, radial, hits = best
+    diameters, holes, shafts, linear = chosen_sets
     notes.append("выбор изображения: " + "; ".join(tried))
     axial, _ = fit_axial_scale(profile, linear, near=radial)
     axial = axial or radial
@@ -329,13 +433,85 @@ async def read_labels(gray: Any, *, router: Any = None, confidential: bool = Tru
     return [str(t) for t in (answer or {}).get("labels") or [] if str(t).strip()]
 
 
+LABELS_VIEW_PROMPT = (
+    "Это вырез технического чертежа: одно изображение детали с размерами вокруг. "
+    "Выпиши ВСЕ размерные надписи на этом вырезе ровно так, как они написаны "
+    "(с Ø, R, M, допусками, «гл.», «N отв.», фасками «1×45°», углами). Числа "
+    "переписывай цифра в цифру; обрезанную краем надпись не выписывай. Ответ — "
+    'ОДНОЙ строкой JSON: {"labels": ["...", "..."]}'
+)
+
+
+async def read_region_labels(
+    gray: Any,
+    regions: list[Any],
+    *,
+    router: Any = None,
+    confidential: bool = True,
+    limit: int = 4,
+) -> dict[int, list[str]]:
+    """Надписи каждого изображения детали — по его вырезу с полями под размеры."""
+    from PIL import Image
+
+    from app.ai.cad_recognize.spec_fragments import _ask
+
+    if router is None:
+        from app.ai.router import ai_router
+
+        router = ai_router
+    height, width = gray.shape[:2]
+    out: dict[int, list[str]] = {}
+    ordered = sorted(regions, key=lambda r: -(r.box[2] - r.box[0]) * (r.box[3] - r.box[1]))
+    for region in ordered[:limit]:
+        x0, y0, x1, y1 = region.box
+        pad = int(0.3 * max(x1 - x0, y1 - y0))
+        crop = gray[
+            max(0, y0 - pad) : min(height, y1 + pad), max(0, x0 - pad) : min(width, x1 + pad)
+        ]
+        image = Image.fromarray(crop)
+        longest = max(image.size)
+        if longest < 1400:
+            factor = min(3.0, 1400 / max(1, longest))
+            image = image.resize(
+                (int(image.size[0] * factor), int(image.size[1] * factor)), Image.LANCZOS
+            )
+        image.thumbnail((2000, 2000))
+        answer = await _ask(
+            LABELS_VIEW_PROMPT,
+            image,
+            router=router,
+            confidential=confidential,
+            num_predict=2000,
+            schema=LABELS_SCHEMA,
+            timeout_seconds=120.0,
+        )
+        out[region.n] = [str(t) for t in (answer or {}).get("labels") or [] if str(t).strip()]
+    return out
+
+
 async def digitize_revolve(gray: Any, *, router: Any = None) -> tuple[ViewsResult, Any, list[str]]:
     """Лист → (результат, прочтение ролей, надписи)."""
     from app.ai.cad_views.sheet_reading import read_sheet
 
     reading = await read_sheet(gray, router=router)
     labels = await read_labels(gray, router=router)
-    return build_revolve(gray, reading, labels), reading, labels
+    pictures = [r for r in reading.regions if r.role in ("view", "section")]
+    region_labels = await read_region_labels(gray, pictures, router=router) if pictures else {}
+    result = build_revolve(gray, reading, labels, region_labels=region_labels)
+    seen = set(labels)
+    merged = list(labels)
+    for texts in region_labels.values():
+        for text in texts:
+            if text not in seen:
+                seen.add(text)
+                merged.append(text)
+    return result, reading, merged
 
 
-__all__ = ["ViewsResult", "build_revolve", "digitize_revolve", "read_labels"]
+__all__ = [
+    "ViewsResult",
+    "build_revolve",
+    "digitize_revolve",
+    "read_labels",
+    "read_region_labels",
+]
