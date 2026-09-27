@@ -36,6 +36,9 @@ def body_measures(result: Any) -> tuple[list[float], list[float]]:
             x, y = segment["to"]
             xs.append(float(x))
             ys.append(float(y))
+            if segment.get("kind") == "arc" and segment.get("center"):
+                cx, cy = segment["center"]
+                diameters.append(2.0 * ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5)
         for feature in result.features or []:
             params = feature.get("params") or {}
             if "diameter_mm" in params:

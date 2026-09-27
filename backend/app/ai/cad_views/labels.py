@@ -28,7 +28,7 @@ class Label:
     """Разобранная надпись. ``kind`` — что это за величина."""
 
     text: str
-    kind: str  # diameter|radius|thread|chamfer|angle|linear|sphere|square|thickness|count|roughness|designation|text
+    kind: str  # diameter|radius|thread|chamfer|angle|linear|sphere|square|thickness|pcd|count|roughness|designation|text
     value: float | None = None
     fit: str | None = None
     surface: str | None = None  # "hole" (H, внутренняя) | "shaft" (h, наружная) | None
@@ -127,6 +127,10 @@ def parse_label(text: str) -> Label:
             count=count,
             tolerance=_tolerance(clean[match.end() :]),
         )
+    # Окружность центров отверстий: «PCD 200», «Ø200 окр. центров».
+    match = re.fullmatch(r"\s*(?:PCD|Pcd)\s*" + _NUM + r"\s*", clean)
+    if match:
+        return Label(raw, "pcd", value=_num(match.group(1)))
     # Толщина плоской детали (ЕСКД): «s3», «s 2,5*» — вместо второго вида.
     match = re.fullmatch(r"\s*[sS]\s*" + _NUM + r"\s*\*?\s*", clean)
     if match:

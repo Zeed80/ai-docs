@@ -54,3 +54,25 @@ def test_thickness_label_is_parsed():
 
     assert parse_label("s3*").kind == "thickness"
     assert parse_label("s 2,5").value == 2.5
+
+
+def test_round_flange_scaled_by_diameter_and_bolt_circle():
+    from app.ai.cad_views.extrude_body import build_extrude
+    from app.ai.cad_views.sheet_reading import Region, SheetReading
+
+    k = 5.0  # px/мм
+    sheet = np.full((1400, 1400), 255, np.uint8)
+    cx, cy = 700, 700
+    cv2.circle(sheet, (cx, cy), int(100 * k), 0, 7)  # Ø200
+    cv2.circle(sheet, (cx, cy), int(20 * k), 0, 7)  # Ø40
+    for dx, dy in ((70, 0), (-70, 0), (0, 70), (0, -70)):  # 4 отв. на Ø140
+        cv2.circle(sheet, (int(cx + dx * k), int(cy + dy * k)), int(6 * k), 0, 7)
+    cv2.line(sheet, (cx - 560, cy), (cx + 560, cy), 0, 2)  # осевые
+    cv2.line(sheet, (cx, cy - 560), (cx, cy + 560), 0, 2)
+    reading = SheetReading("detail", 1, [Region(1, (150, 150, 1250, 1250), "view", "главный вид")])
+    result = build_extrude(sheet, reading, ["Ø200", "Ø40", "4×Ø12", "PCD 140", "s10"])
+    assert result.ok, result.reason
+    diameters = sorted(f["params"]["diameter_mm"] for f in result.features)
+    assert diameters == [12.0, 12.0, 12.0, 12.0, 40.0]
+    arcs = [s for s in result.profile["sketch"] if s["kind"] == "arc"]
+    assert len(arcs) == 2 and arcs[0]["to"][0] == pytest.approx(200, rel=0.02)

@@ -74,14 +74,28 @@ def _circles(
     angles = np.radians(np.arange(0, 360, 2))
     height, width = ink.shape
     out: list[tuple[float, float, float]] = []
-    for cx, cy, r0 in found[0]:
-        best = (0.0, None)
-        for r in np.arange(max(line, 0.5 * r0), 1.5 * r0 + line, 0.5):
+    # С мягким порогом Хаф отдаёт тысячи кандидатов (по убыванию голосов):
+    # лучшие 200 и уточнение радиуса в заданном окне — иначе минуты на лист.
+    for cx, cy, r0 in found[0][:200]:
+        low, high = (radius[0], radius[1]) if radius else (max(line, 0.5 * r0), 1.5 * r0 + line)
+        radii = np.arange(low, high, 0.5)
+        shares = []
+        for r in radii:
             xs = np.clip(np.round(cx + r * np.cos(angles)).astype(int), 0, width - 1)
             ys = np.clip(np.round(cy + r * np.sin(angles)).astype(int), 0, height - 1)
-            share = float(ink[ys, xs].mean())
-            if share > best[0]:
-                best = (share, float(r))
+            shares.append(float(ink[ys, xs].mean()))
+        best = (0.0, None)
+        if shares:
+            top = max(shares)
+            # Толстая обводка даёт плато максимума шириной в штрих — середина
+            # плато и есть середина линии (первый максимум — внутренний край).
+            peak = int(np.argmax(shares))
+            left, right = peak, peak
+            while left > 0 and shares[left - 1] >= top - 0.02:
+                left -= 1
+            while right < len(shares) - 1 and shares[right + 1] >= top - 0.02:
+                right += 1
+            best = (top, float(radii[left] + radii[right]) / 2.0)
         if best[1] is None or best[0] < 0.7 or best[1] < 3 * line:
             continue
         if any(
