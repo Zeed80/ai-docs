@@ -66,9 +66,9 @@ export default function CadListPage() {
   >("");
   // Default = redraw-from-understanding; tracing stays as the auxiliary
   // fallback (see StudioComposer for the same two-method contract).
-  const [vectorizeMethod, setVectorizeMethod] = useState<"trace" | "spec" | "views">(
-    "spec",
-  );
+  const [vectorizeMethod, setVectorizeMethod] = useState<
+    "trace" | "spec" | "views"
+  >("spec");
   // How many times the sheet is read before the answers are intersected. The
   // reader is not merely inaccurate, it is INCONSISTENT, so a single read is a
   // bet; five reads turn that inconsistency into a stated disagreement. It
@@ -186,7 +186,8 @@ export default function CadListPage() {
             pdf_page: pdfPage,
             pdf_dpi: pdfDpi,
             ...(vectorizeMethod === "spec" ? { read_passes: readPasses } : {}),
-            ...(vectorizeMethod === "spec" && upscaleRun !== null
+            ...((vectorizeMethod === "spec" || vectorizeMethod === "views") &&
+            upscaleRun !== null
               ? { auto_upscale: upscaleRun }
               : {}),
             ...(digitizeSheetFormat
@@ -275,19 +276,20 @@ export default function CadListPage() {
               <option value={5}>{t("read_passes_five")}</option>
             </select>
           )}
-          {vectorizeMethod === "spec" && upscaleRun !== null && (
-            <label
-              className="flex items-center gap-2 rounded border border-white/15 bg-zinc-950 px-2 py-2 text-xs text-zinc-200"
-              title={t("upscale_run_hint")}
-            >
-              <input
-                type="checkbox"
-                checked={upscaleRun}
-                onChange={(e) => setUpscaleRun(e.target.checked)}
-              />
-              {t("upscale_run")}
-            </label>
-          )}
+          {(vectorizeMethod === "spec" || vectorizeMethod === "views") &&
+            upscaleRun !== null && (
+              <label
+                className="flex items-center gap-2 rounded border border-white/15 bg-zinc-950 px-2 py-2 text-xs text-zinc-200"
+                title={t("upscale_run_hint")}
+              >
+                <input
+                  type="checkbox"
+                  checked={upscaleRun}
+                  onChange={(e) => setUpscaleRun(e.target.checked)}
+                />
+                {t("upscale_run")}
+              </label>
+            )}
           {vectorizeMethod === "spec" && buildingPlan && (
             <label
               className="flex items-center gap-2 rounded border border-white/15 bg-zinc-950 px-2 py-2 text-xs text-zinc-200"

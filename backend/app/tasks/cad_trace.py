@@ -3610,7 +3610,9 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         # измеримо» становится почти как на 300 dpi и ловит выдумки ридера.
         # Любой отказ — исходник, как без апскейла; исходник хранится рядом.
         upscale_report: dict[str, Any] | None = None
-        if content and vectorize_method == "spec":
+        # Метод `views` меряет контуры и надписи по тому же листу: на грубом
+        # (планка 600 px, линия 2 px) замкнутого контура не находилось вовсе.
+        if content and vectorize_method in ("spec", "views"):
             import asyncio as _asyncio
 
             from app.ai.cad_recognize.sheet_upscale import upscale_options, upscale_sheet
