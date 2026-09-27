@@ -1,0 +1,313 @@
+"""Этап C2: замеры → номиналы надписей, как при перечерчивании инженером.
+
+Тело, построенное по замерам, несёт погрешность листа (89,75 вместо 90,
+отверстие в 79,99; 89,02 вместо 80; 90). Инженер перечерчивает деталь в
+номиналах: координата по одной оси — это цепочка размеров от базы. Решатель
+идёт так же: известны база (0) и габарит; неизвестная координата, которую
+объясняет «известная ± надпись» в пределах допуска листа, получает номинал и
+сама становится известной; и так, пока что-то меняется. Координата, которую
+не объясняет ни одна надпись, остаётся замером — номинал не выдумывается.
+"""
+
+from __future__ import annotations
+
+import math
+
+
+def snap_axis(
+    values: list[float],
+    labels: list[float],
+    *,
+    tolerance: float,
+    overall: float | None = None,
+) -> dict[float, float]:
+    """{замер: номинал} для координат одной оси (от базы 0).
+
+    ``overall`` — габарит по этой оси, если его объясняет надпись: крайняя
+    координата получает его первой.
+    """
+    # Звено цепочки — размер заметно больше допуска: мелкие надписи (фаски,
+    # канавки 1,5…3) притягивали станции к любым своим суммам.
+    positive = sorted({v for v in labels if v >= 3 * tolerance})
+    pending = sorted({round(v, 6) for v in values})
+    snapped: dict[float, float] = {}
+    known: list[float] = [0.0]
+    for value in pending:
+        if abs(value) <= tolerance:
+            snapped[value] = 0.0
+    if overall is not None and pending:
+        far = max(pending, key=abs)
+        if abs(abs(far) - overall) <= tolerance:
+            snapped[far] = overall if far > 0 else -overall
+            known.append(snapped[far])
+    changed = True
+    while changed:
+        changed = False
+        for value in pending:
+            if value in snapped:
+                continue
+            best: tuple[float, float] | None = None
+            for base in known:
+                for label in positive:
+                    for candidate in (base + label, base - label):
+                        gap = abs(candidate - value)
+                        if gap <= tolerance and (best is None or gap < best[0]):
+                            best = (gap, candidate)
+            if best is not None:
+                snapped[value] = round(best[1], 4)
+                known.append(snapped[value])
+                changed = True
+    return snapped
+
+
+def snap_diameter(value: float, diameters: list[float], share: float = 0.03) -> float:
+    """Ø площадки или отверстия — номинал надписи в пределах доли."""
+    near = min(diameters, key=lambda d: abs(d - value), default=None)
+    return near if near is not None and abs(near - value) <= share * near else value
+
+
+def nominal_sketch(
+    segments: list[dict],
+    holes: list[dict],
+    linear: list[float],
+    *,
+    tolerance: float,
+) -> tuple[list[dict], list[dict], int]:
+    """Эскиз выдавливания и центры отверстий — в номиналах (число правок).
+
+    В номиналы приводятся только координаты вершин прямых участков вдоль
+    осей и центры отверстий: точки ломаной дуги к надписям не относятся, и
+    цепочка мелких надписей (2, 4, 10) притягивала их куда угодно (дуга R25
+    планки становилась ступеньками).
+    """
+    segments = _square_corners(segments, tolerance)
+    points = [(0.0, 0.0)] + [(float(s["to"][0]), float(s["to"][1])) for s in segments]
+    snap_x: set[int] = set()
+    snap_y: set[int] = set()
+    for index, (a, b) in enumerate(zip(points, points[1:])):
+        if segments[index].get("kind") != "line":
+            continue
+        dx, dy = abs(b[0] - a[0]), abs(b[1] - a[1])
+        # Вдоль оси — наклон меньше 2° (замер кромки листа не идеален).
+        if dx <= 0.035 * dy and dy > tolerance:
+            snap_x.update({index, index + 1})
+        elif dy <= 0.035 * dx and dx > tolerance:
+            snap_y.update({index, index + 1})
+    xs = [points[i][0] for i in sorted(snap_x)] + [float(h["center_x_mm"]) for h in holes]
+    ys = [points[i][1] for i in sorted(snap_y)] + [float(h["center_y_mm"]) for h in holes]
+    all_x = [p[0] for p in points]
+    all_y = [p[1] for p in points]
+    width = max(all_x) - min(all_x) if all_x else 0.0
+    height = max(all_y) - min(all_y) if all_y else 0.0
+    labels = sorted(set(linear))
+
+    def overall(extent: float) -> float | None:
+        near = min(labels, key=lambda v: abs(v - extent), default=None)
+        return near if near is not None and abs(near - extent) <= tolerance else None
+
+    total_x, total_y = overall(width), overall(height)
+    map_x = snap_axis(xs, labels, tolerance=tolerance, overall=total_x)
+    map_y = snap_axis(ys, labels, tolerance=tolerance, overall=total_y)
+    changed = 0
+    low_x, high_x = min(all_x), max(all_x)
+    low_y, high_y = min(all_y), max(all_y)
+
+    def extreme(value: float, low: float, high: float, total: float | None) -> float | None:
+        # Деталь не выходит за габарит: вершина у его крайней линии лежит на ней.
+        if total is None:
+            return None
+        if abs(value - high) <= tolerance and abs(high - low - total) <= tolerance:
+            return total if abs(low) <= tolerance else high
+        return None
+
+    def fix(value: float, mapping: dict[float, float], allowed: bool) -> float:
+        nonlocal changed
+        if not allowed:
+            return value
+        new = mapping.get(round(value, 6), value)
+        if abs(new - value) > 1e-6:
+            changed += 1
+        return new
+
+    out_segments = []
+    for index, segment in enumerate(segments, start=1):
+        item = dict(segment)
+        x, y = segment["to"]
+        new_x = fix(float(x), map_x, index in snap_x)
+        new_y = fix(float(y), map_y, index in snap_y)
+        edge_x = extreme(new_x, low_x, high_x, total_x)
+        edge_y = extreme(new_y, low_y, high_y, total_y)
+        if edge_x is not None and abs(edge_x - new_x) > 1e-6:
+            new_x, changed = edge_x, changed + 1
+        if edge_y is not None and abs(edge_y - new_y) > 1e-6:
+            new_y, changed = edge_y, changed + 1
+        item["to"] = [new_x, new_y]
+        out_segments.append(item)
+    out_holes = []
+    for hole in holes:
+        item = dict(hole)
+        item["center_x_mm"] = fix(float(hole["center_x_mm"]), map_x, True)
+        item["center_y_mm"] = fix(float(hole["center_y_mm"]), map_y, True)
+        out_holes.append(item)
+    return out_segments, out_holes, changed
+
+
+def _square_corners(segments: list[dict], tolerance: float) -> list[dict]:
+    """Короткое ребро между двумя длинными сторонами вдоль разных осей —
+    скруглённый размыканием прямой угол: вершины заменяются пересечением."""
+    points = [(0.0, 0.0)] + [(float(s["to"][0]), float(s["to"][1])) for s in segments]
+    closed = points[:-1] if points[-1] == points[0] else points
+    count = len(closed)
+    if count < 5:
+        return segments
+
+    def axis(a: tuple[float, float], b: tuple[float, float]) -> str | None:
+        dx, dy = abs(b[0] - a[0]), abs(b[1] - a[1])
+        if dy <= 0.035 * dx and dx > 3 * tolerance:
+            return "h"
+        if dx <= 0.035 * dy and dy > 3 * tolerance:
+            return "v"
+        return None
+
+    merged: dict[int, tuple[float, float]] = {}
+    drop: set[int] = set()
+    for i in range(count):
+        a, b = closed[i], closed[(i + 1) % count]
+        if abs(b[0] - a[0]) + abs(b[1] - a[1]) > 2.5 * tolerance:
+            continue
+        before = axis(closed[(i - 1) % count], a)
+        after = axis(b, closed[(i + 2) % count])
+        if {before, after} != {"h", "v"}:
+            continue
+        corner = (a[0], b[1]) if before == "v" else (b[0], a[1])
+        if (i + 1) % count == 0:
+            continue  # начало эскиза (0, 0) не сдвигается
+        merged[i] = corner
+        drop.add((i + 1) % count)
+    if not merged:
+        return segments
+    out_points = []
+    for i, point in enumerate(closed):
+        if i in drop:
+            continue
+        out_points.append(merged.get(i, point))
+    if out_points[0] != (0.0, 0.0):
+        return segments
+    rebuilt = [{"kind": "line", "to": [round(x, 4), round(y, 4)]} for x, y in out_points[1:]]
+    rebuilt.append({"kind": "line", "to": [0.0, 0.0]})
+    return rebuilt
+
+
+def nominal_round_holes(
+    diameter: float, holes: list[dict], circles: list[float], *, tolerance: float
+) -> tuple[list[dict], int]:
+    """Круглая деталь (эскиз от самой левой точки): центральное отверстие —
+    в центр, остальные — на окружность центров из надписи; N отверстий на
+    одной окружности — равномерный массив (шаг 360/N, фаза — к 15°)."""
+    import math
+
+    cx, cy = diameter / 2.0, 0.0
+    changed = 0
+    out = [dict(h) for h in holes]
+    on_circle: dict[float, list[int]] = {}
+    for index, hole in enumerate(out):
+        dx, dy = float(hole["center_x_mm"]) - cx, float(hole["center_y_mm"]) - cy
+        radius = math.hypot(dx, dy)
+        if radius <= tolerance:
+            hole["center_x_mm"], hole["center_y_mm"] = cx, cy
+            changed += 1
+            continue
+        near = min(circles, key=lambda c: abs(c / 2.0 - radius), default=None)
+        if near is not None and abs(near / 2.0 - radius) <= tolerance:
+            on_circle.setdefault(near, []).append(index)
+    for circle, members in on_circle.items():
+        count = len(members)
+        step = 360.0 / count
+        angles = [
+            math.degrees(
+                math.atan2(float(out[i]["center_y_mm"]) - cy, float(out[i]["center_x_mm"]) - cx)
+            )
+            for i in members
+        ]
+        # Фаза массива — круговое среднее остатков по шагу.
+        folded = [math.radians((a % step) * 360.0 / step) for a in angles]
+        phase = math.degrees(
+            math.atan2(sum(math.sin(f) for f in folded), sum(math.cos(f) for f in folded))
+        )
+        phase = (phase % 360.0) * step / 360.0
+        rounded = round(phase / 15.0) * 15.0
+        phase = rounded if abs(rounded - phase) <= 3.0 else round(phase)
+        for i, angle in zip(members, angles):
+            k = round((angle - phase) / step)
+            nominal = math.radians(phase + k * step)
+            out[i]["center_x_mm"] = round(cx + circle / 2.0 * math.cos(nominal), 4)
+            out[i]["center_y_mm"] = round(cy + circle / 2.0 * math.sin(nominal), 4)
+            changed += 1
+    return out, changed
+
+
+def nominal_revolve(
+    outer: list[dict],
+    bore: list[dict],
+    linear: list[float],
+    outer_diameters: list[float],
+    bore_diameters: list[float],
+    *,
+    tolerance: float,
+) -> tuple[list[dict], list[dict], int]:
+    """Профиль тела вращения — в номиналах: станции вдоль оси и Ø площадок."""
+    # Концы расточки выведены за торцы на 0,05 мм (иначе ядро оставляет
+    # плёнку) — их станции не номинализуются.
+    stations = [p["z"] for p in outer] + [p["z"] for p in bore[1:-1]]
+    length = max((p["z"] for p in outer), default=0.0)
+    labels = sorted(set(linear))
+    near = min(labels, key=lambda v: abs(v - length), default=None)
+    total = near if near is not None and abs(near - length) <= tolerance else None
+    mapping = snap_axis(stations, labels, tolerance=tolerance, overall=total)
+    changed = 0
+
+    def fix_points(points: list[dict], diameters: list[float], ends: bool) -> list[dict]:
+        nonlocal changed
+        out = [dict(p) for p in points]
+        # Площадка — две соседние точки с одним радиусом: Ø по надписи.
+        for a, b in zip(out, out[1:]):
+            if abs(a["r"] - b["r"]) <= 0.02 * max(a["r"], b["r"], 1.0) and b["z"] - a["z"] > 0.3:
+                nominal = snap_diameter(a["r"] + b["r"], diameters) / 2.0
+                if abs(nominal - a["r"]) > 1e-6 or abs(nominal - b["r"]) > 1e-6:
+                    a["r"] = b["r"] = round(nominal, 4)
+                    changed += 1
+        # Станция — номинал, только если порядок вдоль оси с соседями не
+        # ломается (иначе остаётся замер этой станции, а не откат профиля).
+        # Точки одной станции (уступ — две точки) сдвигаются вместе.
+        index = 0
+        while index < len(out):
+            end = index
+            while end + 1 < len(out) and abs(out[end + 1]["z"] - out[index]["z"]) <= 1e-6:
+                end += 1
+            group = range(index, end + 1)
+            movable = [i for i in group if ends or i not in (0, len(out) - 1)]
+            new = mapping.get(round(out[index]["z"], 6))
+            if movable and new is not None and abs(new - out[index]["z"]) > 1e-6:
+                before = out[index - 1]["z"] if index > 0 else -math.inf
+                after = out[end + 1]["z"] if end + 1 < len(out) else math.inf
+                if before - 1e-6 <= new <= after + 1e-6:
+                    for i in movable:
+                        out[i]["z"] = new
+                    changed += 1
+            index = end + 1
+        return out
+
+    return (
+        fix_points(outer, outer_diameters, True),
+        fix_points(bore, bore_diameters, False),
+        changed,
+    )
+
+
+__all__ = [
+    "nominal_revolve",
+    "nominal_round_holes",
+    "nominal_sketch",
+    "snap_axis",
+    "snap_diameter",
+]

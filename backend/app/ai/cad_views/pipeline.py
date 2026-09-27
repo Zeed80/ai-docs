@@ -381,6 +381,20 @@ def build_revolve(
     axial, _ = fit_axial_scale(profile, linear, near=radial)
     axial = axial or radial
     outer, bore = revolve_points(profile, axial, radial)
+    # C2: станции и Ø площадок — номиналы надписей (перечерчивание инженером).
+    from app.ai.cad_views.nominals import nominal_revolve
+
+    length = max((p["z"] for p in outer), default=0.0)
+    outer, bore, snapped = nominal_revolve(
+        outer,
+        bore,
+        linear,
+        shafts or diameters,
+        holes or diameters,
+        tolerance=max(1.2 * line * axial, 0.006 * length),
+    )
+    if snapped:
+        notes.append(f"номиналы надписей: исправлено {snapped} значений замера")
     candidate = revolve_candidate(outer, bore, part or main.part or "деталь")
     features: list[dict[str, Any]] = []
     # Виды той же детали в проекционной связи: перекрываются с главным по

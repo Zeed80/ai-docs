@@ -524,6 +524,28 @@ def build_extrude(
                 "confidence": 0.6,
             }
         )
+    # C2: вершины и центры отверстий — в номиналах надписей по цепочкам от
+    # базы (планка: 89,75 → 90, центр 79,99; 89,02 → 80; 90).
+    from app.ai.cad_views.nominals import nominal_sketch
+
+    holes_params = [f["params"] for f in features if f["kind"] == "hole"]
+    x, y, w, h = outline.box
+    tolerance = max(1.2 * outline.line * scale, 0.012 * max(w * sx, h * sy))
+    if _is_round(outline):
+        from app.ai.cad_views.nominals import nominal_round_holes
+
+        fixed_holes, snapped = nominal_round_holes(
+            w * sx, holes_params, sorted(set(pcds) | set(diameters)), tolerance=tolerance
+        )
+    else:
+        segments, fixed_holes, snapped = nominal_sketch(
+            segments, holes_params, linear, tolerance=tolerance
+        )
+    features[0]["params"]["sketch_profile"] = segments
+    for feature, params in zip([f for f in features if f["kind"] == "hole"], fixed_holes):
+        feature["params"] = params
+    if snapped:
+        notes.append(f"номиналы надписей: исправлено {snapped} значений замера")
     candidate = {
         "candidate": {
             "features": features,
