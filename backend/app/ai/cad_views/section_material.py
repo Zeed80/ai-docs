@@ -114,4 +114,22 @@ def section_material(
     material = material | (strokes & near)
     closing = max(3, int(line))
     material = cv2.morphologyEx(material, cv2.MORPH_CLOSE, np.ones((closing, closing), np.uint8))
+    # Заштрихованная область разреза ограничена основными линиями контура;
+    # блок надписи между размерными линиями (курсивные цифры «Ø7,6», «18°»
+    # дают наклонные «штрихи») — тонкими. Область, чья граница лежит на
+    # основных линиях меньше чем на 70 %, — не материал («Опора»: стенки
+    # 0,87–1,0, блок «Ø7,6» — 0,53).
+    from app.ai.cad_views.extrude_body import main_line_mask
+
+    _ink, thick, _line = main_line_mask(g)
+    regions_n, regions, _st, _c = cv2.connectedComponentsWithStats(
+        cv2.dilate(material, np.ones((3, 3), np.uint8)), 8
+    )
+    grow = np.ones((int(line) | 1, int(line) | 1), np.uint8)
+    for index in range(1, regions_n):
+        region = (regions == index).astype(np.uint8)
+        ring = cv2.dilate(region, grow) & (1 - region)
+        on_main = float((ring & thick).sum()) / max(1.0, float(ring.sum()))
+        if on_main < 0.7:
+            material[region > 0] = 0
     return material, axis

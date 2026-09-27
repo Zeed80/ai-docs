@@ -202,7 +202,7 @@ def profile_from_material(
     # Разрыв материала — отверстие поперёк оси (стенки не заштрихованы) или
     # стык граней; до четверти длины детали — та же деталь.
     span = (present[-1] - present[0]) if present else 0
-    gap = max(int(10 * line), int(0.25 * span))
+    gap = max(int(10 * line), int(0.45 * span))
     for a, b in zip(present, present[1:]):
         if 1 < b - a <= gap:
             for x in range(a + 1, b):
@@ -291,14 +291,17 @@ def fit_scale(
         # без чисел «объясняла» весь вал).
         matched: set[float] = set()
         residual = 0.0
-        for diameters, pool in (
-            (outer_d, outer_labels or labels_any),
-            (inner_d, inner_labels or labels_any),
+        # Расточка по штриховке систематически меньше надписи (~0,4 мм:
+        # «Опора», 8,07 при Ø8,5H10); надписи с полем допуска отверстия (H)
+        # сопоставляются с ней в 5 %, прочие — в 2 %.
+        for diameters, pool, share in (
+            (outer_d, outer_labels or labels_any, 0.02),
+            (inner_d, inner_labels or labels_any, 0.05 if inner_labels else 0.02),
         ):
             for d in diameters:
                 mm = d * scale
                 nearest = min(pool, key=lambda v: abs(v - mm))
-                if abs(nearest - mm) <= 0.02 * nearest:
+                if abs(nearest - mm) <= share * nearest:
                     matched.add(nearest)
                     residual += abs(nearest - mm) / nearest
         hits = len(matched)
