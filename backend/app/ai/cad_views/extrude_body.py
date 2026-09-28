@@ -55,7 +55,11 @@ def main_line_mask(gray: Any) -> tuple[Any, Any, float]:
 
 
 def outlines(
-    gray: Any, view_boxes: list[tuple[int, int, int, int]], *, opening_lines: float = 3.0
+    gray: Any,
+    view_boxes: list[tuple[int, int, int, int]],
+    *,
+    opening_lines: float = 3.0,
+    hole_min_lines: float = 3.0,
 ) -> list[Outline]:
     """Замкнутые контуры основных линий, пересекающиеся с областями видов."""
     import cv2
@@ -166,7 +170,9 @@ def outlines(
         # (лист 1c411279_p012 — 885 с): предел 40 толщин линии, крупные
         # отверстия находятся замкнутыми контурами ниже.
         top = min(0.45 * min(w, h), 40 * line)
-        for cx, cy, r in _circles(crop_ink, line, radius=(1.5 * line, top)):
+        for cx, cy, r in _circles(
+            crop_ink, line, radius=(1.5 * line, top), min_radius_lines=hole_min_lines
+        ):
             gx, gy = cx + max(0, x - pad), cy + max(0, y - pad)
             lx, ly = int(gx - x + 1), int(gy - y + 1)
             if not (0 <= ly < filled.shape[0] and 0 <= lx < filled.shape[1]):

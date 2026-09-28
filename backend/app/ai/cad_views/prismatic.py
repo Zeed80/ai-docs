@@ -506,7 +506,9 @@ def build_prismatic(
     if not boxes:
         return ViewsResult(False, "на листе не найдено изображения детали")
     # Стрелки размеров и цифры у кромок — толстые пятна: размыкание шире.
-    found = outlines(gray, boxes, opening_lines=5.0)
+    # Отверстия крепежа на листе 1:2 — радиус 2,5…3 толщины линии: общий
+    # порог (3) пропускал три из четырёх; мелкие проверяются стенками.
+    found = outlines(gray, boxes, opening_lines=5.0, hole_min_lines=2.0)
     if len(found) < 2:
         return ViewsResult(False, "для призматической детали нужно не меньше двух видов")
     main_box = next((r.box for r in reading.regions if r.n == reading.main), None)
@@ -1374,8 +1376,10 @@ def _assemble(
                 cover = ring_cover(ink, px, py, d1 / 2.0 / scale, along.outline.line)
                 if cover > best[0]:
                     best = (cover, c2)
-            if best[0] >= 0.75 or (
-                best[0] >= 0.6 and (b0 is None or abs((b1 - b0) - d1) <= 0.15 * d1 + 1.0)
+            # Без второго вида выступ подтверждает только уверенная окружность:
+            # иначе пятна стрелок у кромки становились приливами Ø5.
+            if best[0] >= (0.8 if b0 is None else 0.75) or (
+                b0 is not None and best[0] >= 0.6 and abs((b1 - b0) - d1) <= 0.15 * d1 + 1.0
             ):
                 profile = "circle"
                 c2 = best[1]
@@ -1460,6 +1464,55 @@ def _assemble(
                 for boss in bosses
             ):
                 continue  # торец прилива на виде вдоль его оси
+            # Выступ того же пролёта на виде сбоку — прилив, а не отверстие,
+            # даже если прилив не собрался (корпус 21: торец Ø25 сверлился
+            # насквозь отверстием Ø25).
+            face_boss = next(
+                (
+                    item
+                    for item in candidates
+                    if item["axis"] == n
+                    and item["range"][0] - radius_mm * 0.2
+                    <= centre[item["tangent"]]
+                    <= item["range"][1] + radius_mm * 0.2
+                    and abs((item["range"][1] - item["range"][0]) - 2 * radius_mm)
+                    <= 0.2 * 2 * radius_mm
+                ),
+                None,
+            )
+            if face_boss is not None:
+                if not any(
+                    boss["axis"] == n for boss in bosses if boss["sign"] == face_boss["sign"]
+                ):
+                    face = extent[n] if face_boss["sign"] > 0 else 0.0
+                    origin = {**centre, n: face}
+                    diameter = _match(2 * radius_mm, diameters, 0.06) or round(2 * radius_mm, 3)
+                    bosses.append(
+                        {
+                            "axis": n,
+                            "sign": face_boss["sign"],
+                            "origin": origin,
+                            "profile": "circle",
+                            "size": diameter,
+                        }
+                    )
+                    features.append(
+                        {
+                            "kind": "boss",
+                            "params": {
+                                "placement": {
+                                    "origin": _point(origin),
+                                    "axis": _vector(n, face_boss["sign"]),
+                                    "ref": _vector(ua),
+                                },
+                                "profile": "circle",
+                                "depth_mm": round(face_boss["depth"], 3),
+                                "diameter_mm": diameter,
+                            },
+                            "confidence": 0.5,
+                        }
+                    )
+                continue
             near_min = frame.near == "min"
             from_min = near_min if visible else not near_min
             start = 0.0 if from_min else extent[n]
@@ -1474,6 +1527,8 @@ def _assemble(
                     fixed = {shared: centre[shared] + offset}
                     walls.append(line_extent(ink, other, n, fixed, start, stop))
                 reach = max(reach, min(walls))
+            if r < 3 * line and reach < 2 * line * scale:
+                continue  # мелкий круг без стенок на соседних видах — петля цифры
             through = reach >= 0.9 * extent[n] or reach < 2 * line * scale
             diameter = _match(2 * radius_mm, diameters, 0.06) or round(2 * radius_mm, 3)
             origin = dict(centre)
