@@ -265,9 +265,17 @@ def _vertical_line(
         # через полосу на 65 %, начиналось далеко от строки кромки.
         if not inside or inside[0] - low > 3 or high - inside[-1] > reach_gap:
             continue
-        above = strip[max(0, top_row - 9) : max(0, top_row - 3)]
-        below = strip[bottom_row + 4 : bottom_row + 10]
-        if (above.size and above.mean() > 0.5) or (below.size and below.mean() > 0.5):
+        # Окно — не короче периода штриха: невидимый контур рисуется штрихами
+        # (ГОСТ 2.303), и окно в 6 px попадало в пропуск — дно глухого Ø17,5
+        # снова делало сквозное Ø9 в его полосе «глухим на 14,5» (plate-9 v11).
+        reach = max(6, int(round(2.0 * reach_gap)))
+        continued = False
+        for length, share in ((6, 0.5), (reach, 0.35)):
+            above = strip[max(0, top_row - 3 - length) : max(0, top_row - 3)]
+            below = strip[bottom_row + 4 : bottom_row + 4 + length]
+            if (above.size and above.mean() > share) or (below.size and below.mean() > share):
+                continued = True
+        if continued:
             continue
         return True
     return False

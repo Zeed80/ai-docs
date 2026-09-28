@@ -2,7 +2,9 @@
 
 Виды заданы в `sheet_from_solid.plan_views`, их оси подобраны пробой ядра:
 вид спереди — u = −x, v = z; план (наблюдатель на +Z) — u = −x, v = y; вид
-слева — u = y, v = z. Числа кладутся на вид от его рамки: у рамки вида и у
+слева — u = y, v = z. В истинной ориентации направления видов развёрнуты
+(`sheet_from_solid._turn_weldment_views`): u = x, x и −y — знак u берётся
+из направления вида. Числа кладутся на вид от его рамки: у рамки вида и у
 габарита узла общие края, и отсчёт от них не зависит от того, где ядро
 поставило начало координат вида.
 
@@ -54,19 +56,31 @@ def _frames(spec: dict, plan: Any, views: list[dict]) -> dict[str, Any] | None:
     if not all(isinstance(value, dict) and value for value in bounds.values()):
         return None
     front, above, left = bounds["front"], bounds["plan"], bounds["top"]
+
+    def sign(kind: str, axis: int, default: float) -> float:
+        direction = plan.views[index[kind]].get("x_direction") or ()
+        return 1.0 if (direction[axis] if len(direction) > axis else default) > 0 else -1.0
+
+    def along(box: dict, value: float, start: float, direction: float) -> float:
+        edge = box["u_min"] if direction > 0 else box["u_max"]
+        return edge + direction * (value - start) * ratio
+
+    s_front, s_plan, s_left = sign("front", 0, -1.0), sign("plan", 0, -1.0), sign("top", 1, 1.0)
     return {
         "boxes": boxes,
         "index": index,
+        # Вид слева в истинной ориентации: u = −y, край y = 0 — справа.
+        "left_turned": s_left < 0,
         "front": lambda x, z: (
-            front["u_max"] - (x - low[0]) * ratio,
+            along(front, x, low[0], s_front),
             front["v_min"] + (z - low[2]) * ratio,
         ),
         "plan": lambda x, y: (
-            above["u_max"] - (x - low[0]) * ratio,
+            along(above, x, low[0], s_plan),
             above["v_min"] + (y - low[1]) * ratio,
         ),
         "left": lambda y, z: (
-            left["u_min"] + (y - low[1]) * ratio,
+            along(left, y, low[1], s_left),
             left["v_min"] + (z - low[2]) * ratio,
         ),
     }
@@ -98,6 +112,10 @@ def weldment_dimensions(drawing: dict, spec: dict, plan: Any) -> None:
     (blo, bhi) = boxes[0]
     left, front = frames["left"], frames["front"]
     left_index, front_index = frames["index"]["top"], frames["index"]["front"]
+    # Вертикальные размеры вида слева встают по свою сторону от кромки:
+    # толщина основания — слева от вида, высота ребра — справа от ребра.
+    # Кромки берутся по месту на виде, а не по y: при u = −y край y = 0 справа.
+    turned = frames["left_turned"]
     width = bhi[0] - blo[0]
     depth = bhi[1] - blo[1]
     thickness = bhi[2] - blo[2]
@@ -126,8 +144,8 @@ def weldment_dimensions(drawing: dict, spec: dict, plan: Any) -> None:
         _dimension(
             left_index,
             "DistanceY",
-            left(blo[1], blo[2]),
-            left(blo[1], bhi[2]),
+            left(bhi[1] if turned else blo[1], blo[2]),
+            left(bhi[1] if turned else blo[1], bhi[2]),
             thickness,
             "weldment_thickness",
         )
@@ -137,8 +155,8 @@ def weldment_dimensions(drawing: dict, spec: dict, plan: Any) -> None:
             _dimension(
                 left_index,
                 "DistanceY",
-                left(hi[1], lo[2]),
-                left(hi[1], hi[2]),
+                left(lo[1] if turned else hi[1], lo[2]),
+                left(lo[1] if turned else hi[1], hi[2]),
                 hi[2] - lo[2],
                 "weldment_rib_height",
                 below=True,
@@ -246,8 +264,15 @@ def weldment_entities(
     for position, (lo, hi) in enumerate(boxes, start=1):
         # У правого края тела, по высоте — середина: у основания середину
         # по ширине занимает размер высоты ребра.
+        mid = lo[2] + 0.5 * (hi[2] - lo[2])
         marks.append(
-            (position, left(lo[1] + 0.85 * (hi[1] - lo[1]), lo[2] + 0.5 * (hi[2] - lo[2])))
+            (
+                position,
+                max(
+                    (left(lo[1] + share * (hi[1] - lo[1]), mid) for share in (0.15, 0.85)),
+                    key=lambda point: point[0],
+                ),
+            )
         )
     shelf_u = right + _LEADER_MM
     # Подъём не меньше половины вылета: пологая выноска (5…10°) сливалась

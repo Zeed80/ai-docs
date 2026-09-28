@@ -9,6 +9,8 @@ MM_PER_PX = 0.2  # 5 px на мм
 BODY = (100.0, 100.0, 400.0, 400.0)  # грань 60 × 60 мм
 FACE = (60.0, 60.0)
 POCKET = {"profile": "rectangle", "on_plane": "top", "width_mm": 15.0, "height_mm": 15.0}
+# Лист в истинной ориентации (H1): у грани `top` ось v на листе смотрит вниз —
+# карман над центром вида имеет отрицательную v.
 
 
 def _sheet() -> tuple[Image.Image, ImageDraw.ImageDraw]:
@@ -31,7 +33,7 @@ def test_a_cell_of_through_lines_is_not_the_pocket():
         BODY,
         MM_PER_PX,
         FACE,
-        {**POCKET, "center_u_mm": -3.0, "center_v_mm": 7.0},
+        {**POCKET, "center_u_mm": -3.0, "center_v_mm": -7.0},
     )
     assert measured is None
 
@@ -47,8 +49,8 @@ def test_a_closed_outline_is_found_even_when_one_side_is_extended():
         BODY,
         MM_PER_PX,
         FACE,
-        {**POCKET, "center_u_mm": -3.0, "center_v_mm": 7.0},
+        {**POCKET, "center_u_mm": -3.0, "center_v_mm": -7.0},
     )
     assert measured is not None
     assert abs(measured["center_u_mm"] - (-2.5)) < 1.0
-    assert abs(measured["center_v_mm"] - 6.5) < 1.0
+    assert abs(measured["center_v_mm"] - (-6.5)) < 1.0

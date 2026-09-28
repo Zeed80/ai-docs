@@ -1731,6 +1731,53 @@ def test_every_plate_of_the_weldment_is_dimensioned_on_its_view():
     assert abs(u2 - u1) == pytest.approx(120 * ratio)
 
 
+def test_in_true_orientation_the_weldment_stands_on_its_base():
+    """H1: оси видов узла подбирались пробой зеркального ядра (u = −x); в
+    истинной ориентации те же направления клали основание над рёбрами.
+    Разворот на 180° ставит основание вниз, а размеры встают по месту на
+    виде: край y = 0 на виде слева — справа (u = −y)."""
+    from app.ai.cad_ir.sheet_from_solid import _turn_weldment_views, plan_sheet
+    from app.ai.cad_ir.weldment_sheet import weldment_dimensions
+
+    spec = _weldment()
+    plan = plan_sheet(spec, {"bounds_mm": {"x": 80, "y": 120, "z": 38}})
+    _turn_weldment_views(plan, True)
+    directions = {view["kind"]: view["x_direction"] for view in plan.views}
+    assert directions == {
+        "front": [1.0, 0.0, 0.0],
+        "plan": [1.0, 0.0, 0.0],
+        "top": [0.0, -1.0, 0.0],
+    }
+    ratio = plan.ratio
+    box = {"u_min": 0.0, "u_max": 0.0, "v_min": 0.0, "v_max": 0.0}
+    drawing = {
+        "views": [
+            {"bounds_mm": {**box, "u_max": 80 * ratio, "v_max": 38 * ratio}},
+            {"bounds_mm": {**box, "u_max": 80 * ratio, "v_max": 120 * ratio}},
+            {"bounds_mm": {**box, "u_max": 120 * ratio, "v_max": 38 * ratio}},
+        ],
+        "dimensions": [],
+    }
+    weldment_dimensions(drawing, spec, plan)
+    by = {item["measured_by"]: item for item in drawing["dimensions"]}
+    # Толщина основания — у левого края вида слева, т. е. у края y = 120.
+    (u1, _), (u2, _) = by["weldment_thickness"]["anchors_mm"]
+    assert u1 == u2 == pytest.approx(0.0)
+    # Положение ребра отсчитано от края y = 0, который теперь справа.
+    position = [i for i in drawing["dimensions"] if i["measured_by"] == "weldment_rib_position"]
+    assert all(
+        max(u for u, _v in item["anchors_mm"]) == pytest.approx(120 * ratio) for item in position
+    )
+
+
+def test_the_mirror_sheet_keeps_the_probed_weldment_axes():
+    from app.ai.cad_ir.sheet_from_solid import _turn_weldment_views, plan_sheet
+
+    plan = plan_sheet(_weldment(), {"bounds_mm": {"x": 80, "y": 120, "z": 38}})
+    _turn_weldment_views(plan, False)
+    assert {view["kind"]: view["x_direction"] for view in plan.views}["front"] == [-1.0, 0.0, 0.0]
+
+
 def test_a_weld_is_designated_by_standard_type_and_leg():
     from app.ai.cad_ir.weldment_sheet import weld_designation
 

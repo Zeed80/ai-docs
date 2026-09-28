@@ -273,8 +273,9 @@ emg-regression:
 
 # Проверяльщики оцифровки против сгенерированного эталона (план «гипотеза →
 # проверка», задачи M1/M3). Корпус не в git: собирается `cad-verify-corpus`.
-VERIFY_CORPUS ?= cad-dataset-out/verify-corpus-v10
-VERIFY_BASELINE ?= tests/fixtures/verify_gate_v10.json
+# v11 — листы в истинной ориентации (H1), как их рисует продукт.
+VERIFY_CORPUS ?= cad-dataset-out/verify-corpus-v11
+VERIFY_BASELINE ?= tests/fixtures/verify_gate_v11.json
 
 # Храповик по ВСЕМ проверяльщикам: точные счётчики «найдено/верно» на каждой
 # ступени лестницы против базы; хуже на одну гипотезу или лишний неверный

@@ -211,7 +211,20 @@ def eval_plate_hole(png: bytes, truth: dict, frame_source: str = "truth") -> lis
         return []
     profile = truth["spec"]["main_view"]["profile"]
     width, height = float(profile["width_mm"]), float(profile["height_mm"])
-    holes = [(x + width / 2.0, y + height / 2.0, d) for x, y, d in expand_holes(profile)]
+    from app.ai.cad_recognize.verifiers.stage import _drawn_hole_diameter
+
+    # Как в продукте (`stage._plate_holes`): гипотеза — Ø окружности на плане,
+    # у резьбового отверстия — по впадинам резьбы, а не номинал (с резьбовыми
+    # отверстиями корпуса 16 % верных чтений считались промахом).
+    drawn = {
+        (float(hole["center_x_mm"]), float(hole["center_y_mm"])): _drawn_hole_diameter(hole)
+        for hole in profile.get("holes") or []
+        if isinstance(hole, dict) and hole.get("thread")
+    }
+    holes = [
+        (x + width / 2.0, y + height / 2.0, drawn.get((x, y), d))
+        for x, y, d in expand_holes(profile)
+    ]
     gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))
     frame, frame_error = reference, None
     if frame_source == "sheet":

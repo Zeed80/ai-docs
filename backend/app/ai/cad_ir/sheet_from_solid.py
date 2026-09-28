@@ -963,9 +963,18 @@ def _prismatic_dimension_requests(
     for view_index, view in enumerate(views):
         if view_index in plan.scaffold_views:
             continue
-        for item in view.get("visible") or []:
+        # Невидимые окружности — после видимых: глухое отверстие, открытое на
+        # дальнюю грань, на честном виде штриховое, и без них в истинной
+        # ориентации пропадали «Ø11 гл.15», «M5 гл.18» (H1). Размер такой
+        # окружности строится по ней самой, без ребра ядра.
+        circles = [(item, False) for item in view.get("visible") or []] + [
+            (item, True) for item in view.get("hidden") or []
+        ]
+        for item, hidden in circles:
             index = item.get("edge_index")
-            if index is None or item.get("type") != "circle" or not wanted_diameters:
+            if item.get("type") != "circle" or not wanted_diameters:
+                continue
+            if index is None and not hidden:
                 continue
             match = _closest(2.0 * float(item.get("radius") or 0.0) / ratio, wanted_diameters)
             if match is None:
@@ -974,7 +983,7 @@ def _prismatic_dimension_requests(
             requests.append(
                 {
                     "view_index": view_index,
-                    "edge_index": int(index),
+                    "edge_index": None if hidden else int(index),
                     "kind": "Diameter",
                     "label": hole_texts.get(round(match, 3), ""),
                     "_nominal_mm": match,
@@ -1885,11 +1894,20 @@ def _hole_dimensions(drawing: dict, plan: SheetPlan, spec: dict | None = None) -
                 v_max = body[1] / 2.0
         cu = (float(bounds["u_min"]) + float(bounds["u_max"])) / 2.0
         cv = (v_min + v_max) / 2.0
-        circles = [
-            (float(item["center"][0]), float(item["center"][1]), float(item["radius"]))
-            for item in view.get("visible") or []
-            if item.get("type") == "circle" and item.get("center") and item.get("radius")
-        ]
+        # И невидимые окружности: глухое отверстие, открытое на дальнюю грань,
+        # на честном виде штриховое — без него пропадали его координаты (H1).
+        circles: list[tuple[float, float, float]] = []
+        for item in (view.get("visible") or []) + (view.get("hidden") or []):
+            if item.get("type") != "circle" or not item.get("center") or not item.get("radius"):
+                continue
+            circle = (float(item["center"][0]), float(item["center"][1]), float(item["radius"]))
+            if any(
+                math.hypot(circle[0] - c[0], circle[1] - c[1]) <= near
+                and abs(circle[2] - c[2]) <= near
+                for c in circles
+            ):
+                continue
+            circles.append(circle)
         # Наружный контур фланца и центральное отверстие стоят в центре плана —
         # у них нет координат, только диаметр.
         if plan.part_class == "plate":
@@ -3092,9 +3110,63 @@ def _label_dimensions(dimensions: list[dict], requests: list[dict], spec: dict) 
             dimension["place_u"] = float(match["_place_u"])
 
 
-def _kernel_views(views: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Запрос видов ядру — без служебных меток листа (ядро их не принимает)."""
-    return [{key: value for key, value in view.items() if key != "role"} for view in views]
+def _kernel_views(
+    views: list[dict[str, Any]], *, plan_from_above: bool = False
+) -> list[dict[str, Any]]:
+    """Запрос видов ядру — без служебных меток листа (ядро их не принимает).
+
+    ``plan_from_above`` — план плоской детали смотрит сверху (+Z). Вид ядра
+    `side` смотрит снизу (с −Z): в зеркальном режиме переворот TechDraw
+    делал его похожим на вид сверху, в истинной ориентации он честно вид
+    снизу — +Y вниз, глухие отверстия сверху невидимые (H1).
+    """
+    out = []
+    for view in views:
+        item = {key: value for key, value in view.items() if key != "role"}
+        if plan_from_above and item.get("kind") in _FROM_ABOVE:
+            item["kind"] = _FROM_ABOVE[item["kind"]]
+        if plan_from_above and item.get("kind") == "top" and not item.get("x_direction"):
+            item["x_direction"] = _THICKNESS_X_DIRECTION
+        out.append(item)
+    return out
+
+
+# План сверху (+Z) и вид на толщину в проекционной связи с ним. В истинной
+# ориентации строки вида на толщину (`top`) шли зеркально относительно плана
+# сверху — глубина глухих отверстий не мерилась (0 из 54). Горизонтальная ось
+# вида вдоль +Z поворачивает его на 180° в своей плоскости (поворот, не
+# отражение): строки совпадают с планом, 4 из 4 глубин подтверждены.
+_FROM_ABOVE = {"side": "plan"}
+_THICKNESS_X_DIRECTION = (0.0, 0.0, 1.0)
+
+
+def _plan_from_above(plan: SheetPlan, spec: dict, true_orientation: bool) -> bool:
+    """План пластины и фланца — вид сверху; корпус оставлен как согласован."""
+    return (
+        true_orientation and plan.part_class in ("flange", "plate") and not _has_wall_features(spec)
+    )
+
+
+def _turn_weldment_views(plan: SheetPlan, true_orientation: bool) -> None:
+    """Оси видов узла подобраны пробой зеркального ядра (u = −x); в истинной
+    ориентации те же направления давали узел вверх ногами — основание над
+    ребром, валик шва сверху. Разворот направления на 180° в плоскости вида
+    ставит основание вниз: вид спереди u = x, план u = x, вид слева u = −y."""
+    if not true_orientation or plan.part_class != "weldment":
+        return
+    for view in plan.views:
+        if view.get("x_direction"):
+            view["x_direction"] = [-float(value) for value in view["x_direction"]]
+
+
+def _as_side(drawing: dict | None, plan_from_above: bool) -> dict | None:
+    """Вид `plan`, запрошенный вместо `side`, — обратно под именем листа."""
+    if drawing and plan_from_above:
+        back = {value: key for key, value in _FROM_ABOVE.items()}
+        for view in drawing.get("views") or []:
+            if view.get("kind") in back:
+                view["kind"] = back[view["kind"]]
+    return drawing
 
 
 async def build_sheet_from_solid(
@@ -3105,13 +3177,13 @@ async def build_sheet_from_solid(
     sheet_format: str | None = None,
     landscape: bool = True,
     geometry_only: bool = True,
-    true_orientation: bool = False,
+    true_orientation: bool = True,
 ) -> SheetResult | None:
     """Compile the sheet: views from the kernel, everything else from the read.
 
     ``true_orientation`` — виды как их видит наблюдатель (ядро поправляет
-    перевёрнутую ось TechDraw); по умолчанию прежние зеркальные виды, на
-    которых построены проверяльщики.
+    перевёрнутую ось TechDraw), как на настоящих чертежах (H1). ``False`` —
+    прежние зеркальные виды: только для сравнения со старыми корпусами.
 
     Returns ``None`` when the kernel cannot draw the part (an older image, an
     unprojectable shape) so the caller can say so plainly rather than hand back
@@ -3129,12 +3201,17 @@ async def build_sheet_from_solid(
         landscape=landscape,
         geometry_only=geometry_only,
     )
-    drawing = await draw_candidate_sheet(
-        candidate,
-        views=_kernel_views(plan.views),
-        scale=plan.ratio,
-        hidden_lines=True,
-        true_orientation=true_orientation,
+    from_above = _plan_from_above(plan, spec, true_orientation)
+    _turn_weldment_views(plan, true_orientation)
+    drawing = _as_side(
+        await draw_candidate_sheet(
+            candidate,
+            views=_kernel_views(plan.views, plan_from_above=from_above),
+            scale=plan.ratio,
+            hidden_lines=True,
+            true_orientation=true_orientation,
+        ),
+        from_above,
     )
     if not drawing or not (drawing.get("views") or []):
         return None
@@ -3145,14 +3222,17 @@ async def build_sheet_from_solid(
         # A second pass, because an edge can only be named once the view exists.
         dimensioned = await draw_candidate_sheet(
             candidate,
-            views=_kernel_views(plan.views),
+            views=_kernel_views(plan.views, plan_from_above=from_above),
             scale=plan.ratio,
             hidden_lines=True,
             true_orientation=true_orientation,
             dimensions=[
-                {k: v for k, v in request.items() if not k.startswith("_")} for request in requests
+                {k: v for k, v in request.items() if not k.startswith("_")}
+                for request in requests
+                if request.get("edge_index") is not None
             ],
         )
+        dimensioned = _as_side(dimensioned, from_above)
         if dimensioned and dimensioned.get("views"):
             drawing = dimensioned
             warnings = list(drawing.get("warnings") or [])
