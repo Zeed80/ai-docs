@@ -473,6 +473,21 @@ def build_revolve(
             by_main_lines = silhouette_profile(main_only, line)
             if by_main_lines is not None:
                 variants.append((by_main_lines, False))
+            # Контур детали — одна связная фигура основных линий; следы
+            # секущих (штрих со стрелкой над и под видом), буквы и стрелки
+            # размеров — отдельные: силуэт по ним «вырастал» буртами (вал
+            # с четырьмя сечениями).
+            count, labels_cc, stats, _ = cv2.connectedComponentsWithStats(thick_only, 8)
+            if count > 2:
+                biggest = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+                outline_only = np.full_like(crop, 255)
+                keep = cv2.dilate(
+                    (labels_cc == biggest).astype(np.uint8), np.ones((3, 3), np.uint8)
+                )
+                outline_only[keep > 0] = crop[keep > 0]
+                by_outline = silhouette_profile(outline_only, line)
+                if by_outline is not None:
+                    variants.append((by_outline, False))
         by_silhouette = silhouette_profile(crop, line)
         if by_silhouette is not None:
             variants.append((by_silhouette, False))
