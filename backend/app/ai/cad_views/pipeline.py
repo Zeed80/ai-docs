@@ -366,6 +366,15 @@ def build_revolve(
     from app.ai.cad_views.section_material import ink_mask, section_material
     from app.ai.cad_views.view_features import side_view_features
 
+    # Линейка бумаги — основная надпись ЕСКД (нет её — масштаб только по
+    # надписям).
+    try:
+        from app.ai.cad_recognize.verifiers.sheet_scale import locate_title_block
+
+        block = locate_title_block(gray)
+    except Exception:  # noqa: BLE001 — лист без штампа или необычный
+        block = None
+    paper = block.paper_px_per_mm if block is not None else None
     pictures = [r for r in reading.regions if r.role in ("view", "section")]
     if part:
         pictures = [r for r in pictures if (r.part or "") == part] or pictures
@@ -560,6 +569,25 @@ def build_revolve(
                 along, along_hits = fit_scale(profile, shafts, holes, near=overall)
                 if along is not None and along_hits + 1 > hits and along_hits >= 1:
                     radial, hits = along, along_hits + 1
+            if paper is not None and radial is not None:
+                # Масштаб по штампу: основная надпись 185 × 55 мм — линейка
+                # бумаги, масштаб изображения — из ряда ГОСТ 2.302. Масштаб
+                # вне ряда — случайное совпадение надписей Ø; из масштабов
+                # ряда берётся лучший по надписям, если объясняет хоть две.
+                from app.ai.cad_recognize.verifiers.sheet_scale import _GOST_SCALES
+
+                allowed = [
+                    1.0 / (paper * factor * model / sheet_paper)
+                    for model, sheet_paper in _GOST_SCALES
+                ]
+                if not any(abs(radial / g - 1.0) <= 0.04 for g in allowed):
+                    options = []
+                    for g in allowed:
+                        found, found_hits = fit_scale(profile, shafts, holes, near=g, spread=0.04)
+                        if found is not None and found_hits >= 2:
+                            options.append((found_hits, found))
+                    if options:
+                        hits, radial = max(options)
             source = "разрез" if hatched else "силуэт"
             tried.append(f"{region.name or region.n} ({source}): объяснено надписей {hits}")
             if radial is None or hits < 2:
