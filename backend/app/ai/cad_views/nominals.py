@@ -255,6 +255,7 @@ def nominal_revolve(
     *,
     tolerance: float,
     bore_share: float = 0.03,
+    diameter_tolerance_mm: float = 0.0,
 ) -> tuple[list[dict], list[dict], int]:
     """Профиль тела вращения — в номиналах: станции вдоль оси и Ø площадок.
 
@@ -279,7 +280,15 @@ def nominal_revolve(
         # Площадка — две соседние точки с одним радиусом: Ø по надписи.
         for a, b in zip(out, out[1:]):
             if abs(a["r"] - b["r"]) <= 0.02 * max(a["r"], b["r"], 1.0) and b["z"] - a["z"] > 0.3:
-                nominal = snap_diameter(a["r"] + b["r"], diameters, share) / 2.0
+                measured = a["r"] + b["r"]
+                nominal = snap_diameter(measured, diameters, share) / 2.0
+                if abs(2 * nominal - measured) <= 1e-9 and diameter_tolerance_mm > 0:
+                    # Толщина линии в замере: мелкий вид с толстыми линиями
+                    # даёт Ø на линию шире (14,7 при Ø14) — номинал в пределах
+                    # толщины линии, если он единственный.
+                    near = [d for d in diameters if abs(d - measured) <= diameter_tolerance_mm]
+                    if len(near) == 1:
+                        nominal = near[0] / 2.0
                 if abs(nominal - a["r"]) > 1e-6 or abs(nominal - b["r"]) > 1e-6:
                     a["r"] = b["r"] = round(nominal, 4)
                     changed += 1

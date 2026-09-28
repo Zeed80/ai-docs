@@ -344,6 +344,79 @@ def _same_feature(a: dict[str, Any], b: dict[str, Any]) -> bool:
     return True
 
 
+def section_features(
+    gray: Any,
+    main: Any,
+    profile: Any,
+    factor: float,
+    origin: tuple[int, int],
+    axial: float,
+    outer: list[dict[str, float]],
+    label_texts: list[str],
+    region_labels: dict[int, list[str]] | None,
+) -> list[dict[str, Any]]:
+    """Элементы на вынесенных сечениях вала — проверенный путь спека (У6).
+
+    Профиль и масштаб — в пикселях выреза; следы и сечения ищутся по листу,
+    поэтому всё переводится в пиксели листа."""
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from app.ai.cad_recognize.verifiers.reconcile import placed_additions
+    from app.ai.cad_recognize.verifiers.section_outline import propose_placed
+    from app.ai.cad_recognize.verifiers.section_traces import locate_section_traces
+
+    # Ступени — площадки профиля (конусы и фаски не ступени).
+    steps: list[dict[str, float]] = []
+    for a, b in zip(outer, outer[1:]):
+        length = float(b["z"]) - float(a["z"])
+        if length <= 0 or abs(float(a["r"]) - float(b["r"])) > 1e-6:
+            if steps and length > 0:
+                steps[-1]["length_mm"] += length
+            continue
+        steps.append({"diameter_mm": round(2 * float(a["r"]), 3), "length_mm": length})
+    if not steps:
+        return []
+    sheet_mm_per_px = axial * factor  # вырез увеличен в factor раз
+    x0 = origin[0] + profile.x0 / factor
+    x1 = origin[0] + profile.x1 / factor
+    xs = [x for x, _r in profile.outer]
+    rs = [r for _x, r in profile.outer]
+    columns = np.arange(int(round(x0)), int(round(x1)) + 1)
+    half = np.interp((columns - origin[0]) * factor, xs, rs) / factor
+    sheet_profile = SimpleNamespace(
+        x0=float(columns[0]),
+        x1=float(columns[-1]),
+        axis_y=origin[1] + profile.axis_y / factor,
+        line_px=profile.line_px / factor,
+        half_px=half,
+    )
+    frame = SimpleNamespace(mm_per_px=sheet_mm_per_px)
+    try:
+        traces = locate_section_traces(gray, frame, sheet_profile)
+        if not traces:
+            return []
+        body = {"outer": steps, "placed_features": []}
+        proposals = propose_placed(
+            gray, tuple(main.box), sheet_mm_per_px, body, traces, sheet_profile
+        )
+    except Exception:  # noqa: BLE001 — элементы по сечениям необязательны
+        return []
+    if not proposals:
+        return []
+    texts = [*label_texts, *sum((region_labels or {}).values(), [])]
+    spec = {"main_view": body, "dimensions": [{"value": t} for t in texts]}
+    notes: list[str] = []
+    found = []
+    for addition in placed_additions(spec, {"placed_proposals": proposals}, notes):
+        item = dict(addition["feature"])
+        item.pop("sheet_station", None)
+        item["note"] = addition.get("reason") or "элемент по сечению"
+        found.append(item)
+    return found
+
+
 def build_revolve(
     gray: Any,
     reading: Any,
@@ -651,6 +724,7 @@ def build_revolve(
         holes or diameters,
         tolerance=max(1.2 * line * axial, 0.006 * length),
         bore_share=0.07 if holes else 0.03,
+        diameter_tolerance_mm=1.2 * line * radial,
     )
     if snapped:
         notes.append(f"номиналы надписей: исправлено {snapped} значений замера")
@@ -699,6 +773,16 @@ def build_revolve(
             if any(_same_feature(item, other) for other in features):
                 continue
             features.append(item)
+    # Лыски и радиальные отверстия — по вынесенным сечениям (У6): станция —
+    # след секущей на главном виде, угол и размер — сечение, числа —
+    # надписи листа. Многоосевые валы собирались без единого элемента.
+    if not vertical:
+        for item in section_features(
+            gray, main, profile, factor, origin, axial, outer, label_texts, region_labels
+        ):
+            if not any(_same_feature(item, other) for other in features):
+                features.append(item)
+                notes.append(item.pop("note", "элемент по сечению"))
     # Поверхность под поперечным отверстием — цилиндр по соседям, а не дуги
     # пересечения из разреза; фаска «c×45°» — у входа резьбы.
     from app.ai.cad_views.nominals import bridge_cross_holes, chamfer_threaded_end
@@ -742,8 +826,9 @@ def build_revolve(
         },
         features=features,
         scales={
-            "radial_mm_per_px": radial / factor,
-            "axial_mm_per_px": axial / factor,
+            # Мм на пиксель ЛИСТА: вырез увеличен в factor раз.
+            "radial_mm_per_px": radial * factor,
+            "axial_mm_per_px": axial * factor,
             "diameters_explained": hits,
         },
         notes=notes,
