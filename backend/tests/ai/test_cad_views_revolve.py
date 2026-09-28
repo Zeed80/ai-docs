@@ -170,3 +170,36 @@ def test_bore_from_lines_survives_a_label_across_the_wall():
     assert profile is not None
     flats = [p for p in plateaus(profile.inner, 18.0) if p[2] > 0]
     assert flats and all(abs(2 * r / PX - BORE) < 1.0 for _a, _b, r in flats)
+
+
+def test_keyway_face_on_is_a_slot_not_two_holes():
+    """Шпоночный паз лицом на виде вала — карман-капсула по ГОСТ 23360, а не
+    два сквозных отверстия по дугам концов (shaft-7)."""
+    from app.ai.cad_views.revolve_profile import HalfProfile
+    from app.ai.cad_views.view_features import side_view_features
+
+    image = Image.new("L", (900, 400), 255)
+    draw = ImageDraw.Draw(image)
+    axis, px = 200, 10.0  # 10 px на мм
+    # Вал Ø28 × 70 и паз 8 × 33 (центр на 46 мм).
+    draw.rectangle([100, axis - 140, 800, axis + 140], outline=0, width=6)
+    left, right, r = 100 + 29.5 * px, 100 + 62.5 * px, 4 * px
+    draw.line([(left + r, axis - r), (right - r, axis - r)], fill=0, width=6)
+    draw.line([(left + r, axis + r), (right - r, axis + r)], fill=0, width=6)
+    draw.arc([left, axis - r, left + 2 * r, axis + r], 90, 270, fill=0, width=6)
+    draw.arc([right - 2 * r, axis - r, right, axis + r], 270, 90, fill=0, width=6)
+    # Тонкие линии чертежа: осевая штрихпунктиром и выносные.
+    for x in range(60, 840, 40):
+        draw.line([(x, axis), (x + 28, axis)], fill=0, width=2)
+    for x in (100, 800, left, right):
+        draw.line([(x, axis + 150), (x, axis + 195)], fill=0, width=2)
+    draw.line([(100, axis + 185), (800, axis + 185)], fill=0, width=2)
+    profile = HalfProfile(
+        axis_y=float(axis), line_px=6.0, x0=100, x1=800, outer=[(100.0, 140.0), (800.0, 140.0)]
+    )
+    found = side_view_features(np.asarray(image), profile, 0.1, 0.1, [28.0], [70.0, 33.0])
+    slots = [f for f in found if f.get("keyway")]
+    assert len(slots) == 1 and not [f for f in found if f["kind"] == "hole"]
+    slot = slots[0]
+    assert slot["profile"] == "slot" and abs(slot["width_mm"] - 33.0) < 0.6
+    assert slot["height_mm"] == 8.0 and slot["depth_mm"] == 4.0  # ГОСТ 23360 для Ø28

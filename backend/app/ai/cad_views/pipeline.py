@@ -1105,13 +1105,29 @@ def build_revolve(
             if any(_same_feature(item, other) for other in features):
                 continue
             features.append(item)
+    # Шпоночные пазы лицом — и на самом главном виде (вал с пазами: главный
+    # вид — снизу, лицом к пазам; shaft-6 собирался без трёх пазов). С него
+    # берутся только пазы: лыски и отверстия главного вида — уже в профиле.
+    if not vertical and not _key[3]:
+        for item in side_view_features(crop, profile, axial, radial, diameters, linear):
+            if item.get("keyway") and not any(_same_feature(item, other) for other in features):
+                item["view"] = main.name or f"рамка {main.n}"
+                features.append(item)
     # Лыски и радиальные отверстия — по вынесенным сечениям (У6): станция —
     # след секущей на главном виде, угол и размер — сечение, числа —
     # надписи листа. Многоосевые валы собирались без единого элемента.
     if not vertical:
+        keyways = [f["keyway"] for f in features if f.get("keyway")]
         for item in section_features(
             gray, main, profile, factor, origin, axial, outer, label_texts, region_labels
         ):
+            # Вырез паза на сечении — не радиальное отверстие (shaft-6: три
+            # паза строились сквозными Ø4…6 поперёк вала).
+            station = float(item["origin_mm"][2])
+            if item.get("kind") == "hole" and any(
+                a - 1.0 <= station <= b + 1.0 for a, b in keyways
+            ):
+                continue
             if not any(_same_feature(item, other) for other in features):
                 features.append(item)
                 notes.append(item.pop("note", "элемент по сечению"))

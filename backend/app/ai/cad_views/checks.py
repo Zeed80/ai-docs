@@ -91,13 +91,23 @@ def body_measures(result: Any) -> tuple[list[float], list[float]]:
             if abs(a["r"] - b["r"]) <= 0.02 * max(a["r"], b["r"], 1.0) and b["z"] - a["z"] > 0.3:
                 diameters.append(a["r"] + b["r"])
         stations.extend(p["z"] for p in points if p["z"] >= 0)
+    extra: list[float] = []
     for feature in result.features or []:
         if "diameter_mm" in feature:
             diameters.append(float(feature["diameter_mm"]))
         origin = feature.get("origin_mm")
         if origin:
             stations.append(float(origin[2]))
-    lengths = _differences(stations)
+        # Шпоночный паз: концы — станции, длина, ширина и глубина — размеры
+        # листа (вал с пазами проигрывал «пластине» по доле надписей).
+        if feature.get("keyway"):
+            stations.extend(float(z) for z in feature["keyway"])
+            extra += [
+                float(feature[key])
+                for key in ("width_mm", "height_mm", "depth_mm")
+                if feature.get(key)
+            ]
+    lengths = _differences(stations) + extra
     return diameters, lengths
 
 

@@ -134,6 +134,7 @@ def side_view_features(
     """Элементы по размещению (как `placed_features` спека) по второму виду."""
     import numpy as np
 
+    from app.ai.cad_recognize.keyway_standard import standard_section
     from app.ai.cad_views.section_material import ink_mask, symmetry_axis
 
     line = profile.line_px
@@ -224,8 +225,63 @@ def side_view_features(
         flush()
     # Отверстия: окружность в силуэте с центром на оси.
     # Мелкое отверстие (Ø1,5 «Опоры» — 19 px при линии 7,6) — от двух толщин.
-    for cx, cy, r in _circles(ink, line, min_radius_lines=2.0):
-        if not v0 <= cx <= v1 or abs(cy - axis_y) > max(2 * line, 0.1 * r):
+    # Дуги паза узкие (паз 5 мм на листе 1:2,5 — радиус 1,8 линии):
+    # окружности — от полутора линий, отверстия ниже — от двух.
+    circles = [
+        (cx, cy, r)
+        for cx, cy, r in _circles(ink, line, min_radius_lines=1.5)
+        if v0 <= cx <= v1 and abs(cy - axis_y) <= max(2 * line, 0.1 * r)
+    ]
+    # Шпоночный паз лицом: пара параллельных основных линий, симметричных
+    # оси, строго внутри ступени, закрытая дугами — вершины дуг лежат на оси
+    # за концами прямых. Это капсула, а не отверстия: вал shaft-7 строил паз
+    # 8×33 двумя сквозными Ø8 по дугам концов, shaft-6 пазов не видел вовсе.
+    used: set[int] = set()
+    # Прямые паза — основные линии: тонкие линии резьбы (внутренний Ø) тоже
+    # пара, симметричная оси, внутри ступени.
+    from app.ai.cad_views.extrude_body import main_line_mask
+
+    _all, thick_lines, _l = main_line_mask(view_gray)
+    thick_horizontal = cv2.morphologyEx(
+        thick_lines, cv2.MORPH_OPEN, np.ones((1, max(3, int(3 * line))), np.uint8)
+    )
+    for a, b, radius in _keyway_runs(
+        thick_horizontal, ink, thick_lines, axis_y, line, v0, v1, xs, rs
+    ):
+        # Концы капсулы — вершины дуг.
+        z0, z1 = z_of(a), z_of(b)
+        step = 2 * outer_at((z0 + z1) / 2)
+        width = 2 * radius * radial_mm_per_px
+        standard = standard_section(step)
+        depth = None
+        if standard is not None and abs(standard[0] - width) <= 0.2 * standard[0]:
+            width, depth = standard
+        if depth is None:
+            depth = round(0.5 * width, 3)
+        features.append(
+            {
+                "kind": "pocket",
+                "profile": "slot",
+                # Вход с поверхности ступени, в глубину к оси; паз лицом к
+                # наблюдателю вида — на −X, как вырезы пазов на сечениях.
+                "origin_mm": [round(-step / 2, 3), 0.0, round((z0 + z1) / 2, 3)],
+                "axis": [1.0, 0.0, 0.0],
+                "ref": [0.0, 0.0, 1.0],
+                "width_mm": round(snap(z1 - z0, linear_labels or [], share=0.05), 3),
+                "height_mm": round(width, 3),
+                "depth_mm": round(depth, 3),
+                "keyway": [round(z0, 3), round(z1, 3)],
+                "source": "шпоночный паз лицом",
+            }
+        )
+        # Дуги концов паза — не отверстия.
+        for index, (cx, _cy, r) in enumerate(circles):
+            if a - 2 * radius <= cx <= b + 2 * radius and abs(r - radius) <= max(
+                line, 0.3 * radius
+            ):
+                used.add(index)
+    for index, (cx, cy, r) in enumerate(circles):
+        if index in used or r < 2.0 * line:
             continue
         z = z_of(cx)
         diameter = 2 * r * radial_mm_per_px  # радиус уже по середине штриха
@@ -244,3 +300,114 @@ def side_view_features(
             }
         )
     return features
+
+
+def _keyway_runs(
+    horizontal: Any,
+    ink: Any,
+    thick: Any,
+    axis_y: int,
+    line: float,
+    v0: int,
+    v1: int,
+    xs: list[float],
+    rs: list[float],
+) -> list[tuple[int, int, float]]:
+    """Прямые участки пазов лицом: (x начала, x конца, полуширина), px."""
+    import numpy as np
+
+    height, width = horizontal.shape[:2]
+    per_column: list[list[float]] = []
+    for x in range(max(0, v0), min(width, v1 + 1)):
+        edges = np.diff(np.concatenate([[0], horizontal[:, x], [0]]))
+        centres = [
+            (a + b - 1) / 2.0
+            for a, b in zip(np.where(edges == 1)[0], np.where(edges == -1)[0])
+            if b - a >= 0.6 * line
+        ]
+        outer = float(np.interp(x, xs, rs))
+        up = [axis_y - c for c in centres if line < axis_y - c < outer - 1.5 * line]
+        down = [c - axis_y for c in centres if line < c - axis_y < outer - 1.5 * line]
+        per_column.append([r for r in up if any(abs(r - q) <= line for q in down)])
+    runs: list[tuple[int, int, float]] = []
+    start = max(0, v0)
+    open_runs: dict[float, list[int]] = {}
+    for offset, radii in enumerate(per_column):
+        x = start + offset
+        seen = set()
+        for r in radii:
+            # Поллинии: рядом с прямыми паза (±28 px) идут штриховые
+            # невидимой расточки (±22 px) — сливаясь, паз получал её ширину.
+            key = next((k for k in open_runs if abs(k - r) <= 0.5 * line), None)
+            if key is None:
+                open_runs[r] = [x, x]
+                key = r
+            elif x - open_runs[key][1] <= line:
+                open_runs[key][1] = x
+            else:
+                runs.append((open_runs[key][0], open_runs[key][1], key))
+                open_runs[key] = [x, x]
+            seen.add(key)
+        for key in [k for k in open_runs if k not in seen and x - open_runs[k][1] > line]:
+            runs.append((open_runs[key][0], open_runs[key][1], key))
+            del open_runs[key]
+    runs += [(a, b, k) for k, (a, b) in open_runs.items()]
+
+    def arc_end(x_end: int, radius: float, sign: int) -> int | None:
+        """Крайний столбец дуги конца паза: основные линии в полосах выше и
+        ниже оси (осевая по самой оси не считается) без разрыва от конца
+        прямых и не дальше своей ступени."""
+        # Полосы — от осевой почти до самих прямых: дуга выходит из них
+        # сразу за концом прямых, без разрыва.
+        # Осевая — тонкая, в основные линии не входит: полоса — почти от оси.
+        reach = max(2.0, radius - 0.8 * line)
+        rows = [
+            (int(axis_y - reach), int(axis_y - 1)),
+            (int(axis_y + 1), int(axis_y + reach)),
+        ]
+        level = float(np.interp(x_end, xs, rs))
+        last = None
+        gap = 0
+        for step in range(int(1.8 * radius) + 1):
+            x = x_end + sign * step
+            if not 0 <= x < width:
+                break
+            # У уступа паз кончается (shaft-4: подпись «Ø25» поверх паза
+            # склеивала дугу с двойной линией уступа).
+            if abs(float(np.interp(x, xs, rs)) - level) > line:
+                break
+            # Дуга — основная линия: тонкие выносные размеров пересекают
+            # полосу у концов паза и продлевали его.
+            hit = any(thick[max(0, a) : max(0, b) + 1, x].any() for a, b in rows)
+            if hit:
+                last, gap = x, 0
+            else:
+                gap += 1
+                if gap > line:
+                    break
+        return last
+
+    found = []
+    for a, b, radius in runs:
+        # Прямые не короче ширины паза; концы закрыты дугами.
+        if b - a < 2 * radius or radius < 1.0 * line:
+            continue
+        # Паз — в одной ступени: наружный контур вдоль него постоянен
+        # (расточка разреза тянется через все ступени).
+        along = [float(np.interp(x, xs, rs)) for x in range(int(a), int(b) + 1)]
+        if max(along) - min(along) > 1.5 * line:
+            continue
+        left, right = arc_end(a, radius, -1), arc_end(b, radius, 1)
+        if left is None or right is None:
+            continue
+        # Между прямыми — пусто (не расточка со штриховкой): доля чернил
+        # по середине полосы мала.
+        middle = ink[int(axis_y - radius / 2) : int(axis_y + radius / 2) + 1, int(a) : int(b) + 1]
+        if middle.size and middle.mean() > 0.25:
+            continue
+        # Концы — по середине линии дуги; паз длиннее полутора ширин.
+        left, right = int(left + line / 2), int(right - line / 2)
+        if right - left < 3 * radius:
+            continue
+        found.append((left, right, float(radius)))
+    return found
