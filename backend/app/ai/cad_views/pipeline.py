@@ -209,6 +209,62 @@ def tolerant_axis(mask: Any, line: float) -> int:
     return refined[1]
 
 
+def _drop_section_traces(half: list[Any], gray: Any, axis: int, line: float) -> list[Any]:
+    """Следы секущих плоскостей (ГОСТ 2.305) — не бурты.
+
+    След — короткий толстый штрих над и под видом со стрелкой и буквой;
+    выносные связывают его с контуром, и силуэт «вырастал» буртом Ø52 и
+    Ø99 у вала Ø50 (многоосевой вал 0). У бурта две боковые кромки от
+    соседней ступени до его образующей, у следа — один штрих."""
+
+    from app.ai.cad_views.extrude_body import main_line_mask
+
+    values = [h for h in half if h is not None]
+    if len(values) < 10:
+        return half
+    _ink, thick, _line = main_line_mask(gray)
+    height, width = thick.shape[:2]
+    out = list(half)
+    # Площадки — участки почти одного уровня (скачок больше полутора линий).
+    plateaus: list[list[int]] = []
+    for x, h in enumerate(out):
+        if h is None:
+            continue
+        if plateaus and x - plateaus[-1][1] <= 2 and abs(h - out[plateaus[-1][1]]) <= 1.5 * line:
+            plateaus[-1][1] = x
+        else:
+            plateaus.append([x, x])
+    for index, (x, end) in enumerate(plateaus):
+        if index == 0 or index == len(plateaus) - 1:
+            continue
+        level = max(out[k] for k in range(x, end + 1))
+        left = out[plateaus[index - 1][1]]
+        right = out[plateaus[index + 1][0]]
+        base = max(left, right)
+        if (end - x) > 0.15 * len(values) or level <= 1.3 * base:
+            continue
+        # Боковые кромки: вертикали основной линии от base до level над осью.
+        top, bottom = int(axis - level + line), int(axis - base - line)
+        sides = 0
+        if 0 <= top < bottom <= height:
+            columns = [
+                c
+                for c in range(max(0, x - int(line)), min(width, end + int(line) + 1))
+                if thick[top:bottom, c].mean() >= 0.7
+            ]
+            groups: list[list[int]] = []
+            for c in columns:
+                if groups and c - groups[-1][-1] <= 2:
+                    groups[-1].append(c)
+                else:
+                    groups.append([c])
+            sides = len(groups)
+        if sides < 2:
+            for k in range(x, end + 1):
+                out[k] = base
+    return out
+
+
 def silhouette_profile(gray: Any, line: float, axis: int | None = None) -> Any:
     """Профиль тела вращения по неразрезанному виду: силуэт, без расточки."""
     import cv2
@@ -244,6 +300,7 @@ def silhouette_profile(gray: Any, line: float, axis: int | None = None) -> Any:
         _median(_despike(_silhouette(ink, axis, line), int(2 * line)), int(2 * line) + 1),
         int(2.5 * line),
     )
+    half = _drop_section_traces(half, gray, axis, line)
     present = [x for x, h in enumerate(half) if h is not None]
     if not present:
         return None
