@@ -1346,6 +1346,13 @@ def _separated_place(
 
     gap = 2.5 * DIM_TEXT_MM
     options = [(lo + hi) / 2.0, lo + (hi - lo) * 0.25, lo + (hi - lo) * 0.75]
+    # Подпись Ø повёрнута и стоит слева от своей линии (ГОСТ 2.307): за
+    # уступ ступени она не выходит, даже когда свободного промежутка у
+    # ступени нет. «Ø22» короткой ступени с пазом лежала на уступе и канавке
+    # соседней (shaft-6), силуэт там расплывался, уступ уезжал на 4,5 мм.
+    inside = (lo + 1.2 * DIM_TEXT_MM, hi - 0.3 * DIM_TEXT_MM)
+    if inside[0] <= inside[1]:
+        options = [min(max(option, inside[0]), inside[1]) for option in options]
     spans = blocked or []
     if spans:
         # Свободные промежутки между занятыми участками — середины их, от

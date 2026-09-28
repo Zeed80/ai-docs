@@ -224,6 +224,14 @@ def _drop_section_traces(half: list[Any], gray: Any, axis: int, line: float) -> 
         return half
     _ink, thick, _line = main_line_mask(gray)
     height, width = thick.shape[:2]
+    import cv2
+    import numpy as np
+
+    from app.ai.cad_views.section_material import ink_mask
+
+    horizontal = cv2.morphologyEx(
+        ink_mask(gray, line), cv2.MORPH_OPEN, np.ones((1, max(3, int(3 * line))), np.uint8)
+    )
     out = list(half)
     # Площадки — участки почти одного уровня (скачок больше полутора линий).
     plateaus: list[list[int]] = []
@@ -283,11 +291,34 @@ def _drop_section_traces(half: list[Any], gray: Any, axis: int, line: float) -> 
                     groups.append([c])
             sides = len(groups)
         if sides < 2:
-            # Со следом уходит и лестница до соседних площадок.
+            # Со следом уходит и лестница до соседних площадок. Столбец
+            # получает свою пару линий ниже следа, а не уровень соседа: след
+            # «В» над концом Ø16 заливался уровнем Ø22, и уступ уезжал на
+            # 24 px влево (shaft-6).
             for k in range(plateaus[before][1] + 1, plateaus[after][0]):
                 if out[k] is not None and out[k] > base:
-                    out[k] = base
+                    own = _pair_below(horizontal, axis, line, k, level - line)
+                    out[k] = own if own is not None and own <= base else base
     return out
+
+
+def _pair_below(horizontal: Any, axis: int, line: float, x: int, limit: float) -> float | None:
+    """Наибольшая пара горизонталей, симметричных оси, ниже ``limit`` (как
+    в `_silhouette`, для одного столбца)."""
+    import numpy as np
+
+    if not 0 <= x < horizontal.shape[1]:
+        return None
+    edges = np.diff(np.concatenate([[0], horizontal[:, x], [0]]))
+    centres = [
+        (a + b - 1) / 2.0
+        for a, b in zip(np.where(edges == 1)[0], np.where(edges == -1)[0])
+        if b - a >= 0.6 * line
+    ]
+    up = [axis - c for c in centres if c < axis - line and axis - c < limit]
+    down = [c - axis for c in centres if c > axis + line and c - axis < limit]
+    pairs = [r for r in up if any(abs(r - q) <= 1.5 * line for q in down)]
+    return max(pairs) if pairs else None
 
 
 def bore_from_lines(thick: Any, axis: int, line: float, outer: Any, material: Any = None) -> Any:
