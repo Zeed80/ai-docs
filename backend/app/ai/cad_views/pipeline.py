@@ -238,7 +238,10 @@ def _drop_section_traces(half: list[Any], gray: Any, axis: int, line: float) -> 
     for x, h in enumerate(out):
         if h is None:
             continue
-        if plateaus and x - plateaus[-1][1] <= 2 and abs(h - out[plateaus[-1][1]]) <= 1.5 * line:
+        # С уровнем начала площадки, а не с соседним столбцом: скаты стрелок
+        # размера дают плавный подъём, и выброс Ø28 над Ø14 сливался с
+        # площадкой (многоосевой вал 2).
+        if plateaus and x - plateaus[-1][1] <= 2 and abs(h - out[plateaus[-1][0]]) <= 1.5 * line:
             plateaus[-1][1] = x
         else:
             plateaus.append([x, x])
@@ -293,7 +296,12 @@ def _drop_section_traces(half: list[Any], gray: Any, axis: int, line: float) -> 
                     groups[-1].append(c)
                 else:
                     groups.append([c])
-            sides = len(groups)
+            # Кромки бурта — на его концах, и разнесены почти на всю ширину:
+            # стрелка размера без тонкой линии внутри распадается на две
+            # половины посередине (многоосевой вал 2: выброс Ø28 над Ø14).
+            centres = [(g[0] + g[-1]) / 2.0 for g in groups]
+            spread = (max(centres) - min(centres)) if centres else 0.0
+            sides = len(groups) if spread >= 0.6 * max(1, end - x) else min(len(groups), 1)
         if sides < 2:
             # Со следом уходит и лестница до соседних площадок. Столбец
             # получает свою пару линий ниже следа, а не уровень соседа: след
@@ -302,7 +310,10 @@ def _drop_section_traces(half: list[Any], gray: Any, axis: int, line: float) -> 
             for k in range(plateaus[before][1] + 1, plateaus[after][0]):
                 if out[k] is not None and out[k] > base:
                     own = _pair_below(horizontal, axis, line, k, level - line)
-                    out[k] = own if own is not None and own <= base else base
+                    # Пара чуть ниже соседа — тот же контур, прерванный
+                    # штрихом следа (shaft-3: Ø13,2 при Ø14 под следом «Б»);
+                    # заметно ниже — своя ступень (shaft-6: конец Ø16).
+                    out[k] = own if own is not None and own <= base - 1.5 * line else base
     return out
 
 
