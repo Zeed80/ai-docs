@@ -38,6 +38,15 @@ def _silhouette(ink: Any, axis_y: int, line: float) -> list[float | None]:
         up = [axis_y - c for c in centres if c < axis_y - line]
         down = [c - axis_y for c in centres if c > axis_y + line]
         pairs = [r for r in up if any(abs(r - q) <= 1.5 * line for q in down)]
+        if not pairs and up and down:
+            # Лыска или паз с одной стороны: пары нет, а кромка напротив
+            # ниже, но не глубже половины радиуса. Без этого столбцы лыски
+            # пропускались, и силуэт соединял соседние ступени конусом
+            # (многоосевой вал 5: Ø35 → Ø28 скосом на 20 мм).
+            outer_up, outer_down = max(up), max(down)
+            radius, other = max(outer_up, outer_down), min(outer_up, outer_down)
+            if 0.5 * radius <= other < radius - 1.5 * line:
+                pairs = [radius]
         half.append(max(pairs) if pairs else None)
     return half
 
