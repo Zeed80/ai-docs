@@ -359,6 +359,7 @@ def section_features(
 
     Профиль и масштаб — в пикселях выреза; следы и сечения ищутся по листу,
     поэтому всё переводится в пиксели листа."""
+    import math
     from types import SimpleNamespace
 
     import numpy as np
@@ -366,6 +367,7 @@ def section_features(
     from app.ai.cad_recognize.verifiers.reconcile import placed_additions
     from app.ai.cad_recognize.verifiers.section_outline import propose_placed
     from app.ai.cad_recognize.verifiers.section_traces import locate_section_traces
+    from app.ai.cad_views.labels import parse_label
 
     # Ступени — площадки профиля (конусы и фаски не ступени).
     steps: list[dict[str, float]] = []
@@ -413,6 +415,71 @@ def section_features(
         item = dict(addition["feature"])
         item.pop("sheet_station", None)
         item["note"] = addition.get("reason") or "элемент по сечению"
+        found.append(item)
+    # Не объяснённое надписями однозначно — по замеру (угол и Ø к надписям,
+    # если близки): сечение мерит точно (29,8° при 30°, Ø6,02 при Ø6), а
+    # строгое правило спека отдаёт такое человеку — здесь тело без элемента
+    # хуже тела с замеренным.
+    parsed = [parse_label(t) for t in texts]
+    angles = sorted({lab.value for lab in parsed if lab.kind == "angle" and lab.value})
+    holes = sorted({lab.value for lab in parsed if lab.kind == "diameter" and lab.value})
+    starts = [0.0]
+    for step in steps:
+        starts.append(starts[-1] + step["length_mm"])
+    for proposal in proposals:
+        z = float(proposal["station_mm"])
+        if any(abs(float(item["origin_mm"][2]) - z) <= 2.0 for item in found):
+            continue
+        index = proposal.get("step_index")
+        if not isinstance(index, int) or not 0 <= index < len(steps):
+            continue
+        radius = steps[index]["diameter_mm"] / 2.0
+        angle = float(proposal.get("angle_deg") or 0.0)
+        near = [a for a in angles if abs(a - angle) <= 6.0]
+        angle = near[0] if len(near) == 1 else round(angle / 5.0) * 5.0
+        a = math.radians(angle)
+        placement = {
+            "origin_mm": [
+                round(radius * math.cos(a), 4),
+                round(radius * math.sin(a), 4),
+                round(z, 3),
+            ],
+            "axis": [round(-math.cos(a), 6), round(-math.sin(a), 6), 0.0],
+            "ref": [0.0, 0.0, 1.0],
+        }
+        if proposal["kind"] == "hole" and proposal.get("diameter_mm"):
+            measured = float(proposal["diameter_mm"])
+            close = [d for d in holes if abs(d - measured) <= max(0.5, 0.1 * d)]
+            diameter = min(close, key=lambda d: abs(d - measured)) if close else round(measured, 1)
+            item = {"kind": "hole", **placement, "diameter_mm": diameter, "through": True}
+            if not proposal.get("through"):
+                depth = next(
+                    (
+                        lab.depth
+                        for lab in parsed
+                        if lab.kind == "diameter" and lab.value == diameter and lab.depth
+                    ),
+                    None,
+                )
+                if depth:
+                    item.update(through=False, depth_mm=depth)
+            label = f"отверстие Ø{diameter:g}"
+        elif proposal["kind"] == "pocket" and proposal.get("depth_mm"):
+            length = proposal.get("length_mm") or min(steps[index]["length_mm"], 2.0 * radius)
+            item = {
+                "kind": "pocket",
+                "profile": "rectangle",
+                **placement,
+                "width_mm": round(float(length), 3),
+                "height_mm": round(2.0 * radius + 2.0, 3),
+                "depth_mm": round(float(proposal["depth_mm"]), 3),
+            }
+            label = f"лыска глубиной {float(proposal['depth_mm']):g}"
+        else:
+            continue
+        item["note"] = (
+            f"по замеру сечения у {z:g} мм: {label} под {angle:g}° (надписи неоднозначны)"
+        )
         found.append(item)
     return found
 
