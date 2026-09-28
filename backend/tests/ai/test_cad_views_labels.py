@@ -11,6 +11,8 @@ from app.ai.cad_views.labels import parse_label
     ("text", "kind", "value", "surface"),
     [
         ("Ø8,5H10(+0,058)", "diameter", 8.5, "hole"),  # «Опора пружин»: отверстие
+        ("Ø6 120°", "diameter", 6.0, "hole"),  # выноска радиального отверстия
+        ("Ø4 гл.11.9", "diameter", 4.0, "hole"),  # глухое отверстие
         ("Ø5,7H10(+0,048)", "diameter", 5.7, "hole"),
         ("Ø9,8H10(+0,048)", "diameter", 9.8, "hole"),
         ("Ø1,5C11(+0,12 / +0,06)", "diameter", 1.5, "hole"),

@@ -117,14 +117,22 @@ def parse_label(text: str) -> Label:
     match = re.search(_DIAMETER_MARK + r"\s*" + _NUM + r"\s*" + r"(?:" + _FIT + r")?", clean)
     if match:
         fit = match.group("fit")
+        surface = _surface(fit)
+        # Выноска отверстия: «Ø6 120°» (угол радиального отверстия на
+        # сечении) или «Ø4 гл.11.9» — отверстие, не ступень вала (искажённое
+        # «Ø61 20°» объясняло след секущей как бурт Ø61, многоосевой вал 5).
+        angle_match = re.search(_NUM + r"\s*°", clean[match.end() :])
+        if surface is None and (angle_match or depth is not None):
+            surface = "hole"
         return Label(
             raw,
             "diameter",
             value=_num(match.group(1)),
             fit=fit,
-            surface=_surface(fit),
+            surface=surface,
             depth=depth,
             count=count,
+            angle=_num(angle_match.group(1)) if angle_match else None,
             tolerance=_tolerance(clean[match.end() :]),
         )
     # Окружность центров отверстий: «PCD 200», «Ø200 окр. центров».

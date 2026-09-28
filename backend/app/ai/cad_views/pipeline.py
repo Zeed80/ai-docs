@@ -278,10 +278,14 @@ def _drop_section_traces(half: list[Any], gray: Any, axis: int, line: float) -> 
         top, bottom = int(axis - level + line), int(axis - base - line)
         sides = 0
         if 0 <= top < bottom <= height:
+            # Кромка бурта доходит до контура соседней ступени; штрих следа
+            # секущей висит над ним с зазором (многоосевой вал 5: след «В»
+            # у уступа и буква давали две «кромки» бурта Ø61).
+            foot = max(top, bottom - int(1.5 * line))
             columns = [
                 c
                 for c in range(max(0, x - int(line)), min(width, end + int(line) + 1))
-                if thick[top:bottom, c].mean() >= 0.7
+                if thick[top:bottom, c].mean() >= 0.7 and thick[foot:bottom, c].mean() >= 0.7
             ]
             groups: list[list[int]] = []
             for c in columns:
