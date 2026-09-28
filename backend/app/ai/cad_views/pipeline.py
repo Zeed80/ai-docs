@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -1313,6 +1314,18 @@ def choose_body(
     from app.ai.cad_views.extrude_body import build_extrude
     from app.ai.cad_views.prismatic import build_prismatic
 
+    # Сборочный чертёж (общий вид) — не деталь: номера позиций 1…N на
+    # полках. Модель называла такой лист деталью, и метод строил «деталь»
+    # из корпуса сборки (реальный p076, «Серьга подвесная», позиции 1–6).
+    positions = {int(t) for t in merged if re.fullmatch(r"\s*\d{1,2}\s*", str(t))}
+    run = 0
+    while run + 1 in positions:
+        run += 1
+    if run >= 5:
+        return ViewsResult(
+            False,
+            f"похоже на сборочный чертёж: номера позиций 1…{run} — деталь по нему не строится",
+        )
     revolved = build_revolve(gray, reading, labels, region_labels=region_labels)
     extruded = build_extrude(gray, reading, labels, region_labels=region_labels)
     prismatic = build_prismatic(gray, reading, labels, region_labels=region_labels)
