@@ -478,11 +478,21 @@ def build_revolve(
             # размеров — отдельные: силуэт по ним «вырастал» буртами (вал
             # с четырьмя сечениями).
             count, labels_cc, stats, _ = cv2.connectedComponentsWithStats(thick_only, 8)
-            if count > 2:
-                biggest = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+            axis_row = probe_axis if probe_axis is not None else None
+            if count > 2 and axis_row is not None:
+                # Контур может рваться (паз, надпись поверх кромки) — берутся
+                # все фигуры, пересекающие ось: торцы и уступы её пересекают,
+                # следы, буквы и стрелки лежат над и под видом.
+                straddle = [
+                    index
+                    for index in range(1, count)
+                    if stats[index][cv2.CC_STAT_TOP] < axis_row - line
+                    and stats[index][cv2.CC_STAT_TOP] + stats[index][cv2.CC_STAT_HEIGHT]
+                    > axis_row + line
+                ]
                 outline_only = np.full_like(crop, 255)
                 keep = cv2.dilate(
-                    (labels_cc == biggest).astype(np.uint8), np.ones((3, 3), np.uint8)
+                    np.isin(labels_cc, straddle).astype(np.uint8), np.ones((3, 3), np.uint8)
                 )
                 outline_only[keep > 0] = crop[keep > 0]
                 by_outline = silhouette_profile(outline_only, line)
