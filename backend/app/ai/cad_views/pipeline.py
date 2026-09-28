@@ -365,10 +365,12 @@ def bore_from_lines(thick: Any, axis: int, line: float, outer: Any, material: An
                 # паза лицом тоже пара горизонталей у оси, но за ним пусто
                 # (сплошной вал shaft-6 получал «расточку» по пазам).
                 if material is not None:
-                    top = int(axis - reach)
+                    # Материал — вплотную за линией (в 2,5 линии): за штрихом
+                    # надписи на оси («Ø15», shaft-2) сначала пустая расточка.
+                    top = int(axis - min(reach, radius + 2.5 * line))
                     bottom = int(axis - radius - line)
                     low = int(axis + radius + line)
-                    high = int(axis + reach)
+                    high = int(axis + min(reach, radius + 2.5 * line))
                     if not (
                         material[max(0, top) : max(0, bottom), x].any()
                         or material[max(0, low) : max(0, high), x].any()
@@ -378,7 +380,7 @@ def bore_from_lines(thick: Any, axis: int, line: float, outer: Any, material: An
     known = [value for value in found if value is not None]
     if len(known) < 0.5 * len(found) or not known:
         return None
-    inner = _levelled(found, x0, line)
+    inner = _levelled(found, x0, line, min_run=4 * line)
     # Наружный контур — тоже по линиям: самая дальняя от оси длинная
     # горизонталь в пределах тела (с любой стороны: шпоночный паз снизу
     # не делает вал тоньше). Материал под надписью без штриховки «проседал»
@@ -403,18 +405,29 @@ def bore_from_lines(thick: Any, axis: int, line: float, outer: Any, material: An
                     end -= sign
                 radius = abs((hit + end) / 2.0 - axis)
                 best = radius if best is None else max(best, radius)
-        outer_found.append(best if best is not None else float(np.interp(x, xs, rs)))
+        # Линия ниже прежнего контура — не наружная кромка: у торца с
+        # фаской самой дальней горизонталью оказывалась стенка расточки
+        # (shaft-5: площадка Ø13 на наружном контуре).
+        previous = float(np.interp(x, xs, rs))
+        outer_found.append(best if best is not None and best >= previous - 1.5 * line else previous)
     return HalfProfile(
         axis_y=float(axis),
         line_px=line,
         x0=x0,
         x1=x1,
-        outer=_levelled(outer_found, x0, line),
+        outer=_levelled(outer_found, x0, line, min_run=4 * line, ends=True),
         inner=inner,
     )
 
 
-def _levelled(found: list[float | None], x0: int, line: float) -> list[tuple[float, float]]:
+def _levelled(
+    found: list[float | None],
+    x0: int,
+    line: float,
+    *,
+    min_run: float = 0.0,
+    ends: bool = False,
+) -> list[tuple[float, float]]:
     """Ломаная по столбцам: пропуски по соседям, медиана, уровни участков."""
     import numpy as np
 
@@ -432,7 +445,25 @@ def _levelled(found: list[float | None], x0: int, line: float) -> list[tuple[flo
         else:
             runs.append([i])
     for run in runs:
-        level = float(np.median([smooth[i] for i in run]))
+        values = [smooth[i] for i in run]
+        # Скос (фаска) — не площадка: разброс больше полутора линий остаётся
+        # как есть (фаска 2×45° shaft-5 выравнивалась в ложную Ø32,7).
+        if max(values) - min(values) > 1.5 * line:
+            continue
+        level = float(np.median(values))
+        for i in run:
+            smooth[i] = level
+    # Участок короче ``min_run`` между соседями — не ступень: штрихи надписи
+    # на оси («Ø15» полого вала shaft-2) давали расточку Ø3 на 4 мм.
+    for index, run in enumerate(runs):
+        if len(run) >= min_run or len(runs) < 2:
+            continue
+        edge = index == 0 or index == len(runs) - 1
+        if edge and not ends:
+            continue
+        before = runs[index - 1] if index > 0 else []
+        after = runs[index + 1] if index + 1 < len(runs) else []
+        level = smooth[(before if len(before) >= len(after) else after)[0]]
         for i in run:
             smooth[i] = level
     return _simplify(
@@ -990,7 +1021,13 @@ def build_revolve(
             # (колесо part_06: вершины Ø46, а не впадины, совпавшие с Ø38).
             overall_d = max(shafts or diameters, default=0.0)
             fits_overall = bool(overall_d) and abs(widest - overall_d) <= 0.03 * overall_d
-            key = (hits, fits_overall, round(hits / max(1, count), 2), hatched)
+            # При прочих равных — профиль проще (меньше вершин): чертёж
+            # вала — площадки, выбросы у каналов и надписей — не деталь
+            # (shaft-2: ячейки материала давали расточку со ступенями 19…24).
+            # Только между вариантами разреза: у силуэта меньше вершин бывает
+            # и у варианта, потерявшего ступень (вал p121 — отказ проверки).
+            vertices = len(profile.outer) + len(profile.inner or []) if hatched else 0
+            key = (hits, fits_overall, round(hits / max(1, count), 2), hatched, -vertices)
             if best is None or key > best[0]:
                 best = (key, region, crop, factor, origin, line, vertical, profile, radial, hits)
                 chosen_sets = (diameters, holes, shafts, linear)
