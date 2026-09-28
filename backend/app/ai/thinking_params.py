@@ -41,6 +41,10 @@ REASONING_EFFORT_PROVIDERS = frozenset(
         "dashscope",
         "qwen",
         "cerebras",
+        # Gemini (совместимый эндпоинт): reasoning_effort none/minimal/low/high
+        # проверены живым вызовом 2026-09-28; до этого рассуждение не
+        # передавалось вовсе.
+        "gemini",
     }
 )
 

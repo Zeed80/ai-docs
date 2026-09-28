@@ -203,6 +203,92 @@ def _anthropic_capability(key: str, kind: ProviderKind, item: dict, today: str) 
     )
 
 
+# Не чатовые модели Gemini: озвучка, картинки, видео, музыка, live-аудио,
+# агентные превью. В родном списке у них тот же метод generateContent, но
+# для назначения на слот текста или зрения они не годятся.
+_GEMINI_NOT_CHAT = (
+    "tts",
+    "image",
+    "imagen",
+    "veo",
+    "lyria",
+    "live",
+    "native-audio",
+    "transcribe",
+    "robotics",
+    "computer-use",
+    "antigravity",
+    "deep-research",
+    "nano-banana",
+    "aqa",
+)
+
+
+def _gemini_capability(key: str, kind: ProviderKind, item: dict, today: str) -> ModelCapability:
+    """Gemini: возможности из РОДНОГО списка ``/v1beta/models``.
+
+    Совместимый с OpenAI список отдаёт только имя, и все 61 модель ключа
+    попадали в каталог «кандидатами» без единой возможности — вместе с
+    озвучкой, генерацией видео и эмбеддингами. Родная запись (её кладёт
+    ``refresh_models`` в ``item["native"]``) сообщает окно контекста,
+    поддержку рассуждения и методы генерации.
+    """
+    native = item.get("native") or {}
+    if not native:
+        return _unknown_capability(key, kind, item, today)
+    model_id = item.get("id", "") or native.get("name", "")
+    name = model_id.lower()
+    methods = set(native.get("supportedGenerationMethods") or [])
+    context = native.get("inputTokenLimit")
+    base = {
+        "name": key,
+        "provider": kind,
+        "provider_model": model_id,
+        "local_only": False,
+        "capability_source": "discovered",
+        "max_context_tokens": int(context) if isinstance(context, int) else None,
+    }
+    if "embedContent" in methods:
+        return ModelCapability(
+            **base,
+            status=ModelStatus.CANDIDATE,
+            modalities={Modality.EMBEDDING},
+            max_input_tokens=int(context) if isinstance(context, int) else None,
+            notes=f"Эмбеддинги Gemini, из родного списка, {today}.",
+        )
+    if "generateContent" not in methods or any(tag in name for tag in _GEMINI_NOT_CHAT):
+        return ModelCapability(
+            **base,
+            status=ModelStatus.DISABLED,
+            modalities=set(),
+            notes=(
+                f"Не чатовая модель Gemini ({native.get('displayName') or model_id}): озвучка, "
+                f"картинки, видео или live-аудио — на слоты текста не назначается. {today}."
+            ),
+        )
+    thinking = native.get("thinking") is True
+    gemini = "gemini" in name
+    modalities = {Modality.TEXT, Modality.VISION}
+    if gemini:
+        modalities.add(Modality.TOOL_CALLING)
+    return ModelCapability(
+        **base,
+        status=ModelStatus.CANDIDATE,
+        modalities=modalities,
+        supports_tool_calling=gemini,
+        supports_structured_output=gemini,
+        supports_multi_image=True,
+        thinking_supported=thinking,
+        thinking_levels=["low", "medium", "high"] if thinking else [],
+        capabilities_unknown=not gemini,
+        notes=(
+            f"Из родного списка Gemini, {today}: контекст {context}, "
+            f"рассуждение {'есть' if thinking else 'нет'}."
+            + ("" if gemini else " Инструменты и JSON по схеме не подтверждены.")
+        ),
+    )
+
+
 def _unknown_capability(key: str, kind: ProviderKind, item: dict, today: str) -> ModelCapability:
     """Провайдер метаданных не дал — так и записываем.
 
@@ -240,6 +326,7 @@ _PROBES = {
     ProviderKind.OPENROUTER: _openrouter_capability,
     ProviderKind.MISTRAL: _mistral_capability,
     ProviderKind.ANTHROPIC: _anthropic_capability,
+    ProviderKind.GEMINI: _gemini_capability,
     ProviderKind.GROQ: _context_only_capability,
     ProviderKind.CEREBRAS: _context_only_capability,
     ProviderKind.XAI: _context_only_capability,

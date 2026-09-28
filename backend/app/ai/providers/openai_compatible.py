@@ -39,6 +39,34 @@ def openai_endpoint(base_url: object, path: str) -> str:
     return f"{base}/v1/{path.lstrip('/')}"
 
 
+def _raise_for_status(response: httpx.Response) -> None:
+    """``raise_for_status`` с текстом провайдера в сообщении.
+
+    Тип исключения тот же (роутер смотрит на код ответа), но оператор видит
+    причину: у Gemini «квота исчерпана», «перегрузка», «модель недоступна
+    новым пользователям» пропадали за «Server error '503 Service Unavailable'».
+    """
+    if not isinstance(response, httpx.Response):
+        response.raise_for_status()
+        return
+    if response.is_success:
+        return
+    detail = ""
+    try:
+        body = response.json()
+        if isinstance(body, list) and body:
+            body = body[0]
+        if isinstance(body, dict):
+            error = body.get("error")
+            detail = error.get("message", "") if isinstance(error, dict) else str(error or "")
+    except Exception:  # noqa: BLE001
+        detail = response.text[:300]
+    message = (
+        f"{response.status_code} от {response.request.url.host}: {detail or response.reason_phrase}"
+    )
+    raise httpx.HTTPStatusError(message, request=response.request, response=response)
+
+
 def _thinking_params(request: AIRequest, provider_kind: str) -> dict[str, Any]:
     """Reasoning/CoT HTTP params for this request, or {} if undecided.
 
@@ -251,7 +279,7 @@ class OpenAICompatibleProvider(AIProvider):
                 headers=self._headers(),
                 json=payload,
             )
-            response.raise_for_status()
+            _raise_for_status(response)
             body = response.json()
 
         choice = body.get("choices", [{}])[0]
@@ -331,7 +359,7 @@ class OpenAICompatibleProvider(AIProvider):
                 headers=self._headers(),
                 json=payload,
             )
-            response.raise_for_status()
+            _raise_for_status(response)
             body = response.json()
         text = body.get("choices", [{}])[0].get("message", {}).get("content")
         return AIResponse(
@@ -352,7 +380,7 @@ class OpenAICompatibleProvider(AIProvider):
                 headers=self._headers(),
                 json=payload,
             )
-            response.raise_for_status()
+            _raise_for_status(response)
             body = response.json()
         embedding = body.get("data", [{}])[0].get("embedding", [])
         return AIResponse(
@@ -378,7 +406,7 @@ class OpenAICompatibleProvider(AIProvider):
                 headers=self._headers(),
                 json=payload,
             )
-            response.raise_for_status()
+            _raise_for_status(response)
             body = response.json()
         results = body.get("results") or []
         scores = [item.get("relevance_score", item.get("score", 0.0)) for item in results]

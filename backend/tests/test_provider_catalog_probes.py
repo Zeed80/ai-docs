@@ -175,3 +175,47 @@ def test_openai_stays_unknown_because_its_listing_says_nothing():
     cap = capability_from_listing("k", ProviderKind.OPENAI, {"id": "gpt-4o", "owned_by": "openai"})
     assert cap.capabilities_unknown is True
     assert cap.max_context_tokens is None
+
+
+def test_gemini_capabilities_come_from_the_native_listing():
+    """Совместимый список Gemini отдаёт только имя — возможности берутся из
+    родной записи: чат с рассуждением, эмбеддинги отдельно, озвучка скрыта."""
+    from app.ai.provider_catalog_probes import capability_from_listing
+    from app.ai.schemas import Modality, ModelStatus, ProviderKind
+
+    chat = capability_from_listing(
+        "gemini_flash",
+        ProviderKind.GEMINI,
+        {
+            "id": "models/gemini-3.8-flash",
+            "native": {
+                "name": "models/gemini-3.8-flash",
+                "inputTokenLimit": 1048576,
+                "supportedGenerationMethods": ["generateContent", "countTokens"],
+                "thinking": True,
+            },
+        },
+    )
+    assert {Modality.TEXT, Modality.VISION, Modality.TOOL_CALLING} <= chat.modalities
+    assert chat.max_context_tokens == 1048576 and chat.thinking_supported
+    assert chat.supports_structured_output and not chat.capabilities_unknown
+
+    tts = capability_from_listing(
+        "gemini_tts",
+        ProviderKind.GEMINI,
+        {
+            "id": "models/gemini-3.8-flash-tts",
+            "native": {"supportedGenerationMethods": ["generateContent"], "inputTokenLimit": 8192},
+        },
+    )
+    assert tts.status == ModelStatus.DISABLED
+
+    embed = capability_from_listing(
+        "gemini_embed",
+        ProviderKind.GEMINI,
+        {
+            "id": "models/gemini-embedding-2",
+            "native": {"supportedGenerationMethods": ["embedContent"], "inputTokenLimit": 8192},
+        },
+    )
+    assert embed.modalities == {Modality.EMBEDDING}

@@ -396,6 +396,42 @@ async def _enrich_ollama_cloud_capability(
     )
 
 
+async def _gemini_native_models(client: httpx.AsyncClient, base: str, api_key: str) -> dict:
+    """Родной список Gemini ``/v1beta/models``: {"models/…": запись}."""
+    root = base.split("/v1beta")[0] if "/v1beta" in base else base.rstrip("/")
+    models: dict[str, dict] = {}
+    token = None
+    for _page in range(10):
+        params = {"key": api_key, "pageSize": 100, **({"pageToken": token} if token else {})}
+        resp = await client.get(f"{root}/v1beta/models", params=params)
+        resp.raise_for_status()
+        body = resp.json()
+        for model in body.get("models") or []:
+            models[str(model.get("name") or "")] = model
+        token = body.get("nextPageToken")
+        if not token:
+            break
+    return models
+
+
+def _http_error_text(exc: Exception) -> str:
+    """Текст ошибки провайдера, а не только код: «квота исчерпана», «модель
+    недоступна новым пользователям» пропадали за «Server error 429»."""
+    response = getattr(exc, "response", None)
+    if response is not None:
+        try:
+            body = response.json()
+            if isinstance(body, list) and body:
+                body = body[0]
+            message = (body.get("error") or {}).get("message") if isinstance(body, dict) else None
+            if message:
+                return f"{response.status_code}: {message}"
+        except Exception:  # noqa: BLE001
+            pass
+        return f"{response.status_code}: {response.text[:300]}"
+    return str(exc)
+
+
 @router.post("/{instance_id}/refresh-models", dependencies=_admin)
 async def refresh_models(instance_id: str, db: AsyncSession = Depends(get_db)) -> dict:
     inst = await _get_or_404(db, instance_id)
@@ -410,14 +446,23 @@ async def refresh_models(instance_id: str, db: AsyncSession = Depends(get_db)) -
     if not api_key:
         raise HTTPException(400, "API key is not set for this provider")
 
-    url = base if base.endswith("/v1") else f"{base}/v1"
+    from app.ai.providers.openai_compatible import openai_endpoint
+
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(f"{url}/models", headers={"Authorization": f"Bearer {api_key}"})
+            resp = await client.get(
+                openai_endpoint(base, "models"), headers={"Authorization": f"Bearer {api_key}"}
+            )
             resp.raise_for_status()
             data = resp.json().get("data", [])
+            if kind == ProviderKind.GEMINI:
+                # Совместимый список отдаёт одно имя; окно контекста, рассуждение
+                # и методы генерации есть только в родном списке Gemini.
+                native = await _gemini_native_models(client, base, api_key)
+                for item in data:
+                    item["native"] = native.get(str(item.get("id") or ""), {})
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(502, f"Failed to fetch models: {exc}")
+        raise HTTPException(502, f"Failed to fetch models: {_http_error_text(exc)}")
 
     from app.ai.provider_catalog_probes import capability_from_listing
 
