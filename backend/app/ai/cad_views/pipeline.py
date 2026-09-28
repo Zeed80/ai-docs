@@ -738,7 +738,28 @@ def choose_body(
         )
     for candidate in built:
         candidate.coverage = label_coverage(candidate, merged)
-    best = max(built, key=lambda r: r.coverage.get("share") or 0.0)
+    # Наибольшая линейная надпись — габарит детали: гипотеза, на теле которой
+    # его нет, проигрывает при любой доле (корпус живьём: «пластина» вдвое
+    # меньшего масштаба объясняла 86 % надписей половинками, но не «80»).
+    from app.ai.cad_views.labels import parse_label
+
+    lengths = [
+        lab.value for lab in (parse_label(t) for t in merged) if lab.kind == "linear" and lab.value
+    ]
+    largest = max(lengths) if lengths else None
+
+    def rank(result: ViewsResult) -> tuple[bool, bool, float]:
+        explained = {
+            lab.value
+            for lab in (parse_label(t) for t in result.coverage.get("explained") or [])
+            if lab.kind == "linear"
+        }
+        share = result.coverage.get("share") or 0.0
+        # Только среди правдоподобных: габарит вне надписей бывает и у
+        # верного тела (793539cc_p012: 0,78 у вала против 0,35 у «призмы»).
+        return (share >= _MIN_COVERAGE, largest is None or largest in explained, share)
+
+    best = max(built, key=rank)
     names = {
         id(revolved): "тело вращения",
         id(extruded): "выдавливание",

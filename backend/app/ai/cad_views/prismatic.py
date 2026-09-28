@@ -502,7 +502,11 @@ def build_prismatic(
     parsed = [parse_label(t) for t in texts]
     linear = [lab.value for lab in parsed if lab.kind == "linear" and lab.value]
     diameters = [lab.value for lab in parsed if lab.kind in ("diameter", "thread") and lab.value]
-    boxes = [tuple(r.box) for r in reading.regions if r.role in ("view", "section")]
+    # Роли областей модель путает (корпус живьём: план — «other», главным
+    # назван кусок вида 60 × 110 px); контуры видов отбираются проекционной
+    # связью, из областей отсекается только заведомо не изображение.
+    not_pictures = ("title_block", "specification", "table", "notes", "label", "isometric")
+    boxes = [tuple(r.box) for r in reading.regions if r.role not in not_pictures]
     if not boxes:
         return ViewsResult(False, "на листе не найдено изображения детали")
     # Стрелки размеров и цифры у кромок — толстые пятна: размыкание шире.
@@ -606,9 +610,28 @@ def build_prismatic(
     return best[1]
 
 
-def _feature_lengths(features: list[dict[str, Any]]) -> list[float]:
-    """Размеры полостей и приливов, как их надписывают: стороны, глубина, вылет."""
+def _feature_lengths(
+    features: list[dict[str, Any]], extent: dict[str, float] | None = None
+) -> list[float]:
+    """Размеры элементов, как их надписывают: стороны полостей и приливов,
+    глубина, вылет; положения центров от граней тела и шаг между центрами
+    («11» от кромки, «58» между отверстиями крепежа)."""
     lengths: list[float] = []
+    centres: dict[str, list[float]] = {"x": [], "y": [], "z": []}
+    for feature in features:
+        placement = (feature.get("params") or {}).get("placement") or {}
+        origin, axis = placement.get("origin"), placement.get("axis")
+        if not origin or not axis or extent is None:
+            continue
+        for index, name in enumerate(("x", "y", "z")):
+            if abs(axis[index]) > 0.5 or name not in extent:
+                continue
+            value = float(origin[index])
+            centres[name].append(value)
+            lengths += [value, extent[name] - value]
+    for values in centres.values():
+        values = sorted(set(round(v, 2) for v in values))
+        lengths += [b - a for i, a in enumerate(values) for b in values[i + 1 :]]
     for feature in features:
         params = feature.get("params") or {}
         if feature.get("kind") == "cut_prism":
@@ -1585,7 +1608,7 @@ def _assemble(
             ],
             "body_mm": [width, depth, height],
             # Размеры элементов — тоже надписи листа: полость, приливы.
-            "feature_lengths_mm": _feature_lengths(features),
+            "feature_lengths_mm": _feature_lengths(features, extent),
             "views": sorted(used),
             "polygons": polygons,
             "source_box": [mx, my, mx + mw, my + mh],
