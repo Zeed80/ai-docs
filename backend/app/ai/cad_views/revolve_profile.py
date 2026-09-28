@@ -335,7 +335,12 @@ def fit_axial_scale(
     # Габарит: наибольший линейный размер — длина детали (ГОСТ 2.307 требует
     # габаритный размер). По изломам профиля подбор неразличим — их десятки,
     # и любой масштаб «объясняет» почти все надписи.
-    overall = max(labels) / max(1, profile.x1 - profile.x0)
+    # Габарит — наибольшая надпись, согласная с длиной профиля: лишняя
+    # «180» (угол без знака градуса) при габарите 158 уводила масштаб к
+    # подбору по мелким надписям — длина 155,7 (многоосевой вал 2).
+    span = max(1, profile.x1 - profile.x0)
+    fitting = [v for v in labels if near is None or 0.9 * near <= v / span <= 1.1 * near]
+    overall = max(fitting or labels) / span
     if near is None or 0.9 * near <= overall <= 1.1 * near:
         hits = sum(
             1
