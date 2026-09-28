@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -485,6 +486,44 @@ def _levelled(
     return _simplify(
         [(float(x0 + i), float(v)) for i, v in enumerate(smooth)], max(1.0, 0.5 * line)
     )
+
+
+def _has_hexagon(gray: Any, box: tuple[int, int, int, int]) -> bool:
+    """На изображении есть правильный шестиугольник основных линий."""
+    import cv2
+    import numpy as np
+
+    from app.ai.cad_views.extrude_body import main_line_mask
+
+    x0, y0, x1, y1 = (int(v) for v in box)
+    # Рамка области бывает впритык и срезает вершины (втулка p008).
+    pad = int(0.06 * max(x1 - x0, y1 - y0))
+    crop = np.asarray(gray)[max(0, y0 - pad) : y1 + pad, max(0, x0 - pad) : x1 + pad]
+    if crop.size == 0:
+        return False
+    _ink, thick, line = main_line_mask(crop)
+    contours, _h = cv2.findContours(thick.astype(np.uint8), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    area = float(crop.shape[0] * crop.shape[1])
+    for contour in contours:
+        if cv2.contourArea(contour) < 0.05 * area:
+            continue
+        poly = cv2.approxPolyDP(contour, 0.02 * cv2.arcLength(contour, True), True)
+        if len(poly) != 6 or not cv2.isContourConvex(poly):
+            continue
+        points = poly.reshape(-1, 2).astype(float)
+        sides = [float(np.linalg.norm(points[i] - points[(i + 1) % 6])) for i in range(6)]
+        if max(sides) <= 1.2 * min(sides):
+            return True
+    return False
+
+
+def _plain_steps(outer: list[dict[str, Any]]) -> list[tuple[float, float, float]]:
+    """Площадки профиля: (Ø, начало, конец), мм."""
+    steps = []
+    for a, b in zip(outer, outer[1:], strict=False):
+        if b["z"] - a["z"] > 0.3 and abs(a["r"] - b["r"]) <= 1e-6:
+            steps.append((round(2.0 * float(a["r"]), 4), float(a["z"]), float(b["z"])))
+    return steps
 
 
 def silhouette_profile(gray: Any, line: float, axis: int | None = None) -> Any:
@@ -1182,6 +1221,42 @@ def build_revolve(
         notes.append(chamfer_note)
     if bridged or chamfer_note:
         candidate = revolve_candidate(outer, bore, part or main.part or "деталь")
+    # Шестигранник под ключ: на другом виде — сам шестиугольник, на листе —
+    # пара «S» и «Ø по вершинам» (S / cos 30°), на профиле — ступень этого Ø;
+    # грани через 60° (втулка шестигранная p008: S56, Ø65 строился
+    # цилиндром). Одной пары надписей мало: 30 / cos 30° ≈ Ø35 совпадало на
+    # валах без шестигранника. Вершины — сверху и снизу главного вида.
+    hexagon_seen = any(_has_hexagon(gray, region.box) for region in pictures if region is not main)
+    for step_d, z0, z1 in _plain_steps(outer) if hexagon_seen else []:
+        flats = [
+            v
+            for v in linear
+            if abs(v / math.cos(math.radians(30.0)) - step_d) <= 0.02 * step_d and v < step_d
+        ]
+        if len(flats) != 1:
+            continue
+        across = flats[0]
+        radius = step_d / 2.0
+        for k in range(6):
+            a = math.radians(60.0 * k)
+            features.append(
+                {
+                    "kind": "pocket",
+                    "profile": "rectangle",
+                    "origin_mm": [
+                        round(radius * math.cos(a), 4),
+                        round(radius * math.sin(a), 4),
+                        round((z0 + z1) / 2.0, 3),
+                    ],
+                    "axis": [round(-math.cos(a), 6), round(-math.sin(a), 6), 0.0],
+                    "ref": [0.0, 0.0, 1.0],
+                    "width_mm": round(z1 - z0, 3),
+                    "height_mm": round(step_d, 3),
+                    "depth_mm": round(radius - across / 2.0, 3),
+                    "source": f"шестигранник S{across:g}",
+                }
+            )
+        notes.append(f"шестигранник S{across:g} на ступени Ø{step_d:g} ({z0:g}…{z1:g} мм)")
     for item in features:
         params: dict[str, Any] = {
             "placement": {"origin": item["origin_mm"], "axis": item["axis"], "ref": item["ref"]}
