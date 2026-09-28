@@ -481,7 +481,42 @@ def cavity_span(
     return (best[4], best[5], best[6], best[7]) if best else None
 
 
+def visible_rectangles(thick: Any, frame: ViewFrame) -> list[tuple[float, float, float, float]]:
+    """Замкнутые прямоугольники основной линии внутри тела вида (px листа).
+
+    Карман на грани, обращённой к наблюдателю, виден прямоугольником
+    основной линии; окружности (отверстия) заполняют свою рамку на π/4 и
+    сюда не попадают."""
+    import cv2
+    import numpy as np
+
+    left, top, right, bottom = (int(round(v)) for v in frame.rect)
+    line = frame.outline.line
+    crop = thick[top : bottom + 1, left : right + 1]
+    if crop.size == 0:
+        return []
+    closed = cv2.morphologyEx(crop, cv2.MORPH_CLOSE, np.ones((int(2 * line) | 1,) * 2, np.uint8))
+    contours, hierarchy = cv2.findContours(closed, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    found = []
+    minimum = 3.0 / frame.scale  # мм → px
+    for index, contour in enumerate(contours):
+        if hierarchy is None or hierarchy[0][index][3] == -1:
+            continue  # внутренняя граница — дыра в линиях
+        x, y, w, h = cv2.boundingRect(contour)
+        if w < minimum or h < minimum:
+            continue
+        if w > 0.9 * crop.shape[1] and h > 0.9 * crop.shape[0]:
+            continue  # само тело вида
+        if cv2.contourArea(contour) < 0.85 * w * h:
+            continue
+        # До середины линии: дыра в линиях — внутренний край.
+        pad = line / 2.0
+        found.append((left + x - pad, top + y - pad, w + 2 * pad, h + 2 * pad))
+    return found
+
+
 __all__ = [
+    "visible_rectangles",
     "ViewFrame",
     "body_rect",
     "cavity_span",

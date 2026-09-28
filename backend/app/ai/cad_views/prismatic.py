@@ -645,6 +645,190 @@ def _axis_line(
     return sum(samples) / len(samples) if samples else 0.0
 
 
+def _face_pockets(
+    gray: Any,
+    frames: dict[str, Any],
+    thick: Any,
+    thin: Any,
+    extent: dict[str, float],
+    cavities: list[dict[str, Any]],
+    bosses: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Карманы на гранях тела по прямоугольникам видов (см. вызов)."""
+    from app.ai.cad_views.prismatic_parts import cavity_span, visible_rectangles
+
+    def cavity_box(cavity: dict[str, Any], u: str, v: str) -> tuple[float, ...] | None:
+        params = cavity["params"]
+        a, b = _KERNEL_PLANE[params["normal"]]
+        points = params["polygon_mm"]
+        spans = {
+            a: (min(p[0] for p in points), max(p[0] for p in points)),
+            b: (min(p[1] for p in points), max(p[1] for p in points)),
+            params["normal"]: tuple(params["range_mm"]),
+        }
+        return (*spans[u], *spans[v])
+
+    found: list[dict[str, Any]] = []
+    seen: list[tuple[str, float, float, float, float, float]] = []
+    for frame in frames.values():
+        if frame.section:
+            continue
+        n = frame.normal
+        (ua, _), (va, _) = frame.u, frame.v
+        boxes = [(box, True) for box in visible_rectangles(thick, frame)]
+        boxes += [(box, False) for box in hidden_boxes(gray, frame.outline)]
+        for (bx, by, bw, bh), visible in boxes:
+            corner_a, corner_b = frame.to_part(bx, by), frame.to_part(bx + bw, by + bh)
+            u0, u1 = sorted((corner_a[ua], corner_b[ua]))
+            v0, v1 = sorted((corner_a[va], corner_b[va]))
+            if u1 - u0 < 3.0 or v1 - v0 < 3.0:
+                continue
+            # Полость, видная насквозь, и торцы приливов — уже построены.
+            covered = False
+            for cavity in cavities:
+                box = cavity_box(cavity, ua, va)
+                if box is None:
+                    continue
+                inter = _overlap(u0, u1, box[0], box[1]) * _overlap(v0, v1, box[2], box[3])
+                if inter >= 0.5 * (u1 - u0) * (v1 - v0):
+                    covered = True
+            for boss in bosses:
+                if (
+                    boss["axis"] == n
+                    and u0 <= boss["origin"][ua] <= u1
+                    and v0 <= boss["origin"][va] <= v1
+                ):
+                    covered = True
+            if covered:
+                continue
+            near_min = frame.near == "min"
+            on_min = near_min if visible else not near_min
+            face = 0.0 if on_min else extent[n]
+            depth = None
+            for other in frames.values():
+                if other is frame or other.section or n not in (other.u[0], other.v[0]):
+                    continue
+                shared = other.u[0] if other.v[0] == n else other.v[0]
+                lo, hi = (u0, u1) if shared == ua else (v0, v1)
+                span = cavity_span(thin, other, n, shared, lo, hi, extent[n], extent[shared])
+                if span is None:
+                    continue
+                a, b = span[0], span[1]
+                line_mm = 2 * other.outline.line * other.scale
+                if abs(a - face) <= line_mm:
+                    depth = b - a
+                elif abs(b - face) <= line_mm:
+                    depth = b - a
+                if depth is not None:
+                    break
+            if depth is None or depth <= 0.5 or depth >= 0.9 * extent[n]:
+                continue
+            key = (n, round(face, 1), round(u0), round(u1), round(v0), round(v1))
+            if key in seen:
+                continue
+            seen.append(key)
+            origin = {n: face, ua: (u0 + u1) / 2.0, va: (v0 + v1) / 2.0}
+            found.append(
+                {
+                    "kind": "pocket",
+                    "params": {
+                        "placement": {
+                            "origin": _point(origin),
+                            "axis": _vector(n, 1.0 if on_min else -1.0),
+                            "ref": _vector(ua),
+                        },
+                        "profile": "rectangle",
+                        "width_mm": round(u1 - u0, 3),
+                        "height_mm": round(v1 - v0, 3),
+                        "depth_mm": round(depth, 3),
+                    },
+                    "confidence": 0.4,
+                }
+            )
+    return found
+
+
+def _snap_length(value: float, labels: list[float], share: float = 0.03) -> float:
+    from app.ai.cad_views.extrude_body import _match
+
+    hit = _match(value, labels, share)
+    return hit if hit is not None and abs(hit - value) <= max(1.0, share * hit) else value
+
+
+def _snap_interval(
+    low: float, high: float, size: float, labels: list[float], near: float = 1.0
+) -> tuple[float, float]:
+    """Отрезок элемента по оси тела [0, size]: длина — по надписи, край у
+    грани — на грани, середина у середины тела — посередине, иначе край —
+    на надписанном удалении от ближней грани."""
+    length = _snap_length(high - low, labels)
+    centre = (low + high) / 2.0
+    if abs(low) <= near:
+        return 0.0, length
+    if abs(high - size) <= near:
+        return size - length, size
+    if abs(centre - size / 2.0) <= near:
+        return size / 2.0 - length / 2.0, size / 2.0 + length / 2.0
+    offset = _snap_length(low, labels, 0.05)
+    if abs(offset - low) <= near:
+        return offset, offset + length
+    far = _snap_length(size - high, labels, 0.05)
+    if abs(far - (size - high)) <= near:
+        return size - far - length, size - far
+    return centre - length / 2.0, centre + length / 2.0
+
+
+def _nominal_features(
+    features: list[dict[str, Any]], extent: dict[str, float], linear: list[float]
+) -> None:
+    for feature in features:
+        params = feature.get("params") or {}
+        kind = feature.get("kind")
+        if kind == "cut_prism":
+            n = params["normal"]
+            a, b = _KERNEL_PLANE[n]
+            points = params["polygon_mm"]
+            if len(points) == 4:
+                a0, a1 = _snap_interval(
+                    min(p[0] for p in points), max(p[0] for p in points), extent[a], linear
+                )
+                b0, b1 = _snap_interval(
+                    min(p[1] for p in points), max(p[1] for p in points), extent[b], linear
+                )
+                params["polygon_mm"] = [
+                    [round(a0, 4), round(b0, 4)],
+                    [round(a1, 4), round(b0, 4)],
+                    [round(a1, 4), round(b1, 4)],
+                    [round(a0, 4), round(b1, 4)],
+                ]
+            r0, r1 = params["range_mm"]
+            r0, r1 = _snap_interval(r0, r1, extent[n], linear)
+            params["range_mm"] = [round(r0, 4), round(r1, 4)]
+        elif kind in ("boss", "pocket"):
+            params["depth_mm"] = round(_snap_length(float(params["depth_mm"]), linear, 0.08), 3)
+            for key in ("width_mm", "height_mm"):
+                if params.get(key):
+                    params[key] = round(_snap_length(float(params[key]), linear), 3)
+        if kind in ("boss", "pocket", "hole"):
+            placement = params.get("placement") or {}
+            origin = placement.get("origin")
+            axis = placement.get("axis")
+            if not origin or not axis:
+                continue
+            for index, name in enumerate(("x", "y", "z")):
+                if abs(axis[index]) > 0.5 or name not in extent:
+                    continue  # вдоль оси элемента — грань, её не трогаем
+                size = extent[name]
+                value = origin[index]
+                if abs(value - size / 2.0) <= 0.6:
+                    origin[index] = round(size / 2.0, 4)
+                    continue
+                edge = min(value, size - value)
+                snapped = _snap_length(edge, linear, 0.06)
+                if abs(snapped - edge) <= 0.6:
+                    origin[index] = round(snapped if value < size / 2.0 else size - snapped, 4)
+
+
 def _visual_hull(
     main: Any,
     views: dict[str, Any],
@@ -1243,6 +1427,14 @@ def _assemble(
     if cavities:
         notes.append(f"полостей по разрезу: {cavities}")
 
+    # Карманы стенок: прямоугольник на виде грани (видимый — на ближней
+    # грани, невидимый — на дальней), глубина — по соседнему виду: дно
+    # кармана — линия поперёк у грани в том же пролёте.
+    pockets = _face_pockets(gray, frames, thick, _thin, extent, cavity_features, bosses)
+    features.extend(pockets)
+    if pockets:
+        notes.append(f"карманов стенок: {len(pockets)}")
+
     # Отверстия: окружность на виде; видимая — от ближней грани, невидимая —
     # от дальней; глубина — по паре линий стенок на соседних видах.
     holes: list[dict[str, Any]] = []
@@ -1306,6 +1498,10 @@ def _assemble(
                 continue
             holes.append({"axis": n, "centre": centre, "params": hole_params, "view": side})
     features.extend({"kind": "hole", "params": h["params"], "confidence": 0.5} for h in holes)
+    # Номиналы: замер на листе точен до десятых, а деталь задана надписями —
+    # размеры элементов, их удаление от граней и соосность с телом берутся
+    # по надписям и симметрии, если замер к ним близок.
+    _nominal_features(features, extent, linear)
 
     # Габарит с приливами — для сверки с эталоном и отчёта.
     mx, my, mw, mh = main.box
