@@ -188,6 +188,7 @@ def section_voids(
     count, labels, stats, _ = cv2.connectedComponentsWithStats(cells.astype(np.uint8), 4)
     wide = np.ones((int(8 * line) | 1, int(8 * line) | 1), np.uint8)  # на 4 линии наружу
     lines = cv2.dilate(thick, grow)
+    strokes = None  # штрихи штриховки — считаются, только если понадобятся
     polygons = []
     for index in range(1, count):
         if stats[index][cv2.CC_STAT_AREA] < (6 * line) ** 2:
@@ -227,7 +228,11 @@ def section_voids(
             # Зазубрины и вырезы от стрелок и выносок размеров внутри полости —
             # не её форма (корпус 7: пустота Т-образная, рамка — точно 49 × 52).
             bx, by, bw, bh = _trim_to_walls(thick, bx, by, bw, bh, line)
-            bx, by, bw, bh, walled = _grow_to_walls(thick, material, space, bx, by, bw, bh, line)
+            if strokes is None:
+                from app.ai.cad_views.section_material import hatch_strokes, ink_mask
+
+                strokes = hatch_strokes(ink_mask(crop, line), line)
+            bx, by, bw, bh, walled = _grow_to_walls(thick, strokes, space, bx, by, bw, bh, line)
             poly = np.array([[bx, by], [bx + bw, by], [bx + bw, by + bh], [bx, by + bh]])
         else:
             walled = (False, False, False, False)
@@ -266,7 +271,9 @@ def _grow_to_walls(
 
     def beyond_is_wall(v: int, step: int, vertical: bool) -> bool:
         """За стенкой полости — штриховка или конец тела вида; за размерной
-        со стрелками внутри полости — та же пустота (корпус 8)."""
+        со стрелками внутри полости — та же пустота (корпус 8). Штриховка —
+        по штрихам под 45°: маска материала метит и полосу между размерной
+        и стенкой (корпус 19)."""
         a, b = sorted((v + step * int(2 * line), v + step * int(6 * line)))
         if vertical:
             if a < 0 or b >= width:
@@ -280,7 +287,7 @@ def _grow_to_walls(
             open_ = space[a : b + 1, cols]
         if open_.size and open_.mean() < 0.5:
             return True  # дальше — не тело вида
-        return bool(window.size) and float(window.mean()) >= 0.35
+        return bool(window.size) and float(window.mean()) >= 0.2
 
     def scan(start: int, stop: int, step: int, vertical: bool) -> int | None:
         for v in range(start, stop, step):
@@ -406,7 +413,10 @@ class _Points:
 
 
 def arrange_views(
-    outlines: list[Any], main: Any, boxes: dict[int, tuple[float, ...]] | None = None
+    outlines: list[Any],
+    main: Any,
+    boxes: dict[int, tuple[float, ...]] | None = None,
+    further: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Виды в проекционной связи с главным: {"below", "right", "above", "left"}.
 
@@ -415,7 +425,7 @@ def arrange_views(
     выше тела — и вид слева «не той высоты»)."""
     boxes = boxes or {}
     mx, my, mw, mh = boxes.get(id(main), main.box)
-    placed: dict[str, Any] = {}
+    placed: dict[str, list[Any]] = {}
     for outline in outlines:
         if outline is main:
             continue
@@ -440,9 +450,14 @@ def arrange_views(
             if side == "right"
             else (mx - (x + w))
         )
-        if side not in placed or gap < placed[side][0]:
-            placed[side] = (gap, outline)
-    return {side: item[1] for side, item in placed.items()}
+        placed.setdefault(side, []).append((gap, id(outline), outline))
+    if further is not None:
+        # Второй вид с той же стороны (вид спереди под разрезом корпуса):
+        # на нём грань, снятая разрезом, — для формы приливов.
+        for side, items in placed.items():
+            if len(items) >= 2:
+                further[side] = sorted(items, key=lambda item: item[0])[1][2]
+    return {side: min(items, key=lambda item: item[0])[2] for side, items in placed.items()}
 
 
 def view_polygon(
@@ -518,7 +533,11 @@ def build_prismatic(
     for main in candidates[:3]:
         # Рамки тел точнее рамок контуров, но на реальном листе тело вида
         # находится не всегда (1c411279_p011/p012) — тогда по контурам.
-        views = arrange_views(found[:6], main, bodies) or arrange_views(found[:6], main)
+        further: dict[str, Any] = {}
+        views = arrange_views(found[:6], main, bodies, further)
+        if not views:
+            further = {}
+            views = arrange_views(found[:6], main, None, further)
         if not views:
             tried.append(f"контур {main.box[2]}×{main.box[3]} px: нет видов в проекционной связи")
             continue
@@ -551,14 +570,19 @@ def build_prismatic(
         tried.append(f"контур {main.box[2]}×{main.box[3]} px, {scale:.4f} мм/px: {', '.join(what)}")
         key = (len(views), body_hits, len(what))
         if len(what) >= 3:
-            options.append((key, main, views, scale, what))
+            options.append((key, main, views, scale, what, further))
     # Каждая гипотеза «главный вид + масштаб» собирается целиком и сверяется
     # с надписями листа: признаки выбора (число видов, надписанный габарит)
     # на литом корпусе 1c411279_p011 выбирали вид с чужим масштабом.
     best = None
-    for key, main, views, scale, what in sorted(options, key=lambda o: o[0], reverse=True)[:3]:
+    for key, main, views, scale, what, further in sorted(options, key=lambda o: o[0], reverse=True)[
+        :3
+    ]:
         variants = [
-            (1, _assemble(gray, main, views, scale, what, tried, linear, diameters, part)),
+            (
+                1,
+                _assemble(gray, main, views, scale, what, tried, linear, diameters, part, further),
+            ),
             (0, _visual_hull(main, views, scale, what, tried, linear, diameters, part)),
         ]
         for priority, result in variants:
@@ -598,6 +622,27 @@ def _feature_lengths(features: list[dict[str, Any]]) -> list[float]:
                 if params.get(key):
                     lengths.append(float(params[key]))
     return [round(v, 3) for v in lengths if v > 0]
+
+
+def _axis_line(
+    thin: Any,
+    frame: Any,
+    tangent: str,
+    centre: float,
+    axis: str,
+    face: float,
+    sign: int,
+    depth: float,
+) -> float:
+    """Доля осевой линии прилива на виде сбоку: тонкая по центру пролёта от
+    грани тела до торца и дальше за торец (ГОСТ 2.303 — ось выходит за
+    контур на 2…5 мм)."""
+    from app.ai.cad_views.prismatic_parts import _segment_samples
+
+    reach = depth + 3.0
+    low, high = sorted((face, face + sign * reach))
+    samples = _segment_samples(thin, frame, {tangent: centre}, axis, low, high)
+    return sum(samples) / len(samples) if samples else 0.0
 
 
 def _visual_hull(
@@ -940,6 +985,7 @@ def _assemble(
     linear: list[float],
     diameters: list[float],
     part: str | None,
+    further: dict[str, Any] | None = None,
 ) -> Any:
     """Тело по кромкам видов + выступы → приливы, окружности → отверстия,
     пустоты разрезов → полости."""
@@ -1087,6 +1133,12 @@ def _assemble(
                 }
             )
     along_of = {f.normal: f for f in frames.values() if not f.section}
+    for side, outline in (further or {}).items():
+        # Вид за разрезом в том же ряду: на нём снятая разрезом грань.
+        if is_section(gray, outline):
+            continue
+        far = ViewFrame(side, outline, body_rect(thick, outline), scale)
+        along_of.setdefault(far.normal, far)
     along_any = {f.normal: f for f in frames.values()}
     paired: set[int] = set()
     bosses: list[dict[str, Any]] = []
@@ -1138,9 +1190,27 @@ def _assemble(
                 cover = ring_cover(ink, px, py, d1 / 2.0 / scale, along.outline.line)
                 if cover > best[0]:
                     best = (cover, c2)
-            if best[0] >= 0.6 and (b0 is None or abs((b1 - b0) - d1) <= 0.15 * d1 + 1.0):
+            if best[0] >= 0.75 or (
+                best[0] >= 0.6 and (b0 is None or abs((b1 - b0) - d1) <= 0.15 * d1 + 1.0)
+            ):
                 profile = "circle"
                 c2 = best[1]
+        if profile is None and b0 is not None and abs((b1 - b0) - d1) <= 0.15 * d1 + 1.0:
+            # Вида вдоль оси нет (там разрез) — цилиндр выдаёт осевая
+            # штрихпунктирная на обоих видах, где прилив виден выступом.
+            partner_item = candidates[partner] if partner is not None else None
+            marks = [
+                _axis_line(
+                    _thin, frames[item["view"]], item["tangent"], c, axis, face, sign, depth_mm
+                )
+                for item, c in ((one, c1), (partner_item, (b0 + b1) / 2.0))
+                if item is not None
+                for depth_mm in (boss_depth,)
+            ]
+            if marks and min(marks) >= 0.5:
+                profile = "circle"
+                c2 = (b0 + b1) / 2.0
+                d1 = (d1 + (b1 - b0)) / 2.0
         if profile is None:
             if b0 is None:
                 continue  # второго пролёта нет и формы не видно — не угадываем
