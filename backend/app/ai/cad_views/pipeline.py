@@ -290,7 +290,7 @@ def _drop_section_traces(half: list[Any], gray: Any, axis: int, line: float) -> 
     return out
 
 
-def bore_from_lines(thick: Any, axis: int, line: float, outer: Any) -> Any:
+def bore_from_lines(thick: Any, axis: int, line: float, outer: Any, material: Any = None) -> Any:
     """Полупрофиль «наружный контур + расточка по линиям» для разреза.
 
     Расточка в столбце — ближайшая к оси горизонталь основной линии выше и
@@ -302,7 +302,7 @@ def bore_from_lines(thick: Any, axis: int, line: float, outer: Any) -> Any:
     import cv2
     import numpy as np
 
-    from app.ai.cad_views.revolve_profile import HalfProfile, _median, _simplify
+    from app.ai.cad_views.revolve_profile import HalfProfile
 
     horizontal = cv2.morphologyEx(
         thick, cv2.MORPH_OPEN, np.ones((1, max(3, int(3 * line))), np.uint8)
@@ -330,15 +330,70 @@ def bore_from_lines(thick: Any, axis: int, line: float, outer: Any) -> Any:
                 pair.append(abs((hit + end) / 2.0 - axis))
             if len(pair) == 2 and abs(pair[0] - pair[1]) <= line:
                 radius = (pair[0] + pair[1]) / 2.0
+                # Стенка расточки — край разреза: за ней материал. Контур
+                # паза лицом тоже пара горизонталей у оси, но за ним пусто
+                # (сплошной вал shaft-6 получал «расточку» по пазам).
+                if material is not None:
+                    top = int(axis - reach)
+                    bottom = int(axis - radius - line)
+                    low = int(axis + radius + line)
+                    high = int(axis + reach)
+                    if not (
+                        material[max(0, top) : max(0, bottom), x].any()
+                        or material[max(0, low) : max(0, high), x].any()
+                    ):
+                        radius = None
         found.append(radius)
     known = [value for value in found if value is not None]
     if len(known) < 0.5 * len(found) or not known:
         return None
+    inner = _levelled(found, x0, line)
+    # Наружный контур — тоже по линиям: самая дальняя от оси длинная
+    # горизонталь в пределах тела (с любой стороны: шпоночный паз снизу
+    # не делает вал тоньше). Материал под надписью без штриховки «проседал»
+    # (shaft-7: Ø23,9 вместо Ø28 под «Ø6»). Нет линии — прежний контур.
+    limit = max(rs) + 2.0 * line
+    outer_found: list[float | None] = []
+    for i, x in enumerate(range(x0, x1 + 1)):
+        floor = (found[i] or 0.0) + line
+        best: float | None = None
+        if 0 <= x < horizontal.shape[1]:
+            for sign in (-1, 1):
+                far = int(axis + sign * limit)
+                near = int(axis + sign * floor)
+                hit = next(
+                    (y for y in range(far, near, -sign) if 0 <= y < height and horizontal[y, x]),
+                    None,
+                )
+                if hit is None:
+                    continue
+                end = hit
+                while 0 <= end - sign < height and horizontal[end - sign, x]:
+                    end -= sign
+                radius = abs((hit + end) / 2.0 - axis)
+                best = radius if best is None else max(best, radius)
+        outer_found.append(best if best is not None else float(np.interp(x, xs, rs)))
+    return HalfProfile(
+        axis_y=float(axis),
+        line_px=line,
+        x0=x0,
+        x1=x1,
+        outer=_levelled(outer_found, x0, line),
+        inner=inner,
+    )
+
+
+def _levelled(found: list[float | None], x0: int, line: float) -> list[tuple[float, float]]:
+    """Ломаная по столбцам: пропуски по соседям, медиана, уровни участков."""
+    import numpy as np
+
+    from app.ai.cad_views.revolve_profile import _median, _simplify
+
     index = [i for i, value in enumerate(found) if value is not None]
     filled = np.interp(range(len(found)), index, [found[i] for i in index])
     smooth = _median([float(v) for v in filled], int(2 * line) + 1)
     # Участок без скачка больше ¾ линии — один уровень (медиана): пара линий
-    # расточки дрожит на ±2 px, а площадка требует ровного радиуса.
+    # дрожит на ±2 px, а площадка требует ровного радиуса.
     runs: list[list[int]] = []
     for i, value in enumerate(smooth):
         if runs and abs(value - smooth[i - 1]) <= 0.75 * line:
@@ -349,16 +404,8 @@ def bore_from_lines(thick: Any, axis: int, line: float, outer: Any) -> Any:
         level = float(np.median([smooth[i] for i in run]))
         for i in run:
             smooth[i] = level
-    inner = _simplify(
+    return _simplify(
         [(float(x0 + i), float(v)) for i, v in enumerate(smooth)], max(1.0, 0.5 * line)
-    )
-    return HalfProfile(
-        axis_y=float(axis),
-        line_px=line,
-        x0=x0,
-        x1=x1,
-        outer=list(outer.outer),
-        inner=inner,
     )
 
 
@@ -773,7 +820,7 @@ def build_revolve(
             if by_silhouette is not None:
                 outers.append(by_silhouette)
             for outer_profile in outers[:4]:
-                lined = bore_from_lines(thick_only, probe_axis, line, outer_profile)
+                lined = bore_from_lines(thick_only, probe_axis, line, outer_profile, material)
                 if lined is not None:
                     variants.append((lined, True))
         if by_silhouette is not None:
