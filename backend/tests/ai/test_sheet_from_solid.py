@@ -1918,3 +1918,25 @@ def test_a_turned_part_with_holes_on_a_circle_gets_an_end_view_with_pcd_and_coun
     _rotation_pattern_dimensions(drawing, plan)
     labels = sorted(item["label"] for item in drawing["dimensions"])
     assert labels == ["6 отв. Ø11", "Ø90"]
+
+
+def test_hatching_stops_under_a_label_and_split_parts_keep_unique_ids():
+    # ГОСТ 2.306: надпись на заштрихованном поле — штриховка прерывается.
+    # «Ø6» поперёк стенок полого вала перечёркивалась и не читалась (shaft-7).
+    from app.ai.cad_ir.schema import CadIR, HatchRegion, Point, SourceInfo, TextEntity
+    from app.ai.cad_ir.sheet_from_solid import _clear_hatch_under_text
+
+    wall = HatchRegion(
+        boundary=[Point(x=0, y=14), Point(x=400, y=14), Point(x=400, y=26), Point(x=0, y=26)]
+    )
+    label = TextEntity(
+        position=Point(x=200, y=20), text="Ø6", height=14.0, rotation=-90.0, anchor="middle"
+    )
+    out = _clear_hatch_under_text([wall, label])
+    parts = [entity for entity in out if isinstance(entity, HatchRegion)]
+    assert len(parts) == 2  # надпись поперёк стенки режет её надвое
+    assert len({part.id for part in parts}) == 2
+    for part in parts:
+        xs = [point.x for point in part.boundary]
+        assert max(xs) <= 190 or min(xs) >= 202
+    CadIR(source=SourceInfo(image_width=400, image_height=40, kind="spec"), entities=out)

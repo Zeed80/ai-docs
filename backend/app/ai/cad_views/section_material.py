@@ -158,7 +158,11 @@ def material_by_outline(gray: Any, line: float) -> Any:
 
     ink, thick, _ = main_line_mask(np.asarray(gray))
     strokes = hatch_strokes(ink, line)
-    thick = thick & (1 - cv2.dilate(strokes, np.ones((3, 3), np.uint8)))
+    # Из стенок вычитаются только ТОНКИЕ наклонные штрихи: фаска под 45° —
+    # основная линия, и без неё ячейка крайней ступени вытекала за торец
+    # (полый вал shaft-7: разрез обрывался на 706 из 740 px).
+    thin_strokes = _thin_hatch_strokes(ink, line)
+    thick = thick & (1 - cv2.dilate(thin_strokes, np.ones((3, 3), np.uint8)))
     size = int(0.6 * line) | 1
     thick = cv2.morphologyEx(thick, cv2.MORPH_OPEN, np.ones((size, size), np.uint8))
     reach = int(2.5 * line) | 1
@@ -175,3 +179,34 @@ def material_by_outline(gray: Any, line: float) -> Any:
         if float(strokes[cell].mean()) > 0.08:
             material[cell] = 1
     return material
+
+
+def _thin_hatch_strokes(ink: Any, line: float) -> Any:
+    """Наклонные штрихи тоньше основной линии (штриховка, не фаска)."""
+    import cv2
+    import numpy as np
+
+    out = np.zeros_like(ink)
+    found = cv2.createLineSegmentDetector(0).detect(((1 - ink) * 255).astype(np.uint8))[0]
+    if found is None:
+        return out
+    distance = cv2.distanceTransform(ink.astype(np.uint8), cv2.DIST_L2, 3)
+    height, width = ink.shape[:2]
+    for x0, y0, x1, y1 in found.reshape(-1, 4):
+        length = math.hypot(x1 - x0, y1 - y0)
+        angle = (math.degrees(math.atan2(y1 - y0, x1 - x0)) + 180.0) % 180.0
+        if length < 1.5 * line or not (25 <= angle <= 65 or 115 <= angle <= 155):
+            continue
+        # Толщина — медиана вдоль самого штриха (у края штриховки рядом
+        # основная линия контура, окно вокруг середины цепляло её).
+        widths = []
+        for share in (0.2, 0.35, 0.5, 0.65, 0.8):
+            px = int(round(x0 + (x1 - x0) * share))
+            py = int(round(y0 + (y1 - y0) * share))
+            if 0 <= px < width and 0 <= py < height:
+                patch = distance[max(0, py - 1) : py + 2, max(0, px - 1) : px + 2]
+                widths.append(2.0 * float(patch.max()))
+        if not widths or float(np.median(widths)) > 0.75 * line:
+            continue
+        cv2.line(out, (int(x0), int(y0)), (int(x1), int(y1)), 1, max(2, int(line)))
+    return out

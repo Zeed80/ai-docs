@@ -139,7 +139,13 @@ def render_sheet(ir: CadIR, *, dpi: int, ir_px_per_mm: float) -> RenderedSheet:
                 width=stroke(entity),
             )
         elif isinstance(entity, HatchRegion):
-            _hatch(draw, [xy(point) for point in entity.boundary], thin, spacing=2.0 * dpi / 25.4)
+            _hatch(
+                draw,
+                [xy(point) for point in entity.boundary],
+                thin,
+                spacing=2.0 * dpi / 25.4,
+                holes=[[xy(point) for point in hole] for hole in entity.holes],
+            )
         elif isinstance(entity, TextEntity):
             if not font_path or not (entity.text or "").strip():
                 continue
@@ -192,7 +198,14 @@ def render_sheet(ir: CadIR, *, dpi: int, ir_px_per_mm: float) -> RenderedSheet:
     )
 
 
-def _hatch(draw, boundary: list[tuple[float, float]], width: int, *, spacing: float) -> None:
+def _hatch(
+    draw,
+    boundary: list[tuple[float, float]],
+    width: int,
+    *,
+    spacing: float,
+    holes: list[list[tuple[float, float]]] | None = None,
+) -> None:
     """Штриховка под 45° внутри контура (ГОСТ 2.306, металл)."""
     if len(boundary) < 3:
         return
@@ -203,6 +216,10 @@ def _hatch(draw, boundary: list[tuple[float, float]], width: int, *, spacing: fl
     x0, y0, x1, y1 = int(min(xs)), int(min(ys)), int(max(xs)) + 1, int(max(ys)) + 1
     mask = Image.new("1", (x1 - x0 + 1, y1 - y0 + 1), 0)
     ImageDraw.Draw(mask).polygon([(x - x0, y - y0) for x, y in boundary], fill=1)
+    # Вырезы (надписи поверх разреза, ГОСТ 2.306) — без штрихов.
+    for hole in holes or []:
+        if len(hole) >= 3:
+            ImageDraw.Draw(mask).polygon([(x - x0, y - y0) for x, y in hole], fill=0)
     lines = Image.new("1", mask.size, 0)
     line_draw = ImageDraw.Draw(lines)
     extent = mask.size[0] + mask.size[1]

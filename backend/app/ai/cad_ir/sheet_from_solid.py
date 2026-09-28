@@ -3339,6 +3339,7 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
     shift = _fit_shift(entities, area_x0, area_y0, area_w, area_h)
     if shift != (0.0, 0.0):
         entities, placements = draw(offset_u + shift[0], offset_v + shift[1])
+    entities = _clear_hatch_under_text(entities)
     if plan.geometry_only:
         entities += _annotation_entities(
             spec,
@@ -3367,6 +3368,83 @@ def _assemble(drawing: dict, spec: dict, plan: SheetPlan) -> tuple[CadIR, tuple[
         ir.sheet.frame = False
         ir.sheet.title_block = {}
     return ir, (extent_w, extent_h)
+
+
+def _text_outline(entity: Any, pad: float) -> list[tuple[float, float]]:
+    """Прямоугольник надписи на листе (px), с учётом привязки и поворота."""
+    import math
+
+    from app.ai.cad_projection import _LABEL_EM
+
+    height = float(entity.height)
+    width = len(entity.text or "") * _LABEL_EM * height
+    left = -width / 2.0 if getattr(entity, "anchor", "start") == "middle" else 0.0
+    corners = [
+        (left - pad, -0.85 * height - pad),
+        (left + width + pad, -0.85 * height - pad),
+        (left + width + pad, 0.25 * height + pad),
+        (left - pad, 0.25 * height + pad),
+    ]
+    # Поворот по часовой на листе (y вниз), как у рендеров.
+    angle = math.radians(float(entity.rotation or 0.0))
+    cos, sin = math.cos(angle), math.sin(angle)
+    x0, y0 = float(entity.position.x), float(entity.position.y)
+    return [(x0 + x * cos - y * sin, y0 + x * sin + y * cos) for x, y in corners]
+
+
+def _clear_hatch_under_text(entities: list[Any]) -> list[Any]:
+    """Штриховка прерывается под надписью (ГОСТ 2.306).
+
+    Подпись «Ø6» расточки полого вала стояла поперёк заштрихованных стенок —
+    штрихи перечёркивали цифры, и ридер надпись не выписал (shaft-7: расточка
+    пропала из тела). Из области штриховки вычитаются рамки надписей; контур
+    детали — отдельные линии, он не меняется.
+    """
+    from shapely.geometry import Polygon
+    from shapely.ops import unary_union
+
+    from app.ai.cad_ir.schema import HatchRegion, Point, TextEntity
+
+    texts = [
+        Polygon(_text_outline(entity, 0.4 * PAPER_PX_PER_MM))
+        for entity in entities
+        if isinstance(entity, TextEntity) and (entity.text or "").strip()
+    ]
+    if not texts:
+        return entities
+    out: list[Any] = []
+    for entity in entities:
+        if not isinstance(entity, HatchRegion) or entity.pattern != "ansi31":
+            out.append(entity)
+            continue
+        region = Polygon(
+            [(p.x, p.y) for p in entity.boundary],
+            [[(p.x, p.y) for p in hole] for hole in entity.holes],
+        )
+        if not region.is_valid:
+            region = region.buffer(0)
+        covering = [text for text in texts if text.intersects(region)]
+        if not covering or region.is_empty:
+            out.append(entity)
+            continue
+        rest = region.difference(unary_union(covering))
+        parts = [rest] if rest.geom_type == "Polygon" else list(getattr(rest, "geoms", []))
+        parts = [part for part in parts if part.geom_type == "Polygon" and part.area > 1.0]
+        for number, part in enumerate(parts):
+            out.append(
+                entity.model_copy(
+                    update={
+                        # Надпись режет область на части — у каждой свой id.
+                        "id": entity.id if number == 0 else f"{entity.id}-{number}",
+                        "boundary": [Point(x=x, y=y) for x, y in list(part.exterior.coords)[:-1]],
+                        "holes": [
+                            [Point(x=x, y=y) for x, y in list(ring.coords)[:-1]]
+                            for ring in part.interiors
+                        ],
+                    }
+                )
+            )
+    return out
 
 
 _FLAT_TITLE_MM = 20.0
