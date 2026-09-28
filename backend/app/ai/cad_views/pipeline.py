@@ -359,10 +359,37 @@ def bore_from_lines(thick: Any, axis: int, line: float, outer: Any, material: An
     xs = [x for x, _r in outer.outer]
     rs = [r for _x, r in outer.outer]
     x0, x1 = int(outer.x0), int(outer.x1)
+    # Полувид-полуразрез (ЕСКД): штриховка только по одну сторону оси —
+    # расточку видно там одной стенкой, пары нет (втулка p008).
+    one_side = 0
+    if material is not None:
+        rows = np.nonzero(material)[0]
+        if rows.size:
+            below = float((rows > axis).mean())
+            one_side = 1 if below > 0.9 else -1 if below < 0.1 else 0
     found: list[float | None] = []
     for x in range(x0, x1 + 1):
         reach = float(np.interp(x, xs, rs)) - 1.5 * line
         radius: float | None = None
+        if one_side and 0 <= x < horizontal.shape[1] and reach > line:
+            start = int(axis + one_side * 0.6 * line)
+            stop = int(axis + one_side * reach)
+            hit = next(
+                (y for y in range(start, stop, one_side) if 0 <= y < height and horizontal[y, x]),
+                None,
+            )
+            if hit is not None:
+                end = hit
+                while 0 <= end + one_side < height and horizontal[end + one_side, x]:
+                    end += one_side
+                candidate = abs((hit + end) / 2.0 - axis)
+                near = int(axis + one_side * (candidate + line))
+                far = int(axis + one_side * min(reach, candidate + 2.5 * line))
+                lo, hi = min(near, far), max(near, far)
+                if material[max(0, lo) : max(0, hi), x].any():
+                    radius = candidate
+            found.append(radius)
+            continue
         if 0 <= x < horizontal.shape[1] and reach > line:
             pair = []
             for sign in (-1, 1):
@@ -407,7 +434,9 @@ def bore_from_lines(thick: Any, axis: int, line: float, outer: Any, material: An
     for i, x in enumerate(range(x0, x1 + 1)):
         floor = (found[i] or 0.0) + line
         best: float | None = None
-        if 0 <= x < horizontal.shape[1]:
+        # Полуразрез: вторая половина — вид, её дальние горизонтали не контур;
+        # наружный контур остаётся прежним.
+        if 0 <= x < horizontal.shape[1] and not one_side:
             for sign in (-1, 1):
                 far = int(axis + sign * limit)
                 near = int(axis + sign * floor)
