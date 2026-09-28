@@ -599,7 +599,16 @@ def build_prismatic(
             # объясняет лист заметно лучше (на корпусах надписей у обеих
             # поровну, а тело без полости и приливов — не та деталь).
             disagree = int((result.scales or {}).get("views_disagree") or 0)
-            rank = (-disagree, round(share - (0.0 if priority else 0.1), 2), priority, key)
+            # Больше видов в проекционной связи — деталь определена полнее:
+            # два вида из трёх «объясняли» надписи лучше, но без разреза с
+            # полостью (корпус 20: 0,86 против 0,82 у трёх видов).
+            rank = (
+                -disagree,
+                key[0],
+                round(share - (0.0 if priority else 0.1), 2),
+                priority,
+                key,
+            )
             if best is None or rank > best[0]:
                 best = (rank, result)
     if best is None:
