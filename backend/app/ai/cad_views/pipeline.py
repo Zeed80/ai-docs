@@ -457,6 +457,22 @@ def build_revolve(
             rim = lifted_rim(crop, variants[0][0], line)
             if rim is not None:
                 variants.append((rim, True))
+        # Силуэт только по основным линиям: тонкие выноски, прошедшие через
+        # контур, «достраивали» ступень конусом (многоосевой вал 5: выноска
+        # «Ø6 120°» дала Ø60 и скос до Ø28). Вариант сверяется с надписями
+        # наравне с остальными.
+        import cv2
+
+        from app.ai.cad_views.extrude_body import main_line_mask
+
+        ink_all, thick_only, _ = main_line_mask(crop)
+        thin_only = ink_all & (1 - cv2.dilate(thick_only, np.ones((3, 3), np.uint8)))
+        if thin_only.any():
+            main_only = crop.copy()
+            main_only[thin_only > 0] = 255
+            by_main_lines = silhouette_profile(main_only, line)
+            if by_main_lines is not None:
+                variants.append((by_main_lines, False))
         by_silhouette = silhouette_profile(crop, line)
         if by_silhouette is not None:
             variants.append((by_silhouette, False))
