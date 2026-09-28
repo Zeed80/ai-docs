@@ -1048,16 +1048,21 @@ def build_revolve(
     from app.ai.cad_views.nominals import nominal_revolve
 
     length = max((p["z"] for p in outer), default=0.0)
-    outer, bore, snapped = nominal_revolve(
-        outer,
-        bore,
-        linear,
-        shafts or diameters,
-        holes or diameters,
-        tolerance=max(1.2 * line * axial, 0.006 * length),
-        bore_share=0.07 if holes else 0.03,
-        diameter_tolerance_mm=1.2 * line * radial,
-    )
+    raw_outer, raw_bore = outer, bore
+
+    def nominal(chain: list[float]) -> tuple[list[dict], list[dict], int]:
+        return nominal_revolve(
+            raw_outer,
+            raw_bore,
+            chain,
+            shafts or diameters,
+            holes or diameters,
+            tolerance=max(1.2 * line * axial, 0.006 * length),
+            bore_share=0.07 if holes else 0.03,
+            diameter_tolerance_mm=1.2 * line * radial,
+        )
+
+    outer, bore, snapped = nominal(linear)
     if snapped:
         notes.append(f"номиналы надписей: исправлено {snapped} значений замера")
     candidate = revolve_candidate(outer, bore, part or main.part or "деталь")
@@ -1131,6 +1136,15 @@ def build_revolve(
             if not any(_same_feature(item, other) for other in features):
                 features.append(item)
                 notes.append(item.pop("note", "элемент по сечению"))
+    # Длина паза — его размер, а не звено цепочки ступеней: «19» паза
+    # притягивало уступ 139 к 157 − 19 = 138, и от неверной базы съезжала
+    # вся цепочка (shaft-3). Номиналы — заново без размеров пазов.
+    keyway_sizes = [float(f["width_mm"]) for f in features if f.get("keyway")]
+    if keyway_sizes:
+        chain = [v for v in linear if all(abs(v - k) > 0.05 for k in keyway_sizes)]
+        if chain != list(linear):
+            outer, bore, _again = nominal(chain)
+            candidate = revolve_candidate(outer, bore, part or main.part or "деталь")
     # Поверхность под поперечным отверстием — цилиндр по соседям, а не дуги
     # пересечения из разреза; фаска «c×45°» — у входа резьбы.
     from app.ai.cad_views.nominals import bridge_cross_holes, chamfer_threaded_end
