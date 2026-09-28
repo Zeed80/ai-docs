@@ -3306,8 +3306,9 @@ def build_drawing(request: DrawingRequest) -> dict[str, Any]:
                     shape, float(wanted.section_station_mm), request.scale,
                     max(8, request.curve_samples),
                 )
-                if request.true_orientation:
-                    outlines = [[(p[0], -p[1]) for p in o] for o in outlines]
+                # Вынесенное сечение строится из самого тела (u = x, v = y,
+                # наблюдатель на +Z) — оно и так вид наблюдателя, TechDraw
+                # его не переворачивал.
                 if not outlines:
                     raise HTTPException(
                         422,
