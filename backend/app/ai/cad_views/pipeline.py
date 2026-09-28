@@ -290,6 +290,78 @@ def _drop_section_traces(half: list[Any], gray: Any, axis: int, line: float) -> 
     return out
 
 
+def bore_from_lines(thick: Any, axis: int, line: float, outer: Any) -> Any:
+    """Полупрофиль «наружный контур + расточка по линиям» для разреза.
+
+    Расточка в столбце — ближайшая к оси горизонталь основной линии выше и
+    ниже оси (пара симметрична в пределах толщины линии), не дальше
+    полутора линий от наружного контура. Расточка есть, если пара найдена
+    хотя бы в половине столбцов; пропуски (поперечный канал, надпись) —
+    по соседям.
+    """
+    import cv2
+    import numpy as np
+
+    from app.ai.cad_views.revolve_profile import HalfProfile, _median, _simplify
+
+    horizontal = cv2.morphologyEx(
+        thick, cv2.MORPH_OPEN, np.ones((1, max(3, int(3 * line))), np.uint8)
+    )
+    height = horizontal.shape[0]
+    xs = [x for x, _r in outer.outer]
+    rs = [r for _x, r in outer.outer]
+    x0, x1 = int(outer.x0), int(outer.x1)
+    found: list[float | None] = []
+    for x in range(x0, x1 + 1):
+        reach = float(np.interp(x, xs, rs)) - 1.5 * line
+        radius: float | None = None
+        if 0 <= x < horizontal.shape[1] and reach > line:
+            pair = []
+            for sign in (-1, 1):
+                start = int(axis + sign * 0.6 * line)
+                stop = int(axis + sign * reach)
+                rows = range(start, stop, sign)
+                hit = next((y for y in rows if 0 <= y < height and horizontal[y, x]), None)
+                if hit is None:
+                    break
+                end = hit
+                while 0 <= end + sign < height and horizontal[end + sign, x]:
+                    end += sign
+                pair.append(abs((hit + end) / 2.0 - axis))
+            if len(pair) == 2 and abs(pair[0] - pair[1]) <= line:
+                radius = (pair[0] + pair[1]) / 2.0
+        found.append(radius)
+    known = [value for value in found if value is not None]
+    if len(known) < 0.5 * len(found) or not known:
+        return None
+    index = [i for i, value in enumerate(found) if value is not None]
+    filled = np.interp(range(len(found)), index, [found[i] for i in index])
+    smooth = _median([float(v) for v in filled], int(2 * line) + 1)
+    # Участок без скачка больше ¾ линии — один уровень (медиана): пара линий
+    # расточки дрожит на ±2 px, а площадка требует ровного радиуса.
+    runs: list[list[int]] = []
+    for i, value in enumerate(smooth):
+        if runs and abs(value - smooth[i - 1]) <= 0.75 * line:
+            runs[-1].append(i)
+        else:
+            runs.append([i])
+    for run in runs:
+        level = float(np.median([smooth[i] for i in run]))
+        for i in run:
+            smooth[i] = level
+    inner = _simplify(
+        [(float(x0 + i), float(v)) for i, v in enumerate(smooth)], max(1.0, 0.5 * line)
+    )
+    return HalfProfile(
+        axis_y=float(axis),
+        line_px=line,
+        x0=x0,
+        x1=x1,
+        outer=list(outer.outer),
+        inner=inner,
+    )
+
+
 def silhouette_profile(gray: Any, line: float, axis: int | None = None) -> Any:
     """Профиль тела вращения по неразрезанному виду: силуэт, без расточки."""
     import cv2
@@ -686,6 +758,24 @@ def build_revolve(
                 if by_outline is not None:
                     variants.append((by_outline, False))
         by_silhouette = silhouette_profile(crop, line)
+        if material.sum() > 0 and probe_axis is not None:
+            # Расточка по самим линиям: в разрезе полого вала её стенка —
+            # длинная горизонталь основной линии, ближайшая к оси. Надпись
+            # поперёк стенки (штриховка под ней прервана) и стрелки Ø режут
+            # ячейки материала, линию — нет (shaft-7: Ø6 по ячейкам пропадала).
+            # Наружный контур — от материала разреза (силуэт разреза полого
+            # вала ловит саму расточку) и от силуэтов.
+            outers = list(material_profiles) + [
+                profile
+                for profile, is_hatched in variants
+                if not is_hatched and profile is not None
+            ]
+            if by_silhouette is not None:
+                outers.append(by_silhouette)
+            for outer_profile in outers[:4]:
+                lined = bore_from_lines(thick_only, probe_axis, line, outer_profile)
+                if lined is not None:
+                    variants.append((lined, True))
         if by_silhouette is not None:
             variants.append((by_silhouette, False))
             # Зубья в осевом разрезе не штрихуют (ГОСТ 2.402): штриховка

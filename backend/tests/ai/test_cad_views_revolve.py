@@ -149,3 +149,24 @@ def test_outline_cells_keep_the_bore_when_a_dimension_line_crosses_the_wall():
     inner = [r for _x, r in profile.inner if r > 0]
     assert inner and abs(2 * np.median(inner) * radial - 20.0) < 1.0
     assert max(inner) - min(inner) <= 6.0  # одна расточка, без ступеней у стрелок
+
+
+def test_bore_from_lines_survives_a_label_across_the_wall():
+    """Расточка по самим линиям: надпись поперёк стенки со снятой под ней
+    штриховкой (ГОСТ 2.306) не мешает — Ø20 по всей длине (shaft-7)."""
+    from app.ai.cad_views.extrude_body import main_line_mask
+    from app.ai.cad_views.pipeline import bore_from_lines, silhouette_profile
+    from app.ai.cad_views.revolve_profile import plateaus
+
+    image = Image.fromarray(_section())
+    draw = ImageDraw.Draw(image)
+    # Белый прямоугольник поперёк верхней стенки — снятая штриховка под надписью.
+    draw.rectangle([X0 + 60, AXIS - 145, X0 + 90, AXIS - 104], fill=255)
+    gray = np.asarray(image)
+    _ink, thick, _line = main_line_mask(gray)
+    outer = silhouette_profile(gray, 6.0, axis=AXIS)
+    assert outer is not None
+    profile = bore_from_lines(thick, AXIS, 6.0, outer)
+    assert profile is not None
+    flats = [p for p in plateaus(profile.inner, 18.0) if p[2] > 0]
+    assert flats and all(abs(2 * r / PX - BORE) < 1.0 for _a, _b, r in flats)
