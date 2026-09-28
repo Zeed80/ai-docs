@@ -848,6 +848,14 @@ def propose_placed(
             (d for d in disks if abs(d["step_diameter_mm"] - diameter) <= 0.05),
             key=lambda d: d["center_px"][0],
         )
+        if len(same) > len(stations):
+            # Вид с торца — тот же круг ступени, но без штриховки; сечение
+            # по ГОСТ 2.305 заштриховано (многоосевой вал 2: Б-Б и вид с
+            # торца на Ø45 — лыска пропускалась из-за «лишнего» сечения).
+            same = sorted(
+                sorted(same, key=lambda d: -_hatch_share(ink, d))[: len(stations)],
+                key=lambda d: d["center_px"][0],
+            )
         if len(same) != len(stations):
             continue
         for z, disk in zip(sorted(stations), same, strict=False):
@@ -951,3 +959,23 @@ def propose_placed(
                         }
                     )
     return proposals
+
+
+def _hatch_share(ink: Any, disk: dict) -> float:
+    """Доля штрихов под 45° внутри круга (по полуокружности радиуса ¾)."""
+    import cv2
+    import numpy as np
+
+    from app.ai.cad_views.section_material import hatch_strokes
+
+    cx, cy = (int(round(v)) for v in disk["center_px"])
+    r = int(round(disk["radius_px"]))
+    y0, y1 = max(0, cy - r), min(ink.shape[0], cy + r + 1)
+    x0, x1 = max(0, cx - r), min(ink.shape[1], cx + r + 1)
+    piece = (np.asarray(ink[y0:y1, x0:x1]) > 0).astype(np.uint8)
+    if piece.size == 0:
+        return 0.0
+    strokes = hatch_strokes(piece, float(disk.get("line_px") or 3.0))
+    mask = np.zeros_like(piece)
+    cv2.circle(mask, (cx - x0, cy - y0), max(1, int(0.75 * r)), 1, -1)
+    return float((strokes & mask).sum()) / max(1.0, float(mask.sum()))
