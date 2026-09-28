@@ -17,6 +17,7 @@ from app.ai.cad_ir.sheet_from_solid import (
     _assemble,
     _dimension_requests,
     _label_dimensions,
+    _separated_place,
     classify_part,
     plan_sheet,
     plan_views,
@@ -236,6 +237,42 @@ def test_the_scale_is_standard_and_the_sheet_is_the_smallest_that_reads():
     assert plan.sheet_format in {"A4", "A3"}
     # A part is not enlarged onto a bigger sheet just because it would fit.
     assert plan.ratio <= 1.0
+
+
+def test_a_thin_step_moves_the_shaft_onto_a_bigger_sheet():
+    # 220 мм вал с Ø12 на конце и пазом 4 мм: на A4 он вставал 1:4 — ступень
+    # 3 мм на бумаге, паз 1 мм, ни чтение, ни замер их не брали.
+    spec = {
+        "part": "Палец",
+        "main_view": {
+            "type": "тело вращения (вал)",
+            "outer": [
+                {"diameter_mm": 12.0, "length_mm": 20.0},
+                {"diameter_mm": 40.0, "length_mm": 120.0},
+                {"diameter_mm": 18.0, "length_mm": 80.0},
+            ],
+            "keyways": [
+                {"axial_start_mm": 2.5, "length_mm": 15.0, "width_mm": 4.0, "depth_mm": 2.5}
+            ],
+        },
+    }
+    report = {"bounds_mm": {"x": 40.0, "y": 40.0, "z": 220.0}}
+    plan = plan_sheet(spec, report)
+    assert plan.ratio >= 0.5
+
+
+def test_a_part_that_reads_on_a4_stays_on_a4():
+    plan = plan_sheet(_SHAFT, _SHAFT_REPORT)
+    # Ø60…Ø102, уступы 11–21 мм: крупнее листа не нужно.
+    assert plan.sheet_format in {"A4", "A3"}
+
+
+def test_bore_and_outer_diameter_of_one_step_do_not_share_a_place():
+    # Расточка встала посередине; наружному Ø той же ступени свободный
+    # промежуток оставлен один — прежде он вставал туда же (shaft-2).
+    bore = _separated_place(-22.95, 17.9, [])
+    outer = _separated_place(-21.25, 12.25, [bore], blocked=[(-21.25, -20.7)])
+    assert abs(outer - bore) >= 8.0
 
 
 def test_redraw_sheet_is_geometry_only_by_default():

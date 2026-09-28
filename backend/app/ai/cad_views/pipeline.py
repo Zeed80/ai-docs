@@ -234,12 +234,35 @@ def _drop_section_traces(half: list[Any], gray: Any, axis: int, line: float) -> 
             plateaus[-1][1] = x
         else:
             plateaus.append([x, x])
+
+    # Сосед — ближайшая площадка длиннее линии: наклонный штрих буквы или
+    # стрелки у следа даёт «лестницу» однопиксельных площадок, и соседом
+    # следа становилась её верхняя ступенька (вал shaft-6: «Г» над Ø14 —
+    # Ø64, сосед 166 px при уровне 181, «не выше 1,3 соседа»).
+    def neighbour(index: int, step: int) -> int | None:
+        edge = plateaus[index][0] if step < 0 else plateaus[index][1]
+        start = index
+        index += step
+        while 0 <= index < len(plateaus):
+            a, b = plateaus[index]
+            if b - a + 1 >= line:
+                return index
+            # Лестница — не дальше трёх линий; дальше сосед прежний.
+            if abs((b if step < 0 else a) - edge) > 3 * line:
+                break
+            index += step
+        index = start + step
+        return index if 0 <= index < len(plateaus) else None
+
     for index, (x, end) in enumerate(plateaus):
         if index == 0 or index == len(plateaus) - 1:
             continue
+        before, after = neighbour(index, -1), neighbour(index, 1)
+        if before is None or after is None:
+            continue
         level = max(out[k] for k in range(x, end + 1))
-        left = out[plateaus[index - 1][1]]
-        right = out[plateaus[index + 1][0]]
+        left = out[plateaus[before][1]]
+        right = out[plateaus[after][0]]
         base = max(left, right)
         if (end - x) > 0.15 * len(values) or level <= 1.3 * base:
             continue
@@ -260,8 +283,10 @@ def _drop_section_traces(half: list[Any], gray: Any, axis: int, line: float) -> 
                     groups.append([c])
             sides = len(groups)
         if sides < 2:
-            for k in range(x, end + 1):
-                out[k] = base
+            # Со следом уходит и лестница до соседних площадок.
+            for k in range(plateaus[before][1] + 1, plateaus[after][0]):
+                if out[k] is not None and out[k] > base:
+                    out[k] = base
     return out
 
 
@@ -594,6 +619,7 @@ def build_revolve(
         # с торца — разрезом). Пробуются оба профиля, берётся лучше
         # объяснённый надписями.
         variants = []
+        material_profiles = []
         # Ось — по всему изображению (силуэт основных линий): у половины
         # разреза штриховка с одной стороны, и ось по ней находится неверно.
         probe_axis = int(round(probe.axis_y)) if probe is not None else None
@@ -602,10 +628,22 @@ def build_revolve(
             by_material = profile_from_material(material, axis, line, ink=ink_mask(crop, line))
             if by_material is not None:
                 variants.append((by_material, True))
+                material_profiles.append(by_material)
         if variants:
             rim = lifted_rim(crop, variants[0][0], line)
             if rim is not None:
                 variants.append((rim, True))
+        if material.sum() > 0:
+            # Тот же разрез по ячейкам основных линий: размерные линии Ø и
+            # поперечные каналы не режут стенку (`material_by_outline`).
+            from app.ai.cad_views.section_material import material_by_outline
+
+            outlined = material_by_outline(crop, line)
+            if outlined.sum() > 0:
+                by_cells = profile_from_material(outlined, axis, line, ink=ink_mask(crop, line))
+                if by_cells is not None:
+                    variants.append((by_cells, True))
+                    material_profiles.append(by_cells)
         # Силуэт только по основным линиям: тонкие выноски, прошедшие через
         # контур, «достраивали» ступень конусом (многоосевой вал 5: выноска
         # «Ø6 120°» дала Ø60 и скос до Ø28). Вариант сверяется с надписями
@@ -653,14 +691,11 @@ def build_revolve(
             # Зубья в осевом разрезе не штрихуют (ГОСТ 2.402): штриховка
             # кончается у впадин, наружный контур — основные линии силуэта,
             # расточка — по материалу (колесо p009: Ø78 по зубьям).
-            if (
-                variants[0][1]
-                and variants[0][0].inner
-                and (abs(variants[0][0].axis_y - by_silhouette.axis_y) <= 2 * line)
-            ):
+            for hatched in material_profiles:
+                if not (hatched.inner and abs(hatched.axis_y - by_silhouette.axis_y) <= 2 * line):
+                    continue
                 from app.ai.cad_views.revolve_profile import HalfProfile
 
-                hatched = variants[0][0]
                 # Границы детали — где есть и контур, и материал: за торец
                 # уходит то материал (скосы стрелок Ø у торца вала-шестерни
                 # p018), то силуэт (выносные у колеса part_06).
@@ -707,7 +742,7 @@ def build_revolve(
             overall = max(linear) / max(1, profile.x1 - profile.x0) if linear else None
             if overall is not None:
                 along, along_hits = fit_scale(profile, shafts, holes, near=overall)
-                if along is not None and along_hits + 1 > hits and along_hits >= 1:
+                if along is not None and along_hits + 1 >= hits and along_hits >= 1:
                     radial, hits = along, along_hits + 1
             if paper is not None and radial is not None:
                 # Масштаб по штампу: основная надпись 185 × 55 мм — линейка
@@ -750,13 +785,25 @@ def build_revolve(
             if bound and 1.15 * bound < longest <= 1.6 * bound:
                 tried[-1] += f", но профиль длиннее габарита ({longest:.1f} > {bound:g})"
                 continue
+
             # Равное число объяснённых площадок — выигрывает профиль, у
             # которого они составляют большую долю: случайный масштаб
             # объясняет две площадки из многих (колесо p009 — 2 из 4 при
             # диаметре 92 вместо 78), верный — почти все.
-            count = len(plateaus(profile.outer, 3 * profile.line_px)) + len(
-                [p for p in plateaus(profile.inner, 3 * profile.line_px) if p[2] > 0]
-            )
+            # Площадки — различными значениями: у разреза ступень дробится
+            # размерными линиями и стрелками (Ø50 полого вала shaft-5 —
+            # четыре отрезка 49,9…50,3), и доля объяснённых проигрывала
+            # силуэту, у которого расточки нет вовсе.
+            def distinct(radii: list[float]) -> int:
+                kept: list[float] = []
+                for radius in sorted(radii):
+                    if not kept or radius > kept[-1] + max(profile.line_px, 0.03 * radius):
+                        kept.append(radius)
+                return len(kept)
+
+            count = distinct(
+                [p[2] for p in plateaus(profile.outer, 3 * profile.line_px)]
+            ) + distinct([p[2] for p in plateaus(profile.inner, 3 * profile.line_px) if p[2] > 0])
             # Наибольшая надпись Ø — габарит по диаметру: при равном счёте
             # выигрывает профиль, чья наибольшая площадка её объясняет
             # (колесо part_06: вершины Ø46, а не впадины, совпавшие с Ø38).

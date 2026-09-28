@@ -125,3 +125,27 @@ def test_same_feature_from_overlapping_views_is_merged():
     assert _same_feature(flat, dict(flat))
     assert not _same_feature(flat, {**flat, "origin_mm": [-6.47, 0.0, 23.75]})
     assert not _same_feature(flat, {**flat, "depth_mm": 2.0})
+
+
+def test_outline_cells_keep_the_bore_when_a_dimension_line_crosses_the_wall():
+    """Размерная линия Ø со стрелками поперёк стенки не рвёт материал: ячейки
+    — по основным линиям, расточка остаётся Ø20 (полый вал shaft-2)."""
+    from app.ai.cad_views.revolve_profile import fit_scale, profile_from_material
+    from app.ai.cad_views.section_material import ink_mask, material_by_outline
+
+    image = Image.fromarray(_section())
+    draw = ImageDraw.Draw(image)
+    x = X0 + 10 * PX
+    draw.line([(x, AXIS - 15 * PX), (x, AXIS + 15 * PX)], fill=0, width=2)
+    for sign in (-1, 1):
+        tip = AXIS + sign * 15 * PX
+        draw.polygon([(x, tip), (x - 5, tip - sign * 25), (x + 5, tip - sign * 25)], fill=0)
+    gray = np.asarray(image)
+    material = material_by_outline(gray, 6.0)
+    profile = profile_from_material(material, AXIS, 6.0, ink=ink_mask(gray, 6.0))
+    assert profile is not None
+    radial, hits = fit_scale(profile, [30.0, 40.0], [20.0])
+    assert hits >= 3 and abs(radial - 1 / PX) < 0.02 / PX
+    inner = [r for _x, r in profile.inner if r > 0]
+    assert inner and abs(2 * np.median(inner) * radial - 20.0) < 1.0
+    assert max(inner) - min(inner) <= 6.0  # одна расточка, без ступеней у стрелок

@@ -43,6 +43,12 @@ PAPER_PX_PER_MM = 4.0
 _FORMAT_LADDER = ("A4", "A3", "A2", "A1", "A0")
 # Below this the drawing is too small to read even if it technically fits.
 _MIN_USEFUL_RATIO = 1 / 5
+# Самая тонкая ступень тела вращения на бумаге не тоньше этого (см. `_legible_ratio`).
+_MIN_STEP_ON_PAPER_MM = 5.0
+_MIN_SHOULDER_ON_PAPER_MM = 0.75
+_MIN_KEYWAY_ON_PAPER_MM = 2.0
+# Ради читаемости формат растёт не дальше этого.
+_LEGIBLE_FORMAT_LIMIT = "A3"
 _SEMANTIC_ANNOTATION_KINDS = frozenset({"roughness", "tolerance", "datum", "thread", "weld"})
 _ANNOTATION_ROW_MM = 6.0
 
@@ -552,8 +558,11 @@ def _estimate_layout_mm(part_class: str, report: dict, views: list[dict]) -> tup
         width, height = length, diameter
         if "side" in kinds:
             width += VIEW_GAP_MM + diameter
-        if "removed_section" in kinds:
-            width += VIEW_GAP_MM + length
+        # Вынесенные сечения — рядом, каждое шириной в Ø со своим зазором.
+        # Прежде всем сечениям отводилась ещё одна длина вала: одно сечение
+        # 157-миллиметрового вала «требовало» 439 мм, и лист уходил на формат
+        # крупнее, чем нужен (реально — 255).
+        width += kinds.count("removed_section") * (VIEW_GAP_MM + diameter)
         if "top" in kinds:
             height += VIEW_GAP_MM + diameter
         if "bottom" in kinds and part_class == "hollow_rotation":
@@ -569,6 +578,39 @@ def _estimate_layout_mm(part_class: str, report: dict, views: list[dict]) -> tup
     # Dimensions and their witness lines stand off the part; give them room, or
     # the sheet fits the geometry and clips everything that describes it.
     return width + 40.0, height + 40.0
+
+
+def _legible_ratio(part_class: str, spec: dict) -> float:
+    """Наименьший масштаб, при котором тело вращения читается по листу.
+
+    Самая тонкая ступень — не тоньше ``_MIN_STEP_ON_PAPER_MM``, самый низкий
+    уступ — не ниже ``_MIN_SHOULDER_ON_PAPER_MM`` (у Ø25 рядом с Ø28 на 1:4
+    уступ 0,4 мм — тоньше основной линии, ступени сливаются), шпоночный паз —
+    не уже ``_MIN_KEYWAY_ON_PAPER_MM``. Увеличивать деталь ради этого правило
+    не просит (не больше 1:1).
+    """
+    if part_class not in ("solid_rotation", "hollow_rotation"):
+        return 0.0
+    main = (spec.get("main_view") or {}) if isinstance(spec, dict) else {}
+    diameters = [
+        float(step.get("diameter_mm") or 0.0)
+        for step in main.get("outer") or []
+        if float(step.get("diameter_mm") or 0.0) > 0
+    ]
+    if not diameters:
+        return 0.0
+    wanted = [_MIN_STEP_ON_PAPER_MM / min(diameters)]
+    shoulders = [abs(a - b) / 2.0 for a, b in zip(diameters, diameters[1:]) if abs(a - b) > 1e-6]
+    if shoulders:
+        wanted.append(_MIN_SHOULDER_ON_PAPER_MM / min(shoulders))
+    widths = [
+        float(key.get("width_mm") or 0.0)
+        for key in main.get("keyways") or []
+        if float(key.get("width_mm") or 0.0) > 0
+    ]
+    if widths:
+        wanted.append(_MIN_KEYWAY_ON_PAPER_MM / min(widths))
+    return min(1.0, max(wanted))
 
 
 def plan_sheet(
@@ -596,21 +638,47 @@ def plan_sheet(
     )
 
     formats = [sheet_format.upper()] if sheet_format else list(_FORMAT_LADDER)
-    chosen_format, ratio, label = formats[-1], 1.0, "1:1"
-    for candidate in formats:
-        ratio, label = choose_standard_scale(
-            layout_w,
-            layout_h,
+    fitted = [
+        (
             candidate,
-            landscape=landscape,
-            reserve_title_block=not geometry_only,
-            reserve_notes_mm=notes_mm,
+            *choose_standard_scale(
+                layout_w,
+                layout_h,
+                candidate,
+                landscape=landscape,
+                reserve_title_block=not geometry_only,
+                reserve_notes_mm=notes_mm,
+            ),
         )
-        chosen_format = candidate
-        # Stop at the first sheet the part reads well on rather than the first
-        # it merely fits on: 1:10 on A4 is a technically valid, useless drawing.
-        if ratio >= _MIN_USEFUL_RATIO:
-            break
+        for candidate in formats
+    ]
+    # Stop at the first sheet the part reads well on rather than the first
+    # it merely fits on: 1:10 on A4 is a technically valid, useless drawing.
+    # «Reads well» is also about the part's smallest step (ГОСТ 2.302: the
+    # scale shows the part clearly): a 220 mm shaft with four removed sections
+    # fitted A4 at 1:4, and its Ø12 end stood 3 mm tall on paper, the 4 mm
+    # keyway in it 1 mm wide — neither the reader nor any measurement could
+    # take them from the sheet (корпус валов, shaft-4). Such a part goes onto
+    # the next format; if none is big enough, the old rule decides.
+    # Крупнее A3 ради читаемости не идём: растр A2 в 300 dpi — 35 Мп, и
+    # проверяльщики на таком листе роняли процесс (корпус валов, 6 из 30).
+    # Не хватило A3 — наибольший масштаб, который он даёт.
+    wanted = max(_MIN_USEFUL_RATIO, _legible_ratio(part_class, spec))
+    plain = next((item for item in fitted if item[1] >= _MIN_USEFUL_RATIO), fitted[-1])
+    chosen = next((item for item in fitted if item[1] >= wanted), None)
+    if chosen is None or _FORMAT_LADDER.index(chosen[0]) > max(
+        _FORMAT_LADDER.index(_LEGIBLE_FORMAT_LIMIT), _FORMAT_LADDER.index(plain[0])
+    ):
+        within = [
+            item
+            for item in fitted
+            if _FORMAT_LADDER.index(item[0])
+            <= max(_FORMAT_LADDER.index(_LEGIBLE_FORMAT_LIMIT), _FORMAT_LADDER.index(plain[0]))
+        ]
+        chosen = max(
+            within, key=lambda item: (item[1], -_FORMAT_LADDER.index(item[0])), default=plain
+        )
+    chosen_format, ratio, label = chosen
 
     # Reproducing a sheet means reproducing its scale where that is possible.
     read_scale = _read_scale_ratio(spec)
@@ -1300,8 +1368,13 @@ def _separated_place(
         right = 0.3 * DIM_TEXT_MM
         roomy = [(a, b) for a, b in free if b - a >= left + right]
         if roomy:
+            # Середина свободного промежутка, затем его четверти: у расточки и
+            # наружного диаметра одной ступени промежуток один и тот же, и с
+            # одной серединой «Ø35» снова ложилась на «Ø15» (shaft-2 — занятый
+            # участок узкой канавки у торца оставлял ровно один промежуток).
             options = [
-                min(max((a + b) / 2.0, a + left), b - right)
+                min(max(a + (b - a) * share, a + left), b - right)
+                for share in (0.5, 0.25, 0.75)
                 for a, b in sorted(roomy, key=lambda f: -(f[1] - f[0]))
             ]
     for option in options:

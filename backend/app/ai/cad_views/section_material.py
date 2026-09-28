@@ -138,3 +138,40 @@ def section_material(
         if on_main < main_boundary:
             material[region > 0] = 0
     return material, axis
+
+
+def material_by_outline(gray: Any, line: float) -> Any:
+    """Материал разреза как ячейки, ограниченные только ОСНОВНЫМИ линиями.
+
+    `section_material` делит лист на ячейки по всем чернилам: размерные линии
+    и стрелки Ø, проходящие через стенку, поперечный канал, надпись режут
+    стенку на обрывки, и часть их отсеивается — у полого вала shaft-2 стенка
+    рвалась на куски, а расточка по ним выходила Ø14,2 при Ø15 со ступенями
+    Ø26–28 у каналов. Здесь стенки ячеек — основные линии без наклонных
+    штрихов (штриховка разрывает их — разрывы замыкаются вдоль строк и
+    столбцов), ячейка — материал, если штрихи покрывают заметную её долю.
+    """
+    import cv2
+    import numpy as np
+
+    from app.ai.cad_views.extrude_body import main_line_mask
+
+    ink, thick, _ = main_line_mask(np.asarray(gray))
+    strokes = hatch_strokes(ink, line)
+    thick = thick & (1 - cv2.dilate(strokes, np.ones((3, 3), np.uint8)))
+    size = int(0.6 * line) | 1
+    thick = cv2.morphologyEx(thick, cv2.MORPH_OPEN, np.ones((size, size), np.uint8))
+    reach = int(2.5 * line) | 1
+    walls = cv2.morphologyEx(
+        thick, cv2.MORPH_CLOSE, np.ones((1, reach), np.uint8)
+    ) | cv2.morphologyEx(thick, cv2.MORPH_CLOSE, np.ones((reach, 1), np.uint8))
+    count, labels, stats, _ = cv2.connectedComponentsWithStats((1 - walls).astype(np.uint8), 4)
+    border = set(np.unique(np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]])))
+    material = np.zeros_like(ink)
+    for index in range(1, count):
+        if index in border or stats[index][cv2.CC_STAT_AREA] < 9 * line * line:
+            continue
+        cell = labels == index
+        if float(strokes[cell].mean()) > 0.08:
+            material[cell] = 1
+    return material
