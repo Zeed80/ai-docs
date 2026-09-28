@@ -696,6 +696,19 @@ def build_revolve(
     if not pictures:
         return ViewsResult(False, "на листе не найдено изображения детали")
 
+    # Роль области модель путает: у вала p007 рамка «главного вида» стоит на
+    # колонке размеров, а сам вал — в области «label». Крупные области без
+    # роли изображения — тоже кандидаты (после названных); выбирают надписи.
+    def area(region: Any) -> int:
+        return (region.box[2] - region.box[0]) * (region.box[3] - region.box[1])
+
+    largest = max(area(r) for r in pictures)
+    spare = [
+        r
+        for r in reading.regions
+        if r.role in ("label", "other") and area(r) >= 0.5 * largest and r not in pictures
+    ]
+
     def label_sets(texts: list[str]) -> tuple[list[float], list[float], list[float], list[float]]:
         parsed = [parse_label(t) for t in texts]
         diameters = [
@@ -742,7 +755,7 @@ def build_revolve(
     notes: list[str] = []
     best = None
     tried: list[str] = []
-    for region in ordered[:6]:
+    for region in ordered[:6] + sorted(spare, key=lambda r: -area(r))[:2]:
         crop, factor, origin = prepare(gray, region.box)
         line = _line_px(crop)
         vertical, symmetry = _symmetric_orientation(crop, line)
