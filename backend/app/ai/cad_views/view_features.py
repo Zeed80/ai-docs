@@ -383,7 +383,9 @@ def _keyway_runs(
                 last, gap = x, 0
             else:
                 gap += 1
-                if gap > line:
+                # До первой дуги — до радиуса: у узкого паза дуга входит в
+                # полосу поиска не сразу за концом прямых (shaft-6, паз 6 мм).
+                if gap > (line if last is not None else radius):
                     break
         return last
 

@@ -286,8 +286,15 @@ def nominal_revolve(
                     # Толщина линии в замере: мелкий вид с толстыми линиями
                     # даёт Ø на линию шире (14,7 при Ø14) — номинал в пределах
                     # толщины линии, если он единственный.
-                    near = [d for d in diameters if abs(d - measured) <= diameter_tolerance_mm]
-                    if len(near) == 1:
+                    near = sorted(
+                        (d for d in diameters if abs(d - measured) <= diameter_tolerance_mm),
+                        key=lambda d: abs(d - measured),
+                    )
+                    # Два номинала в допуске — ближайший, если он явно ближе
+                    # (shaft-6: 14,7 между Ø14 и Ø16 оставался замером).
+                    if len(near) == 1 or (
+                        len(near) > 1 and abs(near[0] - measured) <= 0.6 * abs(near[1] - measured)
+                    ):
                         nominal = near[0] / 2.0
                 if abs(nominal - a["r"]) > 1e-6 or abs(nominal - b["r"]) > 1e-6:
                     a["r"] = b["r"] = round(nominal, 4)
