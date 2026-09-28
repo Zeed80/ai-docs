@@ -213,6 +213,7 @@ async def draw_candidate_sheet(
     scale: float = 1.0,
     hidden_lines: bool = True,
     dimensions: list[dict[str, Any]] | None = None,
+    true_orientation: bool = False,
 ) -> dict[str, Any] | None:
     """Sheet views built by TechDraw, sections included.
 
@@ -230,6 +231,9 @@ async def draw_candidate_sheet(
         "dimensions": dimensions or [],
         "confirm_assumptions": True,
     }
+    if true_orientation:
+        # Старое ядро поле не знает (extra=forbid) — только по запросу.
+        payload["true_orientation"] = True
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=5.0)) as client:
             response = await client.post(

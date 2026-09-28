@@ -46,6 +46,9 @@ def body_measures(result: Any) -> tuple[list[float], list[float]]:
                     along.append((ay + by) / 2.0)
             lengths += _differences(across) + _differences(along)
         lengths += [float(v) for v in profile.get("bounds_mm") or []]
+        # Габарит тела без приливов — его и надписывают.
+        lengths += [float(v) for v in profile.get("body_mm") or []]
+        lengths += [float(v) for v in profile.get("feature_lengths_mm") or []]
         diameters = [float(f["diameter_mm"]) for f in result.features or [] if f.get("diameter_mm")]
         return diameters, lengths
     if profile.get("kind") == "extrude":

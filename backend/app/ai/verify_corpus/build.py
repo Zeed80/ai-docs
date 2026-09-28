@@ -23,7 +23,7 @@ class SampleUnavailable(RuntimeError):
     """Ядро не собрало тело или не нарисовало лист — образца нет."""
 
 
-async def build_sample(spec: dict, *, dpi: int = 300) -> Sample:
+async def build_sample(spec: dict, *, dpi: int = 300, true_orientation: bool = False) -> Sample:
     from app.ai.cad_ir.sheet_from_solid import PAPER_PX_PER_MM, build_sheet_from_solid
     from app.ai.cad_solid import feature_tree_from_spec
     from app.services.cad_kernel import compile_candidate
@@ -36,7 +36,9 @@ async def build_sample(spec: dict, *, dpi: int = 300) -> Sample:
         confirm_assumptions=True,
         metadata={"source": "verify_corpus"},
     )
-    sheet = await build_sheet_from_solid(candidate, spec, artifacts.report)
+    sheet = await build_sheet_from_solid(
+        candidate, spec, artifacts.report, true_orientation=true_orientation
+    )
     if sheet is None:
         raise SampleUnavailable("ядро не нарисовало лист")
 

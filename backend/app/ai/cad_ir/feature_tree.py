@@ -81,8 +81,10 @@ class Feature3D(BaseModel):
         "keyway",
         # Ф2.5: rib — a thin reinforcing wall, fused exactly like a boss.
         "rib",
-        # Метод views: контур вида насквозь вдоль оси взгляда ∩ тело.
+        # Метод views: контур вида насквозь вдоль оси взгляда ∩ тело;
+        # cut_prism — полость по разрезу в пределах range_mm.
         "intersect",
+        "cut_prism",
     ]
     source_entity_ids: list[str] = Field(default_factory=list)
     # Ф2.6c: which native EMG Feature node(s) (cad_emg_compat.py, ids from

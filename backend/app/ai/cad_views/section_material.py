@@ -60,7 +60,12 @@ def symmetry_axis(mask: Any) -> int:
 
 
 def section_material(
-    gray: Any, line: float, *, revolve: bool = True, axis: int | None = None
+    gray: Any,
+    line: float,
+    *,
+    revolve: bool = True,
+    axis: int | None = None,
+    main_boundary: float = 0.7,
 ) -> tuple[Any, int]:
     """Маска материала разреза и (для тела вращения) строка оси."""
     import cv2
@@ -130,6 +135,6 @@ def section_material(
         region = (regions == index).astype(np.uint8)
         ring = cv2.dilate(region, grow) & (1 - region)
         on_main = float((ring & thick).sum()) / max(1.0, float(ring.sum()))
-        if on_main < 0.7:
+        if on_main < main_boundary:
             material[region > 0] = 0
     return material, axis

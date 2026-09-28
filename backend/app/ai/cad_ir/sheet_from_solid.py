@@ -3025,8 +3025,13 @@ async def build_sheet_from_solid(
     sheet_format: str | None = None,
     landscape: bool = True,
     geometry_only: bool = True,
+    true_orientation: bool = False,
 ) -> SheetResult | None:
     """Compile the sheet: views from the kernel, everything else from the read.
+
+    ``true_orientation`` — виды как их видит наблюдатель (ядро поправляет
+    перевёрнутую ось TechDraw); по умолчанию прежние зеркальные виды, на
+    которых построены проверяльщики.
 
     Returns ``None`` when the kernel cannot draw the part (an older image, an
     unprojectable shape) so the caller can say so plainly rather than hand back
@@ -3045,7 +3050,11 @@ async def build_sheet_from_solid(
         geometry_only=geometry_only,
     )
     drawing = await draw_candidate_sheet(
-        candidate, views=_kernel_views(plan.views), scale=plan.ratio, hidden_lines=True
+        candidate,
+        views=_kernel_views(plan.views),
+        scale=plan.ratio,
+        hidden_lines=True,
+        true_orientation=true_orientation,
     )
     if not drawing or not (drawing.get("views") or []):
         return None
@@ -3059,6 +3068,7 @@ async def build_sheet_from_solid(
             views=_kernel_views(plan.views),
             scale=plan.ratio,
             hidden_lines=True,
+            true_orientation=true_orientation,
             dimensions=[
                 {k: v for k, v in request.items() if not k.startswith("_")} for request in requests
             ],

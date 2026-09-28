@@ -823,6 +823,55 @@ def _check_plan_view() -> None:
     check("plan view sees the rib from above", 34.0 in levels, f"levels={levels}")
 
 
+def _check_true_orientation() -> None:
+    """Вид как его видит наблюдатель (``true_orientation``).
+
+    TechDraw отдаёт геометрию с перевёрнутой осью Y: без поправки у вида
+    спереди прилив на верхней грани оказывался внизу. Брусок 60 × 40 × 30,
+    прилив Ø10 × 5 на верхней грани (+Z): на виде спереди (наблюдатель −Y,
+    ширина вправо) его торец — выше тела, v > 0."""
+    base = _feature("extrude", width_mm=60.0, height_mm=40.0, depth_mm=30.0)
+    boss = {
+        "kind": "boss",
+        "params": {
+            "placement": {"origin": [20.0, 20.0, 30.0], "axis": [0.0, 0.0, 1.0]},
+            "profile": "circle",
+            "diameter_mm": 10.0,
+            "depth_mm": 5.0,
+        },
+        "confidence": 0.9,
+    }
+    levels = {}
+    for flag in (False, True):
+        status, payload = _post(
+            "/drawing",
+            {
+                "candidate": _candidate(base, boss, label="box with a boss"),
+                "confirm_assumptions": True,
+                "views": [{"kind": "front", "x_direction": [1.0, 0.0, 0.0]}],
+                "scale": 1.0,
+                **({"true_orientation": True} if flag else {}),
+            },
+        )
+        if status != 200:
+            check("true orientation builds", False, f"HTTP {status}: {str(payload)[:300]}")
+            return
+        # Торец прилива — горизонталь длиной в его Ø (10).
+        levels[flag] = sorted(
+            round(item["points"][0][1], 1)
+            for item in payload["views"][0].get("visible") or []
+            if item.get("type") == "line"
+            and abs(item["points"][0][1] - item["points"][1][1]) < 1e-6
+            and abs(abs(item["points"][0][0] - item["points"][1][0]) - 10.0) < 0.1
+        )
+    true_levels, legacy = levels[True], levels[False]
+    check(
+        "true orientation puts the top boss above the body",
+        bool(true_levels) and max(true_levels) > 0 and legacy == sorted(-v for v in true_levels),
+        f"levels={levels}",
+    )
+
+
 def _check_view_intersect() -> None:
     """Метод views: призматическая деталь — брусок ∩ контуры видов насквозь."""
     base = _feature(
@@ -851,6 +900,19 @@ def _check_view_intersect() -> None:
         _candidate(base, _feature("intersect", normal="q", polygon_mm=[[0, 0], [1, 0], [0, 1]]))
     )
     check("intersect rejects an unknown view axis", status == 422, f"status={status}")
+    pocket = _feature(
+        "cut_prism",
+        normal="z",
+        polygon_mm=[[20, 10], [50, 10], [50, 30], [20, 30]],
+        range_mm=[20, 40],
+    )
+    status, payload = _compile(_candidate(base, pocket, label="полость по разрезу"))
+    volume = _report_from_zip(payload).get("volume_mm3") if status == 200 else None
+    check(
+        "cut_prism removes the pocket only within its range",
+        status == 200 and volume is not None and abs(volume - (60 * 40 * 30 - 30 * 20 * 10)) < 1.0,
+        f"status={status} volume={volume}",
+    )
 
 
 def _check_placed_features() -> None:
@@ -1557,6 +1619,7 @@ def main() -> int:
     _check_face_groove()
     _check_axial_cross_section()
     _check_plan_view()
+    _check_true_orientation()
     _check_housing_section_hatch()
     _check_work_plane_features()
     _check_body_placement()

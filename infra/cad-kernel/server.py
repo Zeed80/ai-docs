@@ -52,8 +52,10 @@ class Feature(BaseModel):
         # "bolt boss" without re-deriving it from shape heuristics.
         "rib",
         # Призматическая деталь по трём видам (метод views): контур вида,
-        # выдавленный насквозь вдоль оси взгляда, пересекается с телом.
-        "intersect",
+        # выдавленный насквозь вдоль оси взгляда, пересекается с телом;
+        # cut_prism — полость: контур сечения, выдавленный в пределах
+        # ``range_mm`` вдоль оси взгляда, вычитается.
+        "intersect", "cut_prism",
     ]
     source_entity_ids: list[str] = Field(default_factory=list, max_length=500)
     # Ф2.6c: native EMG Feature node id(s) this operation realizes — a
@@ -368,7 +370,7 @@ def _view_prism(shape: Part.Shape, feature: "Feature") -> Part.Shape:
     """
     normal = feature.params.get("normal")
     if normal not in ("x", "y", "z"):
-        raise HTTPException(422, "intersect.normal must be 'x', 'y' or 'z'")
+        raise HTTPException(422, f"{feature.kind}.normal must be 'x', 'y' or 'z'")
     raw = feature.params.get("polygon_mm")
     if not isinstance(raw, list) or not (3 <= len(raw) <= 400):
         raise HTTPException(422, "intersect.polygon_mm must list 3..400 points")
@@ -391,10 +393,21 @@ def _view_prism(shape: Part.Shape, feature: "Feature") -> Part.Shape:
         raise HTTPException(422, f"OpenCascade rejected the intersect outline: {exc}") from exc
     if face.isNull() or not face.isValid() or face.Area <= 1e-6:
         raise HTTPException(422, "intersect outline is not a valid face")
-    reach = shape.BoundBox.DiagonalLength + 10.0
     direction = {"x": App.Vector(1, 0, 0), "y": App.Vector(0, 1, 0), "z": App.Vector(0, 0, 1)}[normal]
-    face.translate(direction * (-reach))
-    prism = face.extrude(direction * (2 * reach))
+    span = feature.params.get("range_mm")
+    if span is not None:
+        # Пределы вдоль оси взгляда (полость по разрезу и невидимому контуру).
+        if not (isinstance(span, list) and len(span) == 2):
+            raise HTTPException(422, f"{feature.kind}.range_mm must be [from, to]")
+        low, high = (float(v) for v in span)
+        if not (math.isfinite(low) and math.isfinite(high)) or high - low <= 1e-6:
+            raise HTTPException(422, f"{feature.kind}.range_mm must be increasing")
+        face.translate(direction * low)
+        prism = face.extrude(direction * (high - low))
+    else:
+        reach = shape.BoundBox.DiagonalLength + 10.0
+        face.translate(direction * (-reach))
+        prism = face.extrude(direction * (2 * reach))
     if prism.isNull() or not prism.isValid() or prism.Volume <= 0:
         raise HTTPException(422, "intersect prism is not a valid solid")
     return prism
@@ -637,7 +650,7 @@ def _operation_checkpoint_plan(
         "base": [(index, feature) for index, feature in body_features if index == base_index],
         "profile_operations": [
             (index, feature) for index, feature in body_features
-            if feature.kind in ("boss", "pocket", "rib", "intersect")
+            if feature.kind in ("boss", "pocket", "rib", "intersect", "cut_prism")
         ],
         "turned_cuts": [
             (index, feature) for index, feature in body_features
@@ -1741,14 +1754,16 @@ def _build_one_body(
         # as its own kind purely so a downstream DFM/technology-process
         # reader can tell "structural rib" from "bolt boss" without
         # re-deriving it from shape heuristics.
-        if feature.kind == "intersect":
+        if feature.kind in ("intersect", "cut_prism"):
             if feature_index in reused_index_set:
                 continue
             tool = _view_prism(shape, feature)
             previous = shape
-            shape = shape.common(tool)
+            shape = shape.common(tool) if feature.kind == "intersect" else shape.cut(tool)
             if shape.isNull() or shape.Volume <= 1e-6:
-                raise HTTPException(422, "intersect removed the whole body")
+                raise HTTPException(422, f"{feature.kind} removed the whole body")
+            if feature.kind == "cut_prism" and previous.Volume - shape.Volume <= 1e-6:
+                raise HTTPException(422, "cut_prism does not reach any material")
             operation_audit.append({
                 "feature_index": feature_index,
                 "kind": feature.kind,
@@ -3015,6 +3030,25 @@ class DrawingRequest(BaseModel):
     hidden_lines: bool = True
     curve_samples: int = Field(default=32, ge=4, le=200)
     dimensions: list[SheetDimensionRequest] = Field(default_factory=list, max_length=200)
+    # TechDraw отдаёт геометрию вида с перевёрнутой осью Y (так её рисует
+    # Qt-сцена), и без поправки каждый вид — зеркало: у корпуса на плане
+    # приливы стоят как сверху, а полость на верхней грани — штриховыми, как
+    # снизу; вид слева — зеркальный вид справа. True — вид как его видит
+    # наблюдатель по ГОСТ 2.305 (v вверх). По умолчанию — прежнее поведение:
+    # на нём построены лист продукта и проверяльщики, переход — отдельно.
+    true_orientation: bool = False
+
+
+def _flip_v(entities: dict[str, list[dict[str, Any]]]) -> None:
+    """Отражение геометрии вида по вертикали на месте (v → −v)."""
+    for group in entities.values():
+        for item in group:
+            if item.get("points"):
+                item["points"] = [(p[0], -p[1]) for p in item["points"]]
+            if item.get("center"):
+                item["center"] = (item["center"][0], -item["center"][1])
+            if item.get("mid"):
+                item["mid"] = (item["mid"][0], -item["mid"][1])
 
 
 def _cut_face_outlines(
@@ -3261,6 +3295,8 @@ def build_drawing(request: DrawingRequest) -> dict[str, Any]:
                 view.BaseView = base_view
                 view.Source = [body]
                 centre_u, centre_v = wanted.detail_center_mm or (0.0, 0.0)
+                if request.true_orientation:
+                    centre_v = -centre_v  # центр дан в координатах листа
                 view.AnchorPoint = App.Vector(centre_u, centre_v, 0.0)
                 view.Radius = float(wanted.detail_radius_mm or 0.0)
             elif wanted.kind == "section" and wanted.section_normal == "axis":
@@ -3270,6 +3306,8 @@ def build_drawing(request: DrawingRequest) -> dict[str, Any]:
                     shape, float(wanted.section_station_mm), request.scale,
                     max(8, request.curve_samples),
                 )
+                if request.true_orientation:
+                    outlines = [[(p[0], -p[1]) for p in o] for o in outlines]
                 if not outlines:
                     raise HTTPException(
                         422,
@@ -3371,6 +3409,8 @@ def build_drawing(request: DrawingRequest) -> dict[str, Any]:
                 view.HardHidden = bool(request.hidden_lines)
             document.recompute()
             entities = _techdraw_edges(view, request.curve_samples)
+            if request.true_orientation:
+                _flip_v(entities)
             # Circles carry a centre and a radius, not a point list; measuring
             # only "points" left every round view — a shaft seen end-on, a
             # flange — reporting no bounds at all, which the caller reads as
@@ -3403,6 +3443,8 @@ def build_drawing(request: DrawingRequest) -> dict[str, Any]:
                     path=list(wanted.section_path_mm) or None,
                     x_direction=wanted.x_direction,
                 )
+                if request.true_orientation:
+                    candidate_hatch = [[(p[0], -p[1]) for p in o] for o in candidate_hatch]
                 # Fail closed on misalignment: a hatch drawn next to the view
                 # instead of inside it is worse than none, and the only honest
                 # check is whether it lands within the view's own bounds.
@@ -3452,8 +3494,9 @@ def build_drawing(request: DrawingRequest) -> dict[str, Any]:
             dim.References2D = references
             try:
                 document.recompute()
+                flip = -1.0 if request.true_orientation else 1.0
                 anchors = [
-                    (round(point.x, 6), round(point.y, 6))
+                    (round(point.x, 6), round(flip * point.y, 6))
                     for point in dim.getLinearPoints()
                 ]
             except Exception as exc:  # noqa: BLE001 — one dimension, not the sheet
