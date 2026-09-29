@@ -109,3 +109,22 @@ def test_a_chain_link_joins_neighbouring_stations_and_does_not_skip_one():
     assert mapping[115.09] == mapping[115.63] == 115
     assert mapping[99.57] == 100
     assert mapping[79.19] == mapping[79.37] == 80
+
+
+def test_an_unscaled_sketch_takes_diameters_by_their_order():
+    """Втулка 793539cc_p015 нарисована не в масштабе (Ø13 — как Ø10,7): Ø
+    площадок — надписи по порядку величины, расточка — наименьшие."""
+    from app.ai.cad_views.pipeline import _ordinal_diameters
+
+    outer = [
+        {"r": 10.8, "z": 0.0},
+        {"r": 10.8, "z": 2.0},
+        {"r": 9.1, "z": 2.0},
+        {"r": 9.1, "z": 9.0},
+    ]
+    bore = [{"r": 5.35, "z": -0.05}, {"r": 5.35, "z": 9.05}]
+    new_outer, new_bore = _ordinal_diameters(outer, bore, [22.0, 13.0, 18.0], [])
+    assert [p["r"] for p in new_outer] == [11.0, 11.0, 9.0, 9.0]
+    assert [p["r"] for p in new_bore] == [6.5, 6.5]
+    # Надписей больше, чем площадок, — не угадывается.
+    assert _ordinal_diameters(outer, [], [22.0, 13.0, 18.0], []) is None

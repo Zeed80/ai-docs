@@ -784,6 +784,46 @@ def section_features(
     return found
 
 
+def _ordinal_diameters(
+    outer: list[dict[str, float]],
+    bore: list[dict[str, float]],
+    shafts: list[float],
+    holes: list[float],
+) -> tuple[list[dict[str, float]], list[dict[str, float]]] | None:
+    """Ø площадок по порядку величины: наружные — наибольшие надписи,
+    расточка — наименьшие (надписи отверстий «H» — только ей). None — число
+    различных площадок не равно числу надписей."""
+
+    def radii(points: list[dict[str, float]]) -> list[float]:
+        found = {
+            round(float(a["r"]), 4)
+            for a, b in zip(points, points[1:])
+            if abs(float(a["r"]) - float(b["r"])) <= 1e-6
+            and float(b["z"]) - float(a["z"]) > 1e-6
+            and float(a["r"]) > 0
+        }
+        return sorted(found)
+
+    outer_r, bore_r = radii(outer), radii(bore)
+    labels = sorted(set(shafts) | set(holes))
+    if not outer_r or len(labels) != len(outer_r) + len(bore_r):
+        return None
+    inner_labels, outer_labels = labels[: len(bore_r)], labels[len(bore_r) :]
+    if any(h not in inner_labels for h in holes):
+        return None
+    mapping_outer = dict(zip(outer_r, (d / 2.0 for d in outer_labels)))
+    mapping_bore = dict(zip(bore_r, (d / 2.0 for d in inner_labels)))
+    if bore_r and max(mapping_bore.values()) >= min(mapping_outer.values()):
+        return None
+
+    def apply(
+        points: list[dict[str, float]], mapping: dict[float, float]
+    ) -> list[dict[str, float]]:
+        return [{**p, "r": mapping.get(round(float(p["r"]), 4), float(p["r"]))} for p in points]
+
+    return apply(outer, mapping_outer), apply(bore, mapping_bore)
+
+
 def build_revolve(
     gray: Any,
     reading: Any,
@@ -791,8 +831,15 @@ def build_revolve(
     *,
     part: str | None = None,
     region_labels: dict[int, list[str]] | None = None,
+    unscaled: bool = False,
 ) -> ViewsResult:
-    """Тело вращения по главному изображению и связанным видам листа."""
+    """Тело вращения по главному изображению и связанным видам листа.
+
+    ``unscaled`` — лист не в масштабе (эскиз: втулка 793539cc_p015 — 9 мм
+    по оси и Ø22 поперёк нарисованы с масштабами 0,016 и 0,032 мм/px, Ø13
+    — как Ø10,7): осевой масштаб — по длинам независимо от радиального, Ø
+    площадок — надписи по порядку величины, если их столько же, сколько
+    площадок. Форма — с листа, числа — надписями, как читает инженер."""
     import numpy as np
 
     from app.ai.cad_views.labels import parse_label
@@ -1122,6 +1169,11 @@ def build_revolve(
             # и у варианта, потерявшего ступень (вал p121 — отказ проверки).
             vertices = len(profile.outer) + len(profile.inner or []) if hatched else 0
             key = (hits, fits_overall, round(hits / max(1, count), 2), hatched, -vertices)
+            if unscaled:
+                # Не в масштабе Ø назначаются по порядку — нужен вариант, где
+                # площадок ровно столько, сколько надписей Ø (разрез с
+                # расточкой, а не силуэт без неё).
+                key = (count == len(set(shafts) | set(holes)), *key)
             if best is None or key > best[0]:
                 best = (key, region, crop, factor, origin, line, vertical, profile, radial, hits)
                 chosen_sets = (diameters, holes, shafts, linear)
@@ -1135,7 +1187,7 @@ def build_revolve(
     _key, main, crop, factor, origin, line, vertical, profile, radial, hits = best
     diameters, holes, shafts, linear = chosen_sets
     notes.append("выбор изображения: " + "; ".join(tried))
-    axial, _ = fit_axial_scale(profile, linear, near=radial)
+    axial, _ = fit_axial_scale(profile, linear, near=None if unscaled else radial)
     axial = axial or radial
     outer, bore = revolve_points(profile, axial, radial)
     # C2: станции и Ø площадок — номиналы надписей (перечерчивание инженером).
@@ -1151,12 +1203,21 @@ def build_revolve(
             chain,
             shafts or diameters,
             holes or diameters,
-            tolerance=max(1.2 * line * axial, 0.006 * length),
+            # Эскиз не в масштабе: пропорции приблизительны (бурт 1,77 при 2).
+            tolerance=max(1.2 * line * axial, (0.05 if unscaled else 0.006) * length),
             bore_share=0.07 if holes else 0.03,
             diameter_tolerance_mm=1.2 * line * radial,
         )
 
     outer, bore, snapped = nominal(linear)
+    if unscaled:
+        ordered = _ordinal_diameters(outer, bore, shafts or diameters, holes)
+        if ordered is None:
+            return ViewsResult(
+                False, "лист не в масштабе, а надписей Ø не столько же, сколько площадок"
+            )
+        outer, bore = ordered
+        notes.append("лист не в масштабе: форма с листа, Ø и длины — надписями")
     if snapped:
         notes.append(f"номиналы надписей: исправлено {snapped} значений замера")
     candidate = revolve_candidate(outer, bore, part or main.part or "деталь")
@@ -1512,6 +1573,19 @@ def choose_body(
             )
     coverage = best.coverage
     total = len(coverage.get("explained") or []) + len(coverage.get("missing") or [])
+    if (
+        total >= _COVERAGE_MIN_LABELS
+        and coverage.get("share") is not None
+        and coverage["share"] < _MIN_COVERAGE
+    ):
+        # Лист не в масштабе — форма с листа, числа надписями; принимается,
+        # только если такое тело надписи объясняет.
+        sketch = build_revolve(gray, reading, labels, region_labels=region_labels, unscaled=True)
+        if sketch.ok:
+            sketch.coverage = label_coverage(sketch, merged)
+            if (sketch.coverage.get("share") or 0.0) >= _MIN_COVERAGE:
+                sketch.notes.append(f"в масштабе листа надписей на теле {coverage['share']:.0%}")
+                return sketch
     if (
         total >= _COVERAGE_MIN_LABELS
         and coverage.get("share") is not None
