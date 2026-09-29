@@ -125,3 +125,29 @@ def test_a_reader_feature_left_without_a_trace_by_the_finding_is_dropped_after_i
     assert settled["provenance"]["main_view.placed_features[0]"]["origin"] == "sheet_measurement"
     assert any("снят" in note for note in report["notes"])
     assert not any("снят" in note for note in settled.get("unresolved") or [])
+
+
+def test_the_across_size_of_a_flat_is_not_also_its_position():
+    """m2: «41,4» лыски (размер «поперёк») шло ещё и положением от уступа —
+    пара 41,4 + 15,9 ложилась на след секущей ближе, чем верная 40,55 + 15,9,
+    и лыска вставала на 0,85 мм дальше."""
+    flat = {
+        "kind": "pocket",
+        "station_mm": 43.3,  # след секущей — не середина лыски
+        "step_index": 1,
+        "step_diameter_mm": 25.0,
+        "angle_deg": 0.2,
+        "depth_mm": 1.55,
+        "across_mm": 23.45,
+        "length_mm": 15.86,
+        "tolerance_mm": 0.8,
+    }
+    spec = _spec(["12", "70", "262", "Ø25", "Ø40", "23.4", "22.55", "15.9"])
+    notes: list[str] = []
+
+    added = placed_additions(spec, {"placed_proposals": [flat]}, notes)
+
+    assert not notes, notes
+    pocket = added[0]["feature"]
+    assert pocket["origin_mm"][2] == 42.5  # 12 + 22,55 + 15,9 / 2
+    assert pocket["width_mm"] == 15.9 and abs(pocket["depth_mm"] - 1.6) < 1e-6

@@ -2311,10 +2311,14 @@ def placed_additions(
             # Длина, измеренная по главному виду (концы лыски), отсекает пары
             # с чужой длиной.
             seen = proposal.get("length_mm")
+            # Размер «поперёк» уже объяснён — положением и длиной он не бывает
+            # (m2: «41,4» лыски на Ø45 шло положением от уступа, станция
+            # 64,35 вместо 63,5).
+            spare = [n for n in free if across is None or n != across]
             pairs = sorted(
                 (abs(shoulder + o + length / 2.0 - z), o, length)
-                for o in free
-                for length in free
+                for o in spare
+                for length in spare
                 if o != length
                 and abs(shoulder + o + length / 2.0 - z) <= 1.0
                 and (

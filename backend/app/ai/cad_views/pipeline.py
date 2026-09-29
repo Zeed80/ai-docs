@@ -703,8 +703,15 @@ def section_features(
     found = []
     for addition in placed_additions(spec, {"placed_proposals": proposals}, notes):
         item = dict(addition["feature"])
-        item.pop("sheet_station", None)
+        sheet = item.pop("sheet_station", None) or {}
         item["note"] = addition.get("reason") or "элемент по сечению"
+        # Надписи, которые элемент объяснил, — его размеры, а не звенья
+        # цепочки ступеней (m2: «40,55» лыски тянуло уступ 118 к 117,45).
+        explains = [sheet.get("from_shoulder_mm")]
+        if item.get("kind") == "pocket":
+            radius = math.hypot(*item["origin_mm"][:2])
+            explains += [item.get("width_mm"), 2.0 * radius - float(item.get("depth_mm") or 0.0)]
+        item["_explains"] = [float(v) for v in explains if isinstance(v, (int, float))]
         found.append(item)
     # Не объяснённое надписями однозначно — по замеру (угол и Ø к надписям,
     # если близки): сечение мерит точно (29,8° при 30°, Ø6,02 при Ø6), а
@@ -765,6 +772,9 @@ def section_features(
                 "depth_mm": round(float(proposal["depth_mm"]), 3),
             }
             label = f"лыска глубиной {float(proposal['depth_mm']):g}"
+            # Размер «поперёк» с листа (23,4 при замере 23,57) — тоже размер
+            # лыски, не звено цепочки.
+            item["_explains_near"] = [2.0 * radius - float(proposal["depth_mm"])]
         else:
             continue
         item["note"] = (
@@ -1236,12 +1246,14 @@ def build_revolve(
             # Уступ на листе — иногда две близкие точки (край канавки и сам
             # уступ): положение — от обеих.
             keyway_positions += [start - z for z in left if left[-1] - z <= 1.0]
-    if keyway_sizes:
+    explained = [v for f in features for v in f.pop("_explains", [])]
+    explained_near = [v for f in features for v in f.pop("_explains_near", [])]
+    if keyway_sizes or explained or explained_near:
         chain = [
             v
             for v in linear
-            if all(abs(v - k) > 0.05 for k in keyway_sizes)
-            and all(abs(v - k) > max(0.5, 0.03 * v) for k in keyway_positions)
+            if all(abs(v - k) > 0.05 for k in [*keyway_sizes, *explained])
+            and all(abs(v - k) > max(0.5, 0.03 * v) for k in [*keyway_positions, *explained_near])
         ]
         if chain != list(linear):
             outer, bore, _again = nominal(chain)
