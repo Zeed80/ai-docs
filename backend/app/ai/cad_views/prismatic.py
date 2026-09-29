@@ -454,9 +454,20 @@ def arrange_views(
     if further is not None:
         # Второй вид с той же стороны (вид спереди под разрезом корпуса):
         # на нём грань, снятая разрезом, — для формы приливов.
+        # Второй — отдельное изображение, а не второй контур того же вида
+        # (housing-13: у разреза два контура, вид спереди — третий).
+        def box_of(outline: Any) -> tuple[float, ...]:
+            return boxes.get(id(outline), outline.box)
+
         for side, items in placed.items():
-            if len(items) >= 2:
-                further[side] = sorted(items, key=lambda item: item[0])[1][2]
+            ordered = sorted(items, key=lambda item: item[0])
+            nx, ny, nw, nh = box_of(ordered[0][2])
+            for _gap, _key, outline in ordered[1:]:
+                x, y, w, h = box_of(outline)
+                shared = _overlap(nx, nx + nw, x, x + w) * _overlap(ny, ny + nh, y, y + h)
+                if shared < 0.5 * min(nw * nh, w * h):
+                    further[side] = outline
+                    break
     return {side: min(items, key=lambda item: item[0])[2] for side, items in placed.items()}
 
 
@@ -691,7 +702,7 @@ def _face_pockets(
     """Карманы на гранях тела по прямоугольникам видов (см. вызов)."""
     from app.ai.cad_views.prismatic_parts import cavity_span, visible_rectangles
 
-    def cavity_box(cavity: dict[str, Any], u: str, v: str) -> tuple[float, ...] | None:
+    def cavity_box(cavity: dict[str, Any], u: str, v: str, n: str) -> tuple[float, ...] | None:
         params = cavity["params"]
         a, b = _KERNEL_PLANE[params["normal"]]
         points = params["polygon_mm"]
@@ -700,7 +711,7 @@ def _face_pockets(
             b: (min(p[1] for p in points), max(p[1] for p in points)),
             params["normal"]: tuple(params["range_mm"]),
         }
-        return (*spans[u], *spans[v])
+        return (*spans[u], *spans[v], *spans[n])
 
     found: list[dict[str, Any]] = []
     seen: list[tuple[str, float, float, float, float, float]] = []
@@ -719,12 +730,23 @@ def _face_pockets(
                 continue
             # Полость, видная насквозь, и торцы приливов — уже построены.
             covered = False
+            near_min = frame.near == "min"
+            on_min = near_min if visible else not near_min
+            face = 0.0 if on_min else extent[n]
             for cavity in cavities:
-                box = cavity_box(cavity, ua, va)
+                box = cavity_box(cavity, ua, va, n)
                 if box is None:
                     continue
                 inter = _overlap(u0, u1, box[0], box[1]) * _overlap(v0, v1, box[2], box[3])
-                if inter >= 0.5 * (u1 - u0) * (v1 - v0):
+                # Сама полость — прямоугольник её размера или клетка в проёме,
+                # которым она выходит на эту грань (housing-18: «карманы» в
+                # проёме не касались материала, и ядро отвергало всё тело);
+                # карман стенки внутри проекции полости на другой грани
+                # (housing-13: 20 × 15 на фоне 50,8 × 70,8) — отдельный элемент.
+                opens_here = min(abs(box[4] - face), abs(box[5] - face)) <= 1.0
+                if inter >= 0.5 * (u1 - u0) * (v1 - v0) and (
+                    opens_here or inter >= 0.5 * (box[1] - box[0]) * (box[3] - box[2])
+                ):
                     covered = True
             for boss in bosses:
                 if (
@@ -735,9 +757,6 @@ def _face_pockets(
                     covered = True
             if covered:
                 continue
-            near_min = frame.near == "min"
-            on_min = near_min if visible else not near_min
-            face = 0.0 if on_min else extent[n]
             depth = None
             for other in frames.values():
                 if other is frame or other.section or n not in (other.u[0], other.v[0]):
