@@ -1224,8 +1224,25 @@ def build_revolve(
     # притягивало уступ 139 к 157 − 19 = 138, и от неверной базы съезжала
     # вся цепочка (shaft-3). Номиналы — заново без размеров пазов.
     keyway_sizes = [float(f["width_mm"]) for f in features if f.get("keyway")]
+    # И положение паза от уступа или торца слева — тоже его размер: «18,8»
+    # первого паза тянуло уступ 165 к 183 − 18,8 = 164,2, и вся цепочка
+    # съезжала на 0,8 мм (shaft-6).
+    stations = sorted({round(float(p["z"]), 3) for p in raw_outer})
+    keyway_positions = []
+    for f in features:
+        if f.get("keyway"):
+            start = float(f["keyway"][0])
+            left = [z for z in stations if z <= start + 1e-6]
+            # Уступ на листе — иногда две близкие точки (край канавки и сам
+            # уступ): положение — от обеих.
+            keyway_positions += [start - z for z in left if left[-1] - z <= 1.0]
     if keyway_sizes:
-        chain = [v for v in linear if all(abs(v - k) > 0.05 for k in keyway_sizes)]
+        chain = [
+            v
+            for v in linear
+            if all(abs(v - k) > 0.05 for k in keyway_sizes)
+            and all(abs(v - k) > max(0.5, 0.03 * v) for k in keyway_positions)
+        ]
         if chain != list(linear):
             outer, bore, _again = nominal(chain)
             candidate = revolve_candidate(outer, bore, part or main.part or "деталь")

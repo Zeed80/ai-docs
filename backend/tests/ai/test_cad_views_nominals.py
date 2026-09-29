@@ -91,3 +91,21 @@ def test_chamfer_goes_to_the_threaded_end():
     assert note and new_outer[0] == {"r": 4.5, "z": 0.0} and new_outer[1]["z"] == 0.5
     same, none = chamfer_threaded_end(outer, [0.5], [])
     assert none is None and same == outer
+
+
+def test_a_chain_link_joins_neighbouring_stations_and_does_not_skip_one():
+    """shaft-6: замеры уступов у канавок на ~1 мм короче; «18» от станции 115
+    давало 97 (перескакивая уступ 99,6), и от неверной 97 − 18 = 79 съезжала
+    вся цепочка. Звено цепочки соединяет СОСЕДНИЕ станции."""
+    from app.ai.cad_views.nominals import snap_axis
+
+    stations = [0.0, 79.19, 79.37, 97.05, 99.57, 115.09, 115.63, 163.79, 164.15, 181.65, 182.01]
+    stations.append(195.0)
+    mapping = snap_axis(
+        stations, [195, 20, 15, 50, 18, 12], tolerance=1.73, overall=195, chain=True
+    )
+    assert mapping[182.01] == mapping[181.65] == 183
+    assert mapping[164.15] == mapping[163.79] == 165
+    assert mapping[115.09] == mapping[115.63] == 115
+    assert mapping[99.57] == 100
+    assert mapping[79.19] == mapping[79.37] == 80

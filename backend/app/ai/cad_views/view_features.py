@@ -250,7 +250,9 @@ def side_view_features(
     ):
         # Концы капсулы — вершины дуг.
         z0, z1 = z_of(a), z_of(b)
-        step = 2 * outer_at((z0 + z1) / 2)
+        # Ø ступени — номинал надписи: сырой замер 22,3 при Ø22 выбирал
+        # сечение ГОСТ из диапазона 22–30 (8×4 вместо 6×3,5, shaft-6).
+        step = snap(2 * outer_at((z0 + z1) / 2), diameter_labels or [], share=0.03)
         width = 2 * radius * radial_mm_per_px
         standard = standard_section(step)
         depth = None
@@ -267,7 +269,16 @@ def side_view_features(
                 "origin_mm": [round(-step / 2, 3), 0.0, round((z0 + z1) / 2, 3)],
                 "axis": [1.0, 0.0, 0.0],
                 "ref": [0.0, 0.0, 1.0],
-                "width_mm": round(snap(z1 - z0, linear_labels or [], share=0.05), 3),
+                # Длина — ближайшая надпись в пределах толщины линии (конец
+                # дуги у уступа уезжает на линию: 13,71 при «13», shaft-6).
+                "width_mm": round(
+                    snap(
+                        z1 - z0,
+                        linear_labels or [],
+                        share=max(0.05, line * axial_mm_per_px / max(z1 - z0, 1e-6)),
+                    ),
+                    3,
+                ),
                 "height_mm": round(width, 3),
                 "depth_mm": round(depth, 3),
                 "keyway": [round(z0, 3), round(z1, 3)],
@@ -300,6 +311,55 @@ def side_view_features(
             }
         )
     return features
+
+
+def _bridge_occluded(
+    runs: list[tuple[int, int, float]],
+    per_column: list[list[float]],
+    start: int,
+    line: float,
+    xs: list[float],
+    rs: list[float],
+) -> list[tuple[int, int, float]]:
+    """Куски прямых одного паза, разорванные подписью Ø и стрелками поверх
+    паза (shaft-6: «Ø22» со стрелками посреди паза 83…96 — прямые распались
+    на куски короче ширины, паз не строился, а вырез на сечении стал
+    сквозным отверстием). Склеиваются куски одной полуширины на одной
+    ступени с разрывом не длиннее ширины паза, каждый не короче толщины линии,
+    если прямые видны хотя бы на 40 % склеенного участка (обрывок у уступа
+    той же полуширины уводил начало паза shaft-4 на 6 мм)."""
+    import numpy as np
+
+    merged: list[tuple[int, int, float]] = []
+    for a, b, radius in sorted(runs):
+        previous = next(
+            (
+                index
+                for index in range(len(merged) - 1, -1, -1)
+                if abs(merged[index][2] - radius) <= 0.5 * line
+            ),
+            None,
+        )
+        if previous is not None:
+            pa, pb, pr = merged[previous]
+            span = range(int(pa), int(b) + 1)
+            level = [float(np.interp(x, xs, rs)) for x in span]
+            seen = sum(
+                1
+                for x in span
+                if 0 <= x - start < len(per_column)
+                and any(abs(r - pr) <= line for r in per_column[x - start])
+            )
+            if (
+                0 < a - pb <= 2.0 * pr
+                and min(pb - pa, b - a) >= line
+                and max(level) - min(level) <= 1.5 * line
+                and seen >= 0.4 * len(span)
+            ):
+                merged[previous] = (pa, max(pb, b), pr)
+                continue
+        merged.append((a, b, radius))
+    return merged
 
 
 def _keyway_runs(
@@ -352,8 +412,19 @@ def _keyway_runs(
             runs.append((open_runs[key][0], open_runs[key][1], key))
             del open_runs[key]
     runs += [(a, b, k) for k, (a, b) in open_runs.items()]
+    runs = _bridge_occluded(runs, per_column, start, line, xs, rs)
 
     def arc_end(x_end: int, radius: float, sign: int) -> int | None:
+        """Крайний столбец дуги; если за концом прямых дуги нет — поиск на
+        радиус раньше: маска основных линий продлевает прямые по пологой
+        вершине дуги, и у короткого паза конец «прямых» уже за вершиной
+        (shaft-6: паз 83…96 — прямые до 572 px при вершине ≈ 565)."""
+        found = _arc_from(x_end, radius, sign)
+        if found is None:
+            found = _arc_from(x_end - sign * int(radius), radius, sign, lead=2.0)
+        return found
+
+    def _arc_from(x_end: int, radius: float, sign: int, lead: float = 1.0) -> int | None:
         """Крайний столбец дуги конца паза: основные линии в полосах выше и
         ниже оси (осевая по самой оси не считается) без разрыва от конца
         прямых и не дальше своей ступени."""
@@ -366,16 +437,21 @@ def _keyway_runs(
             (int(axis_y + 1), int(axis_y + reach)),
         ]
         level = float(np.interp(x_end, xs, rs))
+        previous = level
         last = None
         gap = 0
-        for step in range(int(1.8 * radius) + 1):
+        for step in range(int((0.8 + lead) * radius) + 1):
             x = x_end + sign * step
             if not 0 <= x < width:
                 break
             # У уступа паз кончается (shaft-4: подпись «Ø25» поверх паза
-            # склеивала дугу с двойной линией уступа).
-            if abs(float(np.interp(x, xs, rs)) - level) > line:
+            # склеивала дугу с двойной линией уступа). Уступ в профиле —
+            # скачок в один столбец; плавный подъём — погрешность профиля у
+            # канавки при уступе (shaft-6: 97→99,6 мм), дугу он не обрывает.
+            here = float(np.interp(x, xs, rs))
+            if abs(here - previous) > 0.5 * line or abs(here - level) > max(line, radius):
                 break
+            previous = here
             # Дуга — основная линия: тонкие выносные размеров пересекают
             # полосу у концов паза и продлевали его.
             hit = any(thick[max(0, a) : max(0, b) + 1, x].any() for a, b in rows)
@@ -385,7 +461,7 @@ def _keyway_runs(
                 gap += 1
                 # До первой дуги — до радиуса: у узкого паза дуга входит в
                 # полосу поиска не сразу за концом прямых (shaft-6, паз 6 мм).
-                if gap > (line if last is not None else radius):
+                if gap > (line if last is not None else lead * radius):
                     break
         return last
 
@@ -404,8 +480,19 @@ def _keyway_runs(
             continue
         # Между прямыми — пусто (не расточка со штриховкой): доля чернил
         # по середине полосы мала.
-        middle = ink[int(axis_y - radius / 2) : int(axis_y + radius / 2) + 1, int(a) : int(b) + 1]
-        if middle.size and middle.mean() > 0.25:
+        # Столбцы, где прямые закрыты подписью или стрелками, в счёт не идут;
+        # у дуг — тоже (маска основных линий продлевает прямые до вершины
+        # дуги, а дуга проходит через середину полосы).
+        seen_columns = [
+            x
+            for x in range(max(int(a), int(left + radius)), min(int(b), int(right - radius)) + 1)
+            if 0 <= x - start < len(per_column)
+            and any(abs(r - radius) <= line for r in per_column[x - start])
+        ]
+        middle = ink[int(axis_y - radius / 2) : int(axis_y + radius / 2) + 1, seen_columns]
+        # Штриховка ложится на все столбцы поровну, подпись Ø внутри паза —
+        # кучно (shaft-4: «Ø25» в пазу — среднее 0,26, медиана 0,19).
+        if middle.size and middle.mean() > 0.25 and float(np.median(middle.mean(axis=0))) > 0.25:
             continue
         # Концы — по середине линии дуги; паз длиннее полутора ширин.
         left, right = int(left + line / 2), int(right - line / 2)

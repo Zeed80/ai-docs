@@ -203,3 +203,33 @@ def test_keyway_face_on_is_a_slot_not_two_holes():
     slot = slots[0]
     assert slot["profile"] == "slot" and abs(slot["width_mm"] - 33.0) < 0.6
     assert slot["height_mm"] == 8.0 and slot["depth_mm"] == 4.0  # ГОСТ 23360 для Ø28
+
+
+def test_keyway_under_a_diameter_label_is_still_a_slot():
+    """shaft-6: подпись «Ø22» со стрелками стоит поверх паза — прямые паза
+    рвутся на куски короче ширины, паз не строился, а его вырез на сечении
+    становился сквозным отверстием."""
+    from app.ai.cad_views.revolve_profile import HalfProfile
+    from app.ai.cad_views.view_features import side_view_features
+
+    image = Image.new("L", (900, 400), 255)
+    draw = ImageDraw.Draw(image)
+    axis, px = 200, 10.0
+    draw.rectangle([100, axis - 140, 800, axis + 140], outline=0, width=6)
+    left, right, r = 100 + 29.5 * px, 100 + 62.5 * px, 4 * px
+    draw.line([(left + r, axis - r), (right - r, axis - r)], fill=0, width=6)
+    draw.line([(left + r, axis + r), (right - r, axis + r)], fill=0, width=6)
+    draw.arc([left, axis - r, left + 2 * r, axis + r], 90, 270, fill=0, width=6)
+    draw.arc([right - 2 * r, axis - r, right, axis + r], 270, 90, fill=0, width=6)
+    # Подпись поверх прямых паза: белое поле с тонкими штрихами «цифр».
+    for x0 in (470, 560):
+        draw.rectangle([x0, axis - 70, x0 + 60, axis + 70], fill=255)
+        for x in range(x0 + 6, x0 + 60, 14):
+            draw.line([(x, axis - 60), (x + 6, axis + 60)], fill=0, width=3)
+    profile = HalfProfile(
+        axis_y=float(axis), line_px=6.0, x0=100, x1=800, outer=[(100.0, 140.0), (800.0, 140.0)]
+    )
+    found = side_view_features(np.asarray(image), profile, 0.1, 0.1, [28.0], [70.0, 33.0])
+    slots = [f for f in found if f.get("keyway")]
+    assert len(slots) == 1
+    assert abs(slots[0]["width_mm"] - 33.0) < 0.6

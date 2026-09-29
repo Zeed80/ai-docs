@@ -20,11 +20,19 @@ def snap_axis(
     *,
     tolerance: float,
     overall: float | None = None,
+    chain: bool = False,
 ) -> dict[float, float]:
     """{замер: номинал} для координат одной оси (от базы 0).
 
     ``overall`` — габарит по этой оси, если его объясняет надпись: крайняя
     координата получает его первой.
+
+    ``chain`` — координаты образуют цепочку (станции вала): звено соединяет
+    СОСЕДНИЕ станции. Сначала — от ближайших известных слева и справа, и
+    первым фиксируется самое короткое звено; только когда так ничего не
+    объясняется — от любой известной (размер от базы). Без этого звено
+    перескакивало станцию: «18» от 115 давало 97 вместо уступа 100, и от
+    неверной 97 − 18 = 79 съезжала вся цепочка (shaft-6).
     """
     # Звено цепочки — размер заметно больше допуска: мелкие надписи (фаски,
     # канавки 1,5…3) притягивали станции к любым своим суммам.
@@ -40,6 +48,35 @@ def snap_axis(
         if abs(abs(far) - overall) <= tolerance:
             snapped[far] = overall if far > 0 else -overall
             known.append(snapped[far])
+    changed = True
+    while chain and changed:
+        changed = False
+        best_pair: tuple[float, float, float, float] | None = None
+        for value in pending:
+            if value in snapped:
+                continue
+            lower = [k for k in known if k <= value]
+            upper = [k for k in known if k >= value]
+            bases = ([max(lower)] if lower else []) + ([min(upper)] if upper else [])
+            for base in bases:
+                # Вторая точка того же уступа (край канавки у уступа, наклон
+                # замера) — та же станция.
+                if abs(value - base) <= tolerance:
+                    pair = (abs(value - base), 0.0, value, base)
+                    if best_pair is None or pair < best_pair:
+                        best_pair = pair
+                for label in positive:
+                    for candidate in (base + label, base - label):
+                        gap = abs(candidate - value)
+                        if gap <= tolerance:
+                            pair = (abs(value - base), gap, value, candidate)
+                            if best_pair is None or pair < best_pair:
+                                best_pair = pair
+        if best_pair is not None:
+            _reach, _gap, value, candidate = best_pair
+            snapped[value] = round(candidate, 4)
+            known.append(snapped[value])
+            changed = True
     changed = True
     while changed:
         changed = False
@@ -246,6 +283,18 @@ def nominal_round_holes(
     return out, changed
 
 
+def _explained(
+    mapping: dict[float, float], labels: list[float], tolerance: float
+) -> tuple[int, int]:
+    """Сколько надписей-звеньев совпадает с расстоянием между какими-либо двумя
+    станциями и — при равенстве — между соседними (цепочка)."""
+    points = sorted(set(mapping.values()))
+    gaps = {round(b - a, 4) for i, a in enumerate(points) for b in points[i + 1 :]}
+    links = {round(b - a, 4) for a, b in zip(points, points[1:])}
+    wanted = {round(v, 4) for v in labels if v >= 3 * tolerance}
+    return len(wanted & gaps), len(wanted & links)
+
+
 def nominal_revolve(
     outer: list[dict],
     bore: list[dict],
@@ -269,7 +318,16 @@ def nominal_revolve(
     labels = sorted(set(linear))
     near = min(labels, key=lambda v: abs(v - length), default=None)
     total = near if near is not None and abs(near - length) <= tolerance else None
-    mapping = snap_axis(stations, labels, tolerance=tolerance, overall=total)
+    # Цепочка (звено между соседними станциями) и размеры от базы дают разные
+    # привязки; берётся та, где больше надписей совпадает с расстоянием между
+    # станциями, при равенстве — от базы (реальные листы: z4-r4, p007, p018).
+    plain = snap_axis(stations, labels, tolerance=tolerance, overall=total)
+    chained = snap_axis(stations, labels, tolerance=tolerance, overall=total, chain=True)
+    mapping = (
+        chained
+        if _explained(chained, labels, tolerance) > _explained(plain, labels, tolerance)
+        else plain
+    )
     changed = 0
 
     def fix_points(
