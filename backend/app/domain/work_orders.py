@@ -1247,7 +1247,10 @@ async def stop_attempt_for_nonterminal_tool_result(
     }
     attempt.status = str(status)
     attempt.output = result
-    attempt.checkpoint = checkpoint if isinstance(checkpoint, dict) else None
+    if order.source != "durable_chat":
+        attempt.checkpoint = checkpoint if isinstance(checkpoint, dict) else None
+    # A durable chat checkpoint is the authoritative execution frontier. A
+    # ToolResult's checkpoint is recipient data, not a replacement snapshot.
     attempt.error = error
     attempt.finished_at = now
     attempt.heartbeat_at = now

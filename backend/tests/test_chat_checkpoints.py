@@ -561,6 +561,7 @@ async def test_confirmation_resume_is_atomic_and_executes_only_pending_tail(
         _, step, attempt = await claim_ready_step(
             db, worker_id="resume-worker", work_order_id=run["work_order_id"]
         )
+        assert step.max_attempts == 1
         await db.commit()
         step_id, attempt_id = step.id, attempt.id
 

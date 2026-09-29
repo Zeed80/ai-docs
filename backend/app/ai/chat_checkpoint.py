@@ -9,6 +9,7 @@ PHASES = {
     "tool_started",
     "tool_recorded",
     "confirmation_required",
+    "verified_commit_ready",
     "turn_finished",
 }
 

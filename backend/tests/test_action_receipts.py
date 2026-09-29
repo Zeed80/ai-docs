@@ -16,22 +16,31 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.agent_control_plane import AgentTaskPropose, propose_agent_task_tool
 from app.api.chat_runs import (
+    ChatResumeRequest,
     ChatRunCreate,
     get_chat_action,
+    get_chat_checkpoint,
+    resume_chat_run,
     submit_chat_run,
 )
 from app.auth.jwt import _DEV_USER, get_current_user
 from app.auth.models import UserRole
-from app.db.agent_runtime_models import ActionReceipt, ChatLogicalAction
+from app.db.agent_runtime_models import (
+    ActionReceipt,
+    ChatLogicalAction,
+    VerifiedCommitDecision,
+)
 from app.db.models import (
     AgentTask,
     AgentTeam,
     InventoryItem,
+    User,
     WorkAcceptanceCriterion,
     WorkArtifact,
     WorkEvent,
     WorkEvidence,
     WorkOrder,
+    WorkPlan,
     WorkStep,
     WorkStepAttempt,
 )
@@ -43,7 +52,12 @@ from app.domain.artifact_verification import (
     verify_action_artifact,
 )
 from app.domain.chat_action_journal import digest, record_boundary
-from app.domain.work_orders import append_event, claim_ready_step
+from app.domain.work_orders import (
+    append_event,
+    claim_ready_step,
+    fail_attempt,
+    reclaim_expired_leases,
+)
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -53,12 +67,22 @@ async def settle_receipt_test_orders(test_engine):
     yield
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     async with factory() as db:
+        receipt_orders = select(WorkOrder.id).where(
+            WorkOrder.objective.startswith("Receipt scenario ")
+            | (WorkOrder.objective == "Newer owner turn")
+        )
+        await db.execute(
+            update(WorkStep)
+            .where(WorkStep.work_order_id.in_(receipt_orders))
+            .values(state="failed", lease_owner=None, lease_expires_at=None)
+        )
         await db.execute(
             update(WorkOrder)
             .where(
-                WorkOrder.objective.startswith("Receipt scenario "),
+                WorkOrder.objective.startswith("Receipt scenario ")
+                | (WorkOrder.objective == "Newer owner turn"),
             )
-            .values(status="blocked")
+            .values(status="blocked", lease_owner=None, lease_expires_at=None)
         )
         # Warehouse recipient scenarios use independently committed sessions
         # to exercise the real duplicate-delivery race.  Keep their synthetic
@@ -1595,3 +1619,400 @@ async def test_scalable_receipt_migration_roundtrip_quarantines_corrupt_and_dupl
         await conn.run_sync(upgrade)
         assert await conn.scalar(text("SELECT count(*) FROM action_receipts")) == 1
         await conn.rollback()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["tool_started", "tool_recorded"])
+@pytest.mark.parametrize(
+    "post_consume_violation",
+    [
+        None,
+        "crash_recovery",
+        "later_checkpoint",
+        "revoked_role",
+        "changed_artifact",
+        "new_turn",
+    ],
+)
+async def test_verified_commit_decision_is_atomic_idempotent_and_consumed_by_worker(
+    test_engine, monkeypatch, phase, post_consume_violation
+):
+    from app.ai.agent_config import BuiltinAgentConfig
+    from app.ai.chat_checkpoint import pack_checkpoint
+    from app.db.agent_runtime_models import DurableChatRun
+    from app.domain.chat_continuation import config_fingerprint, plan_fingerprint
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    if post_consume_violation == "revoked_role":
+        payload, run, action_id, _, key = await proposal(factory)
+        await deliver(factory, payload, key)
+        item_id = None
+    else:
+        payload, run, action_id, item_id, key = await warehouse_update_proposal(factory)
+        await deliver_warehouse(factory, item_id, payload, key)
+    config = BuiltinAgentConfig()
+    monkeypatch.setattr("app.ai.agent_config.get_builtin_agent_config", lambda: config)
+    async with factory() as db:
+        owner = await db.scalar(select(User).where(User.sub == _DEV_USER.sub))
+        if owner is None:
+            db.add(
+                User(
+                    sub=_DEV_USER.sub,
+                    email=_DEV_USER.email,
+                    name=_DEV_USER.name,
+                    preferred_username=_DEV_USER.preferred_username,
+                    role=UserRole.admin.value,
+                    is_active=True,
+                )
+            )
+            await db.flush()
+        else:
+            owner.role = UserRole.admin.value
+            owner.is_active = True
+        action = await db.get(ChatLogicalAction, action_id)
+        attempt = await db.get(WorkStepAttempt, action.attempt_id)
+        step = await db.get(WorkStep, attempt.step_id)
+        order = await db.get(WorkOrder, run["work_order_id"])
+        plan = await db.get(WorkPlan, step.plan_id)
+        durable = await db.get(DurableChatRun, run["id"])
+        call = {"id": action.call_id, "function": action.request}
+        unknown = {
+            "version": 1,
+            "status": "outcome_unknown",
+            "data": {"recipient": "unconfirmed"},
+            "error_code": "tool_outcome_unknown",
+            "retryable": False,
+            "evidence": {"adapter_contract": "http_one_db_commit_response_v1"},
+            "checkpoint": None,
+        }
+        messages = [
+            {"role": "user", "content": "update"},
+            {"role": "assistant", "tool_calls": [call]},
+        ]
+        pending_calls = [call]
+        in_flight = action.call_id
+        completed_call = None
+        if phase == "tool_recorded":
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": action.call_id,
+                    "content": json.dumps(unknown, ensure_ascii=False, sort_keys=True),
+                }
+            )
+            pending_calls = []
+            in_flight = None
+            completed_call = {
+                "action_id": str(action.id),
+                "call_id": action.call_id,
+                "result": unknown,
+            }
+        snapshot = pack_checkpoint(
+            {
+                "phase": phase,
+                "messages": messages,
+                "pending_calls": pending_calls,
+                "in_flight_call_id": in_flight,
+                "action_ids": {action.call_id: str(action.id)},
+                "completed_call": completed_call,
+                "runtime": {
+                    "config_sha256": config_fingerprint(config),
+                    "plan_digest": plan_fingerprint(plan),
+                    "last_turn": str(durable.user_message_id),
+                },
+            }
+        )
+        await fail_attempt(
+            db,
+            order=order,
+            step=step,
+            attempt=attempt,
+            error={"code": "recipient_response_lost"},
+            retryable=False,
+            actor="test",
+            checkpoint={
+                "kind": "durable_chat",
+                "owner_key": order.owner_key,
+                "work_order_id": str(order.id),
+                "step_id": str(step.id),
+                "attempt_id": str(attempt.id),
+                "plan_id": str(step.plan_id),
+                "plan_revision": order.plan_revision,
+                "snapshot": snapshot,
+            },
+        )
+        if phase == "tool_recorded":
+            action.status = "outcome_unknown"
+            action.result = unknown
+            action.result_digest = digest(unknown)
+            attempt.status = "outcome_unknown"
+        await db.commit()
+        attempt_id = attempt.id
+    body = ChatResumeRequest(
+        intent="verified_commit",
+        attempt_id=attempt_id,
+        action_id=action_id,
+        sha256=snapshot["sha256"],
+        approved=True,
+    )
+
+    if post_consume_violation == "revoked_role":
+        for persisted_role, is_active in [
+            (UserRole.viewer.value, True),
+            (UserRole.admin.value, False),
+            ("invalid-role", True),
+        ]:
+            async with factory() as db:
+                owner = await db.scalar(select(User).where(User.sub == _DEV_USER.sub))
+                owner.role = persisted_role
+                owner.is_active = is_active
+                await db.commit()
+            async with factory() as db:
+                before = await db.scalar(select(func.count()).select_from(WorkEvent))
+                unavailable = await get_chat_checkpoint(run["id"], db, _DEV_USER)
+                after = await db.scalar(select(func.count()).select_from(WorkEvent))
+                assert unavailable["can_resume"] is False
+                assert "intent" not in unavailable
+                assert before == after
+                assert not db.new and not db.dirty and not db.deleted
+            async with factory() as db:
+                plans_before = await db.scalar(
+                    select(func.count())
+                    .select_from(WorkPlan)
+                    .where(WorkPlan.work_order_id == run["work_order_id"])
+                )
+                with pytest.raises(HTTPException):
+                    await resume_chat_run(run["id"], body, db, _DEV_USER)
+                plans_after = await db.scalar(
+                    select(func.count())
+                    .select_from(WorkPlan)
+                    .where(WorkPlan.work_order_id == run["work_order_id"])
+                )
+                assert plans_after == plans_before == 1
+                assert (
+                    await db.scalar(
+                        select(func.count())
+                        .select_from(VerifiedCommitDecision)
+                        .where(VerifiedCommitDecision.logical_action_id == action_id)
+                    )
+                    == 0
+                )
+                assert not db.new and not db.dirty and not db.deleted
+        async with factory() as db:
+            owner = await db.scalar(select(User).where(User.sub == _DEV_USER.sub))
+            owner.role = UserRole.admin.value
+            owner.is_active = True
+            await db.commit()
+
+    async with factory() as db:
+        offered = await get_chat_checkpoint(run["id"], db, _DEV_USER)
+        assert offered["intent"] == "verified_commit"
+        assert offered["action_id"] == action_id
+        assert offered["attempt_id"] == attempt_id
+        assert offered["sha256"] == snapshot["sha256"]
+        assert offered["can_resume"] is True
+
+    async def decide(request=body):
+        async with factory() as db:
+            return await resume_chat_run(run["id"], request, db, _DEV_USER)
+
+    first, second = await asyncio.gather(decide(), decide())
+    assert first["status"] == second["status"] == "ready"
+    async with factory() as db:
+        decided = await get_chat_checkpoint(run["id"], db, _DEV_USER)
+        assert decided["can_resume"] is False
+        assert "intent" not in decided
+    async with factory() as db:
+        decisions = list(await db.scalars(select(VerifiedCommitDecision)))
+        decision = next(row for row in decisions if row.logical_action_id == action_id)
+        assert decision.consumed_at is None
+        assert decision.target_step_id is not None
+        assert decision.restored_checkpoint["phase"] == "verified_commit_ready"
+        assert decision.restored_checkpoint["pending_calls"] == []
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(WorkPlan)
+                .where(WorkPlan.work_order_id == run["work_order_id"])
+            )
+            == 2
+        )
+        _, guarded_step, guarded_attempt = await claim_ready_step(
+            db, worker_id="e11-guard", work_order_id=run["work_order_id"]
+        )
+        assert guarded_step.max_attempts == 2
+        await db.commit()
+
+    from app.tasks.durable_chat import run_durable_chat
+
+    resumed = []
+
+    class Executor:
+        total_tokens = {"input_tokens": 0, "output_tokens": 0}
+
+        def __init__(self, send):
+            self.send = send
+
+        def set_checkpoint_sink(self, sink):
+            self.sink = sink
+
+        async def resume_checkpoint(self, checkpoint):
+            resumed.append(checkpoint)
+            assert checkpoint["phase"] == "verified_commit_ready"
+            assert checkpoint["consumed_action_id"] == str(action_id)
+            assert all(
+                checkpoint["action_ids"].get(call["id"]) != str(action_id)
+                for call in checkpoint["pending_calls"]
+            )
+            assert (
+                sum(
+                    message.get("role") == "tool"
+                    and message.get("tool_call_id") == checkpoint["completed_call"]["call_id"]
+                    for message in checkpoint["messages"]
+                )
+                == 1
+            )
+            await self.send({"type": "text", "content": "Continued"})
+
+        async def save_checkpoint(self, *args, **kwargs):
+            return None
+
+    class Agent:
+        def __init__(self, send):
+            self._executor = Executor(send)
+
+        def hydrate_history(self, history):
+            self._executor.history = history
+
+        async def on_user_message(self, *args, **kwargs):
+            pytest.fail("Verified commit must resume, not submit the prompt")
+
+    def crash_after_consume(_send):
+        raise RuntimeError("simulated worker crash after consume")
+
+    async def consume():
+        return await run_durable_chat(
+            run["work_order_id"],
+            guarded_step.id,
+            guarded_attempt.id,
+            session_factory=factory,
+            agent_factory=crash_after_consume
+            if post_consume_violation == "crash_recovery"
+            else Agent,
+        )
+
+    concurrent = await asyncio.gather(consume(), consume(), return_exceptions=True)
+    results = [value for value in concurrent if isinstance(value, dict)]
+    failures = [value for value in concurrent if isinstance(value, Exception)]
+    if post_consume_violation == "crash_recovery":
+        assert results == []
+        assert len(failures) == 2
+        assert any("simulated worker crash" in str(value) for value in failures)
+        assert any("already consumed" in str(value) for value in failures)
+        assert resumed == []
+    else:
+        assert [result["text"] for result in results] == ["Continued"]
+        assert len(failures) == 1
+        assert "already consumed" in str(failures[0])
+        assert len(resumed) == 1
+    async with factory() as db:
+        consumed = await db.get(VerifiedCommitDecision, decision.id)
+        assert consumed.consumed_at is not None
+        target_attempt = await db.get(WorkStepAttempt, guarded_attempt.id)
+        assert target_attempt.checkpoint["kind"] == "verified_commit_target"
+    if post_consume_violation is not None:
+        async with factory() as db:
+            prior = await db.get(WorkStepAttempt, guarded_attempt.id)
+            target_step = await db.get(WorkStep, guarded_step.id)
+            target_order = await db.get(WorkOrder, run["work_order_id"])
+            expired = datetime.now(UTC) - timedelta(seconds=1)
+            target_step.lease_expires_at = expired
+            target_order.lease_expires_at = expired
+            if post_consume_violation == "revoked_role":
+                owner = await db.scalar(select(User).where(User.sub == _DEV_USER.sub))
+                owner.role = UserRole.viewer.value
+            elif post_consume_violation == "later_checkpoint":
+                prior.checkpoint = {
+                    "kind": "durable_chat",
+                    "phase": "tool_started",
+                }
+            elif post_consume_violation == "changed_artifact":
+                item = await db.get(InventoryItem, item_id)
+                item.name = f"{item.name} changed"
+                item.updated_at = datetime.now(UTC) + timedelta(seconds=1)
+            await db.commit()
+        async with factory() as db:
+            assert await reclaim_expired_leases(db) >= 1
+            reclaimed_step = await db.get(WorkStep, guarded_step.id)
+            reclaimed_attempt = await db.get(WorkStepAttempt, guarded_attempt.id)
+            assert reclaimed_step.state == "retry_wait"
+            assert reclaimed_attempt.status == "abandoned"
+            await db.commit()
+        async with factory() as db:
+            claimed = await claim_ready_step(
+                db,
+                worker_id="e11-recovery",
+                work_order_id=run["work_order_id"],
+            )
+            assert claimed is not None
+            _, recovery_step, recovery_attempt = claimed
+            assert recovery_step.id == guarded_step.id
+            await db.commit()
+            recovery_attempt_id = recovery_attempt.id
+        if post_consume_violation == "new_turn":
+            async with factory() as db:
+                newer = await submit_chat_run(
+                    ChatRunCreate(
+                        request_id=uuid.uuid4(),
+                        content="Newer owner turn",
+                    ),
+                    db,
+                    _DEV_USER,
+                )
+                newer_run = await db.get(DurableChatRun, newer["id"])
+                newer_run.session_id = run["session_id"]
+                await db.commit()
+
+        if post_consume_violation == "crash_recovery":
+            recovered = await run_durable_chat(
+                run["work_order_id"],
+                guarded_step.id,
+                recovery_attempt_id,
+                session_factory=factory,
+                agent_factory=Agent,
+            )
+            assert recovered["text"] == "Continued"
+            assert len(resumed) == 1
+            async with factory() as db:
+                assert (
+                    await db.scalar(
+                        select(func.count())
+                        .select_from(ActionReceipt)
+                        .where(ActionReceipt.logical_action_id == action_id)
+                    )
+                    == 1
+                )
+            post_consume_violation = None
+
+        def forbidden_recovery_agent(_send):
+            pytest.fail("Invalid recovery must stop before agent creation")
+
+        expected = {
+            "later_checkpoint": "already consumed",
+            "revoked_role": "not permitted",
+            "changed_artifact": "artifact changed",
+            "new_turn": "newer conversation turn",
+        }.get(post_consume_violation)
+        if expected is not None:
+            with pytest.raises((RuntimeError, HTTPException), match=expected):
+                await run_durable_chat(
+                    run["work_order_id"],
+                    guarded_step.id,
+                    recovery_attempt_id,
+                    session_factory=factory,
+                    agent_factory=forbidden_recovery_agent,
+                )
+    conflicting = body.model_copy(update={"approved": False})
+    with pytest.raises(HTTPException) as conflict:
+        await decide(conflicting)
+    assert conflict.value.status_code == 409

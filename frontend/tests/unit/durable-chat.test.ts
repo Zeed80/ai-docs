@@ -71,6 +71,35 @@ describe("долговечный транспорт чата", () => {
     expect(emit).toHaveBeenLastCalledWith({type: "done"});
   });
 
+  it("отправляет отдельное одноразовое решение только для server-driven verified commit", async () => {
+    const blocked = {...run, status: "blocked"};
+    const verified = {can_resume: true, intent: "verified_commit", attempt_id: "attempt", action_id: "action", sha256: "b".repeat(64)};
+    fetcher.mockResolvedValueOnce(response({run: blocked, legacy: false}))
+      .mockResolvedValueOnce(response(blocked)).mockResolvedValueOnce(page())
+      .mockResolvedValueOnce(response(verified))
+      .mockResolvedValueOnce(response(run)).mockResolvedValueOnce(response(run)).mockResolvedValueOnce(page());
+    await transport.watchSession("session"); await flush();
+    transport.send(JSON.stringify({type: "resume", approved: true})); await flush();
+    const posts = fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(posts).toHaveLength(1);
+    expect(JSON.parse(String(posts[0][1]?.body))).toEqual({intent: "verified_commit", action_id: "action", attempt_id: "attempt", sha256: verified.sha256, approved: true});
+  });
+
+  it("не повторяет verified commit после stale 409", async () => {
+    const blocked = {...run, status: "blocked"};
+    const verified = {can_resume: true, intent: "verified_commit", attempt_id: "attempt", action_id: "action", sha256: "b".repeat(64)};
+    fetcher.mockResolvedValueOnce(response({run: blocked, legacy: false}))
+      .mockResolvedValueOnce(response(blocked)).mockResolvedValueOnce(page())
+      .mockResolvedValueOnce(response(verified))
+      .mockResolvedValueOnce(new Response("stale", {status: 409}))
+      .mockResolvedValueOnce(response(blocked)).mockResolvedValueOnce(page())
+      .mockResolvedValueOnce(response({can_resume: false}));
+    await transport.watchSession("session"); await flush();
+    transport.send(JSON.stringify({type: "resume", approved: true})); await flush();
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    expect(emit).toHaveBeenCalledWith(expect.objectContaining({type: "status", content: expect.stringContaining("устарела")}));
+  });
+
   it("не переносит запоздавшее подтверждение в другой чат", async () => {
     await waiting();
     let resolve!: (value: Response) => void;

@@ -809,7 +809,9 @@ replay или completion; E10 определяет такой контракт �
 
 ### E11 — Реализация и UI продолжения без повторного эффекта
 
-**Статус:** TODO. **После:** REVIEWED E10.
+**Статус:** REVIEWED, backend transition, executor и UI в
+`docs/agent-employee-delivery/E11-verified-commit-continuation.md`.
+**После:** REVIEWED E10.
 **Файлы:** перечисленные E10 + `frontend/lib/durable-chat.ts`, карточка подтверждения.
 
 1. Сначала E11.1 backend transition и one-use event; затем E11.2 восстановление

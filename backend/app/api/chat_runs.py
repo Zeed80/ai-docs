@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
@@ -20,13 +20,19 @@ from app.chat.store import (
     append_chat_message,
     ensure_chat_session,
 )
-from app.db.agent_runtime_models import ChatLogicalAction, DurableChatRun
+from app.db.agent_runtime_models import (
+    ChatLogicalAction,
+    DurableChatRun,
+    VerifiedCommitDecision,
+)
 from app.db.models import (
     ChatMessage,
     ChatSession,
     Document,
+    User,
     WorkEvent,
     WorkOrder,
+    WorkPlan,
     WorkStep,
     WorkStepAttempt,
 )
@@ -63,6 +69,16 @@ class ChatResumeRequest(BaseModel):
     attempt_id: uuid.UUID
     sha256: str = Field(pattern="^[a-f0-9]{64}$")
     approved: bool = Field(strict=True)
+    intent: Literal["confirmation", "verified_commit"] = "confirmation"
+    action_id: uuid.UUID | None = None
+
+    @model_validator(mode="after")
+    def require_verified_action(self):
+        if self.intent == "verified_commit" and self.action_id is None:
+            raise ValueError("verified_commit requires action_id")
+        if self.intent == "confirmation" and self.action_id is not None:
+            raise ValueError("action_id is only valid for verified_commit")
+        return self
 
 
 async def existing_decision(db, order_id, attempt_id):
@@ -74,6 +90,35 @@ async def existing_decision(db, order_id, attempt_id):
             WorkEvent.payload["attempt_id"].as_string() == str(attempt_id),
         )
         .limit(1)
+    )
+
+
+async def _verified_commit_owner_verifier(db, order):
+    """Build verifier authority from persisted owner state, never JWT claims."""
+    from app.auth.models import UserInfo, UserRole
+
+    owner = await db.scalar(
+        select(User).where(
+            User.sub == order.owner_key,
+            User.is_active.is_(True),
+        )
+    )
+    if owner is None:
+        raise ValueError("Verified-commit owner is inactive or unavailable")
+    try:
+        owner_role = UserRole(owner.role)
+    except ValueError:
+        raise ValueError("Verified-commit owner role is invalid") from None
+    return UserInfo(
+        sub=owner.sub,
+        email=owner.email,
+        name=owner.name,
+        preferred_username=owner.preferred_username,
+        roles=[owner_role],
+        department_id=str(owner.department_id) if owner.department_id else None,
+        section_access=owner.section_access,
+        timezone=owner.timezone,
+        via_agent=True,
     )
 
 
@@ -100,6 +145,8 @@ async def resume_chat_run(
     # Same lock as cancellation and intake settlement; duplicate clicks cannot
     # allocate two revisions or decide the same snapshot twice.
     order = await db.get(WorkOrder, run.work_order_id, with_for_update=True)
+    if body.intent == "verified_commit":
+        return await _verified_commit_resume(db, run, order, body, user)
     old = await existing_decision(db, order.id, body.attempt_id)
     if old:
         if old.payload["sha256"] != body.sha256 or old.payload["approved"] != body.approved:
@@ -163,6 +210,226 @@ async def resume_chat_run(
             "target_revision": order.plan_revision,
         }
         order.blocker = None
+    await db.commit()
+    return describe(run, order)
+
+
+async def _verified_commit_resume(db, run, order, body, user):
+    """Reserve one E11.1 continuation step; the E11.2 worker consumes it later."""
+    from app.ai.agent_config import get_builtin_agent_config
+    from app.ai.chat_checkpoint import unpack_checkpoint
+    from app.ai.tool_result import normalize_http_one_db_commit_response
+    from app.domain.action_receipts import read_receipt
+    from app.domain.artifact_verification import validate_artifact_verdict, verify_action_artifact
+    from app.domain.chat_action_journal import digest
+    from app.domain.chat_continuation import (
+        config_fingerprint,
+        plan_fingerprint,
+        validate_shared_budgets,
+        validate_wall_budget,
+        verified_commit_continuation_state,
+    )
+
+    request_digest = digest(body.model_dump(mode="json"))
+    old = await db.scalar(
+        select(VerifiedCommitDecision).where(
+            VerifiedCommitDecision.source_attempt_id == body.attempt_id,
+            VerifiedCommitDecision.work_order_id == order.id,
+            VerifiedCommitDecision.owner_key == user.sub,
+        )
+    )
+    if old is not None:
+        if old.request_digest != request_digest:
+            raise HTTPException(409, "Verified-commit checkpoint already decided differently")
+        return describe(run, order)
+    if (
+        order.status != "blocked"
+        or order.canceled_at is not None
+        or run.result_message_id is not None
+    ):
+        raise HTTPException(409, "Chat is not at a verified-commit boundary")
+    latest = await db.scalar(
+        select(DurableChatRun.id)
+        .where(DurableChatRun.session_id == run.session_id)
+        .order_by(DurableChatRun.created_at.desc(), DurableChatRun.id.desc())
+        .limit(1)
+    )
+    if latest != run.id:
+        raise HTTPException(409, "A newer conversation turn exists")
+    attempt = await db.get(WorkStepAttempt, body.attempt_id)
+    step = await db.get(WorkStep, attempt.step_id) if attempt else None
+    action = await db.get(ChatLogicalAction, body.action_id)
+    if (
+        attempt is None
+        or step is None
+        or action is None
+        or step.work_order_id != order.id
+        or action.work_order_id != order.id
+        or action.attempt_id != attempt.id
+    ):
+        raise HTTPException(409, "Verified-commit source not found")
+    record = attempt.checkpoint or {}
+    if (
+        record.get("kind") != "durable_chat"
+        or record.get("owner_key") != order.owner_key
+        or record.get("work_order_id") != str(order.id)
+        or record.get("step_id") != str(step.id)
+        or record.get("attempt_id") != str(attempt.id)
+        or record.get("plan_id") != str(step.plan_id)
+        or record.get("plan_revision") != order.plan_revision
+    ):
+        raise HTTPException(409, "Verified-commit checkpoint binding changed")
+    if (record.get("snapshot") or {}).get("sha256") != body.sha256:
+        raise HTTPException(409, "Checkpoint digest changed")
+    if digest(action.request) != action.request_digest:
+        raise HTTPException(409, "Logical action integrity mismatch")
+    receipt = await read_receipt(db, action)
+    if receipt is None:
+        raise HTTPException(409, "Committed recipient receipt is missing")
+    try:
+        verifier = await _verified_commit_owner_verifier(db, order)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    observation = await verify_action_artifact(db, action=action, user=verifier)
+    if not validate_artifact_verdict(observation) or observation.get("status") != "matched":
+        raise HTTPException(409, "Current recipient artifact is not proved")
+    adapted = normalize_http_one_db_commit_response(
+        receipt["response"], operation=receipt["operation"]
+    ).model_dump(mode="json")
+    if (
+        digest(receipt["response"]) != receipt["response_digest"]
+        or adapted.get("status") != "succeeded"
+        or adapted.get("data") != receipt["response"]
+    ):
+        raise HTTPException(409, "Recipient response adaptation binding changed")
+    checkpoint_payload = unpack_checkpoint(record["snapshot"])
+    phase = checkpoint_payload.get("phase")
+    completed = checkpoint_payload.get("completed_call") or {}
+    if phase == "tool_started":
+        action_valid = (
+            action.status == "started" and action.result is None and action.result_digest is None
+        )
+    elif phase == "tool_recorded":
+        action_valid = (
+            action.status == "outcome_unknown"
+            and completed.get("action_id") == str(action.id)
+            and action.result == completed.get("result")
+            and action.result_digest == digest(action.result)
+        )
+    else:
+        action_valid = False
+    if not action_valid:
+        raise HTTPException(409, "Logical action frontier binding changed")
+    plan = await db.get(WorkPlan, step.plan_id)
+    if plan is None or plan.work_order_id != order.id or plan.revision != record["plan_revision"]:
+        raise HTTPException(409, "Source plan binding changed")
+    plan_digest = plan_fingerprint(plan)
+    now = datetime.now(UTC)
+    expires_at = now + timedelta(minutes=30)
+    try:
+        validate_wall_budget(order)
+        await validate_shared_budgets(db, order)
+        restored = verified_commit_continuation_state(
+            checkpoint=record["snapshot"],
+            source={
+                "order_status": order.status,
+                "attempt_status": attempt.status,
+                "owner_key": order.owner_key,
+                "source_attempt_id": str(attempt.id),
+                "source_plan_revision": record.get("plan_revision"),
+                "latest_turn": str(run.user_message_id),
+                "plan_digest": plan_digest,
+                "canceled": order.canceled_at is not None,
+            },
+            action={
+                "id": str(action.id),
+                "call_id": action.call_id,
+                "request": action.request,
+                "request_digest": action.request_digest,
+            },
+            receipt=receipt,
+            adapted_result=adapted,
+            adapted_result_digest=digest(adapted),
+            observation={
+                **observation,
+                "fresh": True,
+            },
+            current={
+                "owner_key": user.sub,
+                "plan_revision": order.plan_revision,
+                "config_sha256": config_fingerprint(get_builtin_agent_config()),
+                "plan_digest": plan_digest,
+                "latest_turn": str(run.user_message_id),
+                "decision_unexpired": expires_at > now,
+                "budgets_available": True,
+            },
+        )
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        raise HTTPException(409, str(exc)) from exc
+    decision_payload = {
+        "intent": "verified_commit",
+        "attempt_id": str(attempt.id),
+        "action_id": str(action.id),
+        "sha256": body.sha256,
+        "approved": body.approved,
+        "source_revision": order.plan_revision,
+        "observation_digest": observation["verdict_digest"],
+        "expires_at": expires_at.isoformat(),
+    }
+    event = await append_event(
+        db, order.id, "chat.verified_commit_decided", actor=user.sub, payload=decision_payload
+    )
+    target = None
+    if body.approved:
+        _, target = await create_single_step_plan(
+            db,
+            order,
+            kind="agent_turn",
+            title="Continue after verified recipient commit",
+            input_data={
+                "runner": "durable_chat",
+                "verified_commit_decision_id": "pending",
+                "workspace_context": (step.input_ or {}).get("workspace_context", {}),
+            },
+            # One retry is reserved for a worker crash after the decision was
+            # consumed but before the safe pending tail began execution.
+            max_attempts=2,
+            timeout_seconds=7200,
+            actor=user.sub,
+        )
+        order.blocker = None
+    decision = VerifiedCommitDecision(
+        work_order_id=order.id,
+        source_attempt_id=attempt.id,
+        logical_action_id=action.id,
+        owner_key=user.sub,
+        request_digest=request_digest,
+        approved=body.approved,
+        source_checkpoint_sha256=body.sha256,
+        source_plan_revision=decision_payload["source_revision"],
+        observation=observation,
+        restored_checkpoint=restored if body.approved else None,
+        event_id=event.id,
+        target_step_id=target.id if target else None,
+        target_revision=order.plan_revision if target else None,
+        expires_at=expires_at,
+        created_at=now,
+    )
+    db.add(decision)
+    await db.flush()
+    if target is not None:
+        target.input_ = {
+            **target.input_,
+            "verified_commit_decision_id": str(decision.id),
+        }
+        event.payload = {
+            **decision_payload,
+            "decision_id": str(decision.id),
+            "target_step_id": str(target.id),
+            "target_revision": order.plan_revision,
+        }
+    else:
+        event.payload = {**decision_payload, "decision_id": str(decision.id)}
     await db.commit()
     return describe(run, order)
 
@@ -641,6 +908,12 @@ async def get_chat_checkpoint(
         return {"available": False, "can_resume": False}
     record = attempt.checkpoint
     step = await db.get(WorkStep, attempt.step_id)
+    verified_commit_decided = await db.scalar(
+        select(VerifiedCommitDecision.id).where(
+            VerifiedCommitDecision.source_attempt_id == attempt.id,
+            VerifiedCommitDecision.work_order_id == order.id,
+        )
+    )
     if (
         record.get("kind") != "durable_chat"
         or record.get("owner_key") != user.sub
@@ -649,7 +922,7 @@ async def get_chat_checkpoint(
         or record.get("attempt_id") != str(attempt.id)
         or step is None
         or record.get("plan_id") != str(step.plan_id)
-        or record.get("plan_revision") != order.plan_revision
+        or (record.get("plan_revision") != order.plan_revision and verified_commit_decided is None)
     ):
         raise HTTPException(409, "Stale or invalid checkpoint binding")
     try:
@@ -664,6 +937,7 @@ async def get_chat_checkpoint(
     )
 
     can_resume = False
+    verified_commit = None
     if order.status == "blocked" and run.result_message_id is None:
         try:
             confirmation_state(record, order, step, attempt)
@@ -676,14 +950,35 @@ async def get_chat_checkpoint(
                 .limit(1)
             )
             can_resume = (
-                latest == run.id and await existing_decision(db, order.id, attempt.id) is None
+                latest == run.id
+                and verified_commit_decided is None
+                and await existing_decision(db, order.id, attempt.id) is None
             )
         except (ValueError, TypeError, KeyError, AttributeError):
             pass
+        if not can_resume and not is_service_account(user):
+            try:
+                with db.no_autoflush:
+                    verified_commit = await _verified_commit_checkpoint_offer(
+                        db,
+                        run=run,
+                        order=order,
+                        step=step,
+                        attempt=attempt,
+                        record=record,
+                        payload=payload,
+                        user=user,
+                    )
+            except (HTTPException, ValueError, TypeError, KeyError, AttributeError):
+                # Eligibility is an optional, fail-closed projection.  The
+                # checkpoint endpoint must not turn an unsupported/stale
+                # receipt into client authority or obscure the existing E09
+                # verification verdict (whose can_resume remains false).
+                verified_commit = None
     # Full model context stays private storage, not an API/debug transcript.
-    return {
+    summary = {
         "available": True,
-        "can_resume": can_resume,
+        "can_resume": can_resume or verified_commit is not None,
         "confirmation": payload.get("confirmation") if can_resume else None,
         "phase": payload["phase"],
         "plan_revision": order.plan_revision,
@@ -691,4 +986,150 @@ async def get_chat_checkpoint(
         "pending_tool_count": len(payload["pending_calls"]),
         "in_flight": bool(payload.get("in_flight_call_id")),
         "sha256": record["snapshot"]["sha256"],
+    }
+    if verified_commit is not None:
+        summary.update(verified_commit)
+    return summary
+
+
+async def _verified_commit_checkpoint_offer(
+    db,
+    *,
+    run,
+    order,
+    step,
+    attempt,
+    record,
+    payload,
+    user,
+):
+    """Read-only E11 eligibility using the authoritative receipt and artifact."""
+    from app.ai.agent_config import get_builtin_agent_config
+    from app.ai.tool_result import normalize_http_one_db_commit_response
+    from app.domain.action_receipts import read_receipt
+    from app.domain.artifact_verification import validate_artifact_verdict, verify_action_artifact
+    from app.domain.chat_action_journal import digest
+    from app.domain.chat_continuation import (
+        config_fingerprint,
+        plan_fingerprint,
+        validate_shared_budgets,
+        validate_wall_budget,
+        verified_commit_continuation_state,
+    )
+
+    if order.canceled_at is not None:
+        raise ValueError("Verified-commit source binding changed")
+    latest = await db.scalar(
+        select(DurableChatRun.id)
+        .where(DurableChatRun.session_id == run.session_id)
+        .order_by(DurableChatRun.created_at.desc(), DurableChatRun.id.desc())
+        .limit(1)
+    )
+    if latest != run.id:
+        raise ValueError("A newer conversation turn exists")
+    if await db.scalar(
+        select(VerifiedCommitDecision.id).where(
+            VerifiedCommitDecision.source_attempt_id == attempt.id,
+            VerifiedCommitDecision.work_order_id == order.id,
+        )
+    ):
+        raise ValueError("Verified-commit checkpoint already decided")
+
+    phase = payload.get("phase")
+    completed = payload.get("completed_call") or {}
+    call_id = (
+        payload.get("in_flight_call_id") if phase == "tool_started" else completed.get("call_id")
+    )
+    action_id = (payload.get("action_ids") or {}).get(call_id)
+    if phase == "tool_recorded" and completed.get("action_id") != action_id:
+        raise ValueError("Logical action frontier binding changed")
+    try:
+        action_uuid = uuid.UUID(str(action_id))
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError("Logical action frontier binding changed") from None
+    action = await db.get(ChatLogicalAction, action_uuid)
+    if (
+        action is None
+        or action.work_order_id != order.id
+        or action.attempt_id != attempt.id
+        or action.call_id != call_id
+        or digest(action.request) != action.request_digest
+    ):
+        raise ValueError("Verified-commit source not found")
+    if phase == "tool_started":
+        valid_frontier = (
+            attempt.status == "failed"
+            and action.status == "started"
+            and action.result is None
+            and action.result_digest is None
+        )
+    elif phase == "tool_recorded":
+        valid_frontier = (
+            attempt.status in {"failed", "outcome_unknown"}
+            and action.status == "outcome_unknown"
+            and action.result == completed.get("result")
+            and action.result_digest == digest(action.result)
+        )
+    else:
+        valid_frontier = False
+    if not valid_frontier:
+        raise ValueError("Logical action frontier binding changed")
+
+    plan = await db.get(WorkPlan, step.plan_id)
+    if plan is None or plan.work_order_id != order.id or plan.revision != record["plan_revision"]:
+        raise ValueError("Source plan binding changed")
+    validate_wall_budget(order)
+    await validate_shared_budgets(db, order)
+    with db.no_autoflush:
+        receipt = await read_receipt(db, action)
+        if receipt is None:
+            raise ValueError("Committed recipient receipt is missing")
+        verifier = await _verified_commit_owner_verifier(db, order)
+        observation = await verify_action_artifact(db, action=action, user=verifier)
+    if not validate_artifact_verdict(observation) or observation.get("status") != "matched":
+        raise ValueError("Current recipient artifact is not proved")
+    adapted = normalize_http_one_db_commit_response(
+        receipt["response"], operation=receipt["operation"]
+    ).model_dump(mode="json")
+    if digest(receipt["response"]) != receipt["response_digest"]:
+        raise ValueError("Recipient response adaptation binding changed")
+    plan_digest = plan_fingerprint(plan)
+    verified_commit_continuation_state(
+        checkpoint=record["snapshot"],
+        source={
+            "order_status": order.status,
+            "attempt_status": attempt.status,
+            "owner_key": order.owner_key,
+            "source_attempt_id": str(attempt.id),
+            "source_plan_revision": record["plan_revision"],
+            "latest_turn": str(run.user_message_id),
+            "plan_digest": plan_digest,
+            "canceled": order.canceled_at is not None,
+        },
+        action={
+            "id": str(action.id),
+            "call_id": action.call_id,
+            "request": action.request,
+            "request_digest": action.request_digest,
+        },
+        receipt=receipt,
+        adapted_result=adapted,
+        adapted_result_digest=digest(adapted),
+        observation={**observation, "fresh": True},
+        current={
+            "owner_key": user.sub,
+            "plan_revision": order.plan_revision,
+            "config_sha256": config_fingerprint(get_builtin_agent_config()),
+            "plan_digest": plan_digest,
+            "latest_turn": str(run.user_message_id),
+            "decision_unexpired": True,
+            "budgets_available": True,
+        },
+    )
+    return {
+        "intent": "verified_commit",
+        "action_id": action.id,
+        "attempt_id": attempt.id,
+        "sha256": record["snapshot"]["sha256"],
+        "can_resume": True,
     }

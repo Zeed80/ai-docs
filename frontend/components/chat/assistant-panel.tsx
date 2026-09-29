@@ -6,7 +6,10 @@ import {
   buildAgentApprovalMessage,
   buildAgentUserMessage,
 } from "@/lib/agent-ws";
-import { DurableChatTransport, type DurableConfirmation } from "@/lib/durable-chat";
+import {
+  DurableChatTransport,
+  type DurableContinuation,
+} from "@/lib/durable-chat";
 import { useDegradedMode } from "@/lib/degraded-mode";
 import { useAgentName } from "@/lib/agent-name";
 import { mutFetch } from "@/lib/auth";
@@ -315,7 +318,7 @@ export function AssistantPanel() {
   const [isConnected, setIsConnected] = useState(false);
   const [isLegacyChat, setIsLegacyChat] = useState(false);
   const [durableRunId, setDurableRunId] = useState<string | null>(null);
-  const [durableConfirmation, setDurableConfirmation] = useState<DurableConfirmation | null>(null);
+  const [durableConfirmation, setDurableConfirmation] = useState<DurableContinuation | null>(null);
   const [decisionPending, setDecisionPending] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
@@ -583,7 +586,7 @@ export function AssistantPanel() {
       return;
     }
     if (type === "durable_confirmation") {
-      setDurableConfirmation((data.checkpoint as DurableConfirmation | null) ?? null);
+      setDurableConfirmation((data.checkpoint as DurableContinuation | null) ?? null);
       return;
     }
     if (type === "durable_decision_pending") {
@@ -1397,7 +1400,16 @@ export function AssistantPanel() {
             "Долговечный чат: задача работает независимо от вкладки. Подтверждение разрешает одно действие; автоматического повтора после сбоя нет."}
         </p>
         {durableRunId && <a className="block px-4 pb-2 text-xs text-blue-300 underline" href={`/work-orders/chat-journal?run_id=${encodeURIComponent(durableRunId)}`}>Журнал и сверка действий</a>}
-        {durableConfirmation && (
+        {durableConfirmation && "intent" in durableConfirmation && durableConfirmation.intent === "verified_commit" ? (
+          <section aria-label="Продолжение после проверенного commit" className="m-3 rounded border border-sky-600 p-3 text-sm text-slate-100">
+            <p><strong>Получатель уже зафиксировал результат.</strong> Сервер независимо сверил его с этой попыткой.</p>
+            <p className="mb-2 text-xs text-slate-300">Это не разрешение эффекта задним числом и не повтор действия. Продолжится только безопасный хвост работы; следующие действия потребуют отдельных проверок и подтверждений.</p>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" disabled={decisionPending || isStreaming} onClick={() => wsRef.current?.send(JSON.stringify({type: "resume", approved: true}))} className="rounded bg-sky-700 px-3 py-1 disabled:opacity-50">Продолжить после проверенного результата</button>
+              <button type="button" disabled={decisionPending || isStreaming} onClick={() => wsRef.current?.send(JSON.stringify({type: "resume", approved: false}))} className="rounded border border-slate-500 px-3 py-1 disabled:opacity-50">Не продолжать</button>
+            </div>
+          </section>
+        ) : durableConfirmation && !("intent" in durableConfirmation) && (
           <section aria-label="Подтверждение сохранённого действия" className="m-3 rounded border border-amber-600 p-3 text-sm text-slate-100">
             <p>Разрешить одно действие: <strong>{durableConfirmation.confirmation.tool}</strong>?</p>
             <pre className="my-2 max-h-48 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(durableConfirmation.confirmation.args, null, 2)}</pre>

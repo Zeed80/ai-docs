@@ -85,6 +85,44 @@ class ActionReceipt(UUIDPrimaryKey, Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class VerifiedCommitDecision(UUIDPrimaryKey, Base):
+    """Immutable owner decision reserving one continuation after a proved commit."""
+
+    __tablename__ = "verified_commit_decisions"
+    __table_args__ = (
+        UniqueConstraint("source_attempt_id", name="uq_verified_commit_source_attempt"),
+        UniqueConstraint("logical_action_id", name="uq_verified_commit_logical_action"),
+        UniqueConstraint("target_step_id", name="uq_verified_commit_target_step"),
+    )
+
+    work_order_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("work_orders.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_attempt_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("work_step_attempts.id"), nullable=False
+    )
+    logical_action_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("chat_logical_actions.id"), nullable=False
+    )
+    owner_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    request_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    approved: Mapped[bool] = mapped_column(nullable=False)
+    source_checkpoint_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_plan_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    observation: Mapped[dict] = mapped_column(JSON, nullable=False)
+    restored_checkpoint: Mapped[dict | None] = mapped_column(JSON)
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("work_events.id"), nullable=False
+    )
+    target_step_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("work_steps.id"), nullable=True
+    )
+    target_revision: Mapped[int | None] = mapped_column(Integer)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class OwnedWorkspaceBlock(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "owned_workspace_blocks"
     __table_args__ = (UniqueConstraint("owner_key", "block_key"),)

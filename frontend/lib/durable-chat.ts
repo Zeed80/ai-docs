@@ -6,6 +6,41 @@ type Event = Record<string, unknown>;
 export type DurableConfirmation = {
   attempt_id: string; sha256: string; confirmation: {tool: string; args: Record<string, unknown>};
 };
+/**
+ * A separate, server-issued continuation boundary for an action whose recipient
+ * commit was independently verified.  This is deliberately not inferred from
+ * ActionJournal/E09 observations: the resume endpoint rechecks it atomically.
+ */
+export type DurableVerifiedCommitContinuation = {
+  intent: "verified_commit";
+  attempt_id: string;
+  action_id: string;
+  sha256: string;
+};
+export type DurableContinuation = DurableConfirmation | DurableVerifiedCommitContinuation;
+
+function isVerifiedCommitContinuation(value: unknown): value is DurableVerifiedCommitContinuation {
+  if (!value || typeof value !== "object") return false;
+  const checkpoint = value as Record<string, unknown>;
+  return checkpoint.intent === "verified_commit"
+    && typeof checkpoint.attempt_id === "string"
+    && typeof checkpoint.action_id === "string"
+    && typeof checkpoint.sha256 === "string";
+}
+
+function isConfirmation(value: unknown): value is DurableConfirmation {
+  if (!value || typeof value !== "object") return false;
+  const checkpoint = value as Record<string, unknown>;
+  const confirmation = checkpoint.confirmation;
+  return checkpoint.intent !== "verified_commit"
+    && typeof checkpoint.attempt_id === "string"
+    && typeof checkpoint.sha256 === "string"
+    && !!confirmation
+    && typeof confirmation === "object"
+    && typeof (confirmation as Record<string, unknown>).tool === "string"
+    && !!(confirmation as Record<string, unknown>).args
+    && typeof (confirmation as Record<string, unknown>).args === "object";
+}
 type Run = {
   id: string; session_id: string; work_order_id: string; request_id: string;
   status: string; result_message_id: string | null; blocker: unknown;
@@ -21,7 +56,7 @@ export class DurableChatTransport {
   private busy = false;
   private pendingCancel = false;
   private cursor = 0;
-  private confirmation: DurableConfirmation | null = null;
+  private confirmation: DurableContinuation | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private emit: (event: Event) => void) {}
@@ -136,7 +171,12 @@ export class DurableChatTransport {
   private async resume(approved: boolean) {
     if (!this.run || !this.confirmation) return;
     const runId = this.run.id;
-    const body = {attempt_id: this.confirmation.attempt_id, sha256: this.confirmation.sha256, approved};
+    const continuation = this.confirmation;
+    const verifiedCommit = isVerifiedCommitContinuation(continuation);
+    const body = verifiedCommit
+      ? {intent: "verified_commit" as const, action_id: continuation.action_id,
+        attempt_id: continuation.attempt_id, sha256: continuation.sha256, approved}
+      : {attempt_id: continuation.attempt_id, sha256: continuation.sha256, approved};
     const generation = ++this.generation;
     clearTimeout(this.timer);
     this.busy = true;
@@ -145,11 +185,17 @@ export class DurableChatTransport {
     this.emit({type: "durable_state", active: true});
     try {
       let run: Run;
-      try {
+      if (verifiedCommit) {
+        // A verified-commit decision is one-use.  A dropped reply or a stale
+        // binding must be reconciled by GET, never blindly submitted again.
         run = await this.request(`/api/agent/chat-runs/${runId}/resume`, body) as Run;
-      } catch (error) {
-        if (String(error).includes("HTTP 4")) throw error;
-        run = await this.request(`/api/agent/chat-runs/${runId}/resume`, body) as Run;
+      } else {
+        try {
+          run = await this.request(`/api/agent/chat-runs/${runId}/resume`, body) as Run;
+        } catch (error) {
+          if (String(error).includes("HTTP 4")) throw error;
+          run = await this.request(`/api/agent/chat-runs/${runId}/resume`, body) as Run;
+        }
       }
       if (generation !== this.generation) return;
       this.run = run;
@@ -163,8 +209,14 @@ export class DurableChatTransport {
       if (generation !== this.generation) return;
       this.confirmation = null;
       this.emit({type: "durable_confirmation", checkpoint: null});
-      this.emit({type: "status", content: `Решение не подтверждено: ${String(error)}. Проверяю состояние задачи…`});
-      // Reconcile an ambiguous reply without resubmitting a different decision.
+      const stale = String(error).includes("HTTP 409");
+      const context = verifiedCommit
+        ? (stale
+          ? "Привязка проверенного результата устарела или больше небезопасна. Продолжение не выполнено и не будет повторно отправлено."
+          : "Продолжение после проверенного результата не подтверждено. Запрос не будет повторно отправлен.")
+        : "Решение не подтверждено.";
+      this.emit({type: "status", content: `${context} Проверяю состояние задачи…`});
+      // Reconcile an ambiguous reply without resubmitting a decision.
       void this.poll(generation, this.cursor, new Set());
     } finally {
       if (generation === this.generation) this.emit({type: "durable_decision_pending", pending: false});
@@ -200,11 +252,11 @@ export class DurableChatTransport {
       }
       this.cursor = cursor;
       if (terminal.has(run.status) && page.items.length < 100) {
-        let checkpoint: DurableConfirmation | null = null;
+        let checkpoint: DurableContinuation | null = null;
         if (run.status === "blocked") {
           try {
-            const state = await this.request(`/api/agent/chat-runs/${run.id}/checkpoint`) as DurableConfirmation & {can_resume: boolean};
-            if (state.can_resume) checkpoint = state;
+            const state = await this.request(`/api/agent/chat-runs/${run.id}/checkpoint`) as {can_resume: boolean};
+            if (state.can_resume && (isConfirmation(state) || isVerifiedCommitContinuation(state))) checkpoint = state;
           } catch (error) {
             if (!String(error).includes("HTTP 409")) throw error;
           }

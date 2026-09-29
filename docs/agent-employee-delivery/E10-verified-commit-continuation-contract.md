@@ -59,7 +59,9 @@ legacy receipt без достаточного binding или неизвестн
 | canceled order, более новый user turn, changed plan/config, expired decision, exhausted budget | любое | approve | отказ `409`, никакого target step |
 | unknown external effect или unsupported recipient | opaque/manual evidence | approve | отказ; E10 не превращает наблюдение человека в commit proof |
 
-`failed` attempt и `blocked` order являются обязательной source boundary. Для
+Остановленный source attempt и `blocked` order являются обязательной boundary:
+после ошибки worker-а attempt может быть `failed`, а после записанного v1
+`outcome_unknown` он имеет статус `outcome_unknown`. Для
 `tool_started` отсутствие `completed_call` и tool-message ожидаемо: transition
 пропускает raw `receipt.response` через тот же operation-specific adapter, который
 использует gateway (`normalize_http_one_db_commit_response` для текущих
@@ -109,12 +111,10 @@ decision/source action не допускает двух target steps
 ## Красные сценарии E11
 
 `backend/tests/test_verified_commit_continuation_contract.py` содержит исполняемый
-fixture-validator сценарных входных данных и фиксирует будущий domain seam
-`verified_commit_continuation_state`. Отрицательные сценарии исполняются уже в
-E10. Только два позитивных восстановления помечены `xfail(strict=True)`: seam
-намеренно отсутствует, поэтому ожидание E11 остаётся красным, но основной suite
-пригоден. Запуск с `pytest --runxfail` должен падать на отсутствующем seam и явно
-демонстрирует red expectation. Сценарии требуют:
+fixture-validator сценарных входных данных и domain seam
+`verified_commit_continuation_state`. В E10 два позитивных сценария были
+`xfail(strict=True)`; после реализации E11 они переведены в обычные passing
+tests. Сценарии требуют:
 
 - разные восстановления `tool_started` и `tool_recorded` без повторного tool;
 - сохранение прочей истории и pending tail;

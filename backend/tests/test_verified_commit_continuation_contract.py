@@ -1,6 +1,7 @@
 """E10 executable red contract; runtime implementation belongs to E11."""
 
 import copy
+import hashlib
 import json
 
 import pytest
@@ -13,6 +14,13 @@ def _call(call_id: str) -> dict:
         "id": call_id,
         "function": {"name": "warehouse", "arguments": {"action": "update_item", "id": call_id}},
     }
+
+
+def _digest(value: dict) -> str:
+    canonical = json.dumps(
+        value, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def _case(phase: str) -> dict:
@@ -73,7 +81,7 @@ def _case(phase: str) -> dict:
         "checkpoint": pack_checkpoint(checkpoint),
         "source": {
             "order_status": "blocked",
-            "attempt_status": "failed",
+            "attempt_status": "failed" if phase == "tool_started" else "outcome_unknown",
             "owner_key": "alice",
             "source_attempt_id": "attempt-a",
             "source_plan_revision": 4,
@@ -84,28 +92,28 @@ def _case(phase: str) -> dict:
             "id": checkpoint["action_ids"]["committed"],
             "call_id": "committed",
             "request": committed["function"],
-            "request_digest": "request-a",
+            "request_digest": _digest(committed["function"]),
         },
         "receipt": {
             "operation": "warehouse.update_item",
             "logical_action_id": checkpoint["action_ids"]["committed"],
             "owner_key": "alice",
-            "request_digest": "request-a",
+            "request_digest": _digest(committed["function"]),
             "response": response,
-            "response_digest": "response-a",
+            "response_digest": _digest(response),
             "artifact_id": "item-1",
             "artifact_revision": response["updated_at"],
             "receipt_version": 1,
             "provenance": {"source": "recipient"},
         },
         "adapted_result": adapted_result,
-        "adapted_result_digest": "adapted-result-a",
+        "adapted_result_digest": _digest(adapted_result),
         "observation": {
             "status": "matched",
             "operation": "warehouse.update_item",
             "artifact_id": "item-1",
             "artifact_version": response["updated_at"],
-            "artifact_hash": "response-a",
+            "artifact_hash": _digest(response),
             "fresh": True,
             "can_resume": False,
         },
@@ -128,7 +136,10 @@ def _validate_fixture_case(case: dict) -> None:
     checkpoint = unpack_checkpoint(case["checkpoint"])
     if source["canceled"] or source["order_status"] != "blocked":
         raise ValueError("source is not continuable")
-    if source["attempt_status"] != "failed" or source["latest_turn"] != current["latest_turn"]:
+    if (
+        source["attempt_status"] not in {"failed", "outcome_unknown"}
+        or source["latest_turn"] != current["latest_turn"]
+    ):
         raise ValueError("source frontier changed")
     if current["plan_digest"] != "plan-a" or current["config_sha256"] != "config-a":
         raise ValueError("runtime binding changed")
@@ -159,7 +170,7 @@ def _validate_fixture_case(case: dict) -> None:
         receipt["logical_action_id"] != action["id"]
         or receipt["owner_key"] != source["owner_key"]
         or receipt["request_digest"] != action["request_digest"]
-        or receipt["response_digest"] != "response-a"
+        or receipt["response_digest"] != _digest(receipt["response"])
     ):
         raise ValueError("receipt binding changed")
     if (
@@ -183,7 +194,6 @@ def _evaluate(case: dict) -> dict:
     return verified_commit_continuation_state(**case)
 
 
-@pytest.mark.xfail(strict=True, reason="E11: verified-commit restoration is not implemented")
 @pytest.mark.parametrize("phase", ["tool_started", "tool_recorded"])
 def test_verified_commit_substitutes_exact_result_and_preserves_tail(phase):
     case = _case(phase)

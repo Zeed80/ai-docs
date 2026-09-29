@@ -40,6 +40,40 @@ test("подтверждение восстанавливается после r
   expect(intakePosts).toBe(0);
 });
 
+test("verified commit показывает отдельное продолжение и не повторяет действие", async ({context, page}) => {
+  await context.addCookies([{name: "access_token", value: "mock-only", domain: "127.0.0.1", path: "/"}]);
+  const session = {id: "11111111-1111-4111-8111-111111111111", title: "Проверенный commit", user_key: "test-user"};
+  const decisions: unknown[] = [];
+  let continued = false;
+  const run = () => ({id: "run", session_id: session.id, work_order_id: "order", request_id: "request",
+    status: continued ? "completed" : "blocked", result_message_id: continued ? "answer" : null});
+  await context.route("**/api/**", async (route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    if (path === "/api/auth/me") return route.fulfill({json: {sub: "test-user", name: "Test", roles: ["admin"], groups: [], sections: []}});
+    if (path === "/api/ai/agent-config") return route.fulfill({json: {agent_name: "Света"}});
+    if (path === "/api/chat/sessions") return route.fulfill({json: [session]});
+    if (path.endsWith("/messages")) return route.fulfill({json: [{id: "user", role: "user", content: "Создай задачу", attachments: []}]});
+    if (path === "/api/agent/chat-runs") return route.fulfill({json: {run: run(), legacy: false}});
+    if (path.endsWith("/checkpoint")) return route.fulfill({json: continued ? {can_resume: false} : {
+      can_resume: true, intent: "verified_commit", action_id: "action", attempt_id: "attempt", sha256: "b".repeat(64),
+    }});
+    if (path.endsWith("/resume")) {
+      decisions.push(route.request().postDataJSON()); continued = true;
+      return route.fulfill({status: 202, json: run()});
+    }
+    if (path.endsWith("/events")) return route.fulfill({json: {items: continued ? [{sequence: 2, type: "chat.text", payload: {event: {type: "text", content: "Продолжен безопасный хвост"}}}] : [], next_cursor: continued ? 2 : 0}});
+    if (path === "/api/agent/chat-runs/run") return route.fulfill({json: run()});
+    return route.fulfill({json: {}});
+  });
+  await page.goto("/assistant");
+  const card = page.getByRole("region", {name: "Продолжение после проверенного commit"}).first();
+  await expect(card).toContainText("не повтор действия");
+  await card.getByRole("button", {name: "Продолжить после проверенного результата"}).click();
+  await expect(page.getByText("Продолжен безопасный хвост", {exact: true}).first()).toBeVisible();
+  expect(decisions).toEqual([{intent: "verified_commit", action_id: "action", attempt_id: "attempt", sha256: "b".repeat(64), approved: true}]);
+});
+
 test("HTTP-чат восстанавливает работу после reload без повторного POST", async ({context, page}) => {
   await context.addCookies([{name: "access_token", value: "mock-only", domain: "127.0.0.1", path: "/"}]);
   const session = {id: "11111111-1111-4111-8111-111111111111", title: "Проверка восстановления",

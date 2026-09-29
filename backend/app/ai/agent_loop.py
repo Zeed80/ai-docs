@@ -2434,10 +2434,15 @@ class AgentSession:
 
     async def resume_checkpoint(self, payload: dict) -> None:
         """Continue only a validated pending batch; never re-submit the user prompt."""
-        from app.domain.chat_continuation import validate_current_config
+        from app.domain.chat_continuation import (
+            validate_current_config,
+            validate_verified_commit_executor_state,
+        )
 
         self._refresh_runtime_config()
         validate_current_config(payload, self._config)
+        if payload.get("phase") == "verified_commit_ready":
+            validate_verified_commit_executor_state(payload)
         await self._init_mcp()
         runtime = payload["runtime"]
         self._restored_system = runtime["system_prompt"]
