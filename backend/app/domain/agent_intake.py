@@ -76,6 +76,7 @@ class AgentIntakeRequest:
 class AgentIntakeResult:
     run: DurableChatRun
     order: WorkOrder
+    created: bool
 
 
 def _request_digest(request: AgentIntakeRequest) -> str:
@@ -164,7 +165,7 @@ async def submit_agent_intake(
             order = await db.get(WorkOrder, existing.work_order_id)
             if order is None:  # Database integrity should make this unreachable.
                 raise IntakeConflictError("Durable chat run is incomplete")
-            return AgentIntakeResult(run=existing, order=order)
+            return AgentIntakeResult(run=existing, order=order, created=False)
 
         # Reject a forged attachment before creating a new session (and thus
         # before any write which a transport retry could observe).
@@ -268,7 +269,7 @@ async def submit_agent_intake(
             await db.commit()
         else:
             await db.flush()
-        return AgentIntakeResult(run=run, order=order)
+        return AgentIntakeResult(run=run, order=order, created=True)
     except AgentIntakeError:
         # Expected rejections are read-only: attachment, ownership and active
         # turn checks precede the first persistent turn write.  A transport

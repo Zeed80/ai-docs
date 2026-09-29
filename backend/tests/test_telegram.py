@@ -610,7 +610,13 @@ async def test_telegram_rebind_starts_new_owner_history(db_session, telegram_ses
         "telegram-rebind-bob",
     ]
     assert runs[0].session_id != runs[1].session_id
-    sessions = (await db_session.scalars(select(ChatSession))).all()
+    sessions = (
+        await db_session.scalars(
+            select(ChatSession).where(
+                ChatSession.user_key.in_(["telegram-rebind-alice", "telegram-rebind-bob"])
+            )
+        )
+    ).all()
     assert {session.user_key for session in sessions} == {
         "telegram-rebind-alice",
         "telegram-rebind-bob",

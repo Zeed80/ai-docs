@@ -43,6 +43,24 @@ class DelegationCreate(BaseModel):
             k in {"reason", "action", "body", "filters"} for k in self.constraints
         ):
             raise ValueError("Non-empty exact argument constraints are required")
+        if "agent.cron.run" in self.actions:
+            if self.actions != ["agent.cron.run"]:
+                raise ValueError("Cron authority cannot be combined with tool authority")
+            if set(self.constraints) != {"schedule", "prompt_sha256"}:
+                raise ValueError(
+                    "Cron authority requires exact schedule and prompt_sha256 constraints"
+                )
+            schedule = self.constraints["schedule"]
+            prompt_sha256 = self.constraints["prompt_sha256"]
+            if (
+                not isinstance(schedule, str)
+                or not schedule.strip()
+                or not isinstance(prompt_sha256, str)
+                or len(prompt_sha256) != 64
+                or any(char not in "0123456789abcdef" for char in prompt_sha256)
+            ):
+                raise ValueError("Cron authority requires a schedule and SHA-256 prompt digest")
+            return self
         for action in self.actions:
             definition = TOOLS.get(action)
             if (
@@ -72,13 +90,13 @@ def describe(grant: DelegationGrant) -> dict:
 
 @router.get("/actions")
 async def delegation_actions(user: UserInfo = Depends(human_owner)):
-    return {
-        "items": [
-            {"name": tool.name, "effect": tool.effect}
-            for tool in TOOLS.values()
-            if not tool.admin_only and tool.effect in {"write", "delete", "external"}
-        ]
-    }
+    items = [
+        {"name": tool.name, "effect": tool.effect}
+        for tool in TOOLS.values()
+        if not tool.admin_only and tool.effect in {"write", "delete", "external"}
+    ]
+    items.append({"name": "agent.cron.run", "effect": "execute"})
+    return {"items": items}
 
 
 @router.get("")

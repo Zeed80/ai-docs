@@ -8,6 +8,7 @@ review risk before they are applied.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
@@ -259,6 +260,7 @@ class AgentTeamOut(BaseModel):
 class AgentCronCreate(BaseModel):
     schedule: str = Field(..., min_length=1, max_length=120)
     prompt: str = Field(..., min_length=1)
+    delegation_grant_id: uuid.UUID
     description: str | None = None
     metadata: dict | None = None
 
@@ -268,6 +270,8 @@ class AgentCronOut(BaseModel):
     schedule: str
     prompt: str
     description: str | None = None
+    owner_key: str | None = None
+    delegation_grant_id: uuid.UUID | None = None
     enabled: bool
     last_run_at: datetime | None = None
     run_count: int
@@ -1209,12 +1213,38 @@ async def list_agent_teams(db: AsyncSession = Depends(get_db)) -> list[AgentTeam
 async def create_agent_cron(
     payload: AgentCronCreate,
     db: AsyncSession = Depends(get_db),
-    _user: UserInfo = Depends(require_role(UserRole.admin)),
+    _user: UserInfo = Depends(require_human_role(UserRole.admin)),
 ) -> AgentCron:
+    from app.db.agent_runtime_models import DelegationGrant
+    from app.domain.delegations import arguments_match
+
+    cron_arguments = {
+        "schedule": payload.schedule,
+        "prompt_sha256": hashlib.sha256(payload.prompt.encode()).hexdigest(),
+    }
+
+    grant = await db.scalar(
+        select(DelegationGrant).where(
+            DelegationGrant.id == payload.delegation_grant_id,
+            DelegationGrant.owner_key == _user.sub,
+            DelegationGrant.revoked_at.is_(None),
+            DelegationGrant.expires_at > datetime.now(UTC),
+            DelegationGrant.used_actions < DelegationGrant.max_actions,
+        )
+    )
+    if (
+        grant is None
+        or grant.actions != ["agent.cron.run"]
+        or set(grant.constraints) != {"schedule", "prompt_sha256"}
+        or not arguments_match(grant.constraints, cron_arguments)
+    ):
+        raise HTTPException(status_code=422, detail="An active owner delegation grant is required")
     cron = AgentCron(
         schedule=payload.schedule,
         prompt=payload.prompt,
         description=payload.description,
+        owner_key=_user.sub,
+        delegation_grant_id=grant.id,
         metadata_=payload.metadata,
     )
     db.add(cron)

@@ -1,20 +1,17 @@
-"""Executor for AgentCron — scheduled autonomous agent work.
+"""Durable intake for scheduled agent work.
 
-``AgentCron`` rows used to be stored-only fixtures; this beat task makes them
-real: every minute it checks enabled crons against their 5-field schedule and
-runs each due prompt as a HEADLESS agent turn (AgentSession without a
-WebSocket). The result is recorded as an ``AgentTask`` for auditability.
-
-Safety: a headless turn has nobody to answer approval requests, so any
-approval-gated action times out and is auto-denied by the existing
-``_request_approval`` flow — scheduled work can only do what needs no human
-gate. AgentTeam execution remains intentionally out of scope (stored-only).
+Cron is a channel adapter, not a second in-memory agent runtime.  Each due
+minute becomes one durable-chat intake identified by the schedule UUID and the
+*scheduled* UTC minute.  A restart or two beat processes can therefore replay
+the same occurrence safely, while tomorrow's identical schedule remains new.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
+import uuid
 from datetime import UTC, datetime
 
 from app.tasks.async_runner import run_async
@@ -24,7 +21,6 @@ logger = logging.getLogger(__name__)
 
 _MAX_OUTPUT_CHARS = 8000
 _TURN_TIMEOUT_S = 600.0
-
 
 # ── Minimal 5-field cron matcher ───────────────────────────────────────────────
 # Supports: "*", "*/n", "a", "a-b", "a,b,c" (and combinations via commas).
@@ -88,15 +84,12 @@ def _is_due(schedule: str, last_run_at: datetime | None, now: datetime) -> bool:
     return last.replace(second=0, microsecond=0) < now.replace(second=0, microsecond=0)
 
 
-# ── Headless agent turn ────────────────────────────────────────────────────────
-
-
 async def run_headless_agent_turn(prompt: str) -> tuple[bool, str, dict[str, int]]:
-    """Run one agent turn without a WebSocket; returns (ok, final_text, tokens_used).
+    """Compatibility executor for legacy AgentTask work orders.
 
-    tokens_used (Б15) is session.total_tokens after the turn — {0, 0} when
-    nothing was captured (non-Ollama provider, or the turn errored before any
-    call completed), never a guess.
+    Cron never calls this function: scheduled work enters the durable-chat
+    runtime through ``submit_agent_intake`` below.  Keeping this public seam
+    avoids changing the existing AgentTask API's execution contract.
     """
     from app.ai.agent_loop import AgentSession
 
@@ -104,14 +97,11 @@ async def run_headless_agent_turn(prompt: str) -> tuple[bool, str, dict[str, int
     errors: list[str] = []
 
     async def collect(event: dict) -> None:
-        etype = str(event.get("type") or "")
-        if etype == "text":
+        event_type = str(event.get("type") or "")
+        if event_type == "text":
             chunks.append(str(event.get("content") or ""))
-        elif etype == "error":
+        elif event_type == "error":
             errors.append(str(event.get("content") or ""))
-        elif etype == "approval_request":
-            # Headless: nobody can approve — the session's own timeout denies it.
-            logger.warning("agent_cron_approval_requested_headless")
 
     session = AgentSession(collect)
     try:
@@ -119,114 +109,167 @@ async def run_headless_agent_turn(prompt: str) -> tuple[bool, str, dict[str, int
     except TimeoutError:
         errors.append("turn timed out")
     text = "".join(chunks).strip()[:_MAX_OUTPUT_CHARS]
-    ok = bool(text) and not errors
     if errors:
         text = (text + "\n\n[errors] " + "; ".join(errors))[:_MAX_OUTPUT_CHARS]
-    return ok, text, session.total_tokens
+    return bool(text) and not errors, text, session.total_tokens
 
 
 async def _run_headless_turn(prompt: str) -> tuple[bool, str, dict[str, int]]:
+    """Compatibility seam for old WorkOrder rows; cron does not select it."""
     return await run_headless_agent_turn(prompt)
 
 
-async def _dispatch() -> int:
+def _due_minute(moment: datetime) -> datetime:
+    """Canonical scheduled instant; never derive an occurrence ID from dispatch time."""
+    moment = moment if moment.tzinfo else moment.replace(tzinfo=UTC)
+    return moment.astimezone(UTC).replace(second=0, microsecond=0)
+
+
+def _occurrence_key(cron_id: uuid.UUID, due_at: datetime) -> str:
+    return f"{cron_id}:{_due_minute(due_at).isoformat()}"
+
+
+async def _intake_due_cron(*, cron_id: uuid.UUID, due_at: datetime, checked_at: datetime) -> bool:
+    """Atomically persist a due occurrence, or reject it before any agent work.
+
+    The row lock makes the old ``last_run_at`` field a useful fast path; the
+    intake unique key is the durable replay invariant if the transaction is
+    retried after a process restart.
+    """
     from sqlalchemy import select
 
-    from app.db.models import AgentCron, AgentTask
+    from app.auth.models import UserRole
+    from app.db.agent_runtime_models import DelegationGrant
+    from app.db.models import AgentCron, AgentTask, User
+    from app.db.session import _get_session_factory
+    from app.domain.agent_intake import (
+        AgentIntakeRequest,
+        VerifiedIntakeIdentity,
+        submit_agent_intake,
+    )
+    from app.domain.delegations import arguments_match
+
+    factory = _get_session_factory()
+    async with factory() as db:
+        row = await db.get(AgentCron, cron_id, with_for_update=True)
+        if row is None or not row.enabled or not _is_due(row.schedule, row.last_run_at, due_at):
+            return False
+        # Legacy rows and service identities never acquire an implicit owner.
+        if not row.owner_key or row.owner_key in {"agent-service", "anonymous", "system:cron"}:
+            logger.warning("agent_cron_blocked_unknown_owner id=%s", row.id)
+            return False
+        owner = await db.scalar(
+            select(User).where(User.sub == row.owner_key, User.is_active.is_(True))
+        )
+        if owner is None:
+            logger.warning(
+                "agent_cron_blocked_inactive_owner id=%s owner=%s", row.id, row.owner_key
+            )
+            return False
+        try:
+            role = UserRole(owner.role)
+        except ValueError:
+            logger.warning("agent_cron_blocked_invalid_owner_role id=%s", row.id)
+            return False
+        if role is not UserRole.admin:
+            logger.warning("agent_cron_blocked_owner_not_admin id=%s", row.id)
+            return False
+        if row.delegation_grant_id is None:
+            logger.warning("agent_cron_blocked_missing_grant id=%s", row.id)
+            return False
+        grant = await db.scalar(
+            select(DelegationGrant)
+            .where(
+                DelegationGrant.id == row.delegation_grant_id,
+                DelegationGrant.owner_key == row.owner_key,
+                DelegationGrant.revoked_at.is_(None),
+                DelegationGrant.expires_at > checked_at,
+                DelegationGrant.used_actions < DelegationGrant.max_actions,
+            )
+            .with_for_update()
+        )
+        grant_arguments = {
+            "schedule": row.schedule,
+            "prompt_sha256": hashlib.sha256(row.prompt.encode()).hexdigest(),
+        }
+        if (
+            grant is None
+            or grant.actions != ["agent.cron.run"]
+            or not isinstance(grant.constraints, dict)
+            or set(grant.constraints) != {"schedule", "prompt_sha256"}
+            or not arguments_match(grant.constraints, grant_arguments)
+        ):
+            logger.warning("agent_cron_blocked_revoked_or_expired_grant id=%s", row.id)
+            return False
+
+        occurrence = _occurrence_key(row.id, due_at)
+        result = await submit_agent_intake(
+            db,
+            identity=VerifiedIntakeIdentity(account_key=row.owner_key, channel="cron"),
+            request=AgentIntakeRequest(
+                channel="cron",
+                external_message_id=occurrence,
+                request_id=uuid.uuid5(uuid.NAMESPACE_URL, f"cron:{occurrence}"),
+                content=row.prompt,
+                workspace_context={
+                    "cron": {
+                        "schedule_id": str(row.id),
+                        "scheduled_for": _due_minute(due_at).isoformat(),
+                    }
+                },
+            ),
+            commit=False,
+        )
+        if not result.created:
+            return False
+        # Keep the legacy control-plane list auditable, but execution is owned
+        # by the durable work order and its approval gates.
+        legacy_task = AgentTask(
+            objective=f"Cron: {(row.description or row.prompt)[:200]}",
+            description=row.prompt,
+            role="secretary",
+            status="created",
+            metadata_={
+                "agent_cron_id": str(row.id),
+                "schedule": row.schedule,
+                "scheduled_for": _due_minute(due_at).isoformat(),
+                "work_order_id": str(result.order.id),
+            },
+        )
+        db.add(legacy_task)
+        result.order.legacy_agent_task_id = legacy_task.id
+        row.last_run_at = _due_minute(due_at)
+        row.run_count += 1
+        grant.used_actions += 1
+        await db.commit()
+        logger.info("agent_cron_intake_accepted id=%s work_order_id=%s", row.id, result.order.id)
+        return True
+
+
+async def _dispatch(now: datetime | None = None) -> int:
+    """Intake current due schedules.
+
+    Production calls this without an argument, so ``checked_at`` is always
+    wall-clock UTC.  The optional moment exists solely as a deterministic test
+    seam for cron matching and occurrence IDs.
+    """
+    from sqlalchemy import select
+
+    from app.db.models import AgentCron
     from app.db.session import _get_session_factory
 
-    now = datetime.now(UTC)
+    checked_at = now or datetime.now(UTC)
+    due_at = _due_minute(checked_at)
     factory = _get_session_factory()
-    executed = 0
-
     async with factory() as db:
-        crons = list(
-            (await db.execute(select(AgentCron).where(AgentCron.enabled.is_(True)))).scalars().all()
+        cron_ids = list(
+            (await db.execute(select(AgentCron.id).where(AgentCron.enabled.is_(True)))).scalars()
         )
-
-    for cron in crons:
-        if not _is_due(cron.schedule, cron.last_run_at, now):
-            continue
-        logger.info("agent_cron_due id=%s schedule=%r", cron.id, cron.schedule)
-
-        # Claim the run BEFORE executing so a crashed turn is not retried
-        # every minute for the rest of the matching window.
-        async with factory() as db:
-            row = await db.get(AgentCron, cron.id)
-            if row is None or not row.enabled:
-                continue
-            if not _is_due(row.schedule, row.last_run_at, now):
-                continue  # another worker claimed it
-            row.last_run_at = now
-            row.run_count += 1
-            await db.commit()
-
-        async with factory() as db:
-            from app.domain.work_orders import create_single_step_plan, create_work_order
-
-            legacy_task = AgentTask(
-                objective=f"Cron: {(cron.description or cron.prompt)[:200]}",
-                description=cron.prompt,
-                role="secretary",
-                status="running",
-                metadata_={
-                    "agent_cron_id": str(cron.id),
-                    "schedule": cron.schedule,
-                    "ran_at": now.isoformat(),
-                },
-            )
-            db.add(legacy_task)
-            await db.flush()
-            order = await create_work_order(
-                db,
-                owner_key="system:cron",
-                source="cron",
-                objective=cron.prompt,
-                description=cron.description,
-                legacy_agent_task_id=legacy_task.id,
-                metadata={
-                    "agent_cron_id": str(cron.id),
-                    "schedule": cron.schedule,
-                    "ran_at": now.isoformat(),
-                },
-            )
-            await create_single_step_plan(
-                db,
-                order,
-                kind="agent_turn",
-                title=f"Cron: {(cron.description or cron.prompt)[:200]}",
-                input_data={"prompt": cron.prompt, "runner": "cron"},
-                timeout_seconds=int(_TURN_TIMEOUT_S),
-            )
-            work_order_id = order.id
-            legacy_task_id = legacy_task.id
-            await db.commit()
-
-        from app.tasks.work_orders import execute_work_order_now
-
-        ok = await execute_work_order_now(work_order_id)
-        executed += 1
-
-        async with factory() as db:
-            from app.db.models import WorkOrder
-
-            order = await db.get(WorkOrder, work_order_id)
-            legacy_task = await db.get(AgentTask, legacy_task_id)
-            if order is not None and legacy_task is not None:
-                legacy_task.status = "completed" if order.status == "completed" else "failed"
-                legacy_task.output = order.result_summary
-                metadata = dict(legacy_task.metadata_ or {})
-                metadata.update({"work_order_id": str(order.id), "work_order_status": order.status})
-                legacy_task.metadata_ = metadata
-                await db.commit()
-        logger.info(
-            "agent_cron_executed id=%s work_order_id=%s ok=%s",
-            cron.id,
-            work_order_id,
-            ok,
-        )
-
-    return executed
+    accepted = 0
+    for cron_id in cron_ids:
+        if await _intake_due_cron(cron_id=cron_id, due_at=due_at, checked_at=checked_at):
+            accepted += 1
+    return accepted
 
 
 @celery_app.task(
@@ -237,7 +280,7 @@ async def _dispatch() -> int:
     ignore_result=True,
 )
 def dispatch_agent_crons(self) -> None:  # type: ignore[override]
-    """Run due AgentCron prompts as headless agent turns (beat: every minute)."""
+    """Persist due cron occurrences into the common durable intake."""
     try:
         run_async(_dispatch())
     except Exception as exc:

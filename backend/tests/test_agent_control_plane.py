@@ -1,8 +1,12 @@
 """Tests for Agent Control Plane API — status, tasks, teams, cron, plugins."""
 
+import hashlib
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from httpx import AsyncClient
 
+from app.db.agent_runtime_models import DelegationGrant
 from app.db.models import AgentCron, AgentTask, AgentTeam
 
 
@@ -307,12 +311,27 @@ async def test_list_agent_teams(client: AsyncClient, agent_team):
 
 
 @pytest.mark.asyncio
-async def test_create_agent_cron(client: AsyncClient):
+async def test_create_agent_cron(client: AsyncClient, db_session):
+    grant = DelegationGrant(
+        owner_key="dev-user",
+        title="Расписание сводки",
+        actions=["agent.cron.run"],
+        constraints={
+            "schedule": "0 18 * * 5",
+            "prompt_sha256": hashlib.sha256(
+                "Сформируй сводку по аномалиям за неделю".encode()
+            ).hexdigest(),
+        },
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+    db_session.add(grant)
+    await db_session.commit()
     resp = await client.post(
         "/api/agent/cron",
         json={
             "schedule": "0 18 * * 5",
             "prompt": "Сформируй сводку по аномалиям за неделю",
+            "delegation_grant_id": str(grant.id),
             "description": "Еженедельный пятничный отчёт",
         },
     )

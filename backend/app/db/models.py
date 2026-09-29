@@ -1919,6 +1919,14 @@ class AgentCron(UUIDPrimaryKey, TimestampMixin, Base):
     schedule: Mapped[str] = mapped_column(String(120), nullable=False)
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
+    # The human principal that authorized this schedule.  Nullable only for
+    # legacy rows: the dispatcher deliberately refuses to run those rows.
+    owner_key: Mapped[str | None] = mapped_column(String(200), index=True)
+    # A human-issued, owner-bound standing authority.  Legacy schedules have
+    # no grant and are intentionally inert until recreated.
+    delegation_grant_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("agent_delegation_grants.id", ondelete="RESTRICT"), index=True
+    )
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     run_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

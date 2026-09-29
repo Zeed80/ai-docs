@@ -911,7 +911,7 @@ exactly-once у внешнего сервиса без получательск�
 
 ### E17 — Cron и внутренние фоновые поручения
 
-**Статус:** TODO. **После:** E16.
+**Статус:** REVIEWED. **После:** E16. Отчёт: `docs/agent-employee-delivery/E17-cron-durable-intake.md`.
 **Файлы:** `tasks/agent_cron.py`, `test_agent_cron_dispatch.py`, общий intake.
 
 1. Удалить активный headless AgentSession путь только после переключения на intake.
