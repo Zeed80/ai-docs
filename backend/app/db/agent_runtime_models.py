@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -164,6 +165,54 @@ class AgentChannelIdentity(UUIDPrimaryKey, TimestampMixin, Base):
     owner_key: Mapped[str] = mapped_column(String(200), index=True)
     channel: Mapped[str] = mapped_column(String(30))
     external_id: Mapped[str] = mapped_column(String(200))
+
+
+class AgentOutbox(UUIDPrimaryKey, TimestampMixin, Base):
+    """A durable, not-yet-delivered event for one verified channel binding.
+
+    E13 only persists rows.  Claiming leases and performing delivery belong to
+    E14, so no worker may interpret these fields as permission to send yet.
+    """
+
+    __tablename__ = "agent_outbox"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_key",
+            "destination_binding_id",
+            "dedup_key",
+            name="uq_agent_outbox_destination_dedup",
+        ),
+        UniqueConstraint("work_event_id", name="uq_agent_outbox_work_event"),
+        Index("ix_agent_outbox_delivery", "delivery_state", "next_attempt_at"),
+        Index("ix_agent_outbox_owner", "owner_key"),
+    )
+
+    # The originating WorkEvent is durable proof of the domain change.  Both
+    # rows are inserted by the producer in the caller's one transaction.
+    work_event_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("work_events.id", ondelete="CASCADE"), nullable=False
+    )
+    work_order_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("work_orders.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    owner_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    destination_binding_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("agent_channel_identities.id", ondelete="RESTRICT"), nullable=False
+    )
+    event_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    payload_version: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)
+    dedup_key: Mapped[str] = mapped_column(String(300), nullable=False)
+    request_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    delivery_state: Mapped[str] = mapped_column(String(30), nullable=False, default="pending")
+    lease_token: Mapped[uuid.UUID | None] = mapped_column(GUID())
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_code: Mapped[str | None] = mapped_column(String(100))
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AgentScriptRun(UUIDPrimaryKey, TimestampMixin, Base):

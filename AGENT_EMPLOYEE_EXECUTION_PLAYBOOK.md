@@ -848,7 +848,7 @@ replay или completion; E10 определяет такой контракт �
 
 ### E13 — Транзакционный outbox: данные и producer
 
-**Статус:** TODO. **После:** E12.
+**Статус:** REVIEWED. **После:** E12. Отчёт: `docs/agent-employee-delivery/E13-transactional-outbox.md`.
 **Файлы:** runtime models, миграция; создать `domain/agent_outbox.py`.
 
 1. Сначала схема события: immutable ID, owner, destination binding, payload/version,
