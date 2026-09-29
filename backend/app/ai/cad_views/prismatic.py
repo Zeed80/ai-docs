@@ -698,6 +698,7 @@ def _face_pockets(
     extent: dict[str, float],
     cavities: list[dict[str, Any]],
     bosses: list[dict[str, Any]],
+    labels: list[float] | None = None,
 ) -> list[dict[str, Any]]:
     """Карманы на гранях тела по прямоугольникам видов (см. вызов)."""
     from app.ai.cad_views.prismatic_parts import cavity_span, visible_rectangles
@@ -774,6 +775,40 @@ def _face_pockets(
                     depth = b - a
                 if depth is not None:
                     break
+
+            def labelled(value: float) -> bool:
+                return any(abs(lab - value) <= max(0.6, 0.05 * lab) for lab in labels or [])
+
+            # Только видимый прямоугольник основной линии: штриховой собирается
+            # из линий полости (housing-23: «карман» 20 × 40 на виде слева).
+            if depth is None and visible and labelled(u1 - u0) and labelled(v1 - v0):
+                # Мелкий карман стенки: на соседнем виде дно — линия поперёк в
+                # пролёте кармана у самой грани, часто сплошная (выносные
+                # поверх штриховой), и поиск полости её не принимал — из 34
+                # карманов стенок не строился ни один. Глубина — от середины
+                # грани до середины линии дна; принимается только с надписью.
+                for other in frames.values():
+                    if other is frame or other.section or n not in (other.u[0], other.v[0]):
+                        continue
+                    shared = other.u[0] if other.v[0] == n else other.v[0]
+                    lo, hi = (u0, u1) if shared == ua else (v0, v1)
+                    measured = _shallow_depth(
+                        thick, thin, other, n, shared, lo, hi, face, extent[n]
+                    )
+                    # Карман стенки неглубокий: глубина 21 при сторонах 8,5 × 6
+                    # (housing-17) — чужие линии.
+                    if measured is None or measured > min(
+                        1.5 * min(u1 - u0, v1 - v0), 0.35 * extent[n]
+                    ):
+                        continue
+                    near = sorted(
+                        (abs(label - measured), label)
+                        for label in labels or []
+                        if abs(label - measured) <= max(0.6, 0.12 * measured)
+                    )
+                    if near:
+                        depth = near[0][1]
+                        break
             if depth is None or depth <= 0.5 or depth >= 0.9 * extent[n]:
                 continue
             key = (n, round(face, 1), round(u0), round(u1), round(v0), round(v1))
@@ -799,6 +834,95 @@ def _face_pockets(
                 }
             )
     return found
+
+
+def _shallow_depth(
+    thick: Any,
+    thin: Any,
+    frame: Any,
+    n: str,
+    shared: str,
+    lo: float,
+    hi: float,
+    face: float,
+    size: float,
+) -> float | None:
+    """Глубина мелкого кармана на соседнем виде: от середины полосы основной
+    линии грани (у номинальной грани: вид сдвинут на миллиметр) до середины
+    ближайшей полосы линии поперёк в пролёте кармана."""
+    from app.ai.cad_views.prismatic_parts import _segment_samples
+
+    line = frame.outline.line * frame.scale
+    step = 0.5 * line
+    inset = min(2 * line, 0.2 * (hi - lo))
+    if hi - lo - 2 * inset < 2 * line:
+        return None
+    inward = -1.0 if face > 0.5 * size else 1.0
+
+    def cover(mask: Any, at: float) -> float:
+        samples = _segment_samples(mask, frame, {n: at}, shared, lo + inset, hi - inset)
+        return sum(samples) / len(samples) if samples else 0.0
+
+    # Полоса грани: подряд идущие строки основной линии у номинальной грани.
+    rows = [face - inward * k * step for k in range(-8, 9)]
+    band = [at for at in rows if cover(thick, at) >= 0.8]
+    if not band:
+        return None
+    anchor = min(band, key=lambda at: abs(at - face))
+    edge_rows = [anchor]
+    for direction in (-1.0, 1.0):
+        at = anchor + direction * step
+        while at in band or cover(thick, at) >= 0.8:
+            edge_rows.append(at)
+            at += direction * step
+            if len(edge_rows) > 12:
+                return None
+    edge = sum(edge_rows) / len(edge_rows)
+    inner = max(edge_rows) if inward > 0 else min(edge_rows)
+    # Первая полоса линии поперёк внутрь от грани.
+    k = 1
+    hits: list[float] = []
+    while k * step < 0.5 * size:
+        at = inner + inward * k * step
+        if cover(thin, at) >= 0.5 or cover(thick, at) >= 0.5:
+            hits.append(at)
+        elif hits:
+            break
+        k += 1
+    if not hits:
+        return None
+    bottom = sum(hits) / len(hits)
+    # Карман, а не чужая линия: у краёв пролёта — стенки от грани до дна, а
+    # дно за стенки не выходит (housing-4: «прямоугольник» 25 × 20 из
+    # контуров приливов и чужая линия на 22 давали карман насквозь тела).
+    low_n, high_n = sorted((inner + inward * line, bottom - inward * line))
+    if high_n - low_n >= 2 * line:
+        for wall in (lo, hi):
+            best = 0.0
+            for shift in (-1.0, -0.5, 0.0, 0.5, 1.0):
+                samples = [
+                    a or b
+                    for a, b in zip(
+                        _segment_samples(
+                            thin, frame, {shared: wall + shift * line}, n, low_n, high_n
+                        ),
+                        _segment_samples(
+                            thick, frame, {shared: wall + shift * line}, n, low_n, high_n
+                        ),
+                        strict=False,
+                    )
+                ]
+                if samples:
+                    best = max(best, sum(samples) / len(samples))
+            if best < 0.6:
+                return None
+    outside = [
+        _segment_samples(thin, frame, {n: bottom}, shared, lo - 4 * line, lo - 2 * line),
+        _segment_samples(thin, frame, {n: bottom}, shared, hi + 2 * line, hi + 4 * line),
+    ]
+    if all(part and sum(part) >= 0.7 * len(part) for part in outside):
+        return None
+    return round(abs(bottom - edge), 3)
 
 
 def _snap_length(value: float, labels: list[float], share: float = 0.03) -> float:
@@ -1370,12 +1494,14 @@ def _assemble(
                 }
             )
     along_of = {f.normal: f for f in frames.values() if not f.section}
+    far_frames: dict[str, Any] = {}
     for side, outline in (further or {}).items():
         # Вид за разрезом в том же ряду: на нём снятая разрезом грань.
         if is_section(gray, outline):
             continue
         far = ViewFrame(side, outline, body_rect(thick, outline), scale)
         along_of.setdefault(far.normal, far)
+        far_frames[f"{side} (за разрезом)"] = far
     along_any = {f.normal: f for f in frames.values()}
     paired: set[int] = set()
     bosses: list[dict[str, Any]] = []
@@ -1485,7 +1611,11 @@ def _assemble(
     # Карманы стенок: прямоугольник на виде грани (видимый — на ближней
     # грани, невидимый — на дальней), глубина — по соседнему виду: дно
     # кармана — линия поперёк у грани в том же пролёте.
-    pockets = _face_pockets(gray, frames, thick, _thin, extent, cavity_features, bosses)
+    # И на виде за разрезом: карман передней стенки корпуса нарисован только
+    # там (housing-13: 20 × 15 на виде спереди под разрезом).
+    pockets = _face_pockets(
+        gray, {**frames, **far_frames}, thick, _thin, extent, cavity_features, bosses, linear
+    )
     features.extend(pockets)
     if pockets:
         notes.append(f"карманов стенок: {len(pockets)}")
