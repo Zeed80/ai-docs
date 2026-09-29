@@ -15,6 +15,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -49,6 +50,11 @@ class DurableChatRun(UUIDPrimaryKey, TimestampMixin, Base):
     user_message_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("chat_messages.id"))
     result_message_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("chat_messages.id")
+    )
+    # Telegram replies are bound to the identity which authenticated the
+    # inbound update.  It is intentionally nullable for HTTP-originated runs.
+    source_binding_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("agent_channel_identities.id", ondelete="RESTRICT"), nullable=True
     )
 
 
@@ -160,11 +166,20 @@ class DelegationGrant(UUIDPrimaryKey, TimestampMixin, Base):
 
 class AgentChannelIdentity(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "agent_channel_identities"
-    __table_args__ = (UniqueConstraint("channel", "external_id"),)
+    __table_args__ = (
+        Index(
+            "uq_active_agent_channel_identity",
+            "channel",
+            "external_id",
+            unique=True,
+            postgresql_where=text("is_active"),
+        ),
+    )
 
     owner_key: Mapped[str] = mapped_column(String(200), index=True)
     channel: Mapped[str] = mapped_column(String(30))
     external_id: Mapped[str] = mapped_column(String(200))
+    is_active: Mapped[bool] = mapped_column(nullable=False, default=True)
 
 
 class AgentOutbox(UUIDPrimaryKey, TimestampMixin, Base):

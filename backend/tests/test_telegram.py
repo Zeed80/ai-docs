@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from httpx import AsyncClient
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from app.db.agent_runtime_models import AgentChannelIdentity, AgentOutbox, DurableChatRun
+from app.db.models import ChatSession, User, WorkOrder
+from app.integrations.telegram_bot import SvetaTelegramBot
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -333,3 +342,337 @@ async def test_telegram_test_success(client: AsyncClient):
     finally:
         for p in patches:
             p.stop()
+
+
+# ── Durable Telegram intake (E15) ───────────────────────────────────────────────
+
+
+def _telegram_bot(*allowed: int) -> SvetaTelegramBot:
+    bot = object.__new__(SvetaTelegramBot)
+    bot._allowed = set(allowed)
+    return bot
+
+
+def _telegram_update(*, update_id: int, user_id: int, text: str, chat_type: str = "private"):
+    update = MagicMock()
+    update.update_id = update_id
+    update.effective_user.id = user_id
+    update.effective_chat.type = chat_type
+    update.message.text = text
+    update.message.date = datetime.now(UTC) + timedelta(seconds=2)
+    update.message.reply_text = AsyncMock()
+    return update
+
+
+async def _bind_telegram(db, *, owner: str, telegram_id: int):
+    db.add(
+        User(
+            sub=owner,
+            email=f"{owner}@example.test",
+            name=owner,
+            preferred_username=owner,
+            role="operator",
+            is_active=True,
+        )
+    )
+    binding = AgentChannelIdentity(
+        owner_key=owner, channel="telegram", external_id=str(telegram_id)
+    )
+    db.add(binding)
+    await db.flush()
+    return binding
+
+
+@pytest.fixture
+def telegram_session_factory(db_session, monkeypatch):
+    factory = async_sessionmaker(
+        bind=db_session.bind, expire_on_commit=False, join_transaction_mode="create_savepoint"
+    )
+    monkeypatch.setattr("app.db.session._get_session_factory", lambda: factory)
+    return factory
+
+
+@pytest.mark.asyncio
+async def test_telegram_repeat_update_and_bot_restart_create_one_durable_work(
+    db_session, telegram_session_factory
+):
+    telegram_id = 701001
+    await _bind_telegram(db_session, owner="telegram-alice", telegram_id=telegram_id)
+    await db_session.flush()
+    update = _telegram_update(update_id=91001, user_id=telegram_id, text="Проверь новые счета")
+
+    await _telegram_bot(telegram_id)._handle_text(update, MagicMock())
+    # A new polling object has no process-local state; Telegram redelivery must
+    # still resolve to the same persisted run and outbox notification.
+    await _telegram_bot(telegram_id)._handle_text(update, MagicMock())
+
+    assert await db_session.scalar(select(func.count()).select_from(DurableChatRun)) == 1
+    assert await db_session.scalar(select(func.count()).select_from(WorkOrder)) == 1
+    assert await db_session.scalar(select(func.count()).select_from(AgentOutbox)) == 1
+    run = await db_session.scalar(select(DurableChatRun))
+    assert run.intake_channel == "telegram"
+    assert run.external_message_id == "update:91001"
+    # Accepted/progress delivery is persisted. The bot sends no placeholder or
+    # model output from a process-local closure.
+    update.message.reply_text.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_telegram_intake_and_outbox_rollback_together_on_producer_failure(
+    db_session, telegram_session_factory, monkeypatch
+):
+    telegram_id = 701002
+    await _bind_telegram(db_session, owner="telegram-rollback", telegram_id=telegram_id)
+    update = _telegram_update(update_id=91002, user_id=telegram_id, text="Atomic request")
+
+    async def fail_producer(*args, **kwargs):
+        raise RuntimeError("synthetic outbox failure")
+
+    monkeypatch.setattr("app.domain.agent_outbox.produce_agent_outbox", fail_producer)
+    with pytest.raises(RuntimeError, match="synthetic outbox failure"):
+        await _telegram_bot(telegram_id)._handle_text(update, MagicMock())
+
+    assert await db_session.scalar(select(func.count()).select_from(DurableChatRun)) == 0
+    assert await db_session.scalar(select(func.count()).select_from(WorkOrder)) == 0
+    assert await db_session.scalar(select(func.count()).select_from(AgentOutbox)) == 0
+
+
+@pytest.mark.asyncio
+async def test_telegram_conflict_returns_generic_rejection(db_session, telegram_session_factory):
+    telegram_id = 701003
+    await _bind_telegram(db_session, owner="telegram-conflict", telegram_id=telegram_id)
+    first = _telegram_update(update_id=91003, user_id=telegram_id, text="Original")
+    changed = _telegram_update(update_id=91003, user_id=telegram_id, text="Changed")
+
+    await _telegram_bot(telegram_id)._handle_text(first, MagicMock())
+    await _telegram_bot(telegram_id)._handle_text(changed, MagicMock())
+
+    changed.message.reply_text.assert_awaited_once_with("Сообщение не принято.")
+    assert await db_session.scalar(select(func.count()).select_from(DurableChatRun)) == 1
+
+
+@pytest.mark.asyncio
+async def test_telegram_rejects_foreign_allowlist_id_without_work(
+    db_session, telegram_session_factory
+):
+    alice_id, bob_id = 701101, 701102
+    await _bind_telegram(db_session, owner="telegram-alice-allow", telegram_id=alice_id)
+    await _bind_telegram(db_session, owner="telegram-bob-allow", telegram_id=bob_id)
+    update = _telegram_update(update_id=91101, user_id=bob_id, text="Чужое сообщение")
+
+    await _telegram_bot(alice_id)._handle_text(update, MagicMock())
+
+    assert await db_session.scalar(select(func.count()).select_from(WorkOrder)) == 0
+    update.message.reply_text.assert_awaited_once_with("Доступ запрещён.")
+
+
+@pytest.mark.asyncio
+async def test_telegram_group_message_never_creates_work(db_session, telegram_session_factory):
+    telegram_id = 701201
+    await _bind_telegram(db_session, owner="telegram-group-owner", telegram_id=telegram_id)
+    update = _telegram_update(
+        update_id=91201, user_id=telegram_id, text="Личные данные", chat_type="group"
+    )
+
+    await _telegram_bot(telegram_id)._handle_text(update, MagicMock())
+
+    assert await db_session.scalar(select(func.count()).select_from(WorkOrder)) == 0
+    update.message.reply_text.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chat_type", ["group", "private"])
+async def test_telegram_document_is_not_downloaded_before_private_binding(
+    db_session, telegram_session_factory, chat_type
+):
+    telegram_id = 701250
+    update = _telegram_update(update_id=91250, user_id=telegram_id, text="", chat_type=chat_type)
+    update.message.document.file_id = "private-file"
+    context = MagicMock()
+    context.bot.get_file = AsyncMock()
+
+    await _telegram_bot(telegram_id)._handle_document(update, context)
+
+    context.bot.get_file.assert_not_awaited()
+    assert await db_session.scalar(select(func.count()).select_from(WorkOrder)) == 0
+
+
+@pytest.mark.asyncio
+async def test_telegram_rebind_starts_new_owner_history(db_session, telegram_session_factory):
+    telegram_id = 701301
+    await _bind_telegram(db_session, owner="telegram-rebind-alice", telegram_id=telegram_id)
+    first = _telegram_update(update_id=91301, user_id=telegram_id, text="Alice secret")
+    await _telegram_bot(telegram_id)._handle_text(first, MagicMock())
+
+    db_session.add(
+        User(
+            sub="telegram-rebind-bob",
+            email="telegram-rebind-bob@example.test",
+            name="telegram-rebind-bob",
+            preferred_username="telegram-rebind-bob",
+            role="operator",
+            is_active=True,
+        )
+    )
+    binding = await db_session.scalar(
+        select(AgentChannelIdentity).where(AgentChannelIdentity.external_id == str(telegram_id))
+    )
+    binding.is_active = False
+    await db_session.flush()
+    binding = AgentChannelIdentity(
+        owner_key="telegram-rebind-bob", channel="telegram", external_id=str(telegram_id)
+    )
+    db_session.add(binding)
+    await db_session.flush()
+    second = _telegram_update(update_id=91302, user_id=telegram_id, text="Bob request")
+    await _telegram_bot(telegram_id)._handle_text(second, MagicMock())
+    # A delayed redelivery from Alice's binding must not be reinterpreted as a
+    # new Bob request merely because E12 namespaces intake by verified owner.
+    await _telegram_bot(telegram_id)._handle_text(first, MagicMock())
+
+    runs = (
+        await db_session.scalars(select(DurableChatRun).order_by(DurableChatRun.created_at))
+    ).all()
+    assert [run.owner_key for run in runs] == [
+        "telegram-rebind-alice",
+        "telegram-rebind-bob",
+    ]
+    assert runs[0].session_id != runs[1].session_id
+    sessions = (await db_session.scalars(select(ChatSession))).all()
+    assert {session.user_key for session in sessions} == {
+        "telegram-rebind-alice",
+        "telegram-rebind-bob",
+    }
+
+
+@pytest.mark.asyncio
+async def test_unseen_pre_rebind_update_cannot_enter_new_owner_history(
+    db_session, telegram_session_factory
+):
+    telegram_id = 701302
+    await _bind_telegram(db_session, owner="telegram-old-owner", telegram_id=telegram_id)
+    stale = _telegram_update(update_id=91303, user_id=telegram_id, text="Old private request")
+    stale.message.date = datetime.now(UTC) - timedelta(minutes=5)
+
+    old_binding = await db_session.scalar(
+        select(AgentChannelIdentity).where(AgentChannelIdentity.external_id == str(telegram_id))
+    )
+    old_binding.is_active = False
+    db_session.add(
+        User(
+            sub="telegram-new-owner",
+            email="telegram-new-owner@example.test",
+            name="telegram-new-owner",
+            preferred_username="telegram-new-owner",
+            role="operator",
+            is_active=True,
+        )
+    )
+    db_session.add(
+        AgentChannelIdentity(
+            owner_key="telegram-new-owner", channel="telegram", external_id=str(telegram_id)
+        )
+    )
+    await db_session.flush()
+
+    await _telegram_bot(telegram_id)._handle_text(stale, MagicMock())
+    assert await db_session.scalar(select(func.count()).select_from(DurableChatRun)) == 0
+    assert await db_session.scalar(select(func.count()).select_from(WorkOrder)) == 0
+
+
+@pytest.mark.asyncio
+async def test_telegram_binding_soft_revoke_survives_outbox_and_rebinds(db_session):
+    telegram_id = "701401"
+    await _bind_telegram(db_session, owner="telegram-soft-alice", telegram_id=int(telegram_id))
+    binding = await db_session.scalar(
+        select(AgentChannelIdentity).where(AgentChannelIdentity.external_id == telegram_id)
+    )
+    order = WorkOrder(owner_key="telegram-soft-alice", objective="Historical notification")
+    db_session.add(order)
+    await db_session.flush()
+    from app.domain.agent_outbox import AgentOutboxRequest, produce_agent_outbox
+
+    await produce_agent_outbox(
+        db_session,
+        request=AgentOutboxRequest(
+            work_order_id=order.id,
+            owner_key="telegram-soft-alice",
+            destination_binding_id=binding.id,
+            event_type="chat.reply_ready",
+            payload={"resource_type": "work_order", "resource_id": str(order.id)},
+            dedup_key="soft-revoke-history",
+        ),
+    )
+    await unbind_telegram(telegram_id, db_session, _DEV_USER)
+    assert binding.is_active is False
+
+    db_session.add(
+        User(
+            sub="telegram-soft-bob",
+            email="telegram-soft-bob@example.test",
+            name="telegram-soft-bob",
+            preferred_username="telegram-soft-bob",
+            role="operator",
+            is_active=True,
+        )
+    )
+    await db_session.flush()
+    response = await bind_telegram(
+        TelegramBinding(owner_key="telegram-soft-bob", telegram_user_id=telegram_id),
+        db_session,
+        _DEV_USER,
+    )
+    assert response["id"] != str(binding.id)
+    assert binding.owner_key == "telegram-soft-alice"
+    assert binding.is_active is False
+    assert await db_session.scalar(select(func.count()).select_from(AgentOutbox)) == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_admin_binds_have_one_winner(test_engine):
+    """The absent-row case is serialized before either request can insert."""
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    owner = "telegram-concurrent-admin"
+    async with factory() as db:
+        db.add(
+            User(
+                sub=owner,
+                email=f"{owner}@example.test",
+                name=owner,
+                preferred_username=owner,
+                role="operator",
+                is_active=True,
+            )
+        )
+        await db.commit()
+
+    async def bind_once():
+        async with factory() as db:
+            try:
+                return await bind_telegram(
+                    TelegramBinding(owner_key=owner, telegram_user_id="701501"), db, _DEV_USER
+                )
+            except HTTPException as exc:
+                return exc
+
+    first, second = await asyncio.gather(bind_once(), bind_once())
+    assert sum(isinstance(item, dict) for item in (first, second)) == 1
+    loser = next(item for item in (first, second) if isinstance(item, HTTPException))
+    assert loser.status_code == 409
+    async with factory() as db:
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(AgentChannelIdentity)
+                .where(
+                    AgentChannelIdentity.channel == "telegram",
+                    AgentChannelIdentity.external_id == "701501",
+                    AgentChannelIdentity.is_active.is_(True),
+                )
+            )
+            == 1
+        )
+
+
+from app.api.agent_channels import TelegramBinding, bind_telegram, unbind_telegram
+from app.auth.jwt import _DEV_USER

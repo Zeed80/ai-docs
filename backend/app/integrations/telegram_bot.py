@@ -1,19 +1,19 @@
 """Telegram bot for the «Света» agent.
 
-Each Telegram user gets their own AgentSession. Messages are dispatched via
-on_user_message(); responses stream via a Queue → editMessageText cadence
-(Telegram doesn't support real streaming).
+Incoming text is persisted through the common durable intake. The polling
+process does not own an agent session or wait for model execution.
 
 Voice messages are transcribed through Ollama Whisper before being forwarded.
 
-Approval gate answers (inline buttons) call AgentSession.on_approval().
+Approval callbacks are reserved for E16 and never reach the legacy executor.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
+import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -21,8 +21,6 @@ logger = logging.getLogger(__name__)
 try:
     from telegram import (  # noqa: F401 — Bot здесь только проба доступности
         Bot,
-        InlineKeyboardButton,
-        InlineKeyboardMarkup,
         Update,
     )
     from telegram.constants import ParseMode
@@ -54,7 +52,7 @@ def _escape(text: str) -> str:
 
 
 class SvetaTelegramBot:
-    """Wraps python-telegram-bot Application; one AgentSession per Telegram user."""
+    """Wrap python-telegram-bot while execution remains durable and detached."""
 
     def __init__(self, token: str, allowed_user_ids: set[int]) -> None:
         if not TELEGRAM_AVAILABLE:
@@ -64,8 +62,6 @@ class SvetaTelegramBot:
             )
         self._token = token
         self._allowed = allowed_user_ids
-        self._sessions: dict[int, Any] = {}  # user_id → AgentSession
-        self._session_locks: dict[int, asyncio.Lock] = {}
         self._app: Application = Application.builder().token(token).build()
         self._register_handlers()
 
@@ -87,31 +83,38 @@ class SvetaTelegramBot:
     def _is_allowed(self, user_id: int) -> bool:
         return user_id in self._allowed
 
+    async def _is_private_bound_message(self, update: Update, user_id: int) -> bool:
+        """Fail closed before reading private payloads from Telegram."""
+        from sqlalchemy import select
+
+        from app.db.agent_runtime_models import AgentChannelIdentity
+        from app.db.models import User
+        from app.db.session import _get_session_factory
+
+        if update.effective_chat.type != "private":
+            await update.message.reply_text(
+                "Работа с личными данными доступна только в личном чате."
+            )
+            return False
+        async with _get_session_factory()() as db:
+            owner = await db.scalar(
+                select(AgentChannelIdentity.owner_key)
+                .join(User, User.sub == AgentChannelIdentity.owner_key)
+                .where(
+                    AgentChannelIdentity.channel == "telegram",
+                    AgentChannelIdentity.external_id == str(user_id),
+                    AgentChannelIdentity.is_active.is_(True),
+                    User.is_active.is_(True),
+                )
+            )
+        if owner is None:
+            await update.message.reply_text(
+                "Telegram не связан с учётной записью. Обратитесь к администратору."
+            )
+            return False
+        return True
+
     # ── Session management ───────────────────────────────────────────────────
-
-    async def _get_session(self, user_id: int) -> Any:
-        """Get or create an AgentSession for this user (thread-safe)."""
-        if user_id not in self._session_locks:
-            self._session_locks[user_id] = asyncio.Lock()
-
-        async with self._session_locks[user_id]:
-            if user_id not in self._sessions:
-                queue: asyncio.Queue[dict] = asyncio.Queue()
-
-                async def send_fn(event: dict) -> None:
-                    await queue.put(event)
-
-                from app.ai.agent_loop import AgentSession
-
-                session = AgentSession(send=send_fn)
-                session._tg_queue = queue  # type: ignore[attr-defined]
-                self._sessions[user_id] = session
-
-        return self._sessions[user_id]
-
-    async def _reset_session(self, user_id: int) -> None:
-        async with self._session_locks.get(user_id, asyncio.Lock()):
-            self._sessions.pop(user_id, None)
 
     # ── Handlers ─────────────────────────────────────────────────────────────
 
@@ -129,8 +132,9 @@ class SvetaTelegramBot:
         user = update.effective_user
         if not self._is_allowed(user.id):
             return
-        await self._reset_session(user.id)
-        await update.message.reply_text("Сессия сброшена. Начинаем заново.")
+        await update.message.reply_text(
+            "Telegram использует сохранённые работы; локальной сессии для сброса нет."
+        )
 
     async def _handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user = update.effective_user
@@ -144,6 +148,8 @@ class SvetaTelegramBot:
     async def _handle_voice(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user = update.effective_user
         if not self._is_allowed(user.id):
+            return
+        if not await self._is_private_bound_message(update, user.id):
             return
 
         await update.message.reply_text("🎤 Транскрибирую голосовое сообщение…")
@@ -201,6 +207,8 @@ class SvetaTelegramBot:
         if not self._is_allowed(user.id):
             await update.message.reply_text("Доступ запрещён.")
             return
+        if not await self._is_private_bound_message(update, user.id):
+            return
 
         doc = update.message.document
         file = await context.bot.get_file(doc.file_id)
@@ -211,6 +219,8 @@ class SvetaTelegramBot:
         user = update.effective_user
         if not self._is_allowed(user.id):
             await update.message.reply_text("Доступ запрещён.")
+            return
+        if not await self._is_private_bound_message(update, user.id):
             return
 
         # Use the highest-resolution photo
@@ -274,16 +284,9 @@ class SvetaTelegramBot:
         if not self._is_allowed(user_id):
             return
 
-        data = query.data or ""
-        if data.startswith("appr:"):
-            _, action, approval_id = data.split(":", 2)
-            approved = action == "approve"
-            session = self._sessions.get(user_id)
-            if session:
-                await session.on_approval(approved)
-            result_text = "✅ Подтверждено" if approved else "❌ Отклонено"
+        if (query.data or "").startswith("appr:"):
             await query.edit_message_text(
-                f"{query.message.text}\n\n{result_text}",
+                f"{query.message.text}\n\n⚠️ Это подтверждение устарело.",
                 reply_markup=None,
             )
 
@@ -291,11 +294,18 @@ class SvetaTelegramBot:
 
     async def _process_message(self, update: Update, user_id: int, text: str) -> None:
         from sqlalchemy import select
+        from sqlalchemy import text as sql_text
 
-        from app.ai.actor_context import get_acting_user, set_acting_user
-        from app.db.agent_runtime_models import AgentChannelIdentity
+        from app.db.agent_runtime_models import AgentChannelIdentity, DurableChatRun
         from app.db.models import User
         from app.db.session import _get_session_factory
+        from app.domain.agent_intake import (
+            AgentIntakeError,
+            AgentIntakeRequest,
+            VerifiedIntakeIdentity,
+            submit_agent_intake,
+        )
+        from app.domain.agent_outbox import AgentOutboxRequest, produce_agent_outbox
 
         if update.effective_chat.type != "private":
             await update.message.reply_text(
@@ -303,8 +313,8 @@ class SvetaTelegramBot:
             )
             return
         async with _get_session_factory()() as db:
-            owner = await db.scalar(
-                select(AgentChannelIdentity.owner_key)
+            binding = await db.scalar(
+                select(AgentChannelIdentity)
                 .join(
                     User,
                     User.sub == AgentChannelIdentity.owner_key,
@@ -312,139 +322,89 @@ class SvetaTelegramBot:
                 .where(
                     AgentChannelIdentity.channel == "telegram",
                     AgentChannelIdentity.external_id == str(user_id),
+                    AgentChannelIdentity.is_active.is_(True),
                     User.is_active.is_(True),
                 )
+                .with_for_update()
             )
-        if owner is None:
-            await update.message.reply_text(
-                "Telegram не связан с учётной записью. Обратитесь к администратору."
-            )
-            return
-        previous_actor = get_acting_user()
-        set_acting_user(owner)
-        try:
-            existing = self._sessions.get(user_id)
-            if existing is not None and getattr(existing, "_channel_owner", None) != owner:
-                await self._reset_session(user_id)
-            session = await self._get_session(user_id)
-            session._channel_owner = owner
-            await self._process_owned_message(update, user_id, text)
-        finally:
-            set_acting_user(previous_actor)
-
-    async def _process_owned_message(self, update: Update, user_id: int, text: str) -> None:
-        session = await self._get_session(user_id)
-        queue: asyncio.Queue[dict] = session._tg_queue  # type: ignore[attr-defined]
-
-        # Drain any stale events from a previous turn
-        while not queue.empty():
-            try:
-                queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-
-        # Mirror user message to all connected web chat clients
-        try:
-            from app.core.chat_bus import chat_bus
-
-            await chat_bus.publish({"type": "tg_user", "content": text, "source": "telegram"})
-        except Exception:
-            pass
-
-        # Send placeholder; we'll edit it as tokens stream in
-        placeholder = await update.message.reply_text("…")
-        accumulated = ""
-        last_edit = ""
-
-        async def _edit_task() -> None:
-            nonlocal last_edit
-            while True:
-                await asyncio.sleep(1.0)
-                if accumulated and accumulated != last_edit:
-                    try:
-                        await placeholder.edit_text(
-                            accumulated[:4096],
-                            parse_mode=None,
-                        )
-                        last_edit = accumulated
-                    except Exception:
-                        pass
-
-        edit_loop = asyncio.create_task(_edit_task())
-
-        # Run agent turn concurrently with the drain loop
-        agent_task = asyncio.create_task(session.on_user_message(text))
-
-        try:
-            from app.core.chat_bus import chat_bus
-
-            while not agent_task.done() or not queue.empty():
-                try:
-                    event = await asyncio.wait_for(queue.get(), timeout=0.2)
-                except TimeoutError:
-                    continue
-
-                # Mirror every agent event to web chat in real time
-                asyncio.create_task(chat_bus.publish({**event, "source": "telegram"}))
-
-                ev_type = event.get("type", "")
-                if ev_type == "token":
-                    accumulated += event.get("content", "")
-                elif ev_type == "text":
-                    accumulated += event.get("content", "")
-                elif ev_type == "approval_request":
-                    skill = event.get("skill", "")
-                    desc = event.get("description", "Разрешить выполнение?")
-                    approval_id = event.get("approval_id", "")
-                    keyboard = InlineKeyboardMarkup(
-                        [
-                            [
-                                InlineKeyboardButton(
-                                    "✅ Подтвердить",
-                                    callback_data=f"appr:approve:{approval_id}",
-                                ),
-                                InlineKeyboardButton(
-                                    "❌ Отклонить",
-                                    callback_data=f"appr:reject:{approval_id}",
-                                ),
-                            ]
-                        ]
-                    )
-                    await update.message.reply_text(
-                        f"⏳ *Требуется подтверждение*\n"
-                        f"Действие: `{_escape(skill)}`\n"
-                        f"{_escape(desc)}",
-                        parse_mode=ParseMode.MARKDOWN_V2 if ParseMode else None,
-                        reply_markup=keyboard,
-                    )
-                elif ev_type == "done":
-                    break
-                elif ev_type == "error":
-                    accumulated = "⚠️ " + event.get("content", "Ошибка агента.")
-                    break
-        finally:
-            edit_loop.cancel()
-            try:
-                await agent_task
-            except (asyncio.CancelledError, Exception):
-                pass
-
-        # Final edit with full answer
-        if accumulated and accumulated != last_edit:
-            try:
-                await placeholder.edit_text(
-                    accumulated[:4096],
-                    parse_mode=None,
+            if binding is None:
+                await update.message.reply_text(
+                    "Telegram не связан с учётной записью. Обратитесь к администратору."
                 )
-            except Exception:
-                pass
+                return
+            message_date = getattr(update.message, "date", None)
+            if not isinstance(message_date, datetime) or message_date.tzinfo is None:
+                logger.warning("telegram update without a trusted message date was rejected")
+                return
+            # An unseen update can remain queued from before a rebind.  It
+            # must not enter the new owner's conversation.
+            if message_date.astimezone(UTC) < binding.created_at.astimezone(UTC):
+                logger.warning("telegram update predates its active channel binding")
+                return
+            update_id = getattr(update, "update_id", None)
+            if not isinstance(update_id, int) or isinstance(update_id, bool) or update_id < 0:
+                logger.warning("telegram update without a stable update_id was rejected")
+                return
+            external_message_id = f"update:{update_id}"
+            # Telegram update IDs belong to the bot's global stream. E12 also
+            # namespaces by owner, so serialize the global ID here and refuse
+            # to reinterpret an old delivery after an administrator rebinds
+            # the same Telegram account to another owner.
+            await db.execute(
+                sql_text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+                {"key": f"telegram:{external_message_id}"},
+            )
+            previous_owner = await db.scalar(
+                select(DurableChatRun.owner_key).where(
+                    DurableChatRun.intake_channel == "telegram",
+                    DurableChatRun.external_message_id == external_message_id,
+                )
+            )
+            if previous_owner is not None and previous_owner != binding.owner_key:
+                logger.warning("telegram update redelivered after owner rebind")
+                return
+            try:
+                result = await submit_agent_intake(
+                    db,
+                    identity=VerifiedIntakeIdentity(binding.owner_key, "telegram"),
+                    request=AgentIntakeRequest(
+                        channel="telegram",
+                        external_message_id=external_message_id,
+                        request_id=uuid.uuid5(uuid.NAMESPACE_URL, f"telegram:{update_id}"),
+                        content=text,
+                        source_binding_id=binding.id,
+                    ),
+                    commit=False,
+                )
+            except AgentIntakeError:
+                await db.rollback()
+                await update.message.reply_text("Сообщение не принято.")
+                return
+            await produce_agent_outbox(
+                db,
+                request=AgentOutboxRequest(
+                    work_order_id=result.order.id,
+                    owner_key=binding.owner_key,
+                    destination_binding_id=binding.id,
+                    event_type="chat.intake.accepted",
+                    payload={
+                        "resource_type": "work_order",
+                        "resource_id": str(result.order.id),
+                    },
+                    dedup_key=f"telegram:{external_message_id}:accepted",
+                    actor="telegram_intake",
+                ),
+            )
+            await db.commit()
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     async def start_polling(self) -> None:
         await self._app.initialize()
         await self._app.start()
-        await self._app.updater.start_polling(drop_pending_updates=True)
+        # Backlog is safe now that Telegram's stable update_id is a durable
+        # idempotency key. Dropping it would lose messages while the bot is off.
+        await self._app.updater.start_polling(drop_pending_updates=False)
         logger.info("Telegram bot polling started")
 
     async def stop(self) -> None:

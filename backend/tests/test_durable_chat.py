@@ -12,8 +12,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.chat_runs import ChatRunCreate, submit_chat_run
 from app.auth.jwt import _DEV_USER
-from app.db.agent_runtime_models import DurableChatRun
-from app.db.models import ChatMessage, ChatSession, WorkEvent, WorkOrder, WorkStep
+from app.db.agent_runtime_models import AgentChannelIdentity, AgentOutbox, DurableChatRun
+from app.db.models import ChatMessage, ChatSession, User, WorkEvent, WorkOrder, WorkStep
 from app.domain.agent_intake import (
     AgentIntakeRequest,
     IntakeAttachment,
@@ -173,6 +173,12 @@ async def test_concurrent_retry_has_one_committed_request(test_engine):
 async def test_cross_channel_external_ids_are_namespaced_by_verified_identity(test_engine):
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     request_id = uuid.uuid4()
+    async with factory() as db:
+        binding = AgentChannelIdentity(
+            owner_key=_DEV_USER.sub, channel="telegram", external_id="770001"
+        )
+        db.add(binding)
+        await db.commit()
 
     async def submit(channel):
         async with factory() as db:
@@ -186,6 +192,7 @@ async def test_cross_channel_external_ids_are_namespaced_by_verified_identity(te
                     external_message_id=str(request_id),
                     request_id=request_id,
                     content="Same external identifier on another channel",
+                    source_binding_id=binding.id if channel == "telegram" else None,
                 ),
             )
 
@@ -247,6 +254,12 @@ async def test_intake_failure_rolls_back_message_order_and_run(test_engine, monk
     from app.domain import agent_intake
 
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as db:
+        binding = AgentChannelIdentity(
+            owner_key=_DEV_USER.sub, channel="telegram", external_id="770002"
+        )
+        db.add(binding)
+        await db.commit()
 
     async def broken_plan(*args, **kwargs):
         raise RuntimeError("write failed")
@@ -262,6 +275,7 @@ async def test_intake_failure_rolls_back_message_order_and_run(test_engine, monk
                     external_message_id="rollback-1",
                     request_id=uuid.uuid4(),
                     content="Must be atomic",
+                    source_binding_id=binding.id,
                 ),
             )
     async with factory() as db:
@@ -296,6 +310,10 @@ async def test_service_rejects_foreign_attachment_before_writing_turn(test_engin
             storage_path="test/private",
         )
         db.add(foreign)
+        binding = AgentChannelIdentity(
+            owner_key="not-document-owner", channel="telegram", external_id="770003"
+        )
+        db.add(binding)
         await db.commit()
         with pytest.raises(IntakeNotFoundError, match="Owned attachment not found"):
             await submit_agent_intake(
@@ -309,6 +327,7 @@ async def test_service_rejects_foreign_attachment_before_writing_turn(test_engin
                     request_id=uuid.uuid4(),
                     content="Foreign attachment",
                     attachments=(IntakeAttachment(document_id=foreign.id),),
+                    source_binding_id=binding.id,
                 ),
             )
     async with factory() as db:
@@ -388,6 +407,137 @@ async def test_worker_persists_result_without_http_connection(test_engine):
                 WorkEvent.work_order_id == run["work_order_id"],
                 WorkEvent.event_type == "chat.response_saved",
             )
+        )
+
+
+@pytest.mark.asyncio
+async def test_telegram_worker_persists_terminal_reply_outbox(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    owner = "telegram-terminal-owner"
+    async with factory() as db:
+        db.add(
+            User(
+                sub=owner,
+                email="telegram-terminal@example.test",
+                name="Telegram terminal",
+                preferred_username="telegram-terminal",
+                role="operator",
+                is_active=True,
+            )
+        )
+        binding = AgentChannelIdentity(owner_key=owner, channel="telegram", external_id="880001")
+        db.add(binding)
+        await db.flush()
+        intake = await submit_agent_intake(
+            db,
+            identity=VerifiedIntakeIdentity(account_key=owner, channel="telegram"),
+            request=AgentIntakeRequest(
+                channel="telegram",
+                external_message_id="update:terminal",
+                request_id=uuid.uuid4(),
+                content="Return a terminal answer",
+                source_binding_id=binding.id,
+            ),
+        )
+    async with factory() as db:
+        _, step, attempt = await claim_ready_step(
+            db, worker_id="telegram-chat-test", work_order_id=intake.order.id
+        )
+        await db.commit()
+
+    await run_durable_chat(
+        intake.order.id, step.id, attempt.id, session_factory=factory, agent_factory=FakeAgent
+    )
+
+    async with factory() as db:
+        outbox = await db.scalar(
+            select(AgentOutbox).where(
+                AgentOutbox.work_order_id == intake.order.id,
+                AgentOutbox.event_type == "chat.reply_ready",
+            )
+        )
+        assert outbox is not None
+        assert outbox.owner_key == owner
+        assert outbox.destination_binding_id == binding.id
+        assert outbox.payload == {
+            "resource_type": "work_order",
+            "resource_id": str(intake.order.id),
+        }
+
+
+@pytest.mark.asyncio
+async def test_telegram_reply_uses_exact_source_binding_not_another_owner_binding(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    owner = "telegram-multi-binding-owner"
+    async with factory() as db:
+        first = AgentChannelIdentity(owner_key=owner, channel="telegram", external_id="880101")
+        other = AgentChannelIdentity(owner_key=owner, channel="telegram", external_id="880102")
+        db.add_all([first, other])
+        await db.flush()
+        intake = await submit_agent_intake(
+            db,
+            identity=VerifiedIntakeIdentity(account_key=owner, channel="telegram"),
+            request=AgentIntakeRequest(
+                channel="telegram",
+                external_message_id="update:exact-binding",
+                request_id=uuid.uuid4(),
+                content="Reply only to the inbound binding",
+                source_binding_id=other.id,
+            ),
+        )
+    async with factory() as db:
+        _, step, attempt = await claim_ready_step(
+            db, worker_id="telegram-exact-binding", work_order_id=intake.order.id
+        )
+        await db.commit()
+    await run_durable_chat(
+        intake.order.id, step.id, attempt.id, session_factory=factory, agent_factory=FakeAgent
+    )
+    async with factory() as db:
+        outbox = await db.scalar(
+            select(AgentOutbox).where(AgentOutbox.work_order_id == intake.order.id)
+        )
+        assert outbox.destination_binding_id == other.id
+        assert outbox.destination_binding_id != first.id
+
+
+@pytest.mark.asyncio
+async def test_revoked_and_rebound_source_binding_never_receives_old_reply(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    alice, bob = "telegram-old-owner", "telegram-new-owner"
+    async with factory() as db:
+        source = AgentChannelIdentity(owner_key=alice, channel="telegram", external_id="880201")
+        db.add(source)
+        await db.flush()
+        intake = await submit_agent_intake(
+            db,
+            identity=VerifiedIntakeIdentity(account_key=alice, channel="telegram"),
+            request=AgentIntakeRequest(
+                channel="telegram",
+                external_message_id="update:revoked-source",
+                request_id=uuid.uuid4(),
+                content="Do not send this reply after rebind",
+                source_binding_id=source.id,
+            ),
+        )
+        source.is_active = False
+        rebound = AgentChannelIdentity(owner_key=bob, channel="telegram", external_id="880201")
+        db.add(rebound)
+        await db.commit()
+    async with factory() as db:
+        _, step, attempt = await claim_ready_step(
+            db, worker_id="telegram-revoked-binding", work_order_id=intake.order.id
+        )
+        await db.commit()
+    await run_durable_chat(
+        intake.order.id, step.id, attempt.id, session_factory=factory, agent_factory=FakeAgent
+    )
+    async with factory() as db:
+        assert (
+            await db.scalar(
+                select(AgentOutbox.id).where(AgentOutbox.work_order_id == intake.order.id)
+            )
+            is None
         )
 
 
@@ -636,6 +786,58 @@ async def test_intake_namespace_migration_round_trip(db_session):
         intake.downgrade()
         durable.downgrade()
         assert not inspect(sync).get_table_names(schema=schema)
+
+    await connection.run_sync(verify)
+
+
+@pytest.mark.asyncio
+async def test_channel_binding_migration_round_trip(db_session):
+    import importlib.util
+    from pathlib import Path
+
+    import sqlalchemy as sa
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy import inspect, text
+
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "migrations/versions/20260929_0003_agent_channel_soft_revoke.py"
+    )
+    spec = importlib.util.spec_from_file_location("channel_binding_migration", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    schema = "channel_binding_migration_" + uuid.uuid4().hex
+    connection = await db_session.connection()
+    await connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+    await connection.execute(text(f'SET LOCAL search_path TO "{schema}", public'))
+
+    def verify(sync):
+        op = Operations(MigrationContext.configure(sync))
+        op.create_table(
+            "agent_channel_identities",
+            sa.Column("id", sa.UUID(), primary_key=True),
+            sa.Column("channel", sa.String(30), nullable=False),
+            sa.Column("external_id", sa.String(200), nullable=False),
+            sa.UniqueConstraint(
+                "channel", "external_id", name="agent_channel_identities_channel_external_id_key"
+            ),
+        )
+        op.create_table("durable_chat_runs", sa.Column("id", sa.UUID(), primary_key=True))
+        module.op = op
+        module.upgrade()
+        inspector = inspect(sync)
+        columns = {
+            item["name"] for item in inspect(sync).get_columns("durable_chat_runs", schema=schema)
+        }
+        assert "source_binding_id" in columns
+        indexes = inspector.get_indexes("agent_channel_identities", schema=schema)
+        assert any(item["name"] == "uq_active_agent_channel_identity" for item in indexes)
+        module.downgrade()
+        columns = {
+            item["name"] for item in inspect(sync).get_columns("durable_chat_runs", schema=schema)
+        }
+        assert "source_binding_id" not in columns
 
     await connection.run_sync(verify)
 

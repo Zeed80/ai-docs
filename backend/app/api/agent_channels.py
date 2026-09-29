@@ -2,8 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.service import log_action
@@ -31,29 +30,42 @@ async def bind_telegram(
     )
     if owner is None:
         raise HTTPException(404, "Active owner not found")
-    statement = (
-        insert(AgentChannelIdentity)
-        .values(
-            owner_key=body.owner_key,
-            channel="telegram",
-            external_id=body.telegram_user_id,
-        )
-        .on_conflict_do_nothing(index_elements=["channel", "external_id"])
-        .returning(AgentChannelIdentity.id)
+    # A row lock cannot protect a missing row. Serialize this external identity
+    # so concurrent administrators cannot both pass the select-then-insert gap.
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"telegram:{body.telegram_user_id}"},
     )
-    identity_id = await db.scalar(statement)
-    if identity_id is None:
+    identity = await db.scalar(
+        select(AgentChannelIdentity)
+        .where(
+            AgentChannelIdentity.channel == "telegram",
+            AgentChannelIdentity.external_id == body.telegram_user_id,
+            AgentChannelIdentity.is_active.is_(True),
+        )
+        .with_for_update()
+    )
+    if identity is not None:
         raise HTTPException(409, "Channel already bound; revoke it before rebinding")
+    # Revoked bindings are historical security principals: never recycle their
+    # id, since durable runs retain it as their reply destination.
+    identity = AgentChannelIdentity(
+        owner_key=body.owner_key,
+        channel="telegram",
+        external_id=body.telegram_user_id,
+    )
+    db.add(identity)
+    await db.flush()
     await log_action(
         db,
         action="agent.channel.bound",
         entity_type="agent_channel",
-        entity_id=identity_id,
+        entity_id=identity.id,
         user_id=user.sub,
         details=body.model_dump(),
     )
     await db.commit()
-    return {"id": str(identity_id), **body.model_dump()}
+    return {"id": str(identity.id), **body.model_dump()}
 
 
 @router.delete("/telegram/{telegram_user_id}")
@@ -65,6 +77,7 @@ async def unbind_telegram(
         .where(
             AgentChannelIdentity.channel == "telegram",
             AgentChannelIdentity.external_id == telegram_user_id,
+            AgentChannelIdentity.is_active.is_(True),
         )
         .with_for_update()
     )
@@ -77,6 +90,6 @@ async def unbind_telegram(
         entity_id=identity.id,
         user_id=user.sub,
     )
-    await db.delete(identity)
+    identity.is_active = False
     await db.commit()
     return {"revoked": True}

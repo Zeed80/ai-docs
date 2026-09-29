@@ -18,7 +18,7 @@ from app.chat.store import (
     append_chat_message,
     ensure_chat_session,
 )
-from app.db.agent_runtime_models import DurableChatRun
+from app.db.agent_runtime_models import AgentChannelIdentity, DurableChatRun
 from app.db.models import ChatMessage, ChatSession, Document, WorkOrder
 from app.domain.work_orders import ACTIVE_WORK_STATUSES, create_single_step_plan, create_work_order
 
@@ -67,6 +67,9 @@ class AgentIntakeRequest:
     # A transport may supply a digest of its authenticated raw envelope when
     # preserving an established idempotency contract (HTTP does this).
     input_digest: str | None = None
+    # Set only by a trusted Telegram adapter after it resolves the active
+    # binding. HTTP deliberately has no channel binding.
+    source_binding_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -87,6 +90,7 @@ def _request_digest(request: AgentIntakeRequest) -> str:
         "reasoning_mode": request.reasoning_mode,
         "attachments": [str(item.document_id) for item in request.attachments],
         "workspace_context": request.workspace_context,
+        "source_binding_id": str(request.source_binding_id) if request.source_binding_id else None,
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
@@ -108,6 +112,7 @@ async def submit_agent_intake(
     *,
     identity: VerifiedIntakeIdentity,
     request: AgentIntakeRequest,
+    commit: bool = True,
 ) -> AgentIntakeResult:
     """Persist exactly one user turn and ready work order; never invoke a model."""
     _nonblank_within(identity.account_key, label="Verified account", limit=200)
@@ -118,6 +123,21 @@ async def submit_agent_intake(
         raise IntakeValidationError("Intake channel does not match verified identity")
     if request.input_digest is not None and request.channel != "http":
         raise IntakeValidationError("Input digest override is reserved for HTTP compatibility")
+    if request.channel == "telegram":
+        if request.source_binding_id is None:
+            raise IntakeValidationError("Telegram intake requires a verified source binding")
+        binding = await db.scalar(
+            select(AgentChannelIdentity).where(
+                AgentChannelIdentity.id == request.source_binding_id,
+                AgentChannelIdentity.owner_key == identity.account_key,
+                AgentChannelIdentity.channel == "telegram",
+                AgentChannelIdentity.is_active.is_(True),
+            )
+        )
+        if binding is None:
+            raise IntakeValidationError("Telegram source binding is not verified for the owner")
+    elif request.source_binding_id is not None:
+        raise IntakeValidationError("Source binding is reserved for Telegram intake")
     if not request.content.strip():
         raise IntakeValidationError("Message must not be empty")
     if len(json.dumps(request.workspace_context).encode()) > 64000:
@@ -228,6 +248,7 @@ async def submit_agent_intake(
             work_order_id=order.id,
             session_id=session.id,
             user_message_id=message.id,
+            source_binding_id=request.source_binding_id,
         )
         db.add(run)
         await create_single_step_plan(
@@ -243,7 +264,10 @@ async def submit_agent_intake(
             max_attempts=1,
             timeout_seconds=7200,
         )
-        await db.commit()
+        if commit:
+            await db.commit()
+        else:
+            await db.flush()
         return AgentIntakeResult(run=run, order=order)
     except AgentIntakeError:
         # Expected rejections are read-only: attachment, ownership and active

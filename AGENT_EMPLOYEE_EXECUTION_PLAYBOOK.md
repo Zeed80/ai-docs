@@ -880,7 +880,7 @@ exactly-once у внешнего сервиса без получательск�
 
 ### E15 — Telegram intake вместо in-memory AgentSession
 
-**Статус:** TODO. **После:** E14.
+**Статус:** REVIEWED. **После:** E14. Отчёт: `docs/agent-employee-delivery/E15-telegram-durable-intake.md`.
 **Файлы:** `integrations/telegram_bot.py`, `api/telegram.py`, `test_telegram.py`.
 
 1. Сохранить allowlist, проверенное связывание external ID и активного пользователя.

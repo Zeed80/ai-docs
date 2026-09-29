@@ -194,6 +194,7 @@ async def produce_agent_outbox(db: AsyncSession, *, request: AgentOutboxRequest)
         select(AgentChannelIdentity).where(
             AgentChannelIdentity.id == request.destination_binding_id,
             AgentChannelIdentity.owner_key == request.owner_key,
+            AgentChannelIdentity.is_active.is_(True),
         )
     )
     if destination is None:
@@ -390,6 +391,7 @@ async def deliver_outbox_claim(
             select(AgentChannelIdentity).where(
                 AgentChannelIdentity.id == row.destination_binding_id,
                 AgentChannelIdentity.owner_key == row.owner_key,
+                AgentChannelIdentity.is_active.is_(True),
             )
         )
         resource = await db.scalar(

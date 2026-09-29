@@ -14,7 +14,12 @@ from app.ai.chat_checkpoint import (
     unpack_checkpoint,
 )
 from app.chat.store import append_chat_message
-from app.db.agent_runtime_models import ChatLogicalAction, DurableChatRun, VerifiedCommitDecision
+from app.db.agent_runtime_models import (
+    AgentChannelIdentity,
+    ChatLogicalAction,
+    DurableChatRun,
+    VerifiedCommitDecision,
+)
 from app.db.models import (
     ChatMessage,
     User,
@@ -538,7 +543,7 @@ async def _run_durable_chat(
         raise RuntimeError("Agent did not produce a final response")
     # Persist the response once; semantic verification remains a separate step.
     async with factory() as db:
-        await active(db)
+        order = await active(db)
         run = await db.scalar(
             select(DurableChatRun).where(DurableChatRun.work_order_id == work_order_id)
         )
@@ -558,5 +563,32 @@ async def _run_durable_chat(
                 actor="chat-worker",
                 payload={"message_id": str(message.id), "session_id": str(session_id)},
             )
-            await db.commit()
+        if run.intake_channel == "telegram":
+            binding = await db.scalar(
+                select(AgentChannelIdentity).where(
+                    AgentChannelIdentity.id == run.source_binding_id,
+                    AgentChannelIdentity.channel == "telegram",
+                    AgentChannelIdentity.owner_key == order.owner_key,
+                    AgentChannelIdentity.is_active.is_(True),
+                )
+            )
+            if binding is not None:
+                from app.domain.agent_outbox import AgentOutboxRequest, produce_agent_outbox
+
+                await produce_agent_outbox(
+                    db,
+                    request=AgentOutboxRequest(
+                        work_order_id=order.id,
+                        owner_key=order.owner_key,
+                        destination_binding_id=binding.id,
+                        event_type="chat.reply_ready",
+                        payload={
+                            "resource_type": "work_order",
+                            "resource_id": str(order.id),
+                        },
+                        dedup_key=f"telegram:run:{run.id}:reply-ready",
+                        actor="chat-worker",
+                    ),
+                )
+        await db.commit()
     return {"text": result, "executor": "durable_chat", "tokens_used": agent._executor.total_tokens}
