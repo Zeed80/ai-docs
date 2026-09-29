@@ -864,7 +864,7 @@ exactly-once у внешнего сервиса без получательск�
 
 ### E14 — Outbox worker и восстановление доставки
 
-**Статус:** TODO. **После:** E13.
+**Статус:** REVIEWED. **После:** E13. Отчёт: `docs/agent-employee-delivery/E14-outbox-worker.md`.
 **Файлы:** outbox module; создать `tasks/agent_outbox.py`, регистрация Celery/beat.
 
 1. Claim с lease/fencing и ограниченным batch; два worker не получают одну аренду.

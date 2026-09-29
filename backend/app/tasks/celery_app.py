@@ -213,6 +213,12 @@ celery_app.conf.beat_schedule = {
         "task": "work.detect_gaps",
         "schedule": 3_600.0,
     },
+    # E14 worker is bounded and a no-op until a reviewed delivery adapter is
+    # explicitly registered; the tick keeps recovery available once enabled.
+    "agent-outbox-delivery": {
+        "task": "agent_outbox.deliver_due",
+        "schedule": 30.0,
+    },
     # Safety net: sweep business-entity graph nodes/edges left orphaned by
     # any path that bypassed the memory_builder hooks — every 30 minutes.
     "memory-reconcile-graph": {
@@ -271,6 +277,7 @@ celery_app.autodiscover_tasks(
 
 # Flat module — not discovered by autodiscover_tasks(related_name="tasks").
 from app.tasks import agent_cron as _agent_cron  # noqa: F401
+from app.tasks import agent_outbox as _agent_outbox  # noqa: F401
 from app.tasks import approval_escalation as _approval_escalation  # noqa: F401
 from app.tasks import cad_trace as _cad_trace  # noqa: F401
 from app.tasks import canonical_cluster as _canonical_cluster  # noqa: F401
