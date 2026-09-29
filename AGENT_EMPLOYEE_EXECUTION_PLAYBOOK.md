@@ -831,7 +831,7 @@ replay или completion; E10 определяет такой контракт �
 
 ### E12 — Общий intake, отделённый от HTTP и модели
 
-**Статус:** TODO. **После:** E11.
+**Статус:** REVIEWED. **После:** E11. Отчёт: `docs/agent-employee-delivery/E12-common-intake.md`.
 **Файлы:** `api/chat_runs.py::submit_chat_run`, `domain/work_orders.py`,
 создать `domain/agent_intake.py`, тесты durable chat.
 

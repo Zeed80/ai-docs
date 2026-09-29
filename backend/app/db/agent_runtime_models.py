@@ -22,9 +22,21 @@ from app.db.base import GUID, Base, TimestampMixin, UUIDPrimaryKey
 
 class DurableChatRun(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "durable_chat_runs"
-    __table_args__ = (UniqueConstraint("owner_key", "request_id", name="uq_chat_run_request"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "intake_channel",
+            "owner_key",
+            "external_message_id",
+            name="uq_chat_run_intake_message",
+        ),
+    )
 
     owner_key: Mapped[str] = mapped_column(String(200), index=True)
+    # The idempotency boundary is owned by a verified channel adapter.  Keep
+    # request_id for the existing HTTP response contract, but do not use it as
+    # the cross-channel deduplication key.
+    intake_channel: Mapped[str] = mapped_column(String(80), nullable=False, default="http")
+    external_message_id: Mapped[str] = mapped_column(String(300), nullable=False)
     request_id: Mapped[uuid.UUID] = mapped_column(GUID())
     request_digest: Mapped[str] = mapped_column(String(64))
     work_order_id: Mapped[uuid.UUID] = mapped_column(

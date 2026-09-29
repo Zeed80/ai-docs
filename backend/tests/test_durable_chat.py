@@ -1,6 +1,7 @@
 """Durable intake, ownership, event replay and conservative worker-loss behavior."""
 
 import asyncio
+import hashlib
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -12,7 +13,15 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.api.chat_runs import ChatRunCreate, submit_chat_run
 from app.auth.jwt import _DEV_USER
 from app.db.agent_runtime_models import DurableChatRun
-from app.db.models import ChatMessage, WorkEvent, WorkOrder, WorkStep
+from app.db.models import ChatMessage, ChatSession, WorkEvent, WorkOrder, WorkStep
+from app.domain.agent_intake import (
+    AgentIntakeRequest,
+    IntakeAttachment,
+    IntakeNotFoundError,
+    IntakeValidationError,
+    VerifiedIntakeIdentity,
+    submit_agent_intake,
+)
 from app.domain.work_orders import claim_ready_step, reclaim_expired_leases
 from app.tasks.durable_chat import run_durable_chat
 
@@ -65,6 +74,55 @@ async def test_intake_idempotency_and_conflicts(client, db_session):
 
 
 @pytest.mark.asyncio
+async def test_http_retry_matches_pre_namespace_digest(client, db_session):
+    body = request()
+    first = await client.post("/api/agent/chat-runs", json=body)
+    assert first.status_code == 202
+    run = await db_session.get(DurableChatRun, uuid.UUID(first.json()["id"]))
+    # This is exactly the digest persisted before E12's channel namespace.
+    run.request_digest = hashlib.sha256(
+        ChatRunCreate(**body).model_dump_json().encode()
+    ).hexdigest()
+    await db_session.commit()
+
+    retry = await client.post("/api/agent/chat-runs", json=body)
+    assert retry.status_code == 202
+    assert retry.json() == first.json()
+
+
+@pytest.mark.asyncio
+async def test_http_attachment_metadata_remains_part_of_idempotency(client, db_session):
+    from app.db.models import Document
+
+    document = Document(
+        owner_sub=_DEV_USER.sub,
+        file_name="real.pdf",
+        file_hash="b" * 64,
+        file_size=1,
+        mime_type="application/pdf",
+        storage_path="test/metadata",
+    )
+    db_session.add(document)
+    await db_session.commit()
+    body = request(
+        attachments=[
+            {
+                "document_id": str(document.id),
+                "file_name": "first-name.pdf",
+                "mime_type": "application/pdf",
+                "size_bytes": 1,
+            }
+        ]
+    )
+    assert (await client.post("/api/agent/chat-runs", json=body)).status_code == 202
+    changed = {
+        **body,
+        "attachments": [{**body["attachments"][0], "file_name": "changed-name.pdf"}],
+    }
+    assert (await client.post("/api/agent/chat-runs", json=changed)).status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_foreign_owner_and_service_are_denied(client):
     from app.auth.jwt import get_current_user
     from app.main import app
@@ -108,6 +166,159 @@ async def test_concurrent_retry_has_one_committed_request(test_engine):
                 .where(DurableChatRun.request_id == body.request_id)
             )
             == 1
+        )
+
+
+@pytest.mark.asyncio
+async def test_cross_channel_external_ids_are_namespaced_by_verified_identity(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    request_id = uuid.uuid4()
+
+    async def submit(channel):
+        async with factory() as db:
+            return await submit_agent_intake(
+                db,
+                identity=VerifiedIntakeIdentity(account_key=_DEV_USER.sub, channel=channel),
+                request=AgentIntakeRequest(
+                    channel=channel,
+                    # A Telegram update can legitimately have the same text
+                    # as an HTTP client's UUID.  Channel is part of the key.
+                    external_message_id=str(request_id),
+                    request_id=request_id,
+                    content="Same external identifier on another channel",
+                ),
+            )
+
+    http, telegram = await asyncio.gather(submit("http"), submit("telegram"))
+    assert http.run.id != telegram.run.id
+    async with factory() as db:
+        runs = list(
+            (
+                await db.scalars(
+                    select(DurableChatRun).where(
+                        DurableChatRun.external_message_id == str(request_id)
+                    )
+                )
+            ).all()
+        )
+    assert {run.intake_channel for run in runs} == {"http", "telegram"}
+
+
+@pytest.mark.asyncio
+async def test_service_rejects_unverified_channel_and_invalid_namespace(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as db:
+        for identity, intake in (
+            (
+                VerifiedIntakeIdentity(account_key=_DEV_USER.sub, channel="telegram"),
+                AgentIntakeRequest(
+                    channel="http",
+                    external_message_id="1",
+                    request_id=uuid.uuid4(),
+                    content="Wrong verified channel",
+                ),
+            ),
+            (
+                VerifiedIntakeIdentity(account_key=" " * 200, channel="telegram"),
+                AgentIntakeRequest(
+                    channel="telegram",
+                    external_message_id=" ",
+                    request_id=uuid.uuid4(),
+                    content="Invalid namespace",
+                ),
+            ),
+            (
+                VerifiedIntakeIdentity(account_key=_DEV_USER.sub, channel="telegram"),
+                AgentIntakeRequest(
+                    channel="telegram",
+                    external_message_id="untrusted-digest",
+                    request_id=uuid.uuid4(),
+                    content="Digest must be derived from the intake request",
+                    input_digest="0" * 64,
+                ),
+            ),
+        ):
+            with pytest.raises(IntakeValidationError):
+                await submit_agent_intake(db, identity=identity, request=intake)
+
+
+@pytest.mark.asyncio
+async def test_intake_failure_rolls_back_message_order_and_run(test_engine, monkeypatch):
+    from app.domain import agent_intake
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+
+    async def broken_plan(*args, **kwargs):
+        raise RuntimeError("write failed")
+
+    monkeypatch.setattr(agent_intake, "create_single_step_plan", broken_plan)
+    async with factory() as db:
+        with pytest.raises(RuntimeError, match="write failed"):
+            await submit_agent_intake(
+                db,
+                identity=VerifiedIntakeIdentity(account_key=_DEV_USER.sub, channel="telegram"),
+                request=AgentIntakeRequest(
+                    channel="telegram",
+                    external_message_id="rollback-1",
+                    request_id=uuid.uuid4(),
+                    content="Must be atomic",
+                ),
+            )
+    async with factory() as db:
+        assert (
+            await db.scalar(
+                select(DurableChatRun.id).where(DurableChatRun.external_message_id == "rollback-1")
+            )
+            is None
+        )
+        assert (
+            await db.scalar(select(WorkOrder.id).where(WorkOrder.objective == "Must be atomic"))
+            is None
+        )
+        assert (
+            await db.scalar(select(ChatMessage.id).where(ChatMessage.content == "Must be atomic"))
+            is None
+        )
+
+
+@pytest.mark.asyncio
+async def test_service_rejects_foreign_attachment_before_writing_turn(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as db:
+        from app.db.models import Document
+
+        foreign = Document(
+            owner_sub="document-owner",
+            file_name="private.pdf",
+            file_hash="a" * 64,
+            file_size=1,
+            mime_type="application/pdf",
+            storage_path="test/private",
+        )
+        db.add(foreign)
+        await db.commit()
+        with pytest.raises(IntakeNotFoundError, match="Owned attachment not found"):
+            await submit_agent_intake(
+                db,
+                identity=VerifiedIntakeIdentity(
+                    account_key="not-document-owner", channel="telegram"
+                ),
+                request=AgentIntakeRequest(
+                    channel="telegram",
+                    external_message_id="foreign-document",
+                    request_id=uuid.uuid4(),
+                    content="Foreign attachment",
+                    attachments=(IntakeAttachment(document_id=foreign.id),),
+                ),
+            )
+    async with factory() as db:
+        assert (
+            await db.scalar(
+                select(DurableChatRun.id).where(
+                    DurableChatRun.external_message_id == "foreign-document"
+                )
+            )
+            is None
         )
 
 
@@ -344,6 +555,86 @@ async def test_durable_schema_migration_round_trip(db_session):
         assert inspect(sync).get_table_names(schema=schema) == ["durable_chat_runs"]
         assert len(inspect(sync).get_foreign_keys("durable_chat_runs", schema=schema)) == 4
         module.downgrade()
+        assert not inspect(sync).get_table_names(schema=schema)
+
+    await connection.run_sync(verify)
+
+
+@pytest.mark.asyncio
+async def test_intake_namespace_migration_round_trip(db_session):
+    import importlib.util
+    from pathlib import Path
+
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy import inspect, text
+
+    versions = Path(__file__).resolve().parents[1] / "migrations/versions"
+    durable_spec = importlib.util.spec_from_file_location(
+        "durable_chat_migration", versions / "20260911_0001_durable_chat.py"
+    )
+    intake_spec = importlib.util.spec_from_file_location(
+        "agent_intake_migration", versions / "20260929_0001_agent_intake_namespace.py"
+    )
+    durable = importlib.util.module_from_spec(durable_spec)
+    intake = importlib.util.module_from_spec(intake_spec)
+    durable_spec.loader.exec_module(durable)
+    intake_spec.loader.exec_module(intake)
+    legacy_session = ChatSession(user_key="migration-owner")
+    db_session.add(legacy_session)
+    await db_session.flush()
+    legacy_message = ChatMessage(session_id=legacy_session.id, role="user", content="Legacy intake")
+    legacy_order = WorkOrder(owner_key="migration-owner", objective="Legacy intake")
+    db_session.add_all([legacy_message, legacy_order])
+    await db_session.flush()
+    legacy_run_id = uuid.uuid4()
+    legacy_request_id = uuid.uuid4()
+    schema = "intake_migration_" + uuid.uuid4().hex
+    connection = await db_session.connection()
+    await connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+    await connection.execute(text(f'SET LOCAL search_path TO "{schema}", public'))
+
+    def verify(sync):
+        context = MigrationContext.configure(sync)
+        durable.op = Operations(context)
+        intake.op = Operations(context)
+        durable.upgrade()
+        sync.execute(
+            text(
+                """
+                INSERT INTO durable_chat_runs
+                    (id, owner_key, request_id, request_digest, work_order_id, session_id, user_message_id)
+                VALUES
+                    (:id, :owner_key, :request_id, :request_digest, :work_order_id, :session_id, :message_id)
+                """
+            ),
+            {
+                "id": legacy_run_id,
+                "owner_key": "migration-owner",
+                "request_id": legacy_request_id,
+                "request_digest": "0" * 64,
+                "work_order_id": legacy_order.id,
+                "session_id": legacy_session.id,
+                "message_id": legacy_message.id,
+            },
+        )
+        intake.upgrade()
+        columns = {
+            column["name"]
+            for column in inspect(sync).get_columns("durable_chat_runs", schema=schema)
+        }
+        assert {"intake_channel", "external_message_id"} <= columns
+        uniques = inspect(sync).get_unique_constraints("durable_chat_runs", schema=schema)
+        assert any(item["name"] == "uq_chat_run_intake_message" for item in uniques)
+        migrated = sync.execute(
+            text(
+                "SELECT intake_channel, external_message_id FROM durable_chat_runs WHERE id = :id"
+            ),
+            {"id": legacy_run_id},
+        ).one()
+        assert migrated == ("http", str(legacy_request_id))
+        intake.downgrade()
+        durable.downgrade()
         assert not inspect(sync).get_table_names(schema=schema)
 
     await connection.run_sync(verify)

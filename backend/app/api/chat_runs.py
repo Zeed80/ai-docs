@@ -1,25 +1,18 @@
 """Pilot durable chat transport. No task is owned by the HTTP connection."""
 
 import hashlib
-import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
 from app.auth.jwt import get_current_user, is_service_account
 from app.auth.models import UserInfo
-from app.chat.store import (
-    ChatSessionNotFoundError,
-    append_chat_attachment,
-    append_chat_message,
-    ensure_chat_session,
-)
 from app.db.agent_runtime_models import (
     ChatLogicalAction,
     DurableChatRun,
@@ -28,7 +21,6 @@ from app.db.agent_runtime_models import (
 from app.db.models import (
     ChatMessage,
     ChatSession,
-    Document,
     User,
     WorkEvent,
     WorkOrder,
@@ -37,12 +29,14 @@ from app.db.models import (
     WorkStepAttempt,
 )
 from app.db.session import get_db
-from app.domain.work_orders import (
-    ACTIVE_WORK_STATUSES,
-    append_event,
-    create_single_step_plan,
-    create_work_order,
+from app.domain.agent_intake import (
+    AgentIntakeError,
+    AgentIntakeRequest,
+    IntakeAttachment,
+    VerifiedIntakeIdentity,
+    submit_agent_intake,
 )
+from app.domain.work_orders import append_event, create_single_step_plan
 
 router = APIRouter(prefix="/api/agent/chat-runs", tags=["durable-chat"])
 
@@ -454,114 +448,36 @@ async def submit_chat_run(
 ):
     if is_service_account(user):
         raise HTTPException(403, "Chat intake requires a human owner")
-    if not body.content.strip():
-        raise HTTPException(422, "Message must not be empty")
-    if len(json.dumps(body.workspace_context).encode()) > 64000:
-        raise HTTPException(422, "Workspace context is too large")
-    # Serialize retries even when both requests would create a new ChatSession.
-    lock = int.from_bytes(
-        hashlib.sha256(f"{user.sub}:{body.request_id}".encode()).digest()[:8], "big", signed=True
-    )
-    await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock})
-    digest = hashlib.sha256(body.model_dump_json().encode()).hexdigest()
-    existing = await db.scalar(
-        select(DurableChatRun).where(
-            DurableChatRun.owner_key == user.sub,
-            DurableChatRun.request_id == body.request_id,
-        )
-    )
-    if existing:
-        if existing.request_digest != digest:
-            raise HTTPException(409, "Request ID already used for different input")
-        return describe(existing, await db.get(WorkOrder, existing.work_order_id))
     try:
-        session = await ensure_chat_session(db, user_key=user.sub, session_id=body.session_id)
-    except ChatSessionNotFoundError as exc:
-        raise HTTPException(404, "Chat session not found") from exc
-    await db.execute(select(ChatSession.id).where(ChatSession.id == session.id).with_for_update())
-    durable_session = await db.scalar(
-        select(DurableChatRun.id).where(DurableChatRun.session_id == session.id).limit(1)
-    )
-    if not durable_session and await db.scalar(
-        select(ChatMessage.id).where(ChatMessage.session_id == session.id).limit(1)
-    ):
-        raise HTTPException(
-            409, "Legacy conversation migration is not enabled; create a new conversation"
-        )
-    active = await db.scalar(
-        select(DurableChatRun.id)
-        .join(
-            WorkOrder,
-            WorkOrder.id == DurableChatRun.work_order_id,
-        )
-        .where(DurableChatRun.session_id == session.id, WorkOrder.status.in_(ACTIVE_WORK_STATUSES))
-        .limit(1)
-    )
-    if active:
-        raise HTTPException(409, "A durable turn is already active in this conversation")
-    message = await append_chat_message(
-        db, session_id=session.id, role="user", content=body.content
-    )
-    for attachment in body.attachments:
-        document = await db.scalar(
-            select(Document).where(
-                Document.id == attachment.document_id,
-                Document.owner_sub == user.sub,
-            )
-        )
-        if document is None:
-            raise HTTPException(404, "Owned attachment not found")
-        await append_chat_attachment(
+        result = await submit_agent_intake(
             db,
-            session_id=session.id,
-            message_id=message.id,
-            document_id=document.id,
-            file_name=document.file_name,
-            mime_type=document.mime_type,
-            size_bytes=document.file_size,
+            identity=VerifiedIntakeIdentity(account_key=user.sub, channel="http"),
+            request=AgentIntakeRequest(
+                channel="http",
+                external_message_id=str(body.request_id),
+                request_id=body.request_id,
+                session_id=body.session_id,
+                content=body.content,
+                reasoning_mode=body.reasoning_mode,
+                attachments=tuple(
+                    IntakeAttachment(document_id=item.document_id) for item in body.attachments
+                ),
+                workspace_context=body.workspace_context,
+                # This is the pre-E12 HTTP idempotency representation.  It
+                # intentionally retains client-supplied attachment metadata.
+                input_digest=hashlib.sha256(body.model_dump_json().encode()).hexdigest(),
+            ),
         )
-    order = await create_work_order(
-        db,
-        owner_key=user.sub,
-        objective=body.content,
-        source="durable_chat",
-        budgets={"max_replans": 0, "max_wall_clock_seconds": 7200, "max_tool_calls": 200},
-        metadata={"chat_session_id": str(session.id)},
-        acceptance_criteria=[
-            {
-                "criterion_key": "objective_met",
-                "kind": "semantic",
-                "description": body.content,
-                "required": True,
-            }
-        ],
-    )
-    run = DurableChatRun(
-        owner_key=user.sub,
-        request_id=body.request_id,
-        request_digest=digest,
-        work_order_id=order.id,
-        session_id=session.id,
-        user_message_id=message.id,
-    )
-    db.add(run)
-    await create_single_step_plan(
-        db,
-        order,
-        kind="agent_turn",
-        title="Durable chat turn",
-        input_data={
-            "runner": "durable_chat",
-            "reasoning_mode": body.reasoning_mode,
-            "workspace_context": body.workspace_context,
-        },
-        max_attempts=1,
-        timeout_seconds=7200,
-    )
-    await db.commit()
+    except AgentIntakeError as exc:
+        # Preserve the HTTP transport contract while keeping policy and
+        # persistence details out of the common intake service.
+        detail = str(exc)
+        if detail == "External message ID already used for different input":
+            detail = "Request ID already used for different input"
+        raise HTTPException(exc.status_code, detail) from exc
     # Beat discovers the committed ready row. Broker availability is not part
     # of intake, so a lost enqueue cannot lose the user's request.
-    return describe(run, order)
+    return describe(result.run, result.order)
 
 
 async def owned_run(db, run_id, user):
