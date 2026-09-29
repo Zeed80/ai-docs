@@ -30,6 +30,7 @@ from app.db.agent_runtime_models import (  # noqa: F401
     AgentScriptRun,
     DelegationGrant,
     OwnedWorkspaceBlock,
+    TelegramApprovalCallback,
 )
 from app.db.base import GUID, Base, TimestampMixin, UUIDPrimaryKey
 

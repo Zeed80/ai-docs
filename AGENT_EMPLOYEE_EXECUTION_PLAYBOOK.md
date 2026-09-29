@@ -895,7 +895,7 @@ exactly-once у внешнего сервиса без получательск�
 
 ### E16 — Telegram approval/handoff
 
-**Статус:** TODO. **После:** E15.
+**Статус:** REVIEWED. **После:** E15. Отчёт: `docs/agent-employee-delivery/E16-telegram-approval.md`.
 **Файлы:** callback handlers Telegram, continuation service, тесты канала.
 
 1. Callback ссылается на сохранённое решение и конкретный pending action;

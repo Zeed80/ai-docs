@@ -283,12 +283,38 @@ class SvetaTelegramBot:
         user_id = query.from_user.id
         if not self._is_allowed(user_id):
             return
+        if query.message.chat.type != "private":
+            return
 
-        if (query.data or "").startswith("appr:"):
-            await query.edit_message_text(
-                f"{query.message.text}\n\n⚠️ Это подтверждение устарело.",
-                reply_markup=None,
+        match = re.fullmatch(r"ta:([A-Za-z0-9_-]{8,32}):([ar])", query.data or "")
+        if match is None:
+            return
+        from app.db.session import _get_session_factory
+        from app.domain.telegram_approvals import (
+            TelegramApprovalError,
+            settle_telegram_approval_callback,
+        )
+
+        try:
+            async with _get_session_factory()() as db:
+                result = await settle_telegram_approval_callback(
+                    db,
+                    token=match.group(1),
+                    approved=match.group(2) == "a",
+                    telegram_user_id=user_id,
+                )
+        except TelegramApprovalError:
+            result_text = "⚠️ Это подтверждение больше нельзя выполнить."
+        else:
+            icon = (
+                "✅"
+                if result.status == "approved"
+                else "❌"
+                if result.status == "rejected"
+                else "⚠️"
             )
+            result_text = f"{icon} {result.message}"
+        await query.edit_message_text(f"{query.message.text}\n\n{result_text}", reply_markup=None)
 
     # ── Core dispatch ─────────────────────────────────────────────────────────
 

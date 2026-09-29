@@ -406,10 +406,33 @@ async def test_telegram_repeat_update_and_bot_restart_create_one_durable_work(
     # still resolve to the same persisted run and outbox notification.
     await _telegram_bot(telegram_id)._handle_text(update, MagicMock())
 
-    assert await db_session.scalar(select(func.count()).select_from(DurableChatRun)) == 1
-    assert await db_session.scalar(select(func.count()).select_from(WorkOrder)) == 1
-    assert await db_session.scalar(select(func.count()).select_from(AgentOutbox)) == 1
-    run = await db_session.scalar(select(DurableChatRun))
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(DurableChatRun)
+            .where(DurableChatRun.owner_key == "telegram-alice")
+        )
+        == 1
+    )
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(WorkOrder)
+            .where(WorkOrder.owner_key == "telegram-alice")
+        )
+        == 1
+    )
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(AgentOutbox)
+            .where(AgentOutbox.owner_key == "telegram-alice")
+        )
+        == 1
+    )
+    run = await db_session.scalar(
+        select(DurableChatRun).where(DurableChatRun.owner_key == "telegram-alice")
+    )
     assert run.intake_channel == "telegram"
     assert run.external_message_id == "update:91001"
     # Accepted/progress delivery is persisted. The bot sends no placeholder or
@@ -432,9 +455,30 @@ async def test_telegram_intake_and_outbox_rollback_together_on_producer_failure(
     with pytest.raises(RuntimeError, match="synthetic outbox failure"):
         await _telegram_bot(telegram_id)._handle_text(update, MagicMock())
 
-    assert await db_session.scalar(select(func.count()).select_from(DurableChatRun)) == 0
-    assert await db_session.scalar(select(func.count()).select_from(WorkOrder)) == 0
-    assert await db_session.scalar(select(func.count()).select_from(AgentOutbox)) == 0
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(DurableChatRun)
+            .where(DurableChatRun.owner_key == "telegram-rollback")
+        )
+        == 0
+    )
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(WorkOrder)
+            .where(WorkOrder.owner_key == "telegram-rollback")
+        )
+        == 0
+    )
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(AgentOutbox)
+            .where(AgentOutbox.owner_key == "telegram-rollback")
+        )
+        == 0
+    )
 
 
 @pytest.mark.asyncio
@@ -448,7 +492,14 @@ async def test_telegram_conflict_returns_generic_rejection(db_session, telegram_
     await _telegram_bot(telegram_id)._handle_text(changed, MagicMock())
 
     changed.message.reply_text.assert_awaited_once_with("Сообщение не принято.")
-    assert await db_session.scalar(select(func.count()).select_from(DurableChatRun)) == 1
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(DurableChatRun)
+            .where(DurableChatRun.owner_key == "telegram-conflict")
+        )
+        == 1
+    )
 
 
 @pytest.mark.asyncio
@@ -462,7 +513,14 @@ async def test_telegram_rejects_foreign_allowlist_id_without_work(
 
     await _telegram_bot(alice_id)._handle_text(update, MagicMock())
 
-    assert await db_session.scalar(select(func.count()).select_from(WorkOrder)) == 0
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(WorkOrder)
+            .where(WorkOrder.owner_key == "telegram-bob-allow")
+        )
+        == 0
+    )
     update.message.reply_text.assert_awaited_once_with("Доступ запрещён.")
 
 
@@ -476,7 +534,14 @@ async def test_telegram_group_message_never_creates_work(db_session, telegram_se
 
     await _telegram_bot(telegram_id)._handle_text(update, MagicMock())
 
-    assert await db_session.scalar(select(func.count()).select_from(WorkOrder)) == 0
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(WorkOrder)
+            .where(WorkOrder.owner_key == "telegram-group-owner")
+        )
+        == 0
+    )
     update.message.reply_text.assert_awaited_once()
 
 
@@ -494,7 +559,14 @@ async def test_telegram_document_is_not_downloaded_before_private_binding(
     await _telegram_bot(telegram_id)._handle_document(update, context)
 
     context.bot.get_file.assert_not_awaited()
-    assert await db_session.scalar(select(func.count()).select_from(WorkOrder)) == 0
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(DurableChatRun)
+            .where(DurableChatRun.external_message_id == "update:91250")
+        )
+        == 0
+    )
 
 
 @pytest.mark.asyncio
@@ -576,8 +648,22 @@ async def test_unseen_pre_rebind_update_cannot_enter_new_owner_history(
     await db_session.flush()
 
     await _telegram_bot(telegram_id)._handle_text(stale, MagicMock())
-    assert await db_session.scalar(select(func.count()).select_from(DurableChatRun)) == 0
-    assert await db_session.scalar(select(func.count()).select_from(WorkOrder)) == 0
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(DurableChatRun)
+            .where(DurableChatRun.owner_key == "telegram-new-owner")
+        )
+        == 0
+    )
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(WorkOrder)
+            .where(WorkOrder.owner_key == "telegram-new-owner")
+        )
+        == 0
+    )
 
 
 @pytest.mark.asyncio
@@ -625,7 +711,330 @@ async def test_telegram_binding_soft_revoke_survives_outbox_and_rebinds(db_sessi
     assert response["id"] != str(binding.id)
     assert binding.owner_key == "telegram-soft-alice"
     assert binding.is_active is False
-    assert await db_session.scalar(select(func.count()).select_from(AgentOutbox)) == 1
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(AgentOutbox)
+            .where(AgentOutbox.work_order_id == order.id)
+        )
+        == 1
+    )
+
+
+# ── Telegram approval handoff (E16) ──────────────────────────────────────────
+
+
+async def _pending_telegram_approval(
+    db_session,
+    *,
+    expires_at=None,
+    assigned: bool = True,
+    binding_active: bool = True,
+    approver_role: str = "manager",
+    finite_expiry: bool = True,
+):
+    """Build one real durable approval; no Telegram network calls are made."""
+    from app.api.work_orders import WorkApprovalIn, request_work_approval
+    from app.auth.models import UserInfo
+    from app.domain.work_orders import create_work_order, create_work_plan
+
+    owner = "telegram-approval-owner"
+    approver = "telegram-approval-manager"
+    telegram_id = 709001
+    db_session.add_all(
+        [
+            User(
+                sub=owner,
+                email="owner@example.test",
+                name="owner",
+                preferred_username="owner",
+                role="operator",
+                is_active=True,
+            ),
+            User(
+                sub=approver,
+                email="manager@example.test",
+                name="manager",
+                preferred_username="manager",
+                role=approver_role,
+                is_active=True,
+            ),
+        ]
+    )
+    binding = AgentChannelIdentity(
+        owner_key=approver,
+        channel="telegram",
+        external_id=str(telegram_id),
+        is_active=binding_active,
+    )
+    db_session.add(binding)
+    order = await create_work_order(db_session, owner_key=owner, objective="Approval handoff")
+    _, steps = await create_work_plan(
+        db_session,
+        order,
+        steps=[{"step_key": "send", "title": "send", "kind": "agent_turn", "input": {}}],
+    )
+    await db_session.flush()
+    owner_info = UserInfo(
+        sub=owner, email="owner@example.test", name="owner", preferred_username="owner"
+    )
+    response = await request_work_approval(
+        order.id,
+        WorkApprovalIn(
+            step_id=steps[0].id,
+            capability="email",
+            action="send",
+            arguments={"recipient": "safe@example.test"},
+            reason="Human approval",
+            assigned_to=approver if assigned else None,
+            expires_at=(expires_at or datetime.now(UTC) + timedelta(hours=1))
+            if finite_expiry
+            else None,
+        ),
+        db_session,
+        owner_info,
+    )
+    from app.db.agent_runtime_models import TelegramApprovalCallback
+    from app.db.models import Approval
+
+    approval = await db_session.get(Approval, response["approval_id"])
+    callback = await db_session.scalar(
+        select(TelegramApprovalCallback).where(TelegramApprovalCallback.approval_id == approval.id)
+    )
+    await db_session.commit()
+    return approval, binding, callback, telegram_id
+
+
+@pytest.mark.asyncio
+async def test_work_approval_persists_opaque_callback_and_approver_outbox(db_session):
+    approval, binding, callback, _telegram_id = await _pending_telegram_approval(db_session)
+    outbox = await db_session.scalar(
+        select(AgentOutbox).where(AgentOutbox.approval_id == approval.id)
+    )
+    assert callback is not None
+    assert callback.approval_id == approval.id
+    assert callback.binding_id == binding.id
+    assert callback.owner_key == binding.owner_key
+    assert outbox is not None
+    assert outbox.approval_id == approval.id
+    assert outbox.owner_key == binding.owner_key
+    assert outbox.destination_binding_id == binding.id
+    assert outbox.payload == {"resource_type": "work_order", "resource_id": str(approval.entity_id)}
+
+
+@pytest.mark.asyncio
+async def test_telegram_approval_forwarded_button_is_not_a_human_identity(db_session):
+    from app.domain.telegram_approvals import settle_telegram_approval_callback
+
+    approval, _binding, callback, telegram_id = await _pending_telegram_approval(db_session)
+    result = await settle_telegram_approval_callback(
+        db_session, token=callback.token, approved=True, telegram_user_id=telegram_id + 1
+    )
+    assert result.status == "unavailable"
+    assert approval.status.value == "pending"
+
+
+@pytest.mark.asyncio
+async def test_telegram_approval_expired_callback_never_resumes_work(db_session):
+    from app.domain.telegram_approvals import settle_telegram_approval_callback
+
+    approval, _binding, callback, telegram_id = await _pending_telegram_approval(db_session)
+    approval.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    callback.expires_at = approval.expires_at
+    await db_session.commit()
+    result = await settle_telegram_approval_callback(
+        db_session, token=callback.token, approved=True, telegram_user_id=telegram_id
+    )
+    assert result.status == "expired"
+    assert approval.status.value == "expired"
+
+
+@pytest.mark.asyncio
+async def test_telegram_approval_double_click_is_single_use(db_session):
+    from app.domain.telegram_approvals import settle_telegram_approval_callback
+
+    approval, _binding, callback, telegram_id = await _pending_telegram_approval(db_session)
+    first = await settle_telegram_approval_callback(
+        db_session, token=callback.token, approved=True, telegram_user_id=telegram_id
+    )
+    second = await settle_telegram_approval_callback(
+        db_session, token=callback.token, approved=True, telegram_user_id=telegram_id
+    )
+    assert first.status == "approved"
+    assert second.status == "unavailable"
+    assert approval.status.value == "approved"
+
+
+@pytest.mark.asyncio
+async def test_telegram_approval_stale_callback_never_creates_another_step(db_session):
+    from app.db.models import ApprovalStatus
+    from app.domain.telegram_approvals import settle_telegram_approval_callback
+
+    approval, _binding, callback, telegram_id = await _pending_telegram_approval(db_session)
+    approval.status = ApprovalStatus.rejected
+    await db_session.commit()
+    result = await settle_telegram_approval_callback(
+        db_session, token=callback.token, approved=True, telegram_user_id=telegram_id
+    )
+    assert result.status == "unavailable"
+    assert approval.status == ApprovalStatus.rejected
+
+
+@pytest.mark.asyncio
+async def test_telegram_approval_rechecks_revoked_binding(db_session):
+    from app.domain.telegram_approvals import settle_telegram_approval_callback
+
+    approval, binding, callback, telegram_id = await _pending_telegram_approval(db_session)
+    binding.is_active = False
+    await db_session.commit()
+    result = await settle_telegram_approval_callback(
+        db_session, token=callback.token, approved=True, telegram_user_id=telegram_id
+    )
+    assert result.status == "unavailable"
+    assert approval.status.value == "pending"
+
+
+@pytest.mark.asyncio
+async def test_telegram_approval_rejects_changed_exact_arguments(db_session):
+    from app.domain.telegram_approvals import settle_telegram_approval_callback
+
+    approval, _binding, callback, telegram_id = await _pending_telegram_approval(db_session)
+    approval.context = {**approval.context, "tool_args": {"recipient": "changed@example.test"}}
+    await db_session.commit()
+    result = await settle_telegram_approval_callback(
+        db_session, token=callback.token, approved=True, telegram_user_id=telegram_id
+    )
+    assert result.status == "unavailable"
+    assert approval.status.value == "pending"
+
+
+@pytest.mark.asyncio
+async def test_telegram_approval_callback_handler_uses_fake_query_only(
+    db_session, telegram_session_factory
+):
+    """The bot handler settles an opaque token without sending Telegram traffic."""
+    from app.domain.telegram_approvals import callback_data
+
+    _approval, _binding, callback, telegram_id = await _pending_telegram_approval(db_session)
+    update = MagicMock()
+    update.callback_query.data = callback_data(callback, True)
+    update.callback_query.from_user.id = telegram_id
+    update.callback_query.message.text = "Approve exact action"
+    update.callback_query.message.chat.type = "private"
+    update.callback_query.answer = AsyncMock()
+    update.callback_query.edit_message_text = AsyncMock()
+
+    await _telegram_bot(telegram_id)._handle_callback(update, MagicMock())
+
+    update.callback_query.answer.assert_awaited_once()
+    update.callback_query.edit_message_text.assert_awaited_once()
+    assert "Решение сохранено" in update.callback_query.edit_message_text.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_telegram_approval_callback_rejects_group_forward(
+    db_session, telegram_session_factory
+):
+    from app.domain.telegram_approvals import callback_data
+
+    approval, _binding, callback, telegram_id = await _pending_telegram_approval(db_session)
+    update = MagicMock()
+    update.callback_query.data = callback_data(callback, True)
+    update.callback_query.from_user.id = telegram_id
+    update.callback_query.message.chat.type = "group"
+    update.callback_query.answer = AsyncMock()
+    update.callback_query.edit_message_text = AsyncMock()
+
+    await _telegram_bot(telegram_id)._handle_callback(update, MagicMock())
+
+    update.callback_query.answer.assert_awaited_once()
+    update.callback_query.edit_message_text.assert_not_awaited()
+    assert approval.status.value == "pending"
+
+
+@pytest.mark.asyncio
+async def test_telegram_approval_migration_round_trip(db_session):
+    import importlib.util
+    import uuid
+    from pathlib import Path
+
+    import sqlalchemy as sa
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy import inspect, text
+
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "migrations/versions/20260929_0004_telegram_approval_callbacks.py"
+    )
+    spec = importlib.util.spec_from_file_location("telegram_approval_migration", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    schema = "telegram_approval_migration_" + uuid.uuid4().hex
+    connection = await db_session.connection()
+    await connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+    await connection.execute(text(f'SET LOCAL search_path TO "{schema}", public'))
+
+    def verify(sync):
+        op = Operations(MigrationContext.configure(sync))
+        op.create_table("agent_outbox", sa.Column("id", sa.UUID(), primary_key=True))
+        module.op = op
+        module.upgrade()
+        inspector = inspect(sync)
+        assert "telegram_approval_callbacks" in inspector.get_table_names(schema=schema)
+        assert "approval_id" in {
+            column["name"] for column in inspector.get_columns("agent_outbox", schema=schema)
+        }
+        module.downgrade()
+        assert "telegram_approval_callbacks" not in inspect(sync).get_table_names(schema=schema)
+        assert "approval_id" not in {
+            column["name"] for column in inspect(sync).get_columns("agent_outbox", schema=schema)
+        }
+        module.upgrade()
+        assert "telegram_approval_callbacks" in inspect(sync).get_table_names(schema=schema)
+
+    await connection.run_sync(verify)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("assigned", "binding_active", "approver_role", "finite_expiry"),
+    [
+        (False, True, "manager", True),
+        (True, False, "manager", True),
+        (True, True, "viewer", True),
+        (True, True, "manager", False),
+    ],
+)
+async def test_work_approval_creates_no_telegram_callback_without_verified_approver(
+    db_session, assigned, binding_active, approver_role, finite_expiry
+):
+    from app.db.agent_runtime_models import TelegramApprovalCallback
+
+    approval, _binding, callback, _telegram_id = await _pending_telegram_approval(
+        db_session,
+        assigned=assigned,
+        binding_active=binding_active,
+        approver_role=approver_role,
+        finite_expiry=finite_expiry,
+    )
+    assert callback is None
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(AgentOutbox)
+            .where(AgentOutbox.approval_id == approval.id)
+        )
+        == 0
+    )
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(TelegramApprovalCallback)
+            .where(TelegramApprovalCallback.approval_id == approval.id)
+        )
+        == 0
+    )
 
 
 @pytest.mark.asyncio

@@ -79,23 +79,14 @@ class TelegramNotifier:
         self,
         skill: str,
         description: str,
-        approval_id: str,
     ) -> None:
-        """Send an approval request with inline Approve/Reject buttons."""
+        """Notify a configured chat without exporting an approval capability.
+
+        This notifier can target a group chat. Active buttons belong only to a
+        future owner-bound outbox adapter targeting a verified private binding.
+        """
         text = f"⏳ *Требуется подтверждение*\nДействие: `{_escape(skill)}`\n{_escape(description)}"
-        keyboard = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(
-                        "✅ Подтвердить", callback_data=f"appr:approve:{approval_id}"
-                    ),
-                    InlineKeyboardButton(
-                        "❌ Отклонить", callback_data=f"appr:reject:{approval_id}"
-                    ),
-                ]
-            ]
-        )
-        await self._send(text, reply_markup=keyboard)
+        await self._send(text)
 
     async def notify_text(self, text: str) -> None:
         """Send a plain (escaped) text notification."""
@@ -106,28 +97,14 @@ class TelegramNotifier:
         action_type: str,
         entity_label: str,
         hours_pending: int,
-        approval_id: str,
     ) -> None:
-        """Alert about a pending approval that has not been resolved."""
+        """Alert a configured chat; this legacy path never carries a button."""
         text = (
             f"⏳ *Ожидает подтверждения {hours_pending}ч*\n"
             f"Действие: `{_escape(action_type)}`\n"
-            f"Объект: {_escape(entity_label)}\n"
-            f"ID: `{_escape(approval_id[:16])}`"
+            f"Объект: {_escape(entity_label)}"
         )
-        keyboard = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(
-                        "✅ Подтвердить", callback_data=f"appr:approve:{approval_id}"
-                    ),
-                    InlineKeyboardButton(
-                        "❌ Отклонить", callback_data=f"appr:reject:{approval_id}"
-                    ),
-                ]
-            ]
-        )
-        await self._send(text, reply_markup=keyboard)
+        await self._send(text)
 
     async def notify_due_date(
         self,

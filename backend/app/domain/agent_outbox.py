@@ -12,8 +12,12 @@ from typing import Any
 from sqlalchemy import and_, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.agent_runtime_models import AgentChannelIdentity, AgentOutbox
-from app.db.models import WorkOrder
+from app.db.agent_runtime_models import (
+    AgentChannelIdentity,
+    AgentOutbox,
+    TelegramApprovalCallback,
+)
+from app.db.models import Approval, ApprovalStatus, WorkOrder
 from app.domain.work_orders import append_event, utcnow
 
 
@@ -93,6 +97,9 @@ class AgentOutboxRequest:
     dedup_key: str
     payload_version: int = 1
     actor: str = "agent_outbox"
+    # Only approval.requested may name the explicit human recipient instead
+    # of the work-order owner. The approval row is revalidated below.
+    approval_id: uuid.UUID | None = None
 
 
 def _nonblank(value: str, *, label: str, limit: int) -> None:
@@ -129,6 +136,7 @@ def _request_digest(request: AgentOutboxRequest, payload: dict[str, Any]) -> str
         "payload_version": request.payload_version,
         "dedup_key": request.dedup_key,
         "actor": request.actor,
+        "approval_id": str(request.approval_id) if request.approval_id else None,
     }
     encoded = json.dumps(
         canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
@@ -184,11 +192,27 @@ async def produce_agent_outbox(db: AsyncSession, *, request: AgentOutboxRequest)
         return existing
 
     order = await db.scalar(
-        select(WorkOrder)
-        .where(WorkOrder.id == request.work_order_id, WorkOrder.owner_key == request.owner_key)
-        .with_for_update()
+        select(WorkOrder).where(WorkOrder.id == request.work_order_id).with_for_update()
     )
     if order is None:
+        raise OutboxValidationError("Work order is not owned by the verified owner")
+    if request.approval_id is not None:
+        if request.event_type != "approval.requested":
+            raise OutboxValidationError("Only approval.requested may name an approval")
+        approval = await db.scalar(
+            select(Approval)
+            .where(
+                Approval.id == request.approval_id,
+                Approval.entity_type == "work_order",
+                Approval.entity_id == order.id,
+                Approval.assigned_to == request.owner_key,
+                Approval.status == ApprovalStatus.pending,
+            )
+            .with_for_update()
+        )
+        if approval is None:
+            raise OutboxValidationError("Approval recipient is not verified for this work order")
+    elif order.owner_key != request.owner_key:
         raise OutboxValidationError("Work order is not owned by the verified owner")
     destination = await db.scalar(
         select(AgentChannelIdentity).where(
@@ -210,6 +234,7 @@ async def produce_agent_outbox(db: AsyncSession, *, request: AgentOutboxRequest)
     outbox = AgentOutbox(
         work_event_id=event.id,
         work_order_id=order.id,
+        approval_id=request.approval_id,
         owner_key=request.owner_key,
         destination_binding_id=destination.id,
         event_type=request.event_type,
@@ -360,6 +385,46 @@ async def _mark_non_idempotent_send_started(db: AsyncSession, *, claim: OutboxCl
     return result.rowcount == 1
 
 
+async def _valid_delegated_approval_delivery(
+    db: AsyncSession, *, row: AgentOutbox, resource: WorkOrder
+) -> bool:
+    """Prove that a recipient still has the exact approval shown in Telegram."""
+    if row.approval_id is None:
+        return resource.owner_key == row.owner_key
+    approval = await db.scalar(
+        select(Approval)
+        .where(
+            Approval.id == row.approval_id,
+            Approval.entity_type == "work_order",
+            Approval.entity_id == resource.id,
+            Approval.assigned_to == row.owner_key,
+            Approval.status == ApprovalStatus.pending,
+        )
+        .with_for_update()
+    )
+    if approval is None or approval.expires_at is None or approval.expires_at <= utcnow():
+        return False
+    from app.domain.telegram_approvals import _action_digest
+
+    context = approval.context or {}
+    action_digest = _action_digest(context)
+    if action_digest is None or action_digest != context.get("action_digest"):
+        return False
+    callback = await db.scalar(
+        select(TelegramApprovalCallback)
+        .where(
+            TelegramApprovalCallback.approval_id == approval.id,
+            TelegramApprovalCallback.binding_id == row.destination_binding_id,
+            TelegramApprovalCallback.owner_key == row.owner_key,
+            TelegramApprovalCallback.action_digest == action_digest,
+            TelegramApprovalCallback.expires_at == approval.expires_at,
+            TelegramApprovalCallback.consumed_at.is_(None),
+        )
+        .with_for_update()
+    )
+    return callback is not None
+
+
 async def deliver_outbox_claim(
     session_factory: Any,
     *,
@@ -394,15 +459,16 @@ async def deliver_outbox_claim(
                 AgentChannelIdentity.is_active.is_(True),
             )
         )
-        resource = await db.scalar(
-            select(WorkOrder).where(
-                WorkOrder.id == row.work_order_id,
-                WorkOrder.owner_key == row.owner_key,
-            )
-        )
+        resource = await db.scalar(select(WorkOrder).where(WorkOrder.id == row.work_order_id))
         if destination is None or resource is None:
             await _finish_claim(
                 db, claim=claim, state="dead_letter", error_code="recipient_binding_revoked"
+            )
+            await db.commit()
+            return "dead_letter"
+        if not await _valid_delegated_approval_delivery(db, row=row, resource=resource):
+            await _finish_claim(
+                db, claim=claim, state="dead_letter", error_code="approval_binding_stale"
             )
             await db.commit()
             return "dead_letter"

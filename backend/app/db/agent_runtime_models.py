@@ -182,6 +182,34 @@ class AgentChannelIdentity(UUIDPrimaryKey, TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(nullable=False, default=True)
 
 
+class TelegramApprovalCallback(UUIDPrimaryKey, Base):
+    """One opaque Telegram button bound to one exact human decision."""
+
+    __tablename__ = "telegram_approval_callbacks"
+    __table_args__ = (
+        UniqueConstraint("token", name="uq_telegram_approval_callback_token"),
+        UniqueConstraint(
+            "approval_id", "binding_id", name="uq_telegram_approval_callback_approval_binding"
+        ),
+        Index("ix_telegram_approval_callbacks_approval", "approval_id"),
+    )
+
+    # This is deliberately short enough for Telegram callback_data and contains
+    # neither the UUID of the approval nor action arguments.
+    token: Mapped[str] = mapped_column(String(32), nullable=False)
+    approval_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("approvals.id", ondelete="CASCADE"), nullable=False
+    )
+    binding_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("agent_channel_identities.id", ondelete="RESTRICT"), nullable=False
+    )
+    owner_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    action_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class AgentOutbox(UUIDPrimaryKey, TimestampMixin, Base):
     """A durable, not-yet-delivered event for one verified channel binding.
 
@@ -209,6 +237,12 @@ class AgentOutbox(UUIDPrimaryKey, TimestampMixin, Base):
     )
     work_order_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("work_orders.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Null for ordinary owner notifications.  A non-null value is the narrow
+    # proof that an approval recipient may receive a work-order reference
+    # owned by somebody else.
+    approval_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("approvals.id", ondelete="CASCADE"), nullable=True, index=True
     )
     owner_key: Mapped[str] = mapped_column(String(200), nullable=False)
     destination_binding_id: Mapped[uuid.UUID] = mapped_column(

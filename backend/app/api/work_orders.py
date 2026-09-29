@@ -760,6 +760,51 @@ async def request_work_approval(
         actor=user.sub,
         payload={"approval_id": str(approval.id), "step_id": str(step.id)},
     )
+    # A Telegram approval button is a presentation of this exact persisted
+    # decision, never an alternative decision endpoint. Only an explicitly
+    # assigned active manager/admin with a private verified binding receives a
+    # callback and its owner-bound outbox reference.
+    if approval.assigned_to and approval.expires_at is not None:
+        from app.db.agent_runtime_models import AgentChannelIdentity
+        from app.db.models import User
+        from app.domain.agent_outbox import AgentOutboxRequest, produce_agent_outbox
+        from app.domain.telegram_approvals import (
+            TelegramApprovalError,
+            create_telegram_approval_callback,
+        )
+
+        bindings = (
+            await db.scalars(
+                select(AgentChannelIdentity)
+                .join(User, User.sub == AgentChannelIdentity.owner_key)
+                .where(
+                    AgentChannelIdentity.channel == "telegram",
+                    AgentChannelIdentity.owner_key == approval.assigned_to,
+                    AgentChannelIdentity.is_active.is_(True),
+                    User.is_active.is_(True),
+                    User.role.in_(["manager", "admin"]),
+                )
+                .with_for_update()
+            )
+        ).all()
+        for binding in bindings:
+            try:
+                await create_telegram_approval_callback(db, approval=approval, binding=binding)
+            except TelegramApprovalError:
+                continue
+            await produce_agent_outbox(
+                db,
+                request=AgentOutboxRequest(
+                    work_order_id=order.id,
+                    owner_key=binding.owner_key,
+                    destination_binding_id=binding.id,
+                    event_type="approval.requested",
+                    payload={"resource_type": "work_order", "resource_id": str(order.id)},
+                    dedup_key=f"telegram:approval:{approval.id}:requested",
+                    actor="work-order-approval",
+                    approval_id=approval.id,
+                ),
+            )
     await db.commit()
     return {
         "approval_id": str(approval.id),

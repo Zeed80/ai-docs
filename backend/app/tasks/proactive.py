@@ -96,7 +96,7 @@ async def _tg_notify_anomaly(title: str, anomaly_id: str) -> None:
 
 
 async def _tg_notify_stale_approval(
-    action_type: str, entity_label: str, hours_pending: int, approval_id: str
+    action_type: str, entity_label: str, hours_pending: int
 ) -> None:
     notifier = await _get_notifier()
     if notifier:
@@ -105,7 +105,6 @@ async def _tg_notify_stale_approval(
                 action_type=action_type,
                 entity_label=entity_label,
                 hours_pending=hours_pending,
-                approval_id=approval_id,
             )
         except Exception as exc:
             logger.warning("tg_notify_stale_approval_failed", error=str(exc))
@@ -473,7 +472,6 @@ async def _check_stale_approvals() -> dict:
                     action_type=appr.action_type.value,
                     entity_label=entity_label,
                     hours_pending=hours_pending,
-                    approval_id=str(appr.id),
                 )
                 alerted += 1
             except Exception as exc:

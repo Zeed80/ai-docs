@@ -3,15 +3,15 @@
 import asyncio
 import importlib.util
 import uuid
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from sqlalchemy import func, inspect, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.db.agent_runtime_models import AgentChannelIdentity, AgentOutbox
-from app.db.models import WorkEvent, WorkOrder
+from app.db.agent_runtime_models import AgentChannelIdentity, AgentOutbox, TelegramApprovalCallback
+from app.db.models import Approval, ApprovalActionType, ApprovalStatus, WorkEvent, WorkOrder
 from app.domain.agent_outbox import (
     AgentOutboxRequest,
     OutboxConflictError,
@@ -77,6 +77,67 @@ async def _claim_outbox(factory, outbox_id):
             claim = (await claim_due_outbox(db, batch_size=1))[0]
     assert claim.id == outbox_id
     return claim
+
+
+async def _delegated_approval_outbox(factory):
+    """Persist a real approval recipient notification without any network send."""
+    from app.domain.telegram_approvals import _action_digest
+
+    owner = "approval-owner-" + uuid.uuid4().hex
+    approver = "approval-manager-" + uuid.uuid4().hex
+    expires_at = datetime.now(UTC) + timedelta(hours=1)
+    context = {
+        "work_order_id": None,
+        "step_id": str(uuid.uuid4()),
+        "tool_name": "email",
+        "action": "send",
+        "tool_args": {"recipient": "safe@example.test"},
+    }
+    async with factory() as db:
+        async with db.begin():
+            order = WorkOrder(owner_key=owner, objective="Delegated approval delivery")
+            binding = AgentChannelIdentity(
+                owner_key=approver, channel="internal", external_id=uuid.uuid4().hex
+            )
+            db.add_all([order, binding])
+            await db.flush()
+            context["work_order_id"] = str(order.id)
+            context["action_digest"] = _action_digest(context)
+            approval = Approval(
+                action_type=ApprovalActionType.agent_tool_call,
+                entity_type="work_order",
+                entity_id=order.id,
+                status=ApprovalStatus.pending,
+                assigned_to=approver,
+                context=context,
+                expires_at=expires_at,
+            )
+            db.add(approval)
+            await db.flush()
+            callback = TelegramApprovalCallback(
+                token=uuid.uuid4().hex[:20],
+                approval_id=approval.id,
+                binding_id=binding.id,
+                owner_key=approver,
+                action_digest=context["action_digest"],
+                expires_at=expires_at,
+                created_at=datetime.now(UTC),
+            )
+            db.add(callback)
+            outbox = await produce_agent_outbox(
+                db,
+                request=AgentOutboxRequest(
+                    work_order_id=order.id,
+                    owner_key=approver,
+                    destination_binding_id=binding.id,
+                    event_type="approval.requested",
+                    payload={"resource_type": "work_order", "resource_id": str(order.id)},
+                    dedup_key=f"approval:{approval.id}:requested",
+                    approval_id=approval.id,
+                ),
+            )
+            outbox.next_attempt_at = utcnow() - timedelta(minutes=1)
+            return outbox.id, approval.id, binding.id
 
 
 class _InternalFake(OutboxDeliveryAdapter):
@@ -509,3 +570,63 @@ async def test_unavailable_recipient_dead_letters_after_revalidation(test_engine
     async with factory() as db:
         row = await db.get(AgentOutbox, outbox_id)
         assert row.error_code == "recipient_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_delegated_approval_outbox_revalidates_and_delivers_to_fake_adapter(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    outbox_id, approval_id, _binding_id = await _delegated_approval_outbox(factory)
+    claim = await _claim_outbox(factory, outbox_id)
+    fake = _InternalFake()
+
+    assert await deliver_outbox_claim(factory, claim=claim, adapters={"internal": fake}) == "sent"
+    assert fake.calls == 1
+    async with factory() as db:
+        row = await db.get(AgentOutbox, outbox_id)
+        assert row.approval_id == approval_id
+        assert row.delivery_state == "sent"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["expired", "revoked", "arguments"])
+async def test_delegated_approval_outbox_stale_binding_dead_letters_without_send(
+    test_engine, change
+):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    outbox_id, approval_id, binding_id = await _delegated_approval_outbox(factory)
+    async with factory() as db:
+        async with db.begin():
+            approval = await db.get(Approval, approval_id)
+            if change == "expired":
+                approval.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+            elif change == "revoked":
+                (await db.get(AgentChannelIdentity, binding_id)).is_active = False
+            else:
+                approval.context = {
+                    **approval.context,
+                    "tool_args": {"recipient": "changed@example.test"},
+                }
+    claim = await _claim_outbox(factory, outbox_id)
+    fake = _InternalFake()
+
+    assert (
+        await deliver_outbox_claim(factory, claim=claim, adapters={"internal": fake})
+        == "dead_letter"
+    )
+    assert fake.calls == 0
+    async with factory() as db:
+        assert (await db.get(AgentOutbox, outbox_id)).error_code in {
+            "approval_binding_stale",
+            "recipient_binding_revoked",
+        }
+
+
+@pytest.mark.asyncio
+async def test_owner_outbox_delivery_remains_supported(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    outbox_id, _destination_id = await _persist_outbox(factory)
+    claim = await _claim_outbox(factory, outbox_id)
+    fake = _InternalFake()
+
+    assert await deliver_outbox_claim(factory, claim=claim, adapters={"internal": fake}) == "sent"
+    assert fake.calls == 1
