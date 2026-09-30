@@ -1,26 +1,31 @@
 """Pilot durable chat transport. No task is owned by the HTTP connection."""
 
 import hashlib
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
 from app.auth.jwt import get_current_user, is_service_account
 from app.auth.models import UserInfo
+from app.chat.store import create_chat_session
 from app.db.agent_runtime_models import (
+    ArchivedConversationImport,
     ChatLogicalAction,
     DurableChatRun,
     VerifiedCommitDecision,
 )
 from app.db.models import (
     ChatMessage,
+    ChatMessageAttachment,
     ChatSession,
+    Document,
     User,
     WorkEvent,
     WorkOrder,
@@ -56,6 +61,180 @@ class ChatRunCreate(BaseModel):
     reasoning_mode: Literal["normal", "strict"] = "normal"
     attachments: list[ChatRunAttachment] = Field(default_factory=list, max_length=20)
     workspace_context: dict = Field(default_factory=dict)
+
+
+class ArchivedConversationImportCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: uuid.UUID
+    message_ids: list[uuid.UUID] = Field(min_length=1, max_length=100)
+    attachment_ids: list[uuid.UUID] = Field(default_factory=list, max_length=20)
+    title: str = Field(default="Продолжение архивного чата", max_length=500)
+
+    @model_validator(mode="after")
+    def unique_selection(self):
+        if len(set(self.message_ids)) != len(self.message_ids):
+            raise ValueError("message_ids must be unique")
+        if len(set(self.attachment_ids)) != len(self.attachment_ids):
+            raise ValueError("attachment_ids must be unique")
+        return self
+
+
+def _archive_import_digest(source_session_id: uuid.UUID, body: ArchivedConversationImportCreate):
+    payload = {
+        "source_session_id": str(source_session_id),
+        "message_ids": sorted(str(item) for item in body.message_ids),
+        "attachment_ids": sorted(str(item) for item in body.attachment_ids),
+        "title": " ".join(body.title.split()) or "Продолжение архивного чата",
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    ).hexdigest()
+
+
+@router.post("/archive-imports/{source_session_id}", status_code=201)
+async def import_archived_conversation(
+    source_session_id: uuid.UUID,
+    body: ArchivedConversationImportCreate,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+):
+    """Create a new conversation with inert, explicitly selected archive context."""
+    if is_service_account(user):
+        raise HTTPException(403, "Archive import requires a human owner")
+    request_digest = _archive_import_digest(source_session_id, body)
+    lock_raw = f"archive-import:{user.sub}:{body.request_id}".encode()
+    lock_key = int.from_bytes(hashlib.sha256(lock_raw).digest()[:8], "big", signed=True)
+    await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})
+    existing = await db.scalar(
+        select(ArchivedConversationImport).where(
+            ArchivedConversationImport.owner_key == user.sub,
+            ArchivedConversationImport.request_id == body.request_id,
+        )
+    )
+    if existing is not None:
+        if existing.request_digest != request_digest:
+            raise HTTPException(409, "Archive import request already used differently")
+        return {
+            "id": existing.id,
+            "source_session_id": existing.source_session_id,
+            "target_session_id": existing.target_session_id,
+            "record_count": len(existing.records),
+            "created": False,
+        }
+
+    source = await db.scalar(
+        select(ChatSession).where(
+            ChatSession.id == source_session_id,
+            ChatSession.user_key == user.sub,
+            ChatSession.deleted_at.is_(None),
+        )
+    )
+    if source is None:
+        raise HTTPException(404, "Archived chat session not found")
+    # A durable source is not an archive and must be continued through its own
+    # run lifecycle instead of being copied into another execution context.
+    if await db.scalar(
+        select(DurableChatRun.id).where(DurableChatRun.session_id == source.id).limit(1)
+    ):
+        raise HTTPException(409, "Only an archived conversation can be imported")
+
+    messages = list(
+        await db.scalars(
+            select(ChatMessage)
+            .where(
+                ChatMessage.session_id == source.id,
+                ChatMessage.id.in_(body.message_ids),
+            )
+            .order_by(ChatMessage.created_at, ChatMessage.id)
+        )
+    )
+    if len(messages) != len(body.message_ids):
+        raise HTTPException(404, "Selected archived message not found")
+    messages_by_id = {message.id: message for message in messages}
+    messages = [messages_by_id[message_id] for message_id in body.message_ids]
+    if any(message.role not in {"user", "assistant"} for message in messages):
+        raise HTTPException(422, "Only archived user and assistant text can be imported")
+
+    attachments: list[ChatMessageAttachment] = []
+    if body.attachment_ids:
+        attachments = list(
+            await db.scalars(
+                select(ChatMessageAttachment).where(
+                    ChatMessageAttachment.id.in_(body.attachment_ids),
+                    ChatMessageAttachment.session_id == source.id,
+                    ChatMessageAttachment.message_id.in_(body.message_ids),
+                )
+            )
+        )
+        if len(attachments) != len(body.attachment_ids):
+            raise HTTPException(404, "Selected archived attachment not found")
+        if any(item.document_id is None for item in attachments):
+            raise HTTPException(404, "Selected archived attachment is no longer readable")
+        document_ids = {item.document_id for item in attachments}
+        owned_document_ids = set(
+            await db.scalars(
+                select(Document.id).where(
+                    Document.id.in_(document_ids),
+                    Document.owner_sub == user.sub,
+                )
+            )
+        )
+        if owned_document_ids != document_ids:
+            # A historical link is not proof of current access.
+            raise HTTPException(404, "Selected archived attachment is no longer readable")
+
+    attachments_by_message: dict[uuid.UUID, list[ChatMessageAttachment]] = {}
+    for attachment in attachments:
+        attachments_by_message.setdefault(attachment.message_id, []).append(attachment)
+    records = [
+        {
+            "source_message_id": str(message.id),
+            "source_role": message.role,
+            "content": message.content or "",
+            "created_at": message.created_at.isoformat(),
+            "attachments": [
+                {
+                    "attachment_id": str(item.id),
+                    "document_id": str(item.document_id),
+                    "file_name": item.file_name,
+                    "mime_type": item.mime_type,
+                    "size_bytes": item.size_bytes,
+                }
+                for item in sorted(
+                    attachments_by_message.get(message.id, []), key=lambda value: str(value.id)
+                )
+            ],
+            "executable": False,
+        }
+        for message in messages
+    ]
+    if len(json.dumps(records, ensure_ascii=False).encode()) > 48_000:
+        raise HTTPException(422, "Selected archived context is too large")
+
+    target = await create_chat_session(
+        db,
+        user_key=user.sub,
+        title=" ".join(body.title.split()) or "Продолжение архивного чата",
+    )
+    imported = ArchivedConversationImport(
+        owner_key=user.sub,
+        request_id=body.request_id,
+        request_digest=request_digest,
+        source_session_id=source.id,
+        target_session_id=target.id,
+        records=records,
+        attachment_ids=[str(item) for item in body.attachment_ids],
+        created_at=datetime.now(UTC),
+    )
+    db.add(imported)
+    await db.commit()
+    return {
+        "id": imported.id,
+        "source_session_id": imported.source_session_id,
+        "target_session_id": imported.target_session_id,
+        "record_count": len(records),
+        "created": True,
+    }
 
 
 class ChatResumeRequest(BaseModel):

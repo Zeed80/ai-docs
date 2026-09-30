@@ -28,6 +28,7 @@ from app.db.agent_runtime_models import (  # noqa: F401
     AgentChannelIdentity,
     AgentOutbox,
     AgentScriptRun,
+    ArchivedConversationImport,
     DelegationGrant,
     OwnedWorkspaceBlock,
     TelegramApprovalCallback,

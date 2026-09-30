@@ -91,3 +91,29 @@ export async function getChatMessages(
     `/api/chat/sessions/${sessionId}/messages`,
   );
 }
+
+export type ArchivedConversationImport = {
+  id: string;
+  source_session_id: string;
+  target_session_id: string;
+  record_count: number;
+  created: boolean;
+};
+
+export async function importArchivedConversation(
+  sourceSessionId: string,
+  input: {
+    request_id: string;
+    message_ids: string[];
+    attachment_ids: string[];
+    title?: string;
+  },
+): Promise<ArchivedConversationImport> {
+  return apiFetch<ArchivedConversationImport>(
+    `/api/agent/chat-runs/archive-imports/${sourceSessionId}`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+}

@@ -941,7 +941,8 @@ exactly-once у внешнего сервиса без получательск�
 
 ### E19 — Безопасный перенос архивного разговора
 
-**Статус:** TODO. **После:** REVIEWED E18.
+**Статус:** REVIEWED. **После:** REVIEWED E18.
+Отчёт: `docs/agent-employee-delivery/E19-archived-conversation-import.md`.
 **Файлы:** ChatSession API/store, `api/chat_runs.py`, AssistantPanel.
 
 1. Не возобновлять старый WS checkpoint. Предложить новый durable conversation

@@ -58,6 +58,32 @@ class DurableChatRun(UUIDPrimaryKey, TimestampMixin, Base):
     )
 
 
+class ArchivedConversationImport(UUIDPrimaryKey, Base):
+    """Immutable, inert context selected from one legacy chat session."""
+
+    __tablename__ = "archived_conversation_imports"
+    __table_args__ = (
+        UniqueConstraint("owner_key", "request_id", name="uq_archive_import_owner_request"),
+        UniqueConstraint("target_session_id", name="uq_archive_import_target_session"),
+        Index("ix_archive_import_source_session", "source_session_id"),
+    )
+
+    owner_key: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    request_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False)
+    request_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_session_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("chat_sessions.id", ondelete="RESTRICT"), nullable=False
+    )
+    target_session_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("chat_sessions.id", ondelete="RESTRICT"), nullable=False
+    )
+    # Records are display/model context only. They are deliberately not
+    # ChatMessage rows and therefore cannot enter executable dialogue history.
+    records: Mapped[list] = mapped_column(JSON, nullable=False)
+    attachment_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ChatLogicalAction(UUIDPrimaryKey, TimestampMixin, Base):
     __tablename__ = "chat_logical_actions"
 

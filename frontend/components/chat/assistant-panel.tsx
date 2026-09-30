@@ -25,6 +25,7 @@ import {
   createChatSession,
   deleteChatSession,
   getChatMessages,
+  importArchivedConversation,
   listChatSessions,
   type ChatSession,
 } from "@/lib/api";
@@ -86,11 +87,47 @@ interface ChatMessage {
     docId: string;
     mimeType?: string;
     sizeBytes?: number;
+    archiveAttachmentId?: string;
   }[];
   source?: "telegram";
 }
 
 type AttachedFileStatus = "uploading" | "uploaded" | "error";
+
+const ARCHIVE_IMPORT_REQUESTS_STORAGE = "aidocs.archiveImportRequests";
+
+function readArchiveImportRequests(): Record<string, string> | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const parsed = JSON.parse(
+      window.localStorage.getItem(ARCHIVE_IMPORT_REQUESTS_STORAGE) ?? "{}",
+    );
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const valid: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (
+        key.length <= 12000 &&
+        typeof value === "string" &&
+        /^[0-9a-f-]{36}$/i.test(value)
+      ) {
+        valid[key] = value;
+      }
+    }
+    return valid;
+  } catch {
+    return null;
+  }
+}
+
+function writeArchiveImportRequests(requests: Record<string, string>): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    window.localStorage.setItem(ARCHIVE_IMPORT_REQUESTS_STORAGE, JSON.stringify(requests));
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 interface AttachedFile {
   id: string;
@@ -317,6 +354,10 @@ export function AssistantPanel() {
   const [input, setInput] = useState("");
   const [isConnected, setIsConnected] = useState(false);
   const [isLegacyChat, setIsLegacyChat] = useState(false);
+  const [selectedArchiveMessageIds, setSelectedArchiveMessageIds] = useState<Set<string>>(
+    new Set(),
+  );
+  const [isArchiveImporting, setIsArchiveImporting] = useState(false);
   const [durableRunId, setDurableRunId] = useState<string | null>(null);
   const [durableConfirmation, setDurableConfirmation] = useState<DurableContinuation | null>(null);
   const [decisionPending, setDecisionPending] = useState(false);
@@ -352,6 +393,7 @@ export function AssistantPanel() {
   const autoApproveUntilRef = useRef(0);
   const [autoApproveUntil, setAutoApproveUntil] = useState(0);
   const activeHistoryLoadRef = useRef<string | null>(null);
+  const archiveImportRequestsRef = useRef<Map<string, string>>(new Map());
   const currentSessionIdRef = useRef<string | null>(null);
   const currentTurnToolsRef = useRef<string[]>([]);
   const sessionIdRef = useRef<string>(genId());
@@ -375,6 +417,7 @@ export function AssistantPanel() {
 
   const hydrateMessages = useCallback(async (sessionId: string) => {
     activeHistoryLoadRef.current = sessionId;
+    setSelectedArchiveMessageIds(new Set());
     setIsHistoryLoading(true);
     try {
       const history = await getChatMessages(sessionId);
@@ -406,6 +449,7 @@ export function AssistantPanel() {
                   docId: item.document_id!,
                   mimeType: item.mime_type ?? undefined,
                   sizeBytes: item.size_bytes ?? undefined,
+                  archiveAttachmentId: item.id,
                 })) ?? [],
           } as ChatMessage;
         })
@@ -1299,6 +1343,87 @@ export function AssistantPanel() {
     }
   }
 
+  async function handleImportArchive() {
+    if (!currentSessionId || selectedArchiveMessageIds.size === 0 || isArchiveImporting) return;
+    const selectedMessages = messages.filter(
+      (message) =>
+        selectedArchiveMessageIds.has(message.id) &&
+        (message.role === "user" || message.role === "assistant"),
+    );
+    if (selectedMessages.length === 0) return;
+    const attachmentIds = selectedMessages.flatMap((message) =>
+      (message.attachments ?? [])
+        .map((attachment) => attachment.archiveAttachmentId)
+        .filter((id): id is string => !!id),
+    );
+    const operationKey = JSON.stringify({
+      source: currentSessionId,
+      messages: selectedMessages.map((message) => message.id).sort(),
+      attachments: [...attachmentIds].sort(),
+    });
+    let requestId = archiveImportRequestsRef.current.get(operationKey);
+    if (!requestId) {
+      const persisted = readArchiveImportRequests();
+      if (!persisted) {
+        notifyError(
+          "Архивный контекст не перенесён",
+          "Браузер не может сохранить ключ безопасного повтора.",
+        );
+        return;
+      }
+      requestId = persisted[operationKey] || crypto.randomUUID();
+      archiveImportRequestsRef.current.set(operationKey, requestId);
+      persisted[operationKey] = requestId;
+      if (!writeArchiveImportRequests(persisted)) {
+        archiveImportRequestsRef.current.delete(operationKey);
+        notifyError(
+          "Архивный контекст не перенесён",
+          "Браузер не может сохранить ключ безопасного повтора.",
+        );
+        return;
+      }
+    }
+    setIsArchiveImporting(true);
+    try {
+      const imported = await importArchivedConversation(currentSessionId, {
+        request_id: requestId,
+        message_ids: selectedMessages.map((message) => message.id),
+        attachment_ids: attachmentIds,
+      });
+      archiveImportRequestsRef.current.delete(operationKey);
+      const persisted = readArchiveImportRequests();
+      if (persisted) {
+        delete persisted[operationKey];
+        writeArchiveImportRequests(persisted);
+      }
+      const items = await listChatSessions();
+      setSessions(items);
+      currentSessionIdRef.current = imported.target_session_id;
+      setCurrentSessionId(imported.target_session_id);
+      persistSessionToStorage(imported.target_session_id);
+      setMessages([]);
+      setSelectedArchiveMessageIds(new Set());
+      setIsLegacyChat(false);
+      await wsRef.current?.watchSession(imported.target_session_id);
+    } catch {
+      notifyError(
+        "Архивный контекст не перенесён",
+        "Проверьте доступ к выбранным сообщениям и вложениям.",
+      );
+    } finally {
+      setIsArchiveImporting(false);
+    }
+  }
+
+  function toggleArchiveMessage(messageId: string) {
+    setSelectedArchiveMessageIds((current) => {
+      const next = new Set(current);
+      if (next.has(messageId)) next.delete(messageId);
+      else next.add(messageId);
+      return next;
+    });
+  }
+
   async function handleSelectChat(sessionId: string) {
     if (!sessionId || sessionId === currentSessionId || isStreaming) return;
     currentSessionIdRef.current = sessionId;
@@ -1396,9 +1521,22 @@ export function AssistantPanel() {
       {/* Header */}
       <div className="border-b border-slate-700">
         <p className="px-4 py-2 text-xs text-amber-200" role="status">
-          {isLegacyChat ? "Архивный чат: создайте новый для долговечного исполнения." :
+          {isLegacyChat ? "Архивный чат: выберите сообщения для безопасного переноса в новый долговечный разговор." :
             "Долговечный чат: задача работает независимо от вкладки. Подтверждение разрешает одно действие; автоматического повтора после сбоя нет."}
         </p>
+        {isLegacyChat && (
+          <div className="flex items-center gap-2 px-4 pb-2 text-xs text-slate-300">
+            <span>Выбрано: {selectedArchiveMessageIds.size}</span>
+            <button
+              type="button"
+              onClick={() => void handleImportArchive()}
+              disabled={selectedArchiveMessageIds.size === 0 || isArchiveImporting}
+              className="rounded border border-amber-600 bg-amber-900/40 px-2 py-1 text-amber-100 disabled:opacity-50"
+            >
+              {isArchiveImporting ? "Переношу…" : "Продолжить с выбранным контекстом"}
+            </button>
+          </div>
+        )}
         {durableRunId && <a className="block px-4 pb-2 text-xs text-blue-300 underline" href={`/work-orders/chat-journal?run_id=${encodeURIComponent(durableRunId)}`}>Журнал и сверка действий</a>}
         {durableConfirmation && "intent" in durableConfirmation && durableConfirmation.intent === "verified_commit" ? (
           <section aria-label="Продолжение после проверенного commit" className="m-3 rounded border border-sky-600 p-3 text-sm text-slate-100">
@@ -1563,7 +1701,16 @@ export function AssistantPanel() {
           if (msg.role === "user") {
             const isTg = msg.source === "telegram";
             return (
-              <div key={msg.id} className="flex justify-end">
+              <div key={msg.id} className="flex items-start justify-end gap-2">
+                {isLegacyChat && (
+                  <input
+                    type="checkbox"
+                    aria-label={`Выбрать архивное сообщение ${msg.id}`}
+                    checked={selectedArchiveMessageIds.has(msg.id)}
+                    onChange={() => toggleArchiveMessage(msg.id)}
+                    className="mt-2"
+                  />
+                )}
                 <div className="max-w-[85%] space-y-1">
                   {isTg && (
                     <div className="flex items-center justify-end gap-1 mb-0.5">
@@ -1623,7 +1770,17 @@ export function AssistantPanel() {
               [...messages].reverse().find((m) => m.role === "assistant")
                 ?.id === msg.id;
             return (
-              <div key={msg.id} className="flex flex-col items-start gap-0.5">
+              <div key={msg.id} className="flex items-start gap-2">
+                {isLegacyChat && (
+                  <input
+                    type="checkbox"
+                    aria-label={`Выбрать архивное сообщение ${msg.id}`}
+                    checked={selectedArchiveMessageIds.has(msg.id)}
+                    onChange={() => toggleArchiveMessage(msg.id)}
+                    className="mt-2"
+                  />
+                )}
+                <div className="flex flex-col items-start gap-0.5">
                 <div
                   className={`max-w-[90%] rounded-lg text-sm text-slate-100 whitespace-pre-wrap overflow-hidden ${isTg ? "bg-slate-600" : "bg-slate-700"}`}
                 >
@@ -1714,6 +1871,7 @@ export function AssistantPanel() {
                     </button>
                   </div>
                 )}
+                </div>
               </div>
             );
           }

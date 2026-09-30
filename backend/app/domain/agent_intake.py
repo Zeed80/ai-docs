@@ -18,7 +18,11 @@ from app.chat.store import (
     append_chat_message,
     ensure_chat_session,
 )
-from app.db.agent_runtime_models import AgentChannelIdentity, DurableChatRun
+from app.db.agent_runtime_models import (
+    AgentChannelIdentity,
+    ArchivedConversationImport,
+    DurableChatRun,
+)
 from app.db.models import ChatMessage, ChatSession, Document, User, WorkOrder
 from app.domain.work_orders import ACTIVE_WORK_STATUSES, create_single_step_plan, create_work_order
 
@@ -214,6 +218,12 @@ async def submit_agent_intake(
             raise IntakeConflictError(
                 "Legacy conversation migration is not enabled; create a new conversation"
             )
+        archive_import = await db.scalar(
+            select(ArchivedConversationImport).where(
+                ArchivedConversationImport.target_session_id == session.id,
+                ArchivedConversationImport.owner_key == identity.account_key,
+            )
+        )
         active = await db.scalar(
             select(DurableChatRun.id)
             .join(WorkOrder, WorkOrder.id == DurableChatRun.work_order_id)
@@ -276,6 +286,10 @@ async def submit_agent_intake(
                 "runner": "durable_chat",
                 "reasoning_mode": request.reasoning_mode,
                 "workspace_context": request.workspace_context,
+                # This identifier is resolved from server-owned target-session
+                # provenance. It cannot be supplied or replaced by client
+                # workspace_context.
+                "archive_import_id": str(archive_import.id) if archive_import else None,
             },
             max_attempts=1,
             timeout_seconds=7200,
