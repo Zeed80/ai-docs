@@ -19,7 +19,7 @@ from app.chat.store import (
     ensure_chat_session,
 )
 from app.db.agent_runtime_models import AgentChannelIdentity, DurableChatRun
-from app.db.models import ChatMessage, ChatSession, Document, WorkOrder
+from app.db.models import ChatMessage, ChatSession, Document, User, WorkOrder
 from app.domain.work_orders import ACTIVE_WORK_STATUSES, create_single_step_plan, create_work_order
 
 
@@ -122,6 +122,21 @@ async def submit_agent_intake(
     _nonblank_within(request.external_message_id, label="External message ID", limit=300)
     if request.channel != identity.channel:
         raise IntakeValidationError("Intake channel does not match verified identity")
+    # HTTP authentication normally supplies the verified principal while
+    # Telegram and cron already resolve it from this table.  If a local owner
+    # record exists, a later deactivation must nevertheless close every
+    # adapter before it can persist a durable turn.  Missing rows remain the
+    # responsibility of the authenticated adapter: legacy test/dev identities
+    # and externally provisioned users are not silently converted to a local
+    # account here.
+    owner_is_active = await db.scalar(
+        select(User.is_active).where(User.sub == identity.account_key).with_for_update()
+    )
+    # Select the scalar value rather than a mapped User: cron may already have
+    # loaded the owner earlier in this transaction, and SQLAlchemy's identity
+    # map must not let that cached object hide a concurrently committed revoke.
+    if owner_is_active is False:
+        raise IntakeValidationError("Verified owner is inactive")
     if request.input_digest is not None and request.channel != "http":
         raise IntakeValidationError("Input digest override is reserved for HTTP compatibility")
     if request.channel == "telegram":

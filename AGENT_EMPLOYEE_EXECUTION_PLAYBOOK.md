@@ -926,7 +926,9 @@ exactly-once у внешнего сервиса без получательск�
 
 ### E18 — Матрица каналов и паритет контрактов
 
-**Статус:** TODO. **После:** E17. **Создать:** `backend/tests/test_agent_channel_parity.py`.
+**Статус:** REVIEWED (intake/result, не recipient E2E). **После:** E17.
+Отчёт: `docs/agent-employee-delivery/E18-channel-parity.md`.
+**Создать:** `backend/tests/test_agent_channel_parity.py`.
 
 1. Один синтетический workflow запустить HTTP/Telegram/cron fixtures.
 2. Сравнить owner, work identity, budgets, logical action, receipt, approval,
