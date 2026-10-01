@@ -515,7 +515,91 @@ def visible_rectangles(thick: Any, frame: ViewFrame) -> list[tuple[float, float,
     return found
 
 
+def segment_rectangles(thick: Any, frame: ViewFrame) -> list[tuple[float, float, float, float]]:
+    """Прямоугольники из четырёх отрезков основной линии, концы которых
+    сходятся в углах (px листа).
+
+    Поиск по замкнутой «дыре» в линиях ломают размеры внутри кармана:
+    стрелки «20» внутри квадрата 20 × 20 после замыкания делят его на две
+    дыры (housing-9: из 34 карманов стенок 27 не находились прямоугольником).
+    Стороны тела в кандидаты не идут: их концы не в углах кармана."""
+    import cv2
+    import numpy as np
+
+    left, top, right, bottom = (int(round(v)) for v in frame.rect)
+    line = frame.outline.line
+    crop = thick[top : bottom + 1, left : right + 1]
+    if crop.size == 0:
+        return []
+    minimum = max(3.0 / frame.scale, 4 * line)
+    run = int(max(3, minimum))
+    horizontal = cv2.morphologyEx(crop, cv2.MORPH_OPEN, np.ones((1, run), np.uint8))
+    vertical = cv2.morphologyEx(crop, cv2.MORPH_OPEN, np.ones((run, 1), np.uint8))
+
+    def segments(mask: Any, along_x: bool) -> list[tuple[float, float, float]]:
+        count, _labels, stats, _c = cv2.connectedComponentsWithStats(mask, 8)
+        found = []
+        for index in range(1, count):
+            x, y, w, h, _area = (int(v) for v in stats[index])
+            if along_x and h <= 3 * line:
+                found.append((y + h / 2.0, float(x), float(x + w)))
+            elif not along_x and w <= 3 * line:
+                found.append((x + w / 2.0, float(y), float(y + h)))
+        return found
+
+    rows, columns = segments(horizontal, True), segments(vertical, False)
+    tol = 2.0 * line
+
+    def drawn(lines: list[tuple[float, float, float]], at: float, lo: float, hi: float) -> bool:
+        # Сторона может быть разорвана надписью размера внутри кармана —
+        # куски на одной прямой, от угла до угла, покрывают ≥ 70 %.
+        parts = sorted(
+            (max(c[1], lo), min(c[2], hi))
+            for c in lines
+            if abs(c[0] - at) <= tol and c[2] > lo - tol and c[1] < hi + tol
+        )
+        if not parts or parts[0][0] > lo + tol or max(p[1] for p in parts) < hi - tol:
+            return False
+        covered, reach = 0.0, lo
+        for start, end in parts:
+            start = max(start, reach)
+            if end > start:
+                covered += end - start
+                reach = end
+        return covered >= 0.7 * (hi - lo)
+
+    found = []
+    # Пара сплошных сторон одного направления задаёт прямоугольник, две
+    # другие — проверяются кусками (верх/низ или боковые разорваны).
+    for primary, other, along_x in ((rows, columns, True), (columns, rows, False)):
+        for i, (p0, a0, a1) in enumerate(primary):
+            for p1, b0, b1 in primary[i + 1 :]:
+                if abs(p1 - p0) < minimum or abs(a0 - b0) > tol or abs(a1 - b1) > tol:
+                    continue
+                pa, pb = sorted((p0, p1))
+                sa, sb = (a0 + b0) / 2.0, (a1 + b1) / 2.0
+                if sb - sa < minimum:
+                    continue
+                if not (drawn(other, sa, pa, pb) and drawn(other, sb, pa, pb)):
+                    continue
+                xa, xb, ya, yb = (sa, sb, pa, pb) if along_x else (pa, pb, sa, sb)
+                w, h = xb - xa, yb - ya
+                if w > 0.9 * crop.shape[1] and h > 0.9 * crop.shape[0]:
+                    continue
+                if any(
+                    abs(left + xa - f[0]) <= tol
+                    and abs(top + ya - f[1]) <= tol
+                    and abs(w - f[2]) <= tol
+                    and abs(h - f[3]) <= tol
+                    for f in found
+                ):
+                    continue
+                found.append((left + xa, top + ya, w, h))
+    return found
+
+
 __all__ = [
+    "segment_rectangles",
     "visible_rectangles",
     "ViewFrame",
     "body_rect",

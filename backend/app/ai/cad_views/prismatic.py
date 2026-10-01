@@ -710,7 +710,11 @@ def _face_pockets(
     labels: list[float] | None = None,
 ) -> list[dict[str, Any]]:
     """Карманы на гранях тела по прямоугольникам видов (см. вызов)."""
-    from app.ai.cad_views.prismatic_parts import cavity_span, visible_rectangles
+    from app.ai.cad_views.prismatic_parts import (
+        cavity_span,
+        segment_rectangles,
+        visible_rectangles,
+    )
 
     def cavity_box(cavity: dict[str, Any], u: str, v: str, n: str) -> tuple[float, ...] | None:
         params = cavity["params"]
@@ -731,6 +735,18 @@ def _face_pockets(
         n = frame.normal
         (ua, _), (va, _) = frame.u, frame.v
         boxes = [(box, True) for box in visible_rectangles(thick, frame)]
+        # И по четырём отрезкам — для карманов с размером внутри; дубли
+        # отсеиваются ключом ниже.
+        boxes += [
+            (box, True)
+            for box in segment_rectangles(thick, frame)
+            if not any(
+                abs(box[0] - other[0]) <= 2 * frame.outline.line
+                and abs(box[1] - other[1]) <= 2 * frame.outline.line
+                and abs(box[2] - other[2]) <= 2 * frame.outline.line
+                for other, _vis in boxes
+            )
+        ]
         boxes += [(box, False) for box in hidden_boxes(gray, frame.outline)]
         for (bx, by, bw, bh), visible in boxes:
             corner_a, corner_b = frame.to_part(bx, by), frame.to_part(bx + bw, by + bh)
