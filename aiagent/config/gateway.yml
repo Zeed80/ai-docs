@@ -378,11 +378,6 @@ prompts:
       prompt: ./prompts/role-normcontroller.md
       capabilities: [cad_review, documents, analytics]
       default_canvases: ["agent:image-studio"]
-channels:
-  websocket:
-    enabled: true
-    path: /ws/chat
-    auth: none
 auth:
   provider: authentik
   oauth2:

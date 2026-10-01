@@ -1,418 +1,47 @@
-"""WebSocket endpoint for the AiAgent agent (Света)."""
-
-import asyncio
-import json
-import re
-import uuid
+"""Retired compatibility boundary for the former agent WebSocket lifecycle."""
 
 import structlog
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from sqlalchemy import select
-
-from app.ai.actor_context import set_acting_user
-from app.ai.orchestrator import AgentOrchestrator
-from app.ai.router import ai_router
-from app.chat.store import (
-    ChatSessionNotFoundError,
-    append_chat_attachment,
-    append_chat_message,
-    ensure_chat_session,
-    link_pending_attachments_to_message,
-    list_chat_messages,
-    update_chat_session_title,
-)
-from app.chat.user_key import get_ws_user_key
-from app.core.chat_bus import chat_bus
-from app.db.agent_runtime_models import DurableChatRun
-from app.db.models import ChatSession
-from app.db.session import _get_session_factory
+from fastapi import APIRouter, WebSocket
+from fastapi.responses import JSONResponse
 
 router = APIRouter()
 logger = structlog.get_logger()
 
-
-class DurableChatSessionError(Exception):
-    """A conversation cannot mix connection-owned and worker-owned turns."""
-
-
-def _fallback_chat_title(first_message: str) -> str:
-    text = re.sub(r"\s+", " ", (first_message or "").strip())
-    if not text:
-        return "Новый чат"
-    text = re.sub(
-        r"^(пожалуйста|света|выведи|покажи|сделай|напиши|расскажи|найди)\s+",
-        "",
-        text,
-        flags=re.IGNORECASE,
-    )
-    return " ".join(text.split()[:5])[:45].strip(" ,.;:!?") or "Новый чат"
+_RETIREMENT_REASON = (
+    "WebSocket chat lifecycle retired. Use POST /api/agent/chat-runs and the "
+    "durable run, event, checkpoint, resume, and WorkOrder cancel endpoints."
+)
+_FALLBACK_CLOSE_REASON = "Agent WebSocket retired; use durable HTTP chat"
 
 
 @router.websocket("/ws/chat")
 async def chat_ws(ws: WebSocket) -> None:
-    await ws.accept()
-    logger.info("ws_chat_connected", client=ws.client)
-    user_key = await get_ws_user_key(ws)
-    if user_key is None:
-        # Auth is enabled but no valid token — reject with 4001 (Unauthorized)
-        await ws.close(code=4001, reason="Unauthorized")
-        return
-    # Bind this connection's human to the agent's outgoing service calls, so
-    # per-user scoping (personal mailboxes) applies to what the agent may read.
-    set_acting_user(user_key)
-    db_factory = _get_session_factory()
-    active_session_id: uuid.UUID | None = None
-    assistant_buffer: list[str] = []
-    turn_in_progress = False
-    agent_sessions: dict[uuid.UUID, AgentOrchestrator] = {}
-    active_agent_session: AgentOrchestrator | None = None
+    """Reject the retired lifecycle before accepting or starting any model work.
 
-    async def generate_session_title(session_id: uuid.UUID, first_message: str) -> None:
-        try:
-            title = await ai_router.generate_chat_title(first_message)
-        except Exception as exc:
-            logger.warning("chat_title_generation_failed", error=str(exc))
-            title = _fallback_chat_title(first_message)
-        async with db_factory() as db:
-            await update_chat_session_title(
-                db,
-                session_id=session_id,
-                user_key=user_key,
-                title=title,
-            )
-            await db.commit()
-        await chat_bus.publish(
-            {
-                "type": "chat.session_updated",
-                "session_id": str(session_id),
-                "title": title,
-            }
-        )
+    Starlette can return an HTTP response during the WebSocket handshake when
+    the ASGI server advertises ``websocket.http.response``. Older servers do
+    not have that extension, so they get a policy close instead. Both paths
+    happen before ``accept`` and cannot create, resume, or cancel a chat turn.
+    """
 
-    async def send(data: dict) -> None:
-        try:
-            await ws.send_text(json.dumps(data, ensure_ascii=False))
-        except Exception:
-            pass
-        nonlocal assistant_buffer, turn_in_progress, active_session_id
-        if not turn_in_progress or active_session_id is None:
-            return
-        msg_type = data.get("type")
-        if msg_type == "text":
-            token = str(data.get("content", "") or "")
-            if token:
-                assistant_buffer.append(token)
-            return
-        if msg_type == "tool_call":
-            async with db_factory() as db:
-                await append_chat_message(
-                    db,
-                    session_id=active_session_id,
-                    role="tool",
-                    content=f"Tool call: {data.get('tool')}",
-                    metadata={"args": data.get("args"), "tool": data.get("tool")},
-                )
-                await db.commit()
-            return
-        if msg_type == "tool_result":
-            async with db_factory() as db:
-                await append_chat_message(
-                    db,
-                    session_id=active_session_id,
-                    role="tool",
-                    content=f"Tool result: {data.get('tool')}",
-                    metadata={"result": data.get("result"), "tool": data.get("tool")},
-                )
-                await db.commit()
-            return
-        if msg_type == "approval_request":
-            async with db_factory() as db:
-                await append_chat_message(
-                    db,
-                    session_id=active_session_id,
-                    role="approval",
-                    content=f"Approval request: {data.get('tool')}",
-                    metadata={
-                        "args": data.get("args"),
-                        "preview": data.get("preview"),
-                        "approval_id": data.get("approval_id"),
-                        "db_id": data.get("db_id"),
-                        "tool": data.get("tool"),
-                    },
-                )
-                await db.commit()
-            return
-        if msg_type in {"error", "done"}:
-            final_text = "".join(assistant_buffer).strip()
-            assistant_buffer = []
-            turn_in_progress = False
-            if final_text:
-                async with db_factory() as db:
-                    await append_chat_message(
-                        db,
-                        session_id=active_session_id,
-                        role="assistant",
-                        content=final_text,
-                    )
-                    await db.commit()
-
-    # Mirror Telegram conversations to this WebSocket client
-    async def deliver_bus_event(data: dict) -> None:
-        # Bus delivery must never persist into or settle another active turn.
-        await ws.send_text(json.dumps(data, ensure_ascii=False))
-
-    sub_id = chat_bus.subscribe(deliver_bus_event, user_sub=user_key)
-
-    current_turn: asyncio.Task | None = None
-
+    logger.warning("ws_chat_retired", client=ws.client)
+    response = JSONResponse(
+        status_code=410,
+        content={
+            "code": "agent_ws_retired",
+            "detail": _RETIREMENT_REASON,
+            "replacement": "/api/agent/chat-runs",
+        },
+        headers={
+            "Cache-Control": "no-store",
+            "Deprecation": "true",
+            "Link": '</api/agent/chat-runs>; rel="successor-version"',
+        },
+    )
     try:
-        while True:
-            raw = await ws.receive_text()
-            try:
-                data = json.loads(raw)
-            except json.JSONDecodeError:
-                continue
-
-            msg_type = data.get("type")
-
-            if msg_type == "message":
-                raw_content = data.get("content", "").strip()
-                if raw_content:
-                    from app.ai.input_sanitizer import sanitize_user_input
-
-                    content, injection_warnings = sanitize_user_input(raw_content)
-                    if injection_warnings:
-                        logger.warning(
-                            "prompt_injection_detected",
-                            warnings=injection_warnings,
-                            content_preview=raw_content[:100],
-                        )
-                        if len(injection_warnings) >= 2:
-                            from app.audit.service import log_action
-                            from app.db.session import _get_session_factory as _sf
-
-                            async with _sf()() as _audit_db:
-                                await log_action(
-                                    _audit_db,
-                                    action="injection_attempt",
-                                    entity_type="chat",
-                                    user_id=user_key,
-                                    details={"warnings": injection_warnings},
-                                )
-                                await _audit_db.commit()
-                if raw_content:
-                    # Require BOTH turn_in_progress and a not-yet-done Task.
-                    # current_turn.done() alone lags: the Task only finishes
-                    # once on_user_message() fully RETURNS, which includes
-                    # work after the client-visible "done"/"error" frame is
-                    # sent (memory persistence, audit logging, etc) — found
-                    # via live test, a multi-turn scenario's second message
-                    # was rejected with "previous task still running" even
-                    # though the client had already received "done" for the
-                    # first turn. turn_in_progress alone would be unsafe: if
-                    # on_user_message() raises before ever emitting a final
-                    # "done"/"error" (send() is what flips it False), the
-                    # session would stay locked forever. Requiring both means
-                    # either signal — the frame going out, or the task simply
-                    # finishing (incl. via exception) — is enough to unblock.
-                    if turn_in_progress and current_turn and not current_turn.done():
-                        await ws.send_text(
-                            json.dumps(
-                                {
-                                    "type": "busy",
-                                    "content": "Предыдущая задача ещё выполняется.",
-                                }
-                            )
-                        )
-                        continue
-                    raw_session_id = data.get("session_id")
-                    incoming_session_id: uuid.UUID | None = None
-                    if isinstance(raw_session_id, str):
-                        try:
-                            incoming_session_id = uuid.UUID(raw_session_id)
-                        except ValueError:
-                            incoming_session_id = None
-                    try:
-                        async with db_factory() as db:
-                            chat_session = await ensure_chat_session(
-                                db,
-                                user_key=user_key,
-                                session_id=incoming_session_id,
-                            )
-                            await db.execute(
-                                select(ChatSession.id)
-                                .where(ChatSession.id == chat_session.id)
-                                .with_for_update()
-                            )
-                            if await db.scalar(
-                                select(DurableChatRun.id)
-                                .where(DurableChatRun.session_id == chat_session.id)
-                                .limit(1)
-                            ):
-                                raise DurableChatSessionError()
-                            active_session_id = chat_session.id
-                            user_message = await append_chat_message(
-                                db,
-                                session_id=chat_session.id,
-                                role="user",
-                                content=content,
-                            )
-                            attachments = data.get("attachments")
-                            attachment_doc_ids: list[uuid.UUID] = []
-                            if isinstance(attachments, list):
-                                for item in attachments:
-                                    if not isinstance(item, dict):
-                                        continue
-                                    raw_doc = item.get("document_id")
-                                    parsed_doc: uuid.UUID | None = None
-                                    if isinstance(raw_doc, str):
-                                        try:
-                                            parsed_doc = uuid.UUID(raw_doc)
-                                            attachment_doc_ids.append(parsed_doc)
-                                        except ValueError:
-                                            parsed_doc = None
-                                    await append_chat_attachment(
-                                        db,
-                                        session_id=chat_session.id,
-                                        message_id=user_message.id,
-                                        document_id=parsed_doc,
-                                        file_name=str(item.get("file_name") or "attachment"),
-                                        mime_type=(
-                                            str(item.get("mime_type"))
-                                            if item.get("mime_type")
-                                            else None
-                                        ),
-                                        size_bytes=(
-                                            int(item.get("size_bytes"))
-                                            if isinstance(item.get("size_bytes"), int)
-                                            else None
-                                        ),
-                                    )
-                            await link_pending_attachments_to_message(
-                                db,
-                                session_id=chat_session.id,
-                                message_id=user_message.id,
-                                document_ids=attachment_doc_ids,
-                            )
-                            await db.commit()
-                            # Smart Ingest (Scenario 8): trigger classify → extract pipeline
-                            if attachment_doc_ids:
-                                try:
-                                    from app.tasks.extraction import classify_document
-
-                                    for doc_id in attachment_doc_ids:
-                                        classify_document.apply_async(
-                                            args=[str(doc_id)], countdown=1
-                                        )
-                                except Exception:
-                                    pass
-                            session_id = chat_session.id
-                            if session_id not in agent_sessions:
-                                _, history, _ = await list_chat_messages(
-                                    db,
-                                    session_id=session_id,
-                                    user_key=user_key,
-                                )
-                                restored = [
-                                    {"role": msg.role, "content": msg.content or ""}
-                                    for msg in history
-                                    if msg.role in {"user", "assistant"}
-                                    and msg.content
-                                    and msg.id != user_message.id
-                                ]
-                                agent = AgentOrchestrator(send)
-                                agent._executor._session_id = str(session_id)
-                                agent.hydrate_history(restored)
-                                agent_sessions[session_id] = agent
-                                if (
-                                    not restored
-                                    and chat_session.title.strip().lower() == "новый чат"
-                                ):
-                                    asyncio.create_task(generate_session_title(session_id, content))
-                            active_agent_session = agent_sessions[session_id]
-                    except DurableChatSessionError:
-                        await ws.send_text(
-                            json.dumps(
-                                {
-                                    "type": "error",
-                                    "content": "Этот чат использует API /api/agent/chat-runs; WebSocket-ввод недоступен.",
-                                }
-                            )
-                        )
-                        continue
-                    except ChatSessionNotFoundError:
-                        await send(
-                            {
-                                "type": "error",
-                                "content": (
-                                    "Чат не найден или устарел. "
-                                    "Выберите чат из списка или создайте новый."
-                                ),
-                            }
-                        )
-                        continue
-                    await send({"type": "session", "session_id": str(active_session_id)})
-                    turn_in_progress = True
-                    assistant_buffer = []
-                    raw_rm = data.get("reasoning_mode", "normal")
-                    rm = raw_rm if raw_rm in ("normal", "strict") else "normal"
-                    workspace_context = (
-                        data.get("workspace_context")
-                        if isinstance(data.get("workspace_context"), dict)
-                        else {}
-                    )
-                    current_turn = asyncio.create_task(
-                        active_agent_session.on_user_message(
-                            content,
-                            reasoning_mode=rm,
-                            workspace_context=workspace_context,
-                        )
-                    )
-
-            elif msg_type == "stop":
-                if current_turn and not current_turn.done():
-                    current_turn.cancel()
-
-            elif msg_type == "approve":
-                if active_agent_session is not None:
-                    # args_override — правки, внесённые человеком прямо в
-                    # карточке подтверждения (например, отредактированный текст
-                    # письма даёт новый expected_digest).
-                    override = data.get("args_override")
-                    await active_agent_session.on_approval(
-                        True,
-                        approval_id=(
-                            str(data.get("approval_id"))
-                            if data.get("approval_id") is not None
-                            else None
-                        ),
-                        db_id=(str(data.get("db_id")) if data.get("db_id") is not None else None),
-                        args_override=override if isinstance(override, dict) else None,
-                    )
-
-            elif msg_type == "reject":
-                if active_agent_session is not None:
-                    await active_agent_session.on_approval(
-                        False,
-                        approval_id=(
-                            str(data.get("approval_id"))
-                            if data.get("approval_id") is not None
-                            else None
-                        ),
-                        db_id=(str(data.get("db_id")) if data.get("db_id") is not None else None),
-                    )
-
-    except WebSocketDisconnect:
-        logger.info("ws_chat_disconnected")
-        if current_turn and not current_turn.done():
-            current_turn.cancel()
-    except Exception as e:
-        logger.error("ws_chat_error", error=str(e))
-        try:
-            await send({"type": "error", "content": str(e)})
-        except Exception:
-            pass
-        if current_turn and not current_turn.done():
-            current_turn.cancel()
-    finally:
-        chat_bus.unsubscribe(sub_id, user_sub=user_key)
+        await ws.send_denial_response(response)
+    except RuntimeError:
+        # RFC 6455 leaves at most 123 UTF-8 bytes for an application close
+        # reason (125-byte control frame minus the two-byte status code).
+        # The complete migration detail is available in the 410 JSON response.
+        await ws.close(code=1008, reason=_FALLBACK_CLOSE_REASON)

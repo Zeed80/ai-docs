@@ -1,6 +1,7 @@
 "use client";
 
 import { mutFetch } from "@/lib/auth";
+import { getActiveWorkspaceContext } from "@/lib/workspace-context";
 
 type Event = Record<string, unknown>;
 export type DurableConfirmation = {
@@ -47,6 +48,28 @@ type Run = {
 };
 const terminal = new Set(["completed", "blocked", "failed", "canceled"]);
 
+export function buildDurableUserCommand(
+  content: string,
+  sessionId?: string | null,
+  attachments?: Array<{
+    document_id: string;
+    file_name: string;
+    mime_type?: string;
+    size_bytes?: number;
+  }>,
+  reasoningMode?: "normal" | "strict",
+): Record<string, unknown> {
+  return {
+    type: "message",
+    content,
+    session_id: sessionId ?? undefined,
+    workspace_context: getActiveWorkspaceContext(),
+    attachments:
+      attachments && attachments.length > 0 ? attachments : undefined,
+    reasoning_mode: reasoningMode ?? "normal",
+  };
+}
+
 /** Compatibility with the panel's command interface, without a WebSocket lifecycle. */
 export class DurableChatTransport {
   readyState = 1;
@@ -60,6 +83,10 @@ export class DurableChatTransport {
   private timer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private emit: (event: Event) => void) {}
+
+  get isOpen(): boolean {
+    return this.readyState === 1;
+  }
 
   private async request(path: string, body?: Event): Promise<unknown> {
     const response = await mutFetch(path, body ? {
@@ -120,7 +147,7 @@ export class DurableChatTransport {
       return;
     }
     if (message.type !== "message") {
-      this.emit({type: "error", content: "Продолжение после подтверждения пока недоступно. Действие не выполнено."});
+      this.emit({type: "error", content: "Устаревшая команда подтверждения отклонена. Действие не выполнено; используйте сохранённую карточку задачи."});
       return;
     }
     if (this.busy) { this.emit({type: "durable_state", active: true}); return; }

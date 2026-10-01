@@ -4,7 +4,7 @@
         clean rebuild nuke \
         setup health logs ps shell-backend shell-celery shell-frontend \
         migrate migrate-new seed \
-        test test-frontend test-cov e2e regression emg-schema emg-schema-check emg-validate emg-regression emg-live-regression cad-verify-eval cad-verify-baseline cad-real-eval cad-real-live cad-verify-corpus agent-regression agent-test agent-ws-smoke \
+        test test-frontend test-cov e2e regression emg-schema emg-schema-check emg-validate emg-regression emg-live-regression cad-verify-eval cad-verify-baseline cad-real-eval cad-real-live cad-verify-corpus agent-regression agent-test \
         studio-queue-smoke cad-kernel-smoke cad-regression cad-candidate-gate cad-drawing-graph-eval cad-emg-corruption emg-artifact-regression emg-mechanical-live emg-domain-builds cad-class-balanced-dev cad-class-balanced-check cad-class-balanced-cycle \
         cad-final-freeze cad-final-leakage \
         cad-corpus-acquire cad-corpus-generate cad-pmi-truth \
@@ -487,9 +487,6 @@ cad-corpus-generate:
 
 agent-test:
 	cd infra/scripts && python3 run-agent-tests.py
-
-agent-ws-smoke:
-	node scripts/check_agent_ws_adapter.js
 
 studio-queue-smoke:
 	python3 scripts/studio_queue_load_smoke.py

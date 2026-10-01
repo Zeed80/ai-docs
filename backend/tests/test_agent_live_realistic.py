@@ -1,4 +1,4 @@
-"""Реалистичные live-тесты агента Светы на живом стеке.
+"""Реалистичные durable HTTP live-тесты агента Светы на живом стеке.
 
 Проверяют четыре исправленных проблемы:
   1. Эпизодическая память (403 → сохраняется после каждого хода)
@@ -12,14 +12,16 @@
         python -m pytest tests/test_agent_live_realistic.py -s -v --timeout=180
 
 Требования: запущенный прод-стек + Ollama с APEX:Compact + PostgreSQL.
+Для durable chat нужен ``LIVE_HUMAN_BEARER_TOKEN`` реального тестового человека;
+service-account ``AGENT_SERVICE_KEY`` намеренно не имеет права создавать chat run.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import time
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -31,8 +33,7 @@ pytestmark = pytest.mark.live
 _LIVE = os.environ.get("LIVE_STACK") == "1"
 _BACKEND = os.environ.get("BACKEND_URL", "http://localhost:8000")
 _SERVICE_KEY = os.environ.get("AGENT_SERVICE_KEY", "")
-_WS_URL = _BACKEND.replace("http://", "ws://").replace("https://", "wss://")
-
+_HUMAN_BEARER_TOKEN = os.environ.get("LIVE_HUMAN_BEARER_TOKEN", "")
 # Макс. время ожидания одного хода агента (секунды)
 # APEX:Compact (35B) медленный — нужно не менее 180с
 _TURN_TIMEOUT = int(os.environ.get("AGENT_TURN_TIMEOUT", "180"))
@@ -69,6 +70,8 @@ class AgentTurnResult:
         self.approval_requests: list[dict] = []
         self.error: str | None = None
         self.done: bool = False
+        self.status: str | None = None
+        self.blocker: object | None = None
 
     def feed(self, msg: dict) -> None:
         t = msg.get("type")
@@ -94,46 +97,91 @@ class AgentTurnResult:
 
 
 @asynccontextmanager
-async def _agent_ws(session_id: str | None = None) -> AsyncIterator[_AgentWS]:
-    """Async context manager: WS-соединение с агентом."""
-    import websockets
+async def _agent_http(session_id: str | None = None) -> AsyncIterator[_AgentHTTP]:
+    """Durable HTTP client; reconnecting never creates a second logical turn."""
+    if not _HUMAN_BEARER_TOKEN:
+        pytest.skip("LIVE_HUMAN_BEARER_TOKEN is required for human-owned durable chat")
+    async with httpx.AsyncClient(
+        base_url=_BACKEND,
+        headers={"Authorization": f"Bearer {_HUMAN_BEARER_TOKEN}"},
+        timeout=_TURN_TIMEOUT,
+    ) as client:
+        yield _AgentHTTP(client, session_id)
 
-    ws_headers = {}
-    if _SERVICE_KEY:
-        ws_headers["x-api-key"] = _SERVICE_KEY
 
-    url = f"{_WS_URL}/ws/chat"
-    async with websockets.connect(url, additional_headers=ws_headers) as ws:
-        yield _AgentWS(ws, session_id)
-
-
-class _AgentWS:
-    def __init__(self, ws, session_id: str | None) -> None:
-        self._ws = ws
+class _AgentHTTP:
+    def __init__(self, client: httpx.AsyncClient, session_id: str | None) -> None:
+        self._client = client
         self.session_id = session_id
 
     async def send(self, text: str) -> AgentTurnResult:
-        payload: dict = {"type": "message", "content": text}
-        if self.session_id:
-            payload["session_id"] = self.session_id
-        await self._ws.send(json.dumps(payload, ensure_ascii=False))
+        if self.session_id is None:
+            created = await self._client.post(
+                "/api/chat/sessions", json={"title": "Live regression"}
+            )
+            created.raise_for_status()
+            self.session_id = created.json()["id"]
+        request_id = str(uuid.uuid4())
+        accepted = await self._client.post(
+            "/api/agent/chat-runs",
+            json={
+                "request_id": request_id,
+                "session_id": self.session_id,
+                "content": text,
+                "reasoning_mode": "normal",
+                "attachments": [],
+                "workspace_context": {"source": "live_regression"},
+            },
+        )
+        accepted.raise_for_status()
+        run = accepted.json()
 
         result = AgentTurnResult()
+        cursor = 0
         deadline = time.monotonic() + _TURN_TIMEOUT
-        while not result.done:
+        terminal = {"completed", "blocked", "failed", "canceled"}
+        while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError(f"Agent did not respond in {_TURN_TIMEOUT}s")
-            try:
-                raw = await asyncio.wait_for(self._ws.recv(), timeout=min(remaining, 10.0))
-            except TimeoutError:
-                continue
-            msg = json.loads(raw)
-            # Capture session_id from first server message if not set
-            if self.session_id is None and msg.get("session_id"):
-                self.session_id = msg["session_id"]
-            result.feed(msg)
-        return result
+            events = await self._client.get(
+                f"/api/agent/chat-runs/{run['id']}/events",
+                params={"after": cursor, "limit": 100},
+            )
+            events.raise_for_status()
+            page = events.json()
+            for item in page["items"]:
+                event = item.get("payload", {}).get("event")
+                if isinstance(event, dict):
+                    result.feed(event)
+            cursor = page["next_cursor"]
+            state = await self._client.get(f"/api/agent/chat-runs/{run['id']}")
+            state.raise_for_status()
+            run = state.json()
+            if run["status"] in terminal:
+                result.done = True
+                result.status = run["status"]
+                result.blocker = run.get("blocker")
+                if run["status"] == "blocked":
+                    checkpoint_response = await self._client.get(
+                        f"/api/agent/chat-runs/{run['id']}/checkpoint"
+                    )
+                    checkpoint_response.raise_for_status()
+                    checkpoint = checkpoint_response.json()
+                    confirmation = checkpoint.get("confirmation")
+                    if checkpoint.get("can_resume") and isinstance(confirmation, dict):
+                        result.approval_requests.append(
+                            {"type": "confirmation_required", **confirmation}
+                        )
+                    elif result.error is None:
+                        result.error = (
+                            "Durable run blocked without an owner-resumable confirmation: "
+                            f"{run.get('blocker')}"
+                        )
+                elif run["status"] != "completed" and result.error is None:
+                    result.error = f"Durable run finished as {run['status']}: {run.get('blocker')}"
+                return result
+            await asyncio.sleep(min(1.0, remaining))
 
 
 # ── fixture: Ollama доступен ──────────────────────────────────────────────────
@@ -258,7 +306,7 @@ async def test_agent_calls_tool_for_data_question():
     if not _ollama_up():
         pytest.skip("Ollama недоступен")
 
-    async with _agent_ws() as ws:
+    async with _agent_http() as ws:
         result = await ws.send("Сколько счетов сейчас в системе?")
 
     assert result.error is None, f"Агент вернул ошибку: {result.error}"
@@ -287,7 +335,7 @@ async def test_agent_calls_memory_for_ambiguous_question():
     if not _ollama_up():
         pytest.skip("Ollama недоступен")
 
-    async with _agent_ws() as ws:
+    async with _agent_http() as ws:
         result = await ws.send("Что нового по закупкам?")
 
     assert result.error is None, f"Агент вернул ошибку: {result.error}"
@@ -306,7 +354,7 @@ async def test_scenario_invoice_list():
     if not _ollama_up():
         pytest.skip("Ollama недоступен")
 
-    async with _agent_ws() as ws:
+    async with _agent_http() as ws:
         result = await ws.send("Покажи все счета, которые есть в системе")
 
     assert result.error is None, f"Ошибка агента: {result.error}"
@@ -339,7 +387,7 @@ async def test_scenario_invoice_count():
     if not _ollama_up():
         pytest.skip("Ollama недоступен")
 
-    async with _agent_ws() as ws:
+    async with _agent_http() as ws:
         result = await ws.send("Сколько счетов ожидают утверждения?")
 
     assert result.error is None, f"Ошибка: {result.error}"
@@ -361,7 +409,7 @@ async def test_scenario_supplier_query():
     if not _ollama_up():
         pytest.skip("Ollama недоступен")
 
-    async with _agent_ws() as ws:
+    async with _agent_http() as ws:
         result = await ws.send("Покажи поставщиков с которыми мы работаем")
 
     assert result.error is None, f"Ошибка: {result.error}"
@@ -380,7 +428,7 @@ async def test_scenario_anomaly_detection():
     if not _ollama_up():
         pytest.skip("Ollama недоступен")
 
-    async with _agent_ws() as ws:
+    async with _agent_http() as ws:
         result = await ws.send("Есть ли аномалии в счетах за последнее время?")
 
     assert result.error is None, f"Ошибка: {result.error}"
@@ -396,7 +444,7 @@ async def test_scenario_warehouse_stock():
     if not _ollama_up():
         pytest.skip("Ollama недоступен")
 
-    async with _agent_ws() as ws:
+    async with _agent_http() as ws:
         result = await ws.send("Что сейчас на складе? Покажи остатки")
 
     assert result.error is None, f"Ошибка: {result.error}"
@@ -412,7 +460,7 @@ async def test_scenario_document_search():
     if not _ollama_up():
         pytest.skip("Ollama недоступен")
 
-    async with _agent_ws() as ws:
+    async with _agent_http() as ws:
         result = await ws.send("Найди документы про фрезы")
 
     assert result.error is None, f"Ошибка: {result.error}"
@@ -439,7 +487,7 @@ async def test_scenario_multi_turn_context():
     if not _ollama_up():
         pytest.skip("Ollama недоступен")
 
-    async with _agent_ws() as ws:
+    async with _agent_http() as ws:
         r1 = await ws.send("Покажи все счета в системе")
         assert r1.error is None, f"Первый ход упал: {r1.error}"
         assert len(r1.tool_calls) > 0, "Первый ход не вызвал инструментов"
@@ -466,41 +514,17 @@ async def test_gate_approval_required_for_invoice_approve():
     if not _ollama_up():
         pytest.skip("Ollama недоступен")
 
-    async with _agent_ws() as ws:
+    async with _agent_http() as ws:
         result = await ws.send("Утверди все счета которые на рассмотрении")
 
     assert result.error is None, f"Ошибка: {result.error}"
-    # Агент ДОЛЖЕН либо:
-    # a) запросить подтверждение через approval_request
-    # b) спросить в тексте «вы уверены?» / «подтвердите»
-    # c) сообщить что счетов на рассмотрении нет (тоже корректно — gate не нужен)
-    # d) задать уточняющий вопрос перед внешним/важным действием (adaptive
-    #    clarify gate в orchestrator.needs_clarification) — тоже корректный
-    #    safety-исход: действие не выполнено, пока не уточнена цель.
-    has_approval_gate = len(result.approval_requests) > 0
-    has_confirmation_text = any(
-        kw in result.text.lower()
-        for kw in (
-            "подтвердит",
-            "уверен",
-            "да/нет",
-            "продолжить",
-            "применить",
-            "утвердить все",
-            "уточни",
-            "внешнее",
-            "важное действие",
-            "к кому",
-            "к чему",
-        )
+    assert result.status == "blocked", (
+        "Запрос изменения должен завершить durable run в blocked до действия, "
+        f"получено status={result.status}, blocker={result.blocker}"
     )
-    has_no_pending = any(
-        kw in result.text.lower()
-        for kw in ("не найдено", "нет счет", "пусто", "отсутств", "список пуст")
-    )
-    assert has_approval_gate or has_confirmation_text or has_no_pending, (
-        f"Агент выполнил утверждение без gate и без объяснения. "
-        f"approval_requests={result.approval_requests}, text={result.text[:300]}"
+    assert result.approval_requests, (
+        "Blocked run не вернул owner-resumable checkpoint подтверждения. "
+        f"blocker={result.blocker}, text={result.text[:300]}"
     )
 
 
@@ -514,7 +538,7 @@ async def test_simple_question_performance():
     if not _ollama_up():
         pytest.skip("Ollama недоступен")
 
-    async with _agent_ws() as ws:
+    async with _agent_http() as ws:
         t0 = time.monotonic()
         result = await ws.send("Сколько документов загружено?")
         elapsed = time.monotonic() - t0
@@ -540,8 +564,8 @@ async def test_memory_persisted_after_agent_turn():
         pytest.skip("Ollama недоступен")
 
     async with _http() as cli:
-        # Проверяем что нет 403 в логах — делаем ход агента через WS
-        async with _agent_ws() as ws:
+        # Проверяем что нет 403 в логах — делаем ход агента через durable HTTP
+        async with _agent_http() as ws:
             result = await ws.send("Сколько счетов в системе?")
 
         assert result.error is None, f"Ошибка агента: {result.error}"

@@ -57,6 +57,28 @@ it("основная панель отправляет HTTP-задачу без 
   socket.mockRestore();
 });
 
+it("показывает legacy approval request только для чтения", async () => {
+  const completed = {...run, status: "completed"};
+  fetcher.mockImplementation(async (path) => {
+    if (path === "/api/ai/agent-config") return response({});
+    if (path.includes("?session_id=")) return response({run: completed, legacy: false});
+    if (path.endsWith("/events?after=0&limit=100")) return response({
+      items: [{sequence: 1, type: "chat.approval", payload: {event: {
+        type: "approval_request", tool: "email.send", preview: "Отправить письмо",
+        approval_id: "legacy-approval", db_id: "legacy-db",
+      }}}],
+      next_cursor: 1,
+    });
+    return response(completed);
+  });
+
+  render(<AssistantPanel />);
+  expect(await screen.findByText(/Устаревший запрос: решение не отправлено/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", {name: "Утвердить"})).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", {name: "Отклонить"})).not.toBeInTheDocument();
+  expect(fetcher.mock.calls.every(([, init]) => init?.method !== "POST")).toBe(true);
+});
+
 it("в архивном чате ввод отключён с объяснением, история не мигрирует молча", async () => {
   fetcher.mockImplementation(async (path) => response(path.includes("?session_id=") ? {run: null, legacy: true} : {}));
   render(<AssistantPanel />);

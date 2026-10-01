@@ -312,7 +312,9 @@ Ruff/format/diff clean. Отчёт:
 **Что это означает для архитектуры**:
 - AiAgent — ядро продукта, а не вспомогательный слой. Имя агента: Света.
 - FastAPI — «руки» Светы: самодостаточный REST API для всех операций с данными.
-- Next.js — UI, который работает **двумя путями**: REST (CRUD, таблицы, review) и WebSocket к AiAgent (чат, агентные сценарии).
+- Next.js — UI поверх HTTP: обычный REST для CRUD/review и durable chat API
+  (`/api/agent/chat-runs`) с polling/reconnect для агентных сценариев. Старый
+  `/ws/chat` с E20 только возвращает 410 до `accept`.
 - **Degraded mode**: если AiAgent недоступен, UI работает через REST — без Светы, но с полным ручным функционалом.
 - **Dual AI strategy**: gemma4:e4b локально (конфиденциальные документы), reasoning-модель — **локально или через API** (настраиваемо per task). В проде можно гибко переключать.
 - Несколько IMAP-ящиков → routing по ящику (закупки / бухгалтерия / общий).
@@ -1754,7 +1756,7 @@ document-invoices-ai/
 │   │   ├── review/
 │   │   ├── command-palette/
 │   │   ├── tables/
-│   │   ├── chat/                         # AiAgent WebSocket client
+│   │   ├── chat/                         # durable HTTP AiAgent client
 │   │   ├── timeline/
 │   │   ├── compare/
 │   │   ├── supplier/
@@ -1762,7 +1764,7 @@ document-invoices-ai/
 │   ├── lib/
 │   │   ├── keyboard-context.tsx
 │   │   ├── api-client.ts                 # REST → FastAPI
-│   │   ├── agent-ws.ts                  # WebSocket → встроенный агент
+│   │   ├── durable-chat.ts              # HTTP intake/poll/reconnect → агент
 │   │   └── degraded-mode.ts              # fallback when AiAgent down
 │   └── tests/
 ├── aiagent/

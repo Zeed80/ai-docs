@@ -956,7 +956,8 @@ exactly-once у внешнего сервиса без получательск�
 
 ### E20 — Вывод WS lifecycle из эксплуатации
 
-**Статус:** TODO. **После:** E19.
+**Статус:** REVIEWED / DEPLOYED. **После:** E19.
+Отчёт: `docs/agent-employee-delivery/E20-ws-lifecycle-retirement.md`.
 **Читать:** `rg 'ws/chat|AgentSession\(' backend frontend aiagent` и найденных клиентов.
 
 1. Составить список потребителей, feature flags и документации. Сначала проверить
@@ -966,7 +967,9 @@ exactly-once у внешнего сервиса без получательск�
 4. Тесты: новый UI не открывает WS; старый вызов не запускает модель;
    reconnect/cancel/read-only history продолжают работать.
 
-**Готово:** один runtime; не делать две системы «на всякий случай».
+**Готово:** один поддерживаемый lifecycle интерактивного чата; не сохранять
+connection-owned WS исполнение «на всякий случай». Остаточные headless
+WorkOrder/email executor paths перечислены в отчёте и не объявлены мигрированными.
 
 ### E21 — Единый budget ledger
 

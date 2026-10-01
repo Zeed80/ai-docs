@@ -184,10 +184,14 @@ curl -X POST http://localhost/api/search/nl-to-query -H "Content-Type: applicati
 **Goal**: Auto-classify, extract data, trigger anomaly check
 
 **Flow**:
-1. User sends file via WebSocket chat message with `attachment_doc_ids`
+1. User uploads a file and sends its document id through durable
+   `POST /api/agent/chat-runs`; `/ws/chat` is retired and returns 410.
 2. `POST /api/documents/ingest` called with `source_channel=chat`
-3. Celery task `classify_document` triggered automatically (agent.py:193)
-4. Classification result streamed to user in chat
+3. При `auto_process=true` (значение по умолчанию) ingest создаёт processing job
+   и ставит `process_document`/классификацию в Celery; при `auto_process=false`
+   автоматической классификации нет.
+4. Состояние и результат обработки читаются через document/processing-job API;
+   durable chat events сами по себе не обещают отдельное событие классификации.
 5. If invoice: `extract_invoice` → `check_all_anomalies` → workspace block published
 
 **What can fail**:

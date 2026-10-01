@@ -265,15 +265,18 @@
 - [x] Добавить создание НТД из загруженного документа с автоопределением кода/версии.
 - [x] Добавить прямой upload НТД PDF/DOCX/TXT без ручного ввода document id.
 - [x] Добавить optional semantic AI-assisted нормоконтроль с evidence spans.
-- [x] Оставить FastAPI WebSocket самодостаточным контуром встроенного агента.
+- [x] Исторически FastAPI WebSocket был самодостаточным контуром; E20 вывел
+  lifecycle из эксплуатации после переключения поддерживаемых клиентов на durable HTTP.
 - [x] Добавить optional TurboQuant profile для vLLM long-context reasoning.
 - [x] Добавить TurboQuant benchmark command/report.
 - [x] Добавить TurboQuant quality benchmark на инженерных regression cases с term recall/missing terms.
 
 ## Этап 11. Надёжность собственного agent runtime
 
-- [x] Оставить единый UI-контур чата через FastAPI `/ws/chat`.
-- [x] Добавить smoke-тест WebSocket-контракта встроенного агента.
+- [x] Исторический UI-контур `/ws/chat` заменён в E20 на durable HTTP;
+  compatibility handshake отклоняется с 410 до запуска модели.
+- [x] Исторический WS smoke заменён проверками durable reconnect/cancel/history
+  и отдельным негативным тестом retired endpoint.
 - [x] Сохранить degraded mode при недоступности agent runtime.
 - [x] Исправить event-loop lifecycle proactive Celery-задач и async Redis pool.
 - [ ] Расширить live-regression собственного агента на длинные многошаговые сценарии.

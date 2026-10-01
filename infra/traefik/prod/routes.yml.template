@@ -137,8 +137,9 @@ http:
 
     # Authentik live-UI WebSocket (/ws/client/, /ws/outpost/). Must outrank
     # backend-ws (PathPrefix(`/ws`), prio 100) which otherwise swallows it and breaks
-    # the Authentik admin UI ("connection error, reconnecting"). Our app WS is /ws/chat,
-    # so these more specific prefixes don't collide.
+    # the Authentik admin UI ("connection error, reconnecting"). The retired
+    # app endpoint /ws/chat is only a pre-accept 410 compatibility boundary;
+    # these live Authentik WebSockets still need the more specific route.
     authentik-ws:
       rule: "PathPrefix(`/ws/client`) || PathPrefix(`/ws/outpost`)"
       service: authentik

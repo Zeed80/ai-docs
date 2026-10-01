@@ -90,8 +90,10 @@
 - [x] Оставить собственный FastAPI agent loop единственным runtime.
 - [x] Добавить `make aiagent-contract` для сверки `gateway.yml`, registry, scenarios, capability manifest и approval gates.
 - [x] Проверять deny unknown tools и опасные broad capability actions.
-- [x] Оставить единый WebSocket chat через FastAPI `/ws/chat`.
-- [x] Добавить smoke-тест WebSocket-контракта встроенного агента.
+- [x] Исторически чат работал через FastAPI `/ws/chat`; E20 заменил его на
+  durable HTTP, а старый handshake теперь получает явный 410 до `accept`.
+- [x] Исторический WS smoke удалён; действующий контракт проверяется тестами
+  durable chat, восстановления после reload и запрета запуска модели через WS.
 - [x] Оставить FastAPI полностью самодостаточным для degraded mode.
 
 ### P2. Документная память следующего уровня

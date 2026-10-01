@@ -391,7 +391,8 @@ def create_app() -> FastAPI:
     # ── Public routers (no auth required) ─────────────────────────────────────
     app.include_router(health.router, tags=["health"])
     app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
-    # agent.router contains WebSocket endpoints — WS handler validates token internally
+    # Retired /ws/chat stays public only to deny the upgrade with an explicit 410.
+    # It accepts no messages and cannot start model work.
     app.include_router(agent.router, tags=["agent"])
     from app.api import agent_channels, agent_delegations, chat_runs
 

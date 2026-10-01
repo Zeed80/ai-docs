@@ -71,6 +71,17 @@ describe("долговечный транспорт чата", () => {
     expect(emit).toHaveBeenLastCalledWith({type: "done"});
   });
 
+  it("fail-closed отклоняет legacy approve/reject без HTTP-запроса", () => {
+    transport.send(JSON.stringify({type: "approve", approval_id: "legacy"}));
+    transport.send(JSON.stringify({type: "reject", approval_id: "legacy"}));
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(emit).toHaveBeenCalledTimes(2);
+    expect(emit).toHaveBeenLastCalledWith({
+      type: "error",
+      content: "Устаревшая команда подтверждения отклонена. Действие не выполнено; используйте сохранённую карточку задачи.",
+    });
+  });
+
   it("отправляет отдельное одноразовое решение только для server-driven verified commit", async () => {
     const blocked = {...run, status: "blocked"};
     const verified = {can_resume: true, intent: "verified_commit", attempt_id: "attempt", action_id: "action", sha256: "b".repeat(64)};

@@ -3,10 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  buildAgentApprovalMessage,
-  buildAgentUserMessage,
-} from "@/lib/agent-ws";
-import {
+  buildDurableUserCommand,
   DurableChatTransport,
   type DurableContinuation,
 } from "@/lib/durable-chat";
@@ -73,7 +70,7 @@ interface ChatMessage {
   tool?: string;
   args?: Record<string, unknown>;
   result?: unknown;
-  status?: "calling" | "done" | "pending" | "approved" | "rejected";
+  status?: "calling" | "done" | "pending" | "approved" | "rejected" | "unsupported";
   preview?: string;
   card?: ApprovalCard;
   irreversible?: boolean;
@@ -254,16 +251,12 @@ function FileChip({
  */
 function ApprovalCardView({
   card,
-  editing,
-  onEdit,
 }: {
   card: ApprovalCard;
-  editing?: string;
-  onEdit: (text: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [showRaw, setShowRaw] = useState(false);
-  const body = editing ?? card.body_text ?? "";
+  const body = card.body_text ?? "";
   const long = body.length > 400;
 
   return (
@@ -305,22 +298,10 @@ function ApprovalCardView({
 
       {card.body_text !== null && card.body_text !== undefined && (
         <div>
-          {card.editable === "email_draft" ? (
-            // Правка прямо здесь: раньше «поменяй срок на пятницу» стоило
-            // полного круга — отклонить, объяснить словами, ждать нового
-            // черновика.
-            <textarea
-              value={body}
-              onChange={(e) => onEdit(e.target.value)}
-              rows={expanded || editing !== undefined ? 12 : 5}
-              className="w-full resize-y rounded border border-slate-700 bg-slate-900/70 p-2 text-[11px] leading-relaxed text-slate-200 focus:outline-none focus:ring-1 focus:ring-green-600"
-            />
-          ) : (
-            <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded bg-slate-900/50 p-2 text-[11px] text-slate-300">
-              {expanded || !long ? body : `${body.slice(0, 400)}…`}
-            </pre>
-          )}
-          {long && card.editable !== "email_draft" && (
+          <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded bg-slate-900/50 p-2 text-[11px] text-slate-300">
+            {expanded || !long ? body : `${body.slice(0, 400)}…`}
+          </pre>
+          {long && (
             <button
               onClick={() => setExpanded((v) => !v)}
               className="mt-0.5 text-[10px] text-slate-400 hover:text-slate-200"
@@ -373,7 +354,7 @@ export function AssistantPanel() {
   const [lastTurnTools, setLastTurnTools] = useState<string[]>([]);
   const [ratings, setRatings] = useState<Record<string, 1 | -1>>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const wsRef = useRef<DurableChatTransport | null>(null);
+  const transportRef = useRef<DurableChatTransport | null>(null);
   const streamingIdRef = useRef<string | null>(null);
   const tgStreamingIdRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -382,16 +363,9 @@ export function AssistantPanel() {
   const [voiceOk, setVoiceOk] = useState(false);
   const [listening, setListening] = useState(false);
   const dragCounterRef = useRef(0);
-  // Тексты писем, поправленные человеком прямо в карточке подтверждения.
-  const [editedBodies, setEditedBodies] = useState<Record<string, string>>({});
   // Сообщение, к которому человек сейчас пишет «как надо было».
   const [feedbackFor, setFeedbackFor] = useState<string | null>(null);
   const [feedbackText, setFeedbackText] = useState("");
-  const autoApproveRef = useRef(false);
-  // Срок жизни авто-подтверждения и его видимость: режим, который не видно,
-  // человек забывает выключить.
-  const autoApproveUntilRef = useRef(0);
-  const [autoApproveUntil, setAutoApproveUntil] = useState(0);
   const activeHistoryLoadRef = useRef<string | null>(null);
   const archiveImportRequestsRef = useRef<Map<string, string>>(new Map());
   const currentSessionIdRef = useRef<string | null>(null);
@@ -455,7 +429,7 @@ export function AssistantPanel() {
         })
         .filter(Boolean) as ChatMessage[];
       setMessages(nextMessages);
-      await wsRef.current?.watchSession(sessionId, new Set(nextMessages.map((message) => message.id)));
+      await transportRef.current?.watchSession(sessionId, new Set(nextMessages.map((message) => message.id)));
     } catch {
       if (activeHistoryLoadRef.current === sessionId) {
         setMessages([]);
@@ -514,13 +488,13 @@ export function AssistantPanel() {
   }, []);
 
   const connect = useCallback(() => {
-    wsRef.current = new DurableChatTransport(handleServerMessage);
+    transportRef.current = new DurableChatTransport(handleServerMessage);
     setIsConnected(true);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     connect();
-    return () => wsRef.current?.close();
+    return () => transportRef.current?.close();
   }, [connect]);
 
   useEffect(() => {
@@ -727,7 +701,6 @@ export function AssistantPanel() {
       }
       currentTurnToolsRef.current = [];
       streamingIdRef.current = null;
-      autoApproveRef.current = false;
       setIsStreaming(false);
       setActiveToolCall(null);
       void reloadSessionListOnly();
@@ -869,43 +842,10 @@ export function AssistantPanel() {
       if (isTelegram) return;
       const approvalId = genId();
 
-      // Авто-подтверждение не распространяется на необратимое (письмо ушло,
-      // платёж отмечен, файл удалён) и живёт ограниченное время: раньше одно
-      // нажатие «⚡ Все» выключало гейт до конца сессии, ничем этого не
-      // показывая.
-      if (autoApproveRef.current && (irreversible || Date.now() > autoApproveUntilRef.current)) {
-        autoApproveRef.current = false;
-        setAutoApproveUntil(0);
-      }
-      // Auto-approve mode: skip showing dialog, confirm immediately
-      if (
-        autoApproveRef.current &&
-        wsRef.current?.readyState === WebSocket.OPEN
-      ) {
-        const requestApprovalId =
-          typeof data.approval_id === "string" && data.approval_id
-            ? data.approval_id
-            : undefined;
-        const requestDbId =
-          typeof data.db_id === "string" && data.db_id ? data.db_id : undefined;
-        wsRef.current.send(
-          JSON.stringify(buildAgentApprovalMessage(true, requestApprovalId, requestDbId)),
-        );
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: approvalId,
-            role: "approval",
-            tool: data.tool as string,
-            args: data.args as Record<string, unknown>,
-            preview: data.preview as string,
-            approvalId: requestApprovalId,
-            dbId: requestDbId,
-            status: "approved",
-          },
-        ]);
-        return;
-      }
+      // Durable execution accepts decisions only through the server-issued
+      // checkpoint card below. A legacy approval event is display-only: its
+      // approval_id/db_id is not authority to resume a stopped WorkOrder.
+      const isCapability = data.tool === "capability.proposal";
 
       setMessages((prev) => [
         ...prev,
@@ -923,7 +863,7 @@ export function AssistantPanel() {
               : undefined,
           dbId:
             typeof data.db_id === "string" && data.db_id ? data.db_id : undefined,
-          status: "pending",
+          status: isCapability ? "pending" : "unsupported",
         },
       ]);
       return;
@@ -953,7 +893,6 @@ export function AssistantPanel() {
         return;
       }
       streamingIdRef.current = null;
-      autoApproveRef.current = false;
       setIsStreaming(false);
       setMessages((prev) => [
         ...prev,
@@ -1063,8 +1002,8 @@ export function AssistantPanel() {
 
     if (
       (!hasText && !hasFiles) ||
-      !wsRef.current ||
-      wsRef.current.readyState !== WebSocket.OPEN
+      !transportRef.current ||
+      !transportRef.current.isOpen
     )
       return;
 
@@ -1105,9 +1044,9 @@ export function AssistantPanel() {
       },
     ]);
 
-    wsRef.current.send(
+    transportRef.current.send(
       JSON.stringify(
-        buildAgentUserMessage(
+        buildDurableUserCommand(
           content,
           currentSessionId,
           msgAttachments.map((item) => ({
@@ -1135,14 +1074,14 @@ export function AssistantPanel() {
       if (isLegacyChat || isStreaming || isHistoryLoading) return;
       const content = text.trim();
       if (!content) return;
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      if (!transportRef.current || !transportRef.current.isOpen) {
         pendingAskRef.current = content;
         return;
       }
       setMessages((prev) => [...prev, { id: genId(), role: "user", content }]);
-      wsRef.current.send(
+      transportRef.current.send(
         JSON.stringify(
-          buildAgentUserMessage(content, currentSessionId, [], reasoningMode),
+          buildDurableUserCommand(content, currentSessionId, [], reasoningMode),
         ),
       );
       setLastTurnTools([]);
@@ -1206,10 +1145,10 @@ export function AssistantPanel() {
             : m,
         ),
       );
-      if (approved && restOk && wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(
+      if (approved && restOk && transportRef.current?.isOpen) {
+        transportRef.current.send(
           JSON.stringify(
-            buildAgentUserMessage(
+            buildDurableUserCommand(
               `Capability "${title}" одобрена и добавлена в систему. Продолжи выполнение исходной задачи, используя новый инструмент.`,
               currentSessionId,
               undefined,
@@ -1220,103 +1159,15 @@ export function AssistantPanel() {
       }
       return;
     }
-
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-    if (!approved) stopAutoApprove();
-
-    // Человек поправил текст письма прямо в карточке: сохраняем черновик и
-    // передаём агенту новый отпечаток содержимого — иначе отправка упрётся в
-    // 409 «черновик изменился после подтверждения».
-    let argsOverride: Record<string, unknown> | undefined;
-    const edited = editedBodies[msgId];
-    if (approved && edited !== undefined && msg?.card?.entity_id) {
-      try {
-        const res = await mutFetch(`/api/email/drafts/${msg.card.entity_id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            body_text: edited,
-            body_html: edited
-              .split(/\n{2,}/)
-              .map((para) => `<p>${para.replace(/\n/g, "<br/>")}</p>`)
-              .join(""),
-          }),
-        });
-        if (res.ok) {
-          const draft = (await res.json()) as { content_digest?: string };
-          if (draft.content_digest) {
-            argsOverride = { expected_digest: draft.content_digest };
-          }
-        } else {
-          notifyError(
-            "Правка черновика не сохранена",
-            httpDetail(res.status, res.statusText),
-          );
-        }
-      } catch {
-        // Правка не сохранилась — отправляем то, что уже подтверждено, а не
-        // молча подменяем содержимое.
-      }
-    }
-
-    wsRef.current.send(
-      JSON.stringify({
-        ...buildAgentApprovalMessage(approved, msg?.approvalId, msg?.dbId),
-        ...(argsOverride ? { args_override: argsOverride } : {}),
-      }),
-    );
-    setEditedBodies((prev) => {
-      if (!(msgId in prev)) return prev;
-      const next = { ...prev };
-      delete next[msgId];
-      return next;
-    });
-    setMessages((prev) =>
-      prev.map((m) =>
-        m.id === msgId
-          ? { ...m, status: approved ? "approved" : "rejected" }
-          : m,
-      ),
-    );
   }
-
-  const AUTO_APPROVE_MINUTES = 10;
-
-  function handleApproveAll(msgId: string) {
-    autoApproveRef.current = true;
-    const until = Date.now() + AUTO_APPROVE_MINUTES * 60_000;
-    autoApproveUntilRef.current = until;
-    setAutoApproveUntil(until);
-    void handleApproval(msgId, true);
-  }
-
-  function stopAutoApprove() {
-    autoApproveRef.current = false;
-    autoApproveUntilRef.current = 0;
-    setAutoApproveUntil(0);
-  }
-
-  const autoApproveActive = autoApproveUntil > Date.now();
-  useEffect(() => {
-    if (!autoApproveUntil) return;
-    const id = setInterval(() => {
-      if (Date.now() > autoApproveUntilRef.current) {
-        autoApproveRef.current = false;
-        setAutoApproveUntil(0);
-      } else {
-        setAutoApproveUntil((v) => v);
-      }
-    }, 15000);
-    return () => clearInterval(id);
-  }, [autoApproveUntil]);
 
   function stopGeneration() {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+    if (!transportRef.current || !transportRef.current.isOpen) {
       streamingIdRef.current = null;
       setIsStreaming(false);
       return;
     }
-    wsRef.current.send(JSON.stringify({ type: "stop" }));
+    transportRef.current.send(JSON.stringify({ type: "stop" }));
   }
 
   async function handleCreateNewChat() {
@@ -1330,7 +1181,7 @@ export function AssistantPanel() {
       ]);
       setCurrentSessionId(created.id);
       setIsLegacyChat(false);
-      await wsRef.current?.watchSession(created.id);
+      await transportRef.current?.watchSession(created.id);
       persistSessionToStorage(created.id);
       setMessages([]);
       setInput("");
@@ -1404,7 +1255,7 @@ export function AssistantPanel() {
       setMessages([]);
       setSelectedArchiveMessageIds(new Set());
       setIsLegacyChat(false);
-      await wsRef.current?.watchSession(imported.target_session_id);
+      await transportRef.current?.watchSession(imported.target_session_id);
     } catch {
       notifyError(
         "Архивный контекст не перенесён",
@@ -1543,8 +1394,8 @@ export function AssistantPanel() {
             <p><strong>Получатель уже зафиксировал результат.</strong> Сервер независимо сверил его с этой попыткой.</p>
             <p className="mb-2 text-xs text-slate-300">Это не разрешение эффекта задним числом и не повтор действия. Продолжится только безопасный хвост работы; следующие действия потребуют отдельных проверок и подтверждений.</p>
             <div className="flex flex-wrap gap-2">
-              <button type="button" disabled={decisionPending || isStreaming} onClick={() => wsRef.current?.send(JSON.stringify({type: "resume", approved: true}))} className="rounded bg-sky-700 px-3 py-1 disabled:opacity-50">Продолжить после проверенного результата</button>
-              <button type="button" disabled={decisionPending || isStreaming} onClick={() => wsRef.current?.send(JSON.stringify({type: "resume", approved: false}))} className="rounded border border-slate-500 px-3 py-1 disabled:opacity-50">Не продолжать</button>
+              <button type="button" disabled={decisionPending || isStreaming} onClick={() => transportRef.current?.send(JSON.stringify({type: "resume", approved: true}))} className="rounded bg-sky-700 px-3 py-1 disabled:opacity-50">Продолжить после проверенного результата</button>
+              <button type="button" disabled={decisionPending || isStreaming} onClick={() => transportRef.current?.send(JSON.stringify({type: "resume", approved: false}))} className="rounded border border-slate-500 px-3 py-1 disabled:opacity-50">Не продолжать</button>
             </div>
           </section>
         ) : durableConfirmation && !("intent" in durableConfirmation) && (
@@ -1553,8 +1404,8 @@ export function AssistantPanel() {
             <pre className="my-2 max-h-48 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(durableConfirmation.confirmation.args, null, 2)}</pre>
             <p className="mb-2 text-xs text-slate-300">Будут использованы именно эти аргументы. Разрешение действует 30 минут. Отказ окончателен для этого снимка.</p>
             <div className="flex flex-wrap gap-2">
-              <button type="button" disabled={decisionPending || isStreaming} onClick={() => wsRef.current?.send(JSON.stringify({type: "resume", approved: true}))} className="rounded bg-amber-700 px-3 py-1 disabled:opacity-50">Разрешить действие</button>
-              <button type="button" disabled={decisionPending || isStreaming} onClick={() => wsRef.current?.send(JSON.stringify({type: "resume", approved: false}))} className="rounded border border-slate-500 px-3 py-1 disabled:opacity-50">Отказать</button>
+              <button type="button" disabled={decisionPending || isStreaming} onClick={() => transportRef.current?.send(JSON.stringify({type: "resume", approved: true}))} className="rounded bg-amber-700 px-3 py-1 disabled:opacity-50">Разрешить действие</button>
+              <button type="button" disabled={decisionPending || isStreaming} onClick={() => transportRef.current?.send(JSON.stringify({type: "resume", approved: false}))} className="rounded border border-slate-500 px-3 py-1 disabled:opacity-50">Отказать</button>
             </div>
           </section>
         )}
@@ -1985,13 +1836,7 @@ export function AssistantPanel() {
                   </p>
                 )}
                 {!isCapability && msg.card && (
-                  <ApprovalCardView
-                    card={msg.card}
-                    editing={editedBodies[msg.id]}
-                    onEdit={(text) =>
-                      setEditedBodies((prev) => ({ ...prev, [msg.id]: text }))
-                    }
-                  />
+                  <ApprovalCardView card={msg.card} />
                 )}
                 {!isCapability && !msg.card && (
                   <pre className="mb-2 max-h-40 overflow-auto rounded bg-slate-900/50 p-2 text-[10px] text-slate-400">
@@ -2009,11 +1854,7 @@ export function AssistantPanel() {
                       onClick={() => void handleApproval(msg.id, true)}
                       className={`flex-1 py-1.5 rounded text-xs font-medium transition-colors text-white ${isCapability ? "bg-violet-700 hover:bg-violet-600" : "bg-green-700 hover:bg-green-600"}`}
                     >
-                      {isCapability
-                        ? "Добавить"
-                        : editedBodies[msg.id] !== undefined
-                          ? "Утвердить с правкой"
-                          : "Утвердить"}
+                      Добавить
                     </button>
                     <button
                       onClick={() => void handleApproval(msg.id, false)}
@@ -2021,23 +1862,16 @@ export function AssistantPanel() {
                     >
                       Отклонить
                     </button>
-                    {/* Необратимое решается поимённо: «⚡ Все» для отправки
-                        письма или платежа не предлагается вовсе. */}
-                    {!isCapability && !msg.irreversible && (
-                      <button
-                        onClick={() => handleApproveAll(msg.id)}
-                        className="py-1.5 px-2 bg-amber-700 hover:bg-amber-600 text-white rounded text-xs font-medium transition-colors"
-                        title={`Утвердить этот и последующие обратимые запросы (${AUTO_APPROVE_MINUTES} мин)`}
-                      >
-                        ⚡ Все
-                      </button>
-                    )}
                   </div>
                 ) : (
                   <span
                     className={`text-xs px-2 py-0.5 rounded-full ${msg.status === "approved" ? "bg-green-900/50 text-green-400" : "bg-red-900/50 text-red-400"}`}
                   >
-                    {msg.status === "approved" ? "Утверждено" : "Отклонено"}
+                    {msg.status === "approved"
+                      ? "Утверждено"
+                      : msg.status === "unsupported"
+                        ? "Устаревший запрос: решение не отправлено. Используйте сохранённую карточку подтверждения задачи."
+                        : "Отклонено"}
                   </span>
                 )}
               </div>
@@ -2057,24 +1891,6 @@ export function AssistantPanel() {
         })}
         <div ref={messagesEndRef} />
       </div>
-
-      {/* Авто-подтверждение — видимый режим с выключателем: раньше «⚡ Все»
-          снимало гейт до конца сессии, и понять это можно было только по
-          тому, что подтверждений больше не спрашивают. */}
-      {autoApproveActive && (
-        <div className="flex items-center gap-2 border-t border-amber-700/60 bg-amber-950/30 px-3 py-1.5 text-[11px] text-amber-200">
-          <span>
-            Авто-подтверждение обратимых действий ·{" "}
-            {Math.max(0, Math.ceil((autoApproveUntil - Date.now()) / 60000))} мин
-          </span>
-          <button
-            onClick={stopAutoApprove}
-            className="ml-auto rounded border border-amber-700 px-2 py-0.5 hover:bg-amber-900/40"
-          >
-            Выключить
-          </button>
-        </div>
-      )}
 
       {/* Input area */}
       <div className="p-3 border-t border-slate-700 space-y-2">
