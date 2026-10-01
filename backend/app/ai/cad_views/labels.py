@@ -92,6 +92,16 @@ def parse_label(text: str) -> Label:
     if match:
         depth = _num(match.group(1))
         clean = clean[: match.start()] + clean[match.end() :]
+    # Шлицевой вал (ГОСТ 1139): D-8x36x40x7, d-6x23x28js6x6js7 — z × d × D × b;
+    # наружный Ø — третье число. Иначе ступень шлицев оставалась замером
+    # (Ø39,4 при Ø40, реальный p007).
+    match = re.search(
+        r"(?<![A-Za-zА-Яа-я])[DdbB]\s*-\s*\d+\s*x\s*\d+(?:[.,]\d+)?(?:[a-wyzA-Z]{1,2}\d{0,2})?"
+        r"\s*x\s*(?P<outer>\d+(?:[.,]\d+)?)",
+        clean,
+    )
+    if match:
+        return Label(raw, "diameter", value=_num(match.group("outer")), extras={"spline": True})
     # Резьба: M10x0,5-6g, M24x1,5, G1/2.
     match = re.search(r"(?<![A-Za-zА-Яа-я])[MМ]\s*" + _NUM + r"(?:\s*x\s*" + _NUM + r")?", clean)
     if match:

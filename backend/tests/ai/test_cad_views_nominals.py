@@ -128,3 +128,15 @@ def test_an_unscaled_sketch_takes_diameters_by_their_order():
     assert [p["r"] for p in new_bore] == [6.5, 6.5]
     # Надписей больше, чем площадок, — не угадывается.
     assert _ordinal_diameters(outer, [], [22.0, 13.0, 18.0], []) is None
+
+
+def test_a_whole_nominal_wins_over_a_groove_diameter_in_tolerance():
+    """Реальный p007: Ø дна канавки «Ø49,5» с выносного элемента ближе к
+    замеру 49,6, чем номинал ступени Ø50, — ступень привязывалась к канавке."""
+    from app.ai.cad_views.nominals import snap_diameter
+
+    assert snap_diameter(49.6, [50.0, 49.5, 25.0]) == 50.0
+    assert snap_diameter(24.6, [24.5, 25.0]) == 25.0
+    # Единственный кандидат — как раньше, и мелкие номиналы не трогаются.
+    assert snap_diameter(6.48, [6.0, 6.5]) == 6.5
+    assert snap_diameter(49.6, [49.5]) == 49.5

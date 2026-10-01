@@ -98,9 +98,19 @@ def snap_axis(
 
 
 def snap_diameter(value: float, diameters: list[float], share: float = 0.03) -> float:
-    """Ø площадки или отверстия — номинал надписи в пределах доли."""
-    near = min(diameters, key=lambda d: abs(d - value), default=None)
-    return near if near is not None and abs(near - value) <= share * near else value
+    """Ø площадки или отверстия — номинал надписи в пределах доли.
+
+    Из нескольких надписей в допуске целый номинал важнее дробного: Ø дна
+    канавки с выносного элемента (Ø49,5, Ø24,5, Ø21,7 — d − 2t) ближе к
+    замеру, чем номинал ступени Ø50, и ступени вала (ГОСТ 6636 — целые
+    миллиметры) привязывались к канавкам (реальные p007, z4-r4)."""
+    near = [d for d in diameters if abs(d - value) <= share * d]
+    if not near:
+        return value
+    whole = [d for d in near if d >= 10.0 and abs(d - round(d)) <= 1e-6]
+    if whole and len(whole) < len(near):
+        return min(whole, key=lambda d: abs(d - value))
+    return min(near, key=lambda d: abs(d - value))
 
 
 def nominal_sketch(

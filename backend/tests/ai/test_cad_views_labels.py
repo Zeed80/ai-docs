@@ -78,3 +78,18 @@ def test_main_view_falls_back_to_the_view_the_model_named_main():
         "regions": [{"n": 1, "role": "view"}, {"n": 2, "role": "section"}],
     }
     assert parse_reading(answer, boxes).main == 2  # наибольшее изображение
+
+
+def test_a_spline_designation_gives_the_outer_diameter():
+    """ГОСТ 1139: z × d × D × b — наружный Ø шлицевого вала третье число
+    (реальный p007: D-8×36×40×7, ступень Ø40 оставалась замером 39,4)."""
+    from app.ai.cad_views.labels import parse_label
+
+    for text, outer in (
+        ("D-8×36×40×7", 40.0),
+        ("D-6x23x28js6x6js7", 28.0),
+        ("d-6×23×28", 28.0),
+        ("D-8x36H7x40f7x7", 40.0),
+    ):
+        label = parse_label(text)
+        assert label.kind == "diameter" and label.value == outer, text
