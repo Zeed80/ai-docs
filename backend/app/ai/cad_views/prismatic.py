@@ -934,6 +934,31 @@ def _shallow_depth(
     return round(abs(bottom - edge), 3)
 
 
+def _square_sides(mask: Any, cx: float, cy: float, r: float, line: float) -> int:
+    """Сколько из восьми точек сторон описанного квадрата (±r, ±0,85 r)
+    покрыто чернилами: у квадрата — все, у окружности — ни одной (до неё
+    0,3 r — у мелких отверстий это толщина линии, их не проверяем)."""
+    height, width = mask.shape[:2]
+    reach = max(1, int(round(0.5 * line)))
+    count = 0
+    for dx, dy in (
+        (1.0, 0.85),
+        (1.0, -0.85),
+        (-1.0, 0.85),
+        (-1.0, -0.85),
+        (0.85, 1.0),
+        (-0.85, 1.0),
+        (0.85, -1.0),
+        (-0.85, -1.0),
+    ):
+        x, y = int(round(cx + dx * r)), int(round(cy + dy * r))
+        x0, x1 = max(0, x - reach), min(width, x + reach + 1)
+        y0, y1 = max(0, y - reach), min(height, y + reach + 1)
+        if x0 < x1 and y0 < y1 and mask[y0:y1, x0:x1].any():
+            count += 1
+    return count
+
+
 def _snap_length(value: float, labels: list[float], share: float = 0.03) -> float:
     from app.ai.cad_views.extrude_body import _match
 
@@ -1656,6 +1681,11 @@ def _assemble(
             line = frame.outline.line
             visible = ring_cover(thick, cx, cy, r, line) >= 0.5
             if not visible and ring_cover(ink, cx, cy, r, line) < 0.5:
+                continue
+            # Квадратный карман, в который вписалась окружность (housing-9:
+            # карман 20 × 20 × 6 строился глухим отверстием Ø20 на 14): у
+            # квадрата его стороны — там, где окружности нет.
+            if r >= 5 * line and _square_sides(ink, cx, cy, r, line) >= 7:
                 continue
             centre = frame.to_part(cx, cy)
             radius_mm = r * scale
