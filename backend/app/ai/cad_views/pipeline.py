@@ -1617,6 +1617,11 @@ async def digitize_revolve(gray: Any, *, router: Any = None) -> tuple[ViewsResul
                 seen.add(text)
                 merged.append(text)
     result = choose_body(gray, reading, labels, region_labels, merged)
+    # Для повторной сверки без модели (scripts/eval_views_elements.py): метод
+    # пользуется и надписями каждого изображения, без них повтор расходится
+    # с живым прогоном.
+    reading.sheet_labels = labels
+    reading.region_labels = region_labels
     return result, reading, merged
 
 

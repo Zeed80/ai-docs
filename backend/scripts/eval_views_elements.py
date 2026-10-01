@@ -139,11 +139,10 @@ def evaluate(part: dict[str, Any], result: Any) -> dict[str, Any]:
     ]
     best = None
     for mirrored in (False, True):
+        # Зеркально — список точек развёрнут целиком: у уступа две точки с
+        # одним z, и их порядок тоже меняется.
         profile = (
-            sorted(
-                ({"z": ours_len - float(q["z"]), "r": float(q["r"])} for q in outer),
-                key=lambda q: q["z"],
-            )
+            [{"z": ours_len - float(q["z"]), "r": float(q["r"])} for q in reversed(outer)]
             if mirrored
             else outer
         )
@@ -210,7 +209,16 @@ def main() -> int:
         sheet = SheetReading(
             record["sheet_kind"], record["main"], [Region(**x) for x in record["regions"]]
         )
-        result = choose_body(gray, sheet, record["labels"], {}, record["labels"])
+        # Как в живом прогоне: надписи листа, надписи по изображениям и их
+        # объединение; у старых чтений — только объединение.
+        region_labels = {int(k): v for k, v in (record.get("region_labels") or {}).items()}
+        result = choose_body(
+            gray,
+            sheet,
+            record.get("sheet_labels") or record["labels"],
+            region_labels,
+            record["labels"],
+        )
         row = evaluate(part, result)
         rows[name] = row
         for key in totals:

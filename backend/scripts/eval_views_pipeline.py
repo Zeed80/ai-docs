@@ -125,6 +125,9 @@ async def main() -> int:
             gray, prepared = prepare_like_product(gray)
             if prepared:
                 print(f"{name:<20} подготовка: {prepared}", flush=True)
+        # Лист, который видел метод (после подготовки), — для повторной
+        # сверки без модели (scripts/eval_views_elements.py --images).
+        cv2.imwrite(str(args.out / f"{name}.png"), gray)
         result, reading, labels = await digitize(gray)
         record = {
             "sheet": name,
@@ -133,6 +136,8 @@ async def main() -> int:
             "labels": labels,
             "main": reading.main,
             "sheet_kind": reading.sheet_kind,
+            "sheet_labels": getattr(reading, "sheet_labels", None),
+            "region_labels": getattr(reading, "region_labels", None),
             "regions": [dict(region.__dict__) for region in reading.regions],
             "scales": result.scales,
             "features": result.features,

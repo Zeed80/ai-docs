@@ -346,8 +346,17 @@ def nominal_revolve(
         nonlocal changed
         out = [dict(p) for p in points]
         # Площадка — две соседние точки с одним радиусом: Ø по надписи.
+        span = max((p["z"] for p in out), default=0.0) - min((p["z"] for p in out), default=0.0)
         for a, b in zip(out, out[1:]):
-            if abs(a["r"] - b["r"]) <= 0.02 * max(a["r"], b["r"], 1.0) and b["z"] - a["z"] > 0.3:
+            # Длинный участок с разницей Ø до 6 % — площадка, снятая с
+            # перекошенного скана (p121: 28,3 → 27,1 на 34 мм), а не конус:
+            # конусы на валах короткие (фаски, переходы) или надписаны.
+            long_flat = b["z"] - a["z"] >= 0.1 * span and abs(a["r"] - b["r"]) <= 0.06 * max(
+                a["r"], b["r"], 1.0
+            )
+            if (abs(a["r"] - b["r"]) <= 0.02 * max(a["r"], b["r"], 1.0) or long_flat) and b[
+                "z"
+            ] - a["z"] > 0.3:
                 measured = a["r"] + b["r"]
                 nominal = snap_diameter(measured, diameters, share) / 2.0
                 if abs(2 * nominal - measured) <= 1e-9 and diameter_tolerance_mm > 0:

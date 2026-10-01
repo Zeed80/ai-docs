@@ -562,6 +562,299 @@
     }
    ],
    "note": "эскиз не в масштабе"
+  },
+  "2cb28437_p063_nut": {
+   "sheet": "real-web/parts/2cb28437_p063_nut.png",
+   "split": "dev",
+   "class": "rotation",
+   "length_mm": 45.0,
+   "steps": [
+    [
+     50.0,
+     10.0
+    ],
+    [
+     90.0,
+     10.0
+    ],
+    [
+     50.0,
+     25.0
+    ]
+   ],
+   "bore": [
+    [
+     38.0,
+     45.0,
+     0.0
+    ]
+   ],
+   "features": [
+    {
+     "kind": "thread",
+     "d": 38.0,
+     "start": 0.0,
+     "length": 45.0,
+     "internal": true,
+     "spec": "SQ 38x7"
+    }
+   ],
+   "note": "гайка домкрата, ось вертикальна; ступени сверху вниз; бурт R5"
+  },
+  "2cb28437_p063_body": {
+   "sheet": "real-web/parts/2cb28437_p063_body.png",
+   "split": "dev",
+   "class": "rotation",
+   "length_mm": 185.0,
+   "steps": [
+    [
+     70.0,
+     40.0
+    ],
+    [
+     null,
+     125.0
+    ],
+    [
+     140.0,
+     20.0
+    ]
+   ],
+   "bore": [
+    [
+     50.0,
+     40.0,
+     0.0
+    ]
+   ],
+   "features": [],
+   "note": "корпус домкрата (литьё): Ø70×40 сверху, конус до Ø100, основание Ø140×20; внутри Ø50×40, далее конус Ø56→Ø100 стенкой 10"
+  },
+  "2cb28437_p063_screw": {
+   "sheet": "real-web/parts/2cb28437_p063_screw.png",
+   "split": "dev",
+   "class": "rotation",
+   "length_mm": 240.0,
+   "steps": [
+    [
+     65.0,
+     83.0
+    ],
+    [
+     38.0,
+     157.0
+    ]
+   ],
+   "bore": [],
+   "features": [
+    {
+     "kind": "thread",
+     "d": 38.0,
+     "start": 83.0,
+     "length": 157.0,
+     "spec": "SQ 38x7"
+    },
+    {
+     "kind": "cross_hole",
+     "d": 12.0,
+     "at": 48.0
+    },
+    {
+     "kind": "thread",
+     "d": 12.0,
+     "start": 0.0,
+     "length": 30.0,
+     "internal": true
+    }
+   ],
+   "note": "винт домкрата: головка Ø65 (фаска 10×45°, накатка), сверху Ø22 и M12; отверстие под вороток Ø12 в 35 от низа головки"
+  },
+  "2cb28437_p063_bar": {
+   "sheet": "real-web/parts/2cb28437_p063_bar.png",
+   "split": "dev",
+   "class": "rotation",
+   "length_mm": 275.0,
+   "steps": [
+    [
+     12.0,
+     62.0
+    ],
+    [
+     20.0,
+     213.0
+    ]
+   ],
+   "bore": [],
+   "features": [
+    {
+     "kind": "knurl",
+     "start": 175.0,
+     "length": 100.0
+    }
+   ],
+   "note": "вороток; переход Ø12→Ø20 фаской 45°; накатка 100 у правого конца"
+  },
+  "2cb28437_p063_washer": {
+   "sheet": "real-web/parts/2cb28437_p063_washer.png",
+   "split": "dev",
+   "class": "rotation",
+   "length_mm": 8.0,
+   "steps": [
+    [
+     35.0,
+     8.0
+    ]
+   ],
+   "bore": [
+    [
+     14.5,
+     8.0,
+     0.0
+    ]
+   ],
+   "features": [],
+   "note": "шайба, зенковка 90°"
+  },
+  "793539cc_p013_shpindel": {
+   "sheet": "real-web/parts/793539cc_p013_shpindel.png",
+   "split": "dev",
+   "class": "rotation",
+   "length_mm": 127.0,
+   "steps": [
+    [
+     13.0,
+     8.0
+    ],
+    [
+     9.0,
+     2.0
+    ],
+    [
+     13.0,
+     12.0
+    ],
+    [
+     18.0,
+     20.0
+    ],
+    [
+     13.0,
+     85.0
+    ]
+   ],
+   "bore": [],
+   "features": [
+    {
+     "kind": "groove",
+     "at": 8.0,
+     "width": 2.0,
+     "d": 9.0
+    },
+    {
+     "kind": "thread",
+     "d": 18.0,
+     "start": 22.0,
+     "length": 20.0
+    },
+    {
+     "kind": "square",
+     "start": 113.0,
+     "length": 14.0,
+     "size": 10.0
+    }
+   ],
+   "note": "шпиндель (Рис. 13); квадрат □10 на конце; длинный участок Ø13 по рисунку (отдельной надписи нет — общая с левым)"
+  },
+  "793539cc_p013_kryshka": {
+   "sheet": "real-web/parts/793539cc_p013_kryshka.png",
+   "split": "dev",
+   "class": "rotation",
+   "length_mm": 60.0,
+   "steps": [
+    [
+     24.0,
+     13.0
+    ],
+    [
+     null,
+     6.0
+    ],
+    [
+     null,
+     18.0
+    ],
+    [
+     65.0,
+     6.0
+    ],
+    [
+     null,
+     4.0
+    ],
+    [
+     52.0,
+     13.0
+    ]
+   ],
+   "bore": [
+    [
+     14.0,
+     13.0,
+     0.0
+    ]
+   ],
+   "features": [
+    {
+     "kind": "thread",
+     "d": 24.0,
+     "start": 0.0,
+     "length": 13.0
+    },
+    {
+     "kind": "thread",
+     "d": 52.0,
+     "start": 47.0,
+     "length": 13.0
+    },
+    {
+     "kind": "hex",
+     "start": 19.0,
+     "length": 18.0
+    }
+   ],
+   "note": "крышка (Рис. 12): M24×1,5, переход 30°, шестигранник 19…37, фланец Ø65 37…43, M52×2; внутри Ø14, Ø18, M18, Ø25…Ø45 — расточка выписана только Ø14"
+  },
+  "793539cc_p014_zolotnik": {
+   "sheet": "real-web/parts/793539cc_p014_zolotnik.png",
+   "split": "dev",
+   "class": "rotation",
+   "length_mm": 30.0,
+   "steps": [
+    [
+     20.0,
+     20.0
+    ],
+    [
+     70.0,
+     10.0
+    ]
+   ],
+   "bore": [
+    [
+     14.0,
+     20.0,
+     0.0
+    ]
+   ],
+   "features": [
+    {
+     "kind": "groove",
+     "at": 10.0,
+     "width": 2.5,
+     "d": null
+    }
+   ],
+   "note": "золотник (Рис. 14): трубка Ø20/Ø14, тарелка Ø70 толщиной 10 (кромка 3, фаска 45°); пропил 2,5 через стенку"
   }
  }
 }
