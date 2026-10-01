@@ -1637,10 +1637,16 @@ def _assemble(
             "profile": profile,
             "depth_mm": round(boss_depth, 3),
         }
+        # По ЕСКД размер прилива надписан: без надписи — линии размеров и
+        # выносных у кромки (housing-16: «прилив» Ø4,2, housing-23: 5,4 × 30).
         if profile == "circle":
-            diameter = _match(d1, diameters, 0.06) or round(d1, 3)
+            diameter = _match(d1, diameters, 0.06) or _match(d1, linear, 0.06)
+            if diameter is None:
+                continue
             params["diameter_mm"] = diameter
         else:
+            if _match(d1, linear, 0.06) is None or _match(b1 - b0, linear, 0.06) is None:  # type: ignore[operator]
+                continue
             params["width_mm"] = round(d1, 3)
             params["height_mm"] = round(b1 - b0, 3)  # type: ignore[operator]
         bosses.append(
