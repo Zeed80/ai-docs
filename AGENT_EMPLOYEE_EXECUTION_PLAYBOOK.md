@@ -973,8 +973,22 @@ WorkOrder/email executor paths перечислены в отчёте и не о
 
 ### E21 — Единый budget ledger
 
-**Статус:** TODO. **После:** E20.
+**Статус:** IN_PROGRESS. **После:** E20.
+Отчёт: `docs/agent-employee-delivery/E21-budget-ledger.md`.
 **Файлы:** WorkOrder budgets, `tasks/work_orders.py`, executor/provider adapters.
+
+Подкарточки для ограниченного исполнителя:
+
+- **E21.1 (REVIEWED / DEPLOYED):** additive schema и атомарный сервис shared ledger/reservations,
+  independent commit reserve/settle, idempotency и PG concurrency. Пока не
+  подключён к runtime; legacy usage требует baseline, не получает ноль.
+- **E21.2:** явная reconciliation legacy baseline; hooks всех реальных
+  tool/provider attempts, включая nested, fallback/error/crash, parent/child
+  и остаточные headless пути. Повтор reservation не разрешает повтор эффекта.
+- **E21.3:** active-time intervals без ожидания человека, общий атомарный
+  replan budget; end-to-end проверка resume/channel switch и blockers.
+
+E21.1 сама по себе не закрывает карточку и не заменяет старый enforcement.
 
 1. Сначала точные единицы: tool attempts, LLM calls, tokens, cost, active time,
    replan count. Ожидание человека не смешивать с активным временем без ADR.

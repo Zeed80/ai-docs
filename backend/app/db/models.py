@@ -34,6 +34,10 @@ from app.db.agent_runtime_models import (  # noqa: F401
     TelegramApprovalCallback,
 )
 from app.db.base import GUID, Base, TimestampMixin, UUIDPrimaryKey
+from app.db.work_budget_models import (  # noqa: F401
+    WorkBudgetLedger,
+    WorkBudgetReservation,
+)
 
 # ── Enums ────────────────────────────────────────────────────────────────────
 
@@ -1969,6 +1973,16 @@ class WorkOrder(UUIDPrimaryKey, TimestampMixin, Base):
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     parent_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("work_orders.id", ondelete="SET NULL"), index=True
+    )
+    budget_ledger_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey(
+            "work_budget_ledgers.id",
+            name="fk_work_orders_budget_ledger_id",
+            ondelete="RESTRICT",
+            use_alter=True,
+        ),
+        index=True,
     )
     legacy_agent_task_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("agent_tasks.id", ondelete="SET NULL"), unique=True
