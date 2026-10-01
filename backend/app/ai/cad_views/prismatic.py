@@ -788,9 +788,27 @@ def _face_pockets(
             def labelled(value: float) -> bool:
                 return any(abs(lab - value) <= max(0.6, 0.05 * lab) for lab in labels or [])
 
-            # Только видимый прямоугольник основной линии: штриховой собирается
-            # из линий полости (housing-23: «карман» 20 × 40 на виде слева).
-            if depth is None and visible and labelled(u1 - u0) and labelled(v1 - v0):
+            # Штриховой прямоугольник собирается и из линий полости (housing-23:
+            # «карман» 20 × 40 на виде слева): его стороны не должны лежать на
+            # кромках проекции полости.
+            def on_cavity_edge() -> bool:
+                tol = 2 * frame.outline.line * frame.scale
+                for cavity in cavities:
+                    box = cavity_box(cavity, ua, va, n)
+                    if box is None:
+                        continue
+                    if any(abs(a - b) <= tol for a in (u0, u1) for b in box[:2]) or any(
+                        abs(a - b) <= tol for a in (v0, v1) for b in box[2:4]
+                    ):
+                        return True
+                return False
+
+            if (
+                depth is None
+                and (visible or not on_cavity_edge())
+                and labelled(u1 - u0)
+                and labelled(v1 - v0)
+            ):
                 # Мелкий карман стенки: на соседнем виде дно — линия поперёк в
                 # пролёте кармана у самой грани, часто сплошная (выносные
                 # поверх штриховой), и поиск полости её не принимал — из 34
