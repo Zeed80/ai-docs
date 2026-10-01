@@ -1590,6 +1590,18 @@ def _assemble(
                 continue  # второго пролёта нет и формы не видно — не угадываем
             profile = "rectangle"
             c2 = (b0 + b1) / 2.0
+        # Прилив целиком на своей грани: «прилив» Ø9 с центром в 79,3 на
+        # грани шириной 80 — линии у ребра рядом с настоящим приливом
+        # (housing-14: лишний выступ 25 мм на торце).
+        half2 = (d1 if profile == "circle" else (b1 - b0)) / 2.0  # type: ignore[operator]
+        slack = 2 * scale * max(f.outline.line for f in frames.values())
+        if (
+            c1 - d1 / 2.0 < -slack
+            or c1 + d1 / 2.0 > extent[t1] + slack
+            or c2 - half2 < -slack
+            or c2 + half2 > extent[t2] + slack
+        ):
+            continue
         origin = {axis: face, t1: c1, t2: c2}
         params: dict[str, Any] = {
             "placement": {
