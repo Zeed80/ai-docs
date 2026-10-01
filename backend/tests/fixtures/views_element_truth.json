@@ -1,0 +1,567 @@
+{
+ "comment": "Эталон реальных листов по элементам: выписан вручную по надписям листа, как читает инженер. Тело вращения: steps — наружные ступени [Ø, длина] слева направо в ориентации главного вида на листе (если лист повёрнут — в ориентации надписей); bore — [Ø, длина, начало]; features — элементы с положением от левого торца (мм). Сверка — scripts/eval_views_elements.py. Holdout-листы для подбора правил не использовать.",
+ "parts": {
+  "4264de9f_p007": {
+   "sheet": "real-web/sheets/4264de9f_p007.png",
+   "split": "dev",
+   "class": "rotation",
+   "length_mm": 222.0,
+   "steps": [
+    [
+     25.0,
+     25.0
+    ],
+    [
+     30.0,
+     6.0
+    ],
+    [
+     56.0,
+     6.0
+    ],
+    [
+     50.0,
+     60.0
+    ],
+    [
+     40.0,
+     80.0
+    ],
+    [
+     25.0,
+     25.0
+    ],
+    [
+     20.0,
+     20.0
+    ]
+   ],
+   "bore": [],
+   "features": [
+    {
+     "kind": "keyway",
+     "step_d": 50.0,
+     "start": 49.0,
+     "length": 40.0,
+     "width": 14.0,
+     "depth": 3.5
+    },
+    {
+     "kind": "spline",
+     "step_d": 40.0,
+     "start": 97.0,
+     "length": 80.0,
+     "spec": "D-8x36x40x7"
+    },
+    {
+     "kind": "thread",
+     "d": 20.0,
+     "start": 202.0,
+     "length": 20.0
+    },
+    {
+     "kind": "groove",
+     "at": 37.0,
+     "width": 3.0,
+     "d": 49.5
+    },
+    {
+     "kind": "groove",
+     "at": 22.0,
+     "width": 3.0,
+     "d": 24.5
+    },
+    {
+     "kind": "groove",
+     "at": 197.5,
+     "width": 4.5,
+     "d": 16.4
+    }
+   ],
+   "note": "центровые B3,15 на обоих торцах; фаски 1,6×45° (5), 2,5×45° у M20"
+  },
+  "5c7d2ba9_p121": {
+   "sheet": "real-web/sheets/5c7d2ba9_p121.png",
+   "split": "dev",
+   "class": "rotation",
+   "length_mm": 207.0,
+   "steps": [
+    [
+     30.0,
+     20.0
+    ],
+    [
+     38.0,
+     10.0
+    ],
+    [
+     50.0,
+     9.0
+    ],
+    [
+     40.0,
+     40.0
+    ],
+    [
+     30.0,
+     44.0
+    ],
+    [
+     30.0,
+     24.0
+    ],
+    [
+     28.0,
+     60.0
+    ]
+   ],
+   "bore": [],
+   "features": [
+    {
+     "kind": "keyway",
+     "step_d": 40.0,
+     "start": 44.0,
+     "length": 32.0,
+     "width": 12.0,
+     "depth": 5.0
+    },
+    {
+     "kind": "spline",
+     "step_d": 28.0,
+     "start": 147.0,
+     "length": 60.0,
+     "spec": "D-6x23x28"
+    },
+    {
+     "kind": "groove",
+     "at": 17.0,
+     "width": 3.0,
+     "d": 29.4
+    }
+   ],
+   "note": "лист повёрнут на 90°; Ø30k6 и Ø30h11 — одна ступень по Ø, разные допуски"
+  },
+  "c8d8313e_p005": {
+   "sheet": "real-web/sheets/c8d8313e_p005.png",
+   "split": "dev",
+   "class": "rotation",
+   "length_mm": 238.0,
+   "steps": [
+    [
+     34.0,
+     28.0
+    ],
+    [
+     null,
+     6.0
+    ],
+    [
+     34.0,
+     64.0
+    ],
+    [
+     null,
+     99.0
+    ],
+    [
+     22.0,
+     41.0
+    ]
+   ],
+   "bore": [],
+   "features": [
+    {
+     "kind": "keyway",
+     "step_d": 34.0,
+     "start": 49.0,
+     "length": 36.0,
+     "width": 10.0,
+     "depth": 5.0
+    },
+    {
+     "kind": "cross_hole",
+     "d": 5.0,
+     "at": 15.0
+    },
+    {
+     "kind": "thread",
+     "d": 22.0,
+     "start": 197.0,
+     "length": 41.0
+    }
+   ],
+   "note": "слайд; Ø кольца и длинного участка на листе не надписаны (по рисунку ≈42 и ≈24); паз — центры дуг 20 и 46 от кольца, R5"
+  },
+  "part_02_val_gost": {
+   "sheet": "test-drawings/part_02_val_gost.png",
+   "split": "dev",
+   "class": "rotation",
+   "length_mm": 58.0,
+   "steps": [
+    [
+     6.0,
+     17.5
+    ],
+    [
+     6.5,
+     16.0
+    ],
+    [
+     6.0,
+     24.5
+    ]
+   ],
+   "bore": [],
+   "features": [
+    {
+     "kind": "keyway_segment",
+     "step_d": 6.5,
+     "at": 29.5,
+     "radius": 3.5,
+     "width": 2.5,
+     "depth": 2.7
+    }
+   ],
+   "note": "буртик 40,5 и 24,5 от правого торца; сегментная шпонка R3,5 в 29,5 от левого; лист не в масштабе; фаски 0,5×45° (2)"
+  },
+  "part_01_shaft_wikimedia": {
+   "sheet": "test-drawings/part_01_shaft_wikimedia.jpg",
+   "split": "dev",
+   "class": "rotation",
+   "length_mm": 182.0,
+   "steps": [
+    [
+     25.0,
+     16.0
+    ],
+    [
+     34.0,
+     56.0
+    ],
+    [
+     35.0,
+     54.0
+    ],
+    [
+     null,
+     14.5
+    ],
+    [
+     41.98,
+     18.0
+    ],
+    [
+     30.0,
+     23.5
+    ]
+   ],
+   "bore": [],
+   "features": [
+    {
+     "kind": "keyway",
+     "step_d": 35.0,
+     "start": 80.5,
+     "length": 40.0,
+     "width": 6.0,
+     "depth": 3.5
+    },
+    {
+     "kind": "keyway",
+     "step_d": 30.0,
+     "start": 162.0,
+     "length": 18.0,
+     "width": 6.0,
+     "depth": 3.5
+    },
+    {
+     "kind": "gear",
+     "start": 140.5,
+     "length": 18.0,
+     "module": 2.5,
+     "teeth": 14,
+     "tip_d": 41.98
+    }
+   ],
+   "note": "вал-шестерня; 14,5* — буртик Ø40 и шейка Ø31 (длины порознь не надписаны); центровые R3,15; канавки 3 мм в 3 местах"
+  },
+  "z4-r4": {
+   "sheet": "real-sheets/z4-r4.png",
+   "split": "dev",
+   "class": "rotation",
+   "length_mm": 185.0,
+   "steps": [
+    [
+     18.0,
+     15.0
+    ],
+    [
+     25.0,
+     19.0
+    ],
+    [
+     35.0,
+     31.0
+    ],
+    [
+     30.0,
+     30.0
+    ],
+    [
+     25.0,
+     20.0
+    ],
+    [
+     24.0,
+     18.0
+    ],
+    [
+     22.0,
+     52.0
+    ]
+   ],
+   "bore": [],
+   "features": [
+    {
+     "kind": "thread",
+     "d": 18.0,
+     "start": 0.0,
+     "length": 15.0
+    },
+    {
+     "kind": "thread",
+     "d": 24.0,
+     "start": 115.0,
+     "length": 18.0
+    },
+    {
+     "kind": "keyway",
+     "step_d": 30.0,
+     "start": 71.0,
+     "length": 22.0,
+     "width": 8.0,
+     "depth": 4.0
+    },
+    {
+     "kind": "keyway",
+     "step_d": 22.0,
+     "start": 150.0,
+     "length": 25.0,
+     "width": 6.0,
+     "depth": 3.5
+    }
+   ],
+   "note": "фото учебного листа, 2:1; из real_sheets_truth.json"
+  },
+  "part_03_vtulka_gost": {
+   "sheet": "test-drawings/part_03_vtulka_gost.png",
+   "split": "dev",
+   "class": "rotation",
+   "length_mm": 24.0,
+   "steps": [
+    [
+     15.0,
+     12.0
+    ],
+    [
+     16.0,
+     6.0
+    ],
+    [
+     15.0,
+     6.0
+    ]
+   ],
+   "bore": [
+    [
+     13.0,
+     4.0,
+     0.0
+    ],
+    [
+     11.0,
+     16.0,
+     4.0
+    ],
+    [
+     13.0,
+     4.0,
+     20.0
+    ]
+   ],
+   "features": [
+    {
+     "kind": "flange",
+     "start": 16.0,
+     "thickness": 2.0,
+     "d": 29.0,
+     "flats": 3,
+     "flat_distance": 9.5,
+     "holes": {
+      "count": 3,
+      "d": 2.5,
+      "pcd": 22.0
+     }
+    }
+   ],
+   "note": "600 px, 4:1; фланец — круг Ø29 с тремя лысками; 2 отв. Ø1 под 20° не оцениваются; из real_sheets_truth.json"
+  },
+  "part_06_gear_gost": {
+   "sheet": "test-drawings/part_06_gear_gost.png",
+   "split": "dev",
+   "class": "rotation",
+   "length_mm": 15.0,
+   "steps": [
+    [
+     46.0,
+     6.0
+    ],
+    [
+     14.0,
+     9.0
+    ]
+   ],
+   "bore": [
+    [
+     7.0,
+     15.0,
+     0.0
+    ]
+   ],
+   "features": [
+    {
+     "kind": "face_groove",
+     "end": "left",
+     "depth": 2.0,
+     "d_out": 38.0,
+     "d_in": 16.0
+    },
+    {
+     "kind": "gear",
+     "module": 1.0,
+     "teeth": 44,
+     "tip_d": 46.0,
+     "start": 0.0,
+     "length": 6.0
+    }
+   ],
+   "note": "колесо m1 z44; из real_sheets_truth.json"
+  },
+  "shaft_detail": {
+   "sheet": "example-drawings/shaft_detail.png",
+   "split": "dev",
+   "class": "rotation",
+   "length_mm": 840.0,
+   "steps": [
+    [
+     30.0,
+     220.0
+    ],
+    [
+     50.0,
+     400.0
+    ],
+    [
+     30.0,
+     220.0
+    ]
+   ],
+   "bore": [],
+   "features": [
+    {
+     "kind": "cross_hole",
+     "d": 10.0,
+     "at": null
+    }
+   ],
+   "note": "синтетический лист, толщины линий не по ЕСКД; паз 12×6 без положения"
+  },
+  "part_04_planka_gost": {
+   "sheet": "test-drawings/part_04_planka_gost.png",
+   "split": "dev",
+   "class": "plate",
+   "thickness_mm": 3.0,
+   "bounds_mm": [
+    90.0,
+    100.0
+   ],
+   "contour": "Г: полка 90×30 с концом R16, стойка 20×100 с R10, внутренний R25",
+   "features": [
+    {
+     "kind": "hole",
+     "d": 16.0,
+     "x": 16.0,
+     "y": 14.0
+    },
+    {
+     "kind": "hole",
+     "d": 10.0,
+     "x": 80.0,
+     "y": 14.0
+    },
+    {
+     "kind": "hole",
+     "d": 10.0,
+     "x": 80.0,
+     "y": 90.0
+    }
+   ]
+  },
+  "flange_detail": {
+   "sheet": "example-drawings/flange_detail.png",
+   "split": "dev",
+   "class": "plate",
+   "thickness_mm": 20.0,
+   "bounds_mm": [
+    560.0,
+    560.0
+   ],
+   "contour": "круг Ø560",
+   "features": [
+    {
+     "kind": "hole",
+     "d": 80.0,
+     "x": 0.0,
+     "y": 0.0
+    },
+    {
+     "kind": "bolt_circle",
+     "count": 4,
+     "d": 18.0,
+     "pcd": 200.0,
+     "phase": 0.0
+    }
+   ]
+  },
+  "793539cc_p015": {
+   "sheet": "real-web/sheets/793539cc_p015.png",
+   "split": "dev",
+   "class": "rotation",
+   "length_mm": 9.0,
+   "steps": [
+    [
+     22.0,
+     2.0
+    ],
+    [
+     18.0,
+     7.0
+    ]
+   ],
+   "bore": [
+    [
+     13.0,
+     9.0,
+     0.0
+    ]
+   ],
+   "features": [
+    {
+     "kind": "chamfer",
+     "at": "bore_right",
+     "size": 2.5
+    }
+   ],
+   "note": "эскиз не в масштабе"
+  }
+ }
+}
