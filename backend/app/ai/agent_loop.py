@@ -821,6 +821,7 @@ async def execute_skill(
     *,
     approval_granted: bool = False,
     idempotency_key: str | None = None,
+    budget_context: WorkBudgetContext | None = None,
 ) -> dict:
     from app.ai.tool_transport import (
         async_job_http_failure,
@@ -872,6 +873,8 @@ async def execute_skill(
     args = _skill_execution_args(skill, args)
 
     method = skill["method"].upper()
+    if method not in {"GET", "POST", "PATCH", "DELETE"}:
+        return {"error": f"Unsupported method: {method}"}
     path = skill["path"]
     async_job = async_job_operation(skill, args)
     email_send = email_send_queue_operation(skill, args)
@@ -915,6 +918,8 @@ async def execute_skill(
     last_error: Exception | None = None
     for attempt in range(max_retries):
         dispatch_attempted = False
+        tool_operation_key: str | None = None
+        tool_settlement_ok = True
         try:
             _hdrs = internal_headers()
             if idempotency_key is not None:
@@ -930,17 +935,42 @@ async def execute_skill(
                     query_args if method == "GET" else body_args
                 )
             async with httpx.AsyncClient(timeout=float(timeout)) as client:
+                if budget_context is not None:
+                    tool_operation_key = await budget_context.prepare_tool_attempt(
+                        method=method,
+                        url=url,
+                        request={
+                            "params": query_args if method == "GET" else None,
+                            "body": body_args if method != "GET" else None,
+                            "approval_granted": approval_granted,
+                            "idempotency_key": idempotency_key,
+                        },
+                    )
                 dispatch_attempted = True
-                if method == "GET":
-                    resp = await client.get(url, params=query_args, headers=_hdrs)
-                elif method == "POST":
-                    resp = await client.post(url, json=body_args, headers=_hdrs)
-                elif method == "PATCH":
-                    resp = await client.patch(url, json=body_args, headers=_hdrs)
-                elif method == "DELETE":
-                    resp = await client.delete(url, headers=_hdrs)
+                try:
+                    if method == "GET":
+                        resp = await client.get(url, params=query_args, headers=_hdrs)
+                    elif method == "POST":
+                        resp = await client.post(url, json=body_args, headers=_hdrs)
+                    elif method == "PATCH":
+                        resp = await client.patch(url, json=body_args, headers=_hdrs)
+                    else:
+                        resp = await client.delete(url, headers=_hdrs)
+                except BaseException as exc:
+                    if budget_context is not None and tool_operation_key is not None:
+                        tool_settlement_ok = await budget_context.charge_tool_attempt(
+                            tool_operation_key,
+                            recipient_outcome="unconfirmed",
+                        )
+                        if not tool_settlement_ok and not isinstance(exc, Exception):
+                            budget_context.raise_if_stopped()
+                    raise
                 else:
-                    return {"error": f"Unsupported method: {method}"}
+                    if budget_context is not None and tool_operation_key is not None:
+                        tool_settlement_ok = await budget_context.charge_tool_attempt(
+                            tool_operation_key,
+                            recipient_outcome="responded",
+                        )
 
             if 200 <= resp.status_code < 300 or (
                 not mcp_tool_search
@@ -1090,6 +1120,12 @@ async def execute_skill(
             elif resp.status_code >= 500 and not safe_to_retry:
                 return unknown_outcome(f"HTTP {resp.status_code}; recipient outcome not confirmed")
             elif resp.status_code in {502, 503, 504} and attempt < max_retries - 1:
+                if budget_context is not None and not tool_settlement_ok:
+                    try:
+                        body = resp.json()
+                    except Exception:
+                        body = resp.text[:300]
+                    return read_http_failure(resp.status_code, body)
                 last_error = Exception(f"HTTP {resp.status_code}")
                 await asyncio.sleep(2**attempt)
                 continue
@@ -1176,6 +1212,8 @@ async def execute_skill(
                 )
             if not safe_to_retry:
                 return unknown_outcome(f"Transport failed: {type(e).__name__}")
+            if budget_context is not None and not tool_settlement_ok:
+                return read_transport_failure(type(e).__name__)
             last_error = e
             logger.warning(
                 "skill_http_retry",
@@ -2747,8 +2785,16 @@ class AgentSession:
             return True
 
         await self._send({"type": "tool_call", "tool": intent.capability, "args": intent.args})
-        result = await execute_skill(skill, intent.args, self._config)
+        budget_context = getattr(self, "_work_budget_context", None)
+        result = await execute_skill(
+            skill,
+            intent.args,
+            self._config,
+            budget_context=budget_context,
+        )
         await self._send({"type": "tool_result", "tool": intent.capability, "result": result})
+        if budget_context is not None:
+            budget_context.raise_if_stopped()
         if isinstance(result, dict) and result.get("error"):
             return False  # never answer with a wrong count on error — let the LLM try
         total = extract_list_count(result)
@@ -3297,6 +3343,7 @@ class AgentSession:
                 args,
                 self._config,
                 approval_granted=approval_granted,
+                budget_context=budget_context,
                 **receipt_options,
             )
         else:
@@ -3455,7 +3502,14 @@ class AgentSession:
                         )
                     if nonterminal_status in {"partial", "outcome_unknown"}:
                         raise ChatNonterminalToolResult(result)
-            elif nonterminal_status is not None:
+                budget_context = getattr(self, "_work_budget_context", None)
+                if budget_context is not None:
+                    budget_context.raise_if_stopped()
+            else:
+                budget_context = getattr(self, "_work_budget_context", None)
+                if budget_context is not None:
+                    budget_context.raise_if_stopped()
+            if self._checkpoint_sink is None and nonterminal_status is not None:
                 # Non-checkpointed sessions have no durable replay boundary,
                 # but must still stop before another tool or LLM turn.
                 break

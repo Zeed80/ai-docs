@@ -559,7 +559,7 @@ async def test_revoked_and_rebound_source_binding_never_receives_old_reply(test_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["approval", "error", "expired", "canceled", "budget"])
+@pytest.mark.parametrize("mode", ["approval", "error", "expired", "canceled"])
 async def test_fail_closed_before_effect_or_result(test_engine, mode):
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     run, step_id, attempt_id = await claimed_run(factory)
@@ -571,8 +571,6 @@ async def test_fail_closed_before_effect_or_result(test_engine, mode):
             step.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
         if mode == "canceled":
             order.status = "canceled"
-        if mode == "budget":
-            order.budgets = {**order.budgets, "max_tool_calls": 0}
         await db.commit()
 
     class Agent(FakeAgent):
@@ -594,6 +592,38 @@ async def test_fail_closed_before_effect_or_result(test_engine, mode):
     async with factory() as db:
         saved = await db.get(DurableChatRun, run["id"])
         assert saved.result_message_id is None
+
+
+@pytest.mark.asyncio
+async def test_tool_call_event_is_audit_not_physical_attempt_counter(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    run, step_id, attempt_id = await claimed_run(factory)
+    async with factory() as db:
+        order = await db.get(WorkOrder, run["work_order_id"])
+        order.budgets = {**order.budgets, "max_tool_calls": 0}
+        await db.commit()
+
+    class Agent(FakeAgent):
+        async def on_user_message(self, prompt, **kwargs):
+            await self.send({"type": "tool_call", "tool": "audit-only", "args": {}})
+            await super().on_user_message(prompt, **kwargs)
+
+    result = await run_durable_chat(
+        run["work_order_id"],
+        step_id,
+        attempt_id,
+        session_factory=factory,
+        agent_factory=Agent,
+    )
+
+    assert result["text"] == "Answer"
+    async with factory() as db:
+        assert await db.scalar(
+            select(WorkEvent.id).where(
+                WorkEvent.work_order_id == run["work_order_id"],
+                WorkEvent.event_type == "chat.tool_call",
+            )
+        )
 
 
 @pytest.mark.asyncio

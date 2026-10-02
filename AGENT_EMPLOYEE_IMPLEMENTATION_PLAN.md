@@ -15,8 +15,10 @@
 Срез 2 октября 2026: E21.1 и E21.2a приняты. Свежий common intake создаёт
 общий ledger атомарно с WorkOrder; physical streaming AgentSession calls
 резервируют `llm_calls` до provider, включая retry/fallback. Неизвестный legacy
-baseline и недоказанные конечные token/cost caps блокируют этот путь. Nested
-tools, AIRouter/headless, token/cost accounting и active/replan остаются E21.2b+/E21.3;
+baseline и недоказанные конечные token/cost caps блокируют этот путь. E21.2b1
+подключает nested physical HTTP attempts, включая reviewed read retries, к ledger;
+approval/preflight расходуют ноль, settlement failure не стирает recipient outcome.
+AIRouter/headless, legacy reconciliation, token/cost accounting и active/replan остаются E21.2b+/E21.3;
 вся E21 не завершена. Отчёт: `docs/agent-employee-delivery/E21-budget-ledger.md`.
 
 Срез передачи: `548ba327` — проверенный локальный commit пилота квитанций.

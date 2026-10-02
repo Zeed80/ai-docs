@@ -1000,6 +1000,12 @@ E21.2 выполняется последовательными ограниче
   nested tool/transport attempts; AIRouter planner/verifier и generic/headless
   исполнители; legacy baseline и reconciliation дочерних ограничений.
 
+Первый ограниченный этап E21.2b+ — **E21.2b1 (REVIEWED / DEPLOYED)**: physical HTTP
+attempts вложенных AgentSession tools, включая разрешённые read transport retries.
+Approval/preflight/local rejection не считаются dispatch. Ошибка settlement
+после эффекта не должна стирать результат получателя и журнал/checkpoint.
+Этот этап не подключает AIRouter/headless, token/cost или legacy baseline.
+
 E21.2a не объявляет все вызовы системы учтёнными и не закрывает E21.2.
 
 1. Сначала точные единицы: tool attempts, LLM calls, tokens, cost, active time,

@@ -45,6 +45,7 @@ class _ExecutionState:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     logical_call_no: int = 0
     physical_call_no: int = 0
+    physical_tool_attempt_no: int = 0
     execution_claimed: bool = False
     stopped: BudgetExecutionStopped | None = None
 
@@ -302,3 +303,128 @@ class WorkBudgetContext:
                     details={"budget_error": str(exc), "operation_key": operation_key},
                 )
             ) from exc
+
+    async def prepare_tool_attempt(
+        self,
+        *,
+        method: str,
+        url: str,
+        request: dict[str, Any],
+    ) -> str:
+        """Reserve one physical nested-tool attempt before transport dispatch."""
+        await self.assert_ready()
+        await self._active_ledger()
+        async with self._state.lock:
+            if self._state.stopped is not None:
+                raise self._state.stopped
+            self._state.physical_tool_attempt_no += 1
+            physical_attempt_no = self._state.physical_tool_attempt_no
+
+        request_digest = hashlib.sha256(
+            json.dumps(
+                {"method": method, "url": url, "request": request},
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                default=str,
+            ).encode()
+        ).hexdigest()
+        operation_key = (
+            f"tool:{self.attempt_id}:p{physical_attempt_no}:{method.lower()}:{request_digest[:12]}"
+        )
+        try:
+            _, created = await reserve_budget_for_dispatch(
+                self.session_factory,
+                work_order_id=self.work_order_id,
+                operation_key=operation_key,
+                dimension="tool_attempts",
+                units=1,
+                request_digest=request_digest,
+            )
+        except BudgetExceeded as exc:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "tool_attempt_budget_exceeded",
+                    "Tool attempt budget is exhausted",
+                    details={"budget_error": str(exc)},
+                )
+            ) from exc
+        except (BudgetBindingConflict, BudgetReservationConflict, BudgetLedgerError) as exc:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "tool_budget_reservation_failed",
+                    "Tool attempt budget reservation failed",
+                    details={"budget_error": str(exc)},
+                )
+            ) from exc
+        except Exception as exc:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "tool_budget_reservation_unavailable",
+                    "Tool attempt budget reservation could not be committed; dispatch is forbidden",
+                    details={"budget_error": str(exc)},
+                )
+            ) from exc
+        if not created:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "tool_operation_already_recorded",
+                    "This physical tool operation was already reserved or charged; "
+                    "automatic replay is forbidden",
+                    details={"operation_key": operation_key},
+                )
+            )
+
+        # A cancellation can win after the independently committed reservation.
+        # Keep that reservation consumed, but recheck the lease before transport.
+        await self._active_ledger()
+        return operation_key
+
+    async def charge_tool_attempt(
+        self,
+        operation_key: str,
+        *,
+        recipient_outcome: str,
+    ) -> bool:
+        """Charge one dispatched attempt without hiding its recipient outcome.
+
+        A settlement failure is sticky but deliberately deferred. The caller can
+        first persist the already-observed ToolResult/checkpoint, then cross the
+        typed stop before another tool or model call.
+        """
+        try:
+            await settle_budget(
+                self.session_factory,
+                work_order_id=self.work_order_id,
+                operation_key=operation_key,
+                actual_units=1,
+            )
+            return True
+        except (BudgetBindingConflict, BudgetReservationConflict, BudgetLedgerError) as exc:
+            await self._stop(
+                BudgetExecutionStopped(
+                    "tool_budget_settlement_failed",
+                    "Tool was dispatched but its budget charge could not be settled",
+                    details={
+                        "budget_error": str(exc),
+                        "operation_key": operation_key,
+                        "recipient_outcome": recipient_outcome,
+                        "consumed_budget": "reserved",
+                    },
+                )
+            )
+            return False
+        except Exception as exc:
+            await self._stop(
+                BudgetExecutionStopped(
+                    "tool_budget_settlement_unavailable",
+                    "Tool was dispatched but its budget charge could not be committed",
+                    details={
+                        "budget_error": str(exc),
+                        "operation_key": operation_key,
+                        "recipient_outcome": recipient_outcome,
+                        "consumed_budget": "reserved",
+                    },
+                )
+            )
+            return False

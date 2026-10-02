@@ -20,6 +20,7 @@ from app.ai.chat_checkpoint import (
     pack_checkpoint,
     unpack_checkpoint,
 )
+from app.ai.work_budget_context import BudgetExecutionStopped
 from app.api.chat_runs import (
     ChatResumeRequest,
     ChatRunCreate,
@@ -272,6 +273,53 @@ async def test_checkpointed_compact_v1_waiting_approval_keeps_exact_raw_envelope
     assert exc_info.value.result == result
     assert snapshots[-1]["completed_call"]["result"] == result
     assert json.loads(obj.messages[-1]["content"]) == result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "expected_exception"),
+    [
+        ("outcome_unknown", ChatNonterminalToolResult),
+        ("waiting_approval", ChatWaitingApprovalToolResult),
+    ],
+)
+async def test_nonterminal_checkpoint_precedes_deferred_budget_settlement_stop(
+    status, expected_exception
+):
+    obj = session()
+    snapshots = []
+    result = {
+        "version": 1,
+        "status": status,
+        "data": {"recipient": "unconfirmed"},
+        "error_code": "tool_outcome_unknown",
+        "retryable": False,
+        "evidence": {"adapter_contract": "test_v1"},
+        "checkpoint": {"receipt": "r-1"},
+    }
+
+    class StickyBudgetStop:
+        def raise_if_stopped(self):
+            raise BudgetExecutionStopped(
+                "tool_budget_settlement_unavailable",
+                "settlement unavailable after dispatch",
+            )
+
+    async def persist(snapshot):
+        snapshots.append(unpack_checkpoint(snapshot))
+
+    async def execute(tc, iteration):
+        return "test", result, tc["id"]
+
+    obj._work_budget_context = StickyBudgetStop()
+    obj.set_checkpoint_sink(persist)
+    obj._execute_single_tool = execute
+    with pytest.raises(expected_exception):
+        await obj._execute_tools_sequential([call(), call("two")], 0)
+
+    assert snapshots[-1]["phase"] == "tool_recorded"
+    assert snapshots[-1]["completed_call"]["result"] == result
+    assert snapshots[-1]["can_resume"] is False
 
 
 @pytest.mark.asyncio

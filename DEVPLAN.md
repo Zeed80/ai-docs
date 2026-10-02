@@ -7,7 +7,11 @@
 E21.2a (2 октября 2026): common intake атомарно создаёт ledger, а physical
 streaming вызовы AgentSession занимают общий `llm_calls` до отправки. Retry и
 fallback учитываются отдельно; budget stop сохраняется в `blocked` без replan.
-Это не полный budget accounting: nested tools/AIRouter/headless, legacy baseline,
+E21.2b1 подключает physical HTTP attempts вложенных tools к общему ledger:
+approval/preflight расходуют ноль, разрешённые read retries учитываются отдельно.
+Settlement failure сохраняет результат и checkpoint до остановки; неизвестный
+эффект не разрешает обычный resume. Проверка: `python3 -m pytest backend/tests/test_work_budget_tools.py -q`.
+Это не полный budget accounting: AIRouter/headless, legacy baseline,
 token/cost и active/replan ещё требуют E21.2b+/E21.3. Проверки:
 `python3 -m pytest backend/tests/test_work_budget_ledger.py backend/tests/test_work_budget_provider.py backend/tests/test_durable_chat.py -q`.
 

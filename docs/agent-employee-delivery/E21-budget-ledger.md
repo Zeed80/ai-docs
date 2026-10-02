@@ -233,3 +233,134 @@ Production:
 - Следующий этап — E21.2b+: verified token/cost bounds/accounting, nested tools,
   AIRouter/headless/legacy reconciliation. E21 нельзя закрывать до E21.2/E21.3,
   production validation и независимого review.
+
+## E21.2b1 — physical nested tool/transport attempts durable AgentSession
+
+Карточка / статус / дата / base commit / commit результата:
+
+- E21 и E21.2 остаются `IN_PROGRESS`; ограниченный этап E21.2b1 имеет статус
+  `TESTED` и передан на независимую приёмку главному агенту.
+- Дата: 2 октября 2026 года.
+- Base: `ff9cf7df` (`Enforce durable streaming provider call budgets`).
+- Commit/deploy выполняет только главный агент; исполнитель их не делал.
+- Исполнитель: `gpt-5.6-sol`, high; один цикл замечаний сеньора. Учитывался
+  приоритет nonterminal checkpoint/journal перед отложенным settlement blocker.
+  Экономия модели не измерена.
+
+Изменено (пути и контракт):
+
+- `backend/app/ai/work_budget_context.py`: тот же immutable
+  `WorkBudgetContext(work_order_id, step_id, attempt_id, session_factory)` теперь
+  independently резервирует `tool_attempts=1` непосредственно перед каждым
+  физическим HTTP-вызовом и settlement-ит единицу после ответа, ошибки или
+  `BaseException`. Новая reservation никогда не открывается из существующей;
+  live lease повторно проверяется после reserve, а E21.2a execution marker
+  остаётся единым fence всего attempt.
+- `backend/app/ai/agent_loop.py`: durable AgentSession передаёт context в обычный
+  nested dispatch и существующий fast-intent route. Policy, approval, разбор
+  аргументов, headers и создание клиента происходят до reserve. Unsupported
+  method, неизвестный skill, approval pause/reject и другой local preflight
+  расходуют ноль. Каждый разрешённый reviewed read transport retry получает
+  отдельный reserve/charge; write/unknown не получил нового retry.
+- Ошибка settlement после dispatch становится sticky
+  `BudgetExecutionStopped`, но уже известный ToolResult сначала проходит
+  существующие history/checkpoint/action-journal границы. Для обычного known
+  result worker затем сохраняет явный budget blocker и не продолжает tool/LLM
+  tail. `partial`/`outcome_unknown`/`waiting_approval` после durable journal
+  сохраняют более сильное существующее nonterminal состояние; обычный resume
+  остаётся запрещённым, а reservation остаётся consumed evidence.
+- `backend/app/tasks/durable_chat.py`: `chat.tool_call` остаётся audit event, но
+  удалён как физический счётчик по старому JSON `max_tool_calls`. Авторитетный
+  default 200 или явный root limit теперь берётся только из shared ledger.
+- `backend/tests/test_work_budget_tools.py`,
+  `backend/tests/test_chat_checkpoints.py`, `backend/tests/test_durable_chat.py`:
+  PostgreSQL/fake-transport regressions для max=0, physical retry, failure/crash,
+  parent/child last slot, approval, lease/cancel, duplicate replay, settlement,
+  journal/checkpoint и API resume.
+
+Не изменено и почему:
+
+- `tool_transport.py` policy и существующие списки reviewed read/write effects
+  не расширялись; E21.2b1 считает фактические попытки, но не разрешает новые.
+- AIRouter planner/verifier, generic/headless executors, scenario runner,
+  email/background LLM paths, token/cost bounds, active time, replans и legacy
+  parent/child reconciliation остаются следующими E21.2b+/E21.3 этапами.
+- Вызовы `execute_skill` вне durable AgentSession без server-owned context не
+  объявлены покрытыми. Durable context с отсутствующим ledger fail-closed с
+  `legacy_budget_baseline_required`; исторический baseline не придумывается.
+- `AGENT_EMPLOYEE_EXECUTION_PLAYBOOK.md` — root-owned параллельный WIP и этим
+  исполнителем не редактировался. Несвязанные CAD-модули не затрагивались.
+
+Проверки (точные команды, passed/failed/skipped):
+
+- `python3 -m pytest backend/tests/test_work_budget_provider.py backend/tests/test_tool_transport.py -q`
+  — 222 passed, 0 failed, 0 skipped.
+- Первый новый прогон `python3 -m pytest backend/tests/test_work_budget_tools.py -q`
+  — 8 passed, 1 failed, 0 skipped: test-only monkeypatch `asyncio.sleep` вызывал
+  сам себя. Production-код не менялся; исправленный финальный повтор — 16 passed,
+  0 failed, 0 skipped.
+- Первый совместный checkpoint/durable повтор после правки — 98 passed, 1 failed,
+  0 skipped: новый тест сравнивал полный dict результата с одной строкой `Answer`.
+  Assertion приведён к фактическому контракту `result["text"]`; расширенный
+  повтор после добавления review-regressions — 104 passed, 0 failed, 0 skipped.
+- Frozen-профиль
+  `python3 -m pytest backend/tests/test_work_budget_ledger.py backend/tests/test_work_budget_provider.py backend/tests/test_work_budget_tools.py backend/tests/test_durable_chat.py backend/tests/test_chat_checkpoints.py backend/tests/test_work_order_checkpoint.py backend/tests/test_tool_transport.py -q`
+  — 379 passed, 0 failed, 0 skipped за 28.36s.
+- Дополнительная граница
+  `python3 -m pytest backend/tests/test_work_orders.py backend/tests/test_agent_execution_boundary.py backend/tests/test_agent_delegations.py backend/tests/test_action_receipts.py backend/tests/test_chat_action_journal.py -q`
+  — 113 passed, 0 failed, 0 skipped за 21.29s.
+- `ruff check` и `ruff format --check` по трём production- и трём test-файлам —
+  passed; `git diff --check` — passed. Во всех pytest-прогонах осталось известное
+  предупреждение `Unknown config option: asyncio_loop_scope`.
+
+Конкурентность/безопасность:
+
+- Два разных fresh attempts root/child с общим ledger и последним tool slot
+  стартовали параллельно. Ровно один создал tool reservation и пересёк HTTP
+  boundary; второй получил `tool_attempt_budget_exceeded`. Тест не маскируется
+  same-attempt execution marker.
+- Reviewed read с transport failure и успешным повтором создал две charged
+  reservations. Write transport ambiguity создал одну charged reservation и
+  `outcome_unknown` без повтора. `BaseException` после dispatch также charged;
+  новый context того же attempt остановлен E21.2a marker до HTTP.
+- Cancel после independently committed tool reserve, но до HTTP, оставил reserve
+  consumed и остановил effect по live lease. Max=0, broken reserve и legacy
+  unbound останавливаются до HTTP. Approval pause расходует ноль; авторизованный
+  вызов — ровно одну попытку.
+- Settlement DB failure не открывает read retry. Known result записан как
+  `tool_recorded`, затем WorkOrder заблокирован typed budget error. Unknown result
+  записан как `outcome_unknown`, `can_replay=false`, checkpoint `can_resume=false`,
+  обычный resume API возвращает 409; independent recipient verification остаётся
+  отдельным существующим gate.
+
+Production / известные ограничения / rollback / следующий gate:
+
+- Исполнитель по ограничению задания не выполнял `make prod-build`, restart,
+  `/health`, commit или push. Реальные LLM, SMTP, Telegram и деловые эффекты не
+  вызывались; HTTP использовал только fakes.
+- При полной недоступности budget DB может быть невозможно сохранить новый
+  checkpoint/blocker. Независимо committed reservation остаётся consumed/reserved
+  evidence, а execution marker запрещает слепой replay; отчёт не выдаёт это за
+  подтверждённый recipient outcome.
+- E21.2b1 не доказывает полный parent/legacy integration и не закрывает E21.2.
+  Следующий gate — независимый review diff главным агентом, production
+  build/health и отдельные узкие E21.2b+ этапы для token/cost, AIRouter/headless
+  путей и legacy reconciliation.
+
+### Независимая приёмка E21.2b1 главным агентом — 2 октября 2026
+
+- Исполнитель: `gpt-5.6-sol`; один пишущий агент, без дочерних агентов.
+  Review исправил приоритет nonterminal результата перед sticky budget stop;
+  после freeze главный агент независимо проверил diff и негативный resume gate.
+- Независимый профиль ledger/provider/tools/durable/checkpoints/work_orders/
+  channel parity/execution boundary/delegations/transport: **423 passed**, без
+  failed/skipped. Единственный warning — существующий `asyncio_loop_scope`.
+  Ruff check, format-check шести Python-файлов и `git diff --check` прошли.
+- `make prod-build` завершился с кодом 0: backend и workers пересозданы;
+  неизменённый frontend остался healthy. `/health`: `{"status":"ok"}`.
+  Backend и основной worker healthy, beat запущен; Alembic `20261001_0001 (head)`.
+  SHA256 трёх production-файлов совпадает между checkout/backend/worker.
+- E21.2b1 принят и развёрнут. E21 остаётся IN_PROGRESS; следующий этап должен
+  отдельно охватить AIRouter/headless, затем доказуемый token/cost accounting,
+  legacy reconciliation и E21.3. Push не выполнялся: запрет публикации
+  накопленной истории не снят. Экономия лимитов количественно не измерялась.

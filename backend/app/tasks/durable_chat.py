@@ -5,7 +5,7 @@ import json
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select, update
+from sqlalchemy import select, update
 
 from app.ai.chat_checkpoint import (
     ChatCheckpointError,
@@ -510,17 +510,6 @@ async def _run_durable_chat(
             raise ChatRunStopped("Event exceeds durable storage limit")
         async with factory() as db:
             order = await active(db)
-            if kind == "tool_call":
-                calls = await db.scalar(
-                    select(func.count())
-                    .select_from(WorkEvent)
-                    .where(
-                        WorkEvent.work_order_id == order.id,
-                        WorkEvent.event_type == "chat.tool_call",
-                    )
-                )
-                if calls >= min(int((order.budgets or {}).get("max_tool_calls", 200)), 200):
-                    raise ChatRunStopped("Tool-call budget exhausted")
             await append_event(
                 db,
                 order.id,
