@@ -14,6 +14,7 @@ import structlog
 from sqlalchemy import select
 
 from app.ai.chat_checkpoint import ChatNonterminalToolResult, ChatWaitingApprovalToolResult
+from app.ai.work_budget_context import BudgetExecutionStopped
 from app.domain.work_orders import (
     WorkStateError,
     append_event,
@@ -650,15 +651,42 @@ async def execute_claimed_step(
 
     factory = session_factory or _get_session_factory()
     async with factory() as db:
-        step = await db.get(WorkStep, step_id)
-        attempt = await db.get(WorkStepAttempt, attempt_id)
-        if step is None or attempt is None or not attempt_owns_lease(step, attempt):
+        root_order_id = await db.scalar(
+            select(WorkStep.work_order_id).where(WorkStep.id == step_id)
+        )
+        if root_order_id is None:
             return False
-        order = await db.get(WorkOrder, step.work_order_id)
-        if order is None or order.status != "running":
+        # Match cancellation and terminal settlement: WorkOrder is the root
+        # lock. Do not lock WorkStep here; claim_ready_step intentionally has
+        # a different step-first path and this preparation must not introduce
+        # a new order<->step inversion.
+        order = await db.get(WorkOrder, root_order_id, with_for_update=True)
+        step = await db.get(WorkStep, step_id, populate_existing=True)
+        # This row is the existing per-attempt dispatch fence. Concurrent
+        # deliveries of the same claimed attempt serialize here before either
+        # one can create or reuse the physical call marker below.
+        attempt = await db.get(WorkStepAttempt, attempt_id, with_for_update=True)
+        if (
+            order is None
+            or order.status != "running"
+            or step is None
+            or step.work_order_id != order.id
+            or attempt is None
+            or not attempt_owns_lease(step, attempt)
+        ):
             return False
         kind = step.kind
         durable_chat = order.source == "durable_chat"
+        existing_call = await db.scalar(
+            select(WorkToolCall).where(
+                WorkToolCall.attempt_id == attempt.id,
+                WorkToolCall.call_no == 1,
+            )
+        )
+        if existing_call is not None:
+            # A prepared/running/terminal call proves that this attempt already
+            # crossed its dispatch boundary. It never authorizes replay.
+            return False
         try:
             input_data, resolved_from = await resolve_step_input(db, step)
         except Exception as exc:  # noqa: BLE001 - invalid persisted dataflow is terminal
@@ -1157,6 +1185,48 @@ async def execute_claimed_step(
                         "evidence": exc.result.get("evidence") or {},
                     }
                     call_row.finished_at = utcnow()
+                await db.commit()
+        return False
+    except BudgetExecutionStopped as exc:
+        if exc.code == "llm_execution_already_started":
+            # A duplicate delivery shares the winning attempt and lease. The
+            # loser must not fail or unblock that state while the winner runs.
+            return False
+        error = {**exc.as_error(), "type": type(exc).__name__}
+        async with factory() as db:
+            order = await db.get(WorkOrder, work_order_id, with_for_update=True)
+            step_row = await db.get(WorkStep, step_id, with_for_update=True)
+            attempt_row = await db.get(WorkStepAttempt, attempt_id, with_for_update=True)
+            call_row = await db.get(WorkToolCall, call_id, with_for_update=True)
+            if order and step_row and attempt_row and attempt_owns_lease(step_row, attempt_row):
+                now = utcnow()
+                attempt_row.status = "failed"
+                attempt_row.error = error
+                attempt_row.finished_at = now
+                attempt_row.heartbeat_at = now
+                step_row.last_error = error
+                step_row.lease_owner = None
+                step_row.lease_expires_at = None
+                step_row.next_attempt_at = None
+                await transition_step(
+                    db,
+                    step_row,
+                    "failed",
+                    actor=worker,
+                    payload={"error": error},
+                )
+                order.blocker = error
+                await transition_work_order(
+                    db,
+                    order,
+                    "blocked",
+                    actor=worker,
+                    payload={"budget_error": error},
+                )
+                if call_row is not None:
+                    call_row.status = "failed"
+                    call_row.error = error
+                    call_row.finished_at = now
                 await db.commit()
         return False
     except (TimeoutError, ConnectionError) as exc:

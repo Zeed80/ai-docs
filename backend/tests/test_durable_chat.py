@@ -14,6 +14,7 @@ from app.api.chat_runs import ChatRunCreate, submit_chat_run
 from app.auth.jwt import _DEV_USER
 from app.db.agent_runtime_models import AgentChannelIdentity, AgentOutbox, DurableChatRun
 from app.db.models import ChatMessage, ChatSession, User, WorkEvent, WorkOrder, WorkStep
+from app.db.work_budget_models import WorkBudgetLedger, WorkBudgetReservation
 from app.domain.agent_intake import (
     AgentIntakeRequest,
     IntakeAttachment,
@@ -59,6 +60,15 @@ async def test_intake_idempotency_and_conflicts(client, db_session):
     assert step.max_attempts == 1
     order = await db_session.get(WorkOrder, uuid.UUID(run["work_order_id"]))
     assert order.budgets["max_replans"] == 0
+    assert order.budget_ledger_id is not None
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(WorkBudgetLedger)
+            .where(WorkBudgetLedger.root_work_order_id == order.id)
+        )
+        == 1
+    )
     assert (await client.post(f"/api/work-orders/{run['work_order_id']}/run")).status_code == 409
     assert (
         await client.post(
@@ -261,6 +271,9 @@ async def test_intake_failure_rolls_back_message_order_and_run(test_engine, monk
         db.add(binding)
         await db.commit()
 
+    async with factory() as db:
+        ledger_count_before = await db.scalar(select(func.count()).select_from(WorkBudgetLedger))
+
     async def broken_plan(*args, **kwargs):
         raise RuntimeError("write failed")
 
@@ -279,6 +292,10 @@ async def test_intake_failure_rolls_back_message_order_and_run(test_engine, monk
                 ),
             )
     async with factory() as db:
+        assert (
+            await db.scalar(select(func.count()).select_from(WorkBudgetLedger))
+            == ledger_count_before
+        )
         assert (
             await db.scalar(
                 select(DurableChatRun.id).where(DurableChatRun.external_message_id == "rollback-1")
@@ -682,6 +699,168 @@ async def test_worker_dispatch_settles_durable_turn(test_engine, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["max_zero", "finite_tokens", "finite_cost", "legacy"])
+async def test_worker_persists_budget_stop_as_nonretryable_blocker(test_engine, monkeypatch, mode):
+    from app.ai import agent_loop, orchestrator
+    from app.ai.agent_config import BuiltinAgentConfig
+    from app.db.models import WorkStepAttempt, WorkToolCall
+    from app.tasks import work_orders
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    run, step_id, attempt_id = await claimed_run(factory)
+    async with factory() as db:
+        order = await db.get(WorkOrder, run["work_order_id"])
+        ledger = await db.get(WorkBudgetLedger, order.budget_ledger_id)
+        if mode == "max_zero":
+            ledger.max_llm_calls = 0
+        elif mode == "finite_tokens":
+            ledger.max_tokens = 100
+        elif mode == "finite_cost":
+            ledger.max_cost_usd = 1
+        else:
+            order.budget_ledger_id = None
+        await db.commit()
+
+    provider_calls = []
+
+    async def provider(*args, **kwargs):
+        provider_calls.append("called")
+        return {"role": "assistant", "content": "must not run"}
+
+    class Agent:
+        def __init__(self, send):
+            self.send = send
+            self._executor = self
+            self.total_tokens = 0
+            self.context = None
+
+        def set_work_budget_context(self, context):
+            self.context = context
+
+        def hydrate_history(self, history):
+            self.history = history
+
+        async def on_user_message(self, prompt, **kwargs):
+            config = BuiltinAgentConfig(department_enabled=False, provider="ollama")
+            await agent_loop._call_provider_streaming(
+                [{"role": "user", "content": prompt}],
+                [],
+                None,
+                config,
+                lambda _token: asyncio.sleep(0),
+                budget_context=self.context,
+            )
+
+    monkeypatch.setattr(orchestrator, "AgentOrchestrator", Agent)
+    monkeypatch.setattr(agent_loop, "_call_ollama_streaming", provider)
+
+    assert not await work_orders.execute_claimed_step(
+        step_id, attempt_id, schedule_verification=False, session_factory=factory
+    )
+    assert provider_calls == []
+    async with factory() as db:
+        order = await db.get(WorkOrder, run["work_order_id"])
+        step = await db.get(WorkStep, step_id)
+        attempt = await db.get(WorkStepAttempt, attempt_id)
+        call = await db.scalar(select(WorkToolCall).where(WorkToolCall.attempt_id == attempt_id))
+        saved_run = await db.get(DurableChatRun, run["id"])
+        assert order.status == "blocked"
+        assert order.blocker["code"] in {
+            "llm_call_budget_exceeded",
+            "token_budget_enforcement_unavailable",
+            "cost_budget_enforcement_unavailable",
+            "legacy_budget_baseline_required",
+        }
+        assert step.state == "failed"
+        assert step.lease_owner is None
+        assert step.lease_expires_at is None
+        assert step.next_attempt_at is None
+        assert attempt.status == "failed"
+        assert call.status == "failed"
+        assert saved_run.result_message_id is None
+
+
+@pytest.mark.asyncio
+async def test_two_workers_for_same_attempt_dispatch_only_one_provider(test_engine, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from app.ai import agent_loop, orchestrator
+    from app.ai.agent_config import BuiltinAgentConfig
+    from app.tasks import work_orders
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    run, step_id, attempt_id = await claimed_run(factory)
+    provider_calls = []
+
+    async def provider(*args, **kwargs):
+        provider_calls.append(kwargs.get("provider", "ollama"))
+        await asyncio.sleep(0.05)
+        return {"role": "assistant", "content": "one answer"}
+
+    class Agent:
+        def __init__(self, send):
+            self.send = send
+            self._executor = self
+            self.total_tokens = 0
+            self.context = None
+
+        def set_work_budget_context(self, context):
+            self.context = context
+
+        def hydrate_history(self, history):
+            self.history = history
+
+        async def on_user_message(self, prompt, **kwargs):
+            config = BuiltinAgentConfig(department_enabled=False, provider="ollama")
+            result = await agent_loop._call_provider_streaming(
+                [{"role": "user", "content": prompt}],
+                [],
+                None,
+                config,
+                lambda _token: asyncio.sleep(0),
+                budget_context=self.context,
+            )
+            await self.send({"type": "text", "content": result["content"]})
+
+    monkeypatch.setattr(agent_loop, "_call_ollama_streaming", provider)
+    monkeypatch.setattr(agent_loop, "_call_openai_streaming", provider)
+    monkeypatch.setattr(orchestrator, "AgentOrchestrator", Agent)
+    verifier = AsyncMock()
+    monkeypatch.setattr(work_orders, "verify_completed_step", verifier)
+    outcomes = await asyncio.gather(
+        work_orders.execute_claimed_step(
+            step_id,
+            attempt_id,
+            session_factory=factory,
+            schedule_verification=False,
+        ),
+        work_orders.execute_claimed_step(
+            step_id,
+            attempt_id,
+            session_factory=factory,
+            schedule_verification=False,
+        ),
+    )
+    assert sorted(outcomes) == [False, True]
+    verifier.assert_awaited_once()
+    assert len(provider_calls) == 1
+    async with factory() as db:
+        reservations = list(
+            await db.scalars(
+                select(WorkBudgetReservation).where(
+                    WorkBudgetReservation.work_order_id == run["work_order_id"]
+                )
+            )
+        )
+    assert len([row for row in reservations if row.operation_key.startswith("execution:")]) == 1
+    assert len([row for row in reservations if row.operation_key.startswith("llm:")]) == 1
+    async with factory() as db:
+        step = await db.get(WorkStep, step_id)
+        assert step.state == "succeeded"
+        assert step.last_error is None
+
+
+@pytest.mark.asyncio
 async def test_durable_schema_migration_round_trip(db_session):
     import importlib.util
     from pathlib import Path
@@ -900,6 +1079,81 @@ async def test_cancel_interrupts_running_agent_without_later_effect(
     finally:
         execution.cancel()
         await asyncio.gather(execution, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_cancel_and_prepare_use_root_first_locks_without_deadlock_or_provider(
+    test_engine, monkeypatch
+):
+    from unittest.mock import AsyncMock
+
+    from app.api import work_orders as work_order_api
+    from app.db.models import WorkToolCall
+    from app.tasks import work_orders
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    run, step_id, attempt_id = await claimed_run(factory)
+    cancel_holds_order = asyncio.Event()
+    release_cancel = asyncio.Event()
+    original_get_owned_order = work_order_api._get_owned_order
+
+    async def hold_cancel_after_root_lock(db, work_order_id, user, *, lock=False):
+        order = await original_get_owned_order(db, work_order_id, user, lock=lock)
+        if lock:
+            cancel_holds_order.set()
+            await release_cancel.wait()
+        return order
+
+    provider = AsyncMock(side_effect=AssertionError("Canceled work must not reach provider"))
+    monkeypatch.setattr(work_order_api, "_get_owned_order", hold_cancel_after_root_lock)
+    monkeypatch.setattr("app.tasks.durable_chat.run_durable_chat", provider)
+
+    async def cancel():
+        async with factory() as db:
+            return await work_order_api.cancel_order(run["work_order_id"], db, _DEV_USER)
+
+    cancel_task = asyncio.create_task(cancel())
+    execute_task = None
+    try:
+        await asyncio.wait_for(cancel_holds_order.wait(), timeout=5)
+        execute_task = asyncio.create_task(
+            work_orders.execute_claimed_step(
+                step_id,
+                attempt_id,
+                schedule_verification=False,
+                session_factory=factory,
+            )
+        )
+        # On PostgreSQL the worker is now waiting for the root WorkOrder lock.
+        # The former attempt-first order instead held the attempt here, making
+        # cancel wait for attempt while prepare waited for WorkOrder.
+        await asyncio.sleep(0.05)
+        assert not execute_task.done()
+        release_cancel.set()
+        canceled, executed = await asyncio.wait_for(
+            asyncio.gather(cancel_task, execute_task), timeout=5
+        )
+        assert canceled.status == "canceled"
+        assert executed is False
+        provider.assert_not_awaited()
+        async with factory() as db:
+            assert (await db.get(WorkOrder, run["work_order_id"])).status == "canceled"
+            assert (await db.get(WorkStep, step_id)).state == "canceled"
+            assert (
+                await db.scalar(
+                    select(WorkToolCall.id).where(WorkToolCall.attempt_id == attempt_id)
+                )
+                is None
+            )
+    finally:
+        release_cancel.set()
+        for task in (cancel_task, execute_task):
+            if task is not None and not task.done():
+                task.cancel()
+        await asyncio.gather(
+            *(task for task in (cancel_task, execute_task) if task is not None),
+            return_exceptions=True,
+        )
 
 
 @pytest.mark.asyncio

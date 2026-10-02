@@ -24,6 +24,7 @@ from app.db.agent_runtime_models import (
     DurableChatRun,
 )
 from app.db.models import ChatMessage, ChatSession, Document, User, WorkOrder
+from app.domain.work_budget_ledger import initialize_budget_ledger
 from app.domain.work_orders import ACTIVE_WORK_STATUSES, create_single_step_plan, create_work_order
 
 
@@ -265,6 +266,10 @@ async def submit_agent_intake(
                 }
             ],
         )
+        # The ledger belongs to the same atomic intake boundary as the turn,
+        # WorkOrder and plan. Binding after claim would invent a fresh baseline
+        # for work that may already have dispatched an effect.
+        await initialize_budget_ledger(db, order.id)
         run = DurableChatRun(
             owner_key=identity.account_key,
             intake_channel=request.channel,

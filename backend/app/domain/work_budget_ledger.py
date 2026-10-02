@@ -287,47 +287,56 @@ def _reject_tighter_descendant_limits(
                 )
 
 
+async def initialize_budget_ledger(db, work_order_id: uuid.UUID) -> WorkBudgetLedger:
+    """Create/bind a fresh lineage inside the caller's current transaction.
+
+    Intake uses this before it creates a plan so the WorkOrder, durable run,
+    plan and ledger have one rollback boundary. Historic work is deliberately
+    rejected instead of receiving an invented zero-usage baseline.
+    """
+    orders = await _lock_lineage(db, work_order_id)
+    root = next(row for row in orders if row.parent_id is None)
+    order_ids = [row.id for row in orders]
+    existing_ids = {row.budget_ledger_id for row in orders if row.budget_ledger_id}
+    if len(existing_ids) > 1:
+        raise BudgetBindingConflict("WorkOrder lineage is bound to multiple budget ledgers")
+    ledger = await db.get(WorkBudgetLedger, next(iter(existing_ids))) if existing_ids else None
+    if ledger is not None and (
+        ledger.root_work_order_id != root.id or ledger.owner_key != root.owner_key
+    ):
+        raise BudgetBindingConflict("Existing budget ledger does not match server lineage")
+    if ledger is None and existing_ids:
+        raise BudgetBindingConflict("WorkOrder references a missing budget ledger")
+    unbound = [row for row in orders if row.budget_ledger_id is None]
+    if ledger is not None and not unbound:
+        return ledger
+    if await _has_historic_usage(db, order_ids, orders):
+        raise LegacyBudgetBaselineRequired(
+            "Historic attempts, calls, or replans require an explicit baseline migration"
+        )
+    limits = normalize_limits(root.budgets)
+    _reject_tighter_descendant_limits(root, orders, limits)
+    if ledger is None:
+        ledger = WorkBudgetLedger(
+            root_work_order_id=root.id,
+            owner_key=root.owner_key,
+            **limits,
+        )
+        db.add(ledger)
+        await db.flush()
+    for row in orders:
+        if row.budget_ledger_id not in {None, ledger.id}:
+            raise BudgetBindingConflict("WorkOrder ledger binding is immutable")
+        row.budget_ledger_id = ledger.id
+    await db.flush()
+    return ledger
+
+
 async def bind_budget_ledger(session_factory, work_order_id: uuid.UUID) -> WorkBudgetLedger:
     """Create/bind a fresh lineage in one independently committed transaction."""
     async with session_factory() as db:
         async with db.begin():
-            orders = await _lock_lineage(db, work_order_id)
-            root = next(row for row in orders if row.parent_id is None)
-            order_ids = [row.id for row in orders]
-            existing_ids = {row.budget_ledger_id for row in orders if row.budget_ledger_id}
-            if len(existing_ids) > 1:
-                raise BudgetBindingConflict("WorkOrder lineage is bound to multiple budget ledgers")
-            ledger = (
-                await db.get(WorkBudgetLedger, next(iter(existing_ids))) if existing_ids else None
-            )
-            if ledger is not None and (
-                ledger.root_work_order_id != root.id or ledger.owner_key != root.owner_key
-            ):
-                raise BudgetBindingConflict("Existing budget ledger does not match server lineage")
-            if ledger is None and existing_ids:
-                raise BudgetBindingConflict("WorkOrder references a missing budget ledger")
-            unbound = [row for row in orders if row.budget_ledger_id is None]
-            if ledger is not None and not unbound:
-                return ledger
-            if await _has_historic_usage(db, order_ids, orders):
-                raise LegacyBudgetBaselineRequired(
-                    "Historic attempts, calls, or replans require an explicit baseline migration"
-                )
-            limits = normalize_limits(root.budgets)
-            _reject_tighter_descendant_limits(root, orders, limits)
-            if ledger is None:
-                ledger = WorkBudgetLedger(
-                    root_work_order_id=root.id,
-                    owner_key=root.owner_key,
-                    **limits,
-                )
-                db.add(ledger)
-                await db.flush()
-            for row in orders:
-                if row.budget_ledger_id not in {None, ledger.id}:
-                    raise BudgetBindingConflict("WorkOrder ledger binding is immutable")
-                row.budget_ledger_id = ledger.id
-        return ledger
+            return await initialize_budget_ledger(db, work_order_id)
 
 
 async def _usage(db, ledger_id: uuid.UUID, dimension: str) -> Decimal:
@@ -344,7 +353,7 @@ async def _usage(db, ledger_id: uuid.UUID, dimension: str) -> Decimal:
     return Decimal(value or 0)
 
 
-async def reserve_budget(
+async def _reserve_budget(
     session_factory,
     *,
     work_order_id: uuid.UUID,
@@ -352,7 +361,7 @@ async def reserve_budget(
     dimension: str,
     units: Any,
     request_digest: str,
-) -> WorkBudgetReservation:
+) -> tuple[WorkBudgetReservation, bool]:
     """Atomically reserve one dimension and commit before returning."""
     if dimension not in DIMENSION_LIMITS:
         raise BudgetLedgerError(f"Unsupported budget dimension: {dimension}")
@@ -393,7 +402,7 @@ async def reserve_budget(
                     raise BudgetReservationConflict(
                         "operation_key is already bound to different budget units"
                     )
-                return existing
+                return existing, False
             if dimension == "cost_usd":
                 unknown_cost = await db.scalar(
                     select(WorkBudgetReservation.id)
@@ -438,7 +447,56 @@ async def reserve_budget(
                 await db.flush()
         if exceeded is not None:
             raise BudgetExceeded(json.dumps(exceeded, sort_keys=True))
-        return reservation
+        return reservation, True
+
+
+async def reserve_budget(
+    session_factory,
+    *,
+    work_order_id: uuid.UUID,
+    operation_key: str,
+    dimension: str,
+    units: Any,
+    request_digest: str,
+) -> WorkBudgetReservation:
+    """Idempotently reserve a dimension for non-dispatch callers.
+
+    Existing callers retain the E21.1 API. Effect dispatchers must use
+    ``reserve_budget_for_dispatch`` and require ``created`` to be true.
+    """
+    reservation, _ = await _reserve_budget(
+        session_factory,
+        work_order_id=work_order_id,
+        operation_key=operation_key,
+        dimension=dimension,
+        units=units,
+        request_digest=request_digest,
+    )
+    return reservation
+
+
+async def reserve_budget_for_dispatch(
+    session_factory,
+    *,
+    work_order_id: uuid.UUID,
+    operation_key: str,
+    dimension: str,
+    units: Any,
+    request_digest: str,
+) -> tuple[WorkBudgetReservation, bool]:
+    """Reserve atomically and report whether this transaction created it.
+
+    A matching pre-existing reservation is evidence of an earlier dispatch
+    boundary, never permission to repeat the external effect.
+    """
+    return await _reserve_budget(
+        session_factory,
+        work_order_id=work_order_id,
+        operation_key=operation_key,
+        dimension=dimension,
+        units=units,
+        request_digest=request_digest,
+    )
 
 
 async def settle_budget(

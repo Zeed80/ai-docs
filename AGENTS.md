@@ -36,6 +36,7 @@ The target implementation structure is:
 Атомарная квитанция получателя (пилот task_propose): `python3 -m pytest backend/tests/test_action_receipts.py -q`.
 Read-only сверка AgentTask по квитанции (E00): тот же набор и `backend/tests/test_chat_action_journal.py`; отчёт в `docs/agent-employee-delivery/E00-receipt-verification.md`.
 Проверки границ и разрешений: `python3 -m pytest backend/tests/test_agent_execution_boundary.py backend/tests/test_agent_delegations.py -q`.
+Общий бюджет и physical streaming provider attempts (E21.1/E21.2a): `python3 -m pytest backend/tests/test_work_budget_ledger.py backend/tests/test_work_budget_provider.py backend/tests/test_durable_chat.py -q`.
 Пилот долговечного чата: `python3 -m pytest backend/tests/test_durable_chat.py backend/tests/test_work_order_checkpoint.py -q`.
 Снимки исполнения и одноразовое продолжение после подтверждения владельца: `python3 -m pytest backend/tests/test_chat_checkpoints.py -q`.
 Журнал логических действий, наблюдения владельца и миграция: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.

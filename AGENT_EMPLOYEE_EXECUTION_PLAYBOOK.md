@@ -990,6 +990,18 @@ WorkOrder/email executor paths перечислены в отчёте и не о
 
 E21.1 сама по себе не закрывает карточку и не заменяет старый enforcement.
 
+E21.2 выполняется последовательными ограниченными этапами:
+
+- **E21.2a (REVIEWED / DEPLOYED):** свежий ledger внутри common intake transaction;
+  фактические streaming provider attempts AgentSession долговечного чата,
+  включая retry/fallback, atomic reserve до вызова и явный nonretryable blocker.
+  Конечные token/cost caps без доказанного upper bound запрещают вызов.
+- **E21.2b+:** token/cost accounting и проверяемые pre-dispatch bounds;
+  nested tool/transport attempts; AIRouter planner/verifier и generic/headless
+  исполнители; legacy baseline и reconciliation дочерних ограничений.
+
+E21.2a не объявляет все вызовы системы учтёнными и не закрывает E21.2.
+
 1. Сначала точные единицы: tool attempts, LLM calls, tokens, cost, active time,
    replan count. Ожидание человека не смешивать с активным временем без ADR.
 2. Целевые defaults: 2 часа active, 200 tools, 50 LLM calls, 3 replans. Не включать

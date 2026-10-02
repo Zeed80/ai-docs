@@ -22,6 +22,7 @@ from app.ai.degradation import log_degraded
 from app.ai.gateway_config import gateway_config
 from app.ai.streaming_scrubber import StreamingContextScrubber
 from app.ai.thinking_params import thinking_request_params as _thinking_request_params
+from app.ai.work_budget_context import BudgetExecutionStopped, WorkBudgetContext
 from app.config import settings as _settings
 
 logger = structlog.get_logger()
@@ -1894,6 +1895,7 @@ async def _call_provider_streaming(
     thinking_level_override: str | None = None,
     on_thinking: Callable[[str], Awaitable[None]] | None = None,
     max_tokens: int | None = None,
+    budget_context: WorkBudgetContext | None = None,
 ) -> dict:
     """Dispatch to the configured LLM provider with optional fallback chain."""
     primary_provider = _get_agent_provider(config, provider_override=provider_override)
@@ -1903,6 +1905,7 @@ async def _call_provider_streaming(
         if provider != primary_provider
     ]
 
+    logical_call_no = await budget_context.begin_logical_call() if budget_context else None
     last_exc: Exception | None = None
     transient_errors = (
         httpx.RemoteProtocolError,
@@ -1914,8 +1917,26 @@ async def _call_provider_streaming(
         attempts = 2 if p == "ollama" else 1
         for attempt in range(1, attempts + 1):
             try:
+                operation_key = None
+                if budget_context is not None:
+                    operation_key = await budget_context.prepare_provider_call(
+                        logical_call_no=logical_call_no,
+                        provider=p,
+                        provider_attempt=attempt,
+                        request={
+                            "messages": messages,
+                            "tools": tools,
+                            "system_prompt": system_prompt,
+                            "provider": p,
+                            "provider_attempt": attempt,
+                            "model": model_override or config.worker_model,
+                            "disable_thinking": disable_thinking_override,
+                            "thinking_level": thinking_level_override,
+                            "max_output_tokens": max_tokens,
+                        },
+                    )
                 if p == "ollama":
-                    return await _call_ollama_streaming(
+                    result = await _call_ollama_streaming(
                         messages,
                         tools,
                         system_prompt,
@@ -1927,7 +1948,7 @@ async def _call_provider_streaming(
                         max_tokens=max_tokens,
                     )
                 elif p in _OPENAI_COMPATIBLE_PROVIDERS:
-                    return await _call_openai_streaming(
+                    result = await _call_openai_streaming(
                         messages,
                         tools,
                         system_prompt,
@@ -1941,7 +1962,7 @@ async def _call_provider_streaming(
                         max_tokens=max_tokens,
                     )
                 elif p == "anthropic":
-                    return await _call_anthropic_streaming(
+                    result = await _call_anthropic_streaming(
                         messages,
                         tools,
                         system_prompt,
@@ -1951,7 +1972,7 @@ async def _call_provider_streaming(
                     )
                 else:
                     logger.warning("unknown_provider_falling_back", provider=p)
-                    return await _call_ollama_streaming(
+                    result = await _call_ollama_streaming(
                         messages,
                         tools,
                         system_prompt,
@@ -1962,21 +1983,29 @@ async def _call_provider_streaming(
                         thinking_level=thinking_level_override,
                         max_tokens=max_tokens,
                     )
-            except transient_errors as exc:
+                if operation_key is not None:
+                    await budget_context.charge_provider_call(operation_key)
+                return result
+            except BaseException as exc:
+                if isinstance(exc, BudgetExecutionStopped):
+                    raise
+                if operation_key is not None:
+                    await budget_context.charge_provider_call(operation_key)
+                if not isinstance(exc, Exception):
+                    raise
                 last_exc = exc
-                logger.warning(
-                    "provider_transient_error",
-                    provider=p,
-                    attempt=attempt,
-                    attempts=attempts,
-                    error=str(exc),
-                )
-                if attempt < attempts:
-                    await asyncio.sleep(0.75 * attempt)
-                    continue
-                break
-            except Exception as exc:
-                last_exc = exc
+                if isinstance(exc, transient_errors):
+                    logger.warning(
+                        "provider_transient_error",
+                        provider=p,
+                        attempt=attempt,
+                        attempts=attempts,
+                        error=str(exc),
+                    )
+                    if attempt < attempts:
+                        await asyncio.sleep(0.75 * attempt)
+                        continue
+                    break
                 logger.warning(
                     "provider_call_error",
                     provider=p,
@@ -2045,6 +2074,7 @@ class AgentSession:
         # Orchestrator routed this turn to the desktop — reliable auto-publish
         # fallback in _deliver_final_content (by intent, not keyword). Reset each turn.
         self._workspace_expected: bool = False
+        self._work_budget_context: WorkBudgetContext | None = None
 
         self._config = get_builtin_agent_config()
         self._rebuild_runtime_components(self._config)
@@ -2061,6 +2091,13 @@ class AgentSession:
 
     def set_checkpoint_sink(self, sink: Callable[[dict], Awaitable[None]]) -> None:
         self._checkpoint_sink = sink
+
+    def set_work_budget_context(self, context: WorkBudgetContext) -> None:
+        """Attach one immutable durable execution identity before model use."""
+        current = getattr(self, "_work_budget_context", None)
+        if current is not None and current != context:
+            raise ValueError("Work budget context cannot be replaced during an execution")
+        self._work_budget_context = context
 
     async def save_checkpoint(
         self, phase: str, confirmation: dict | None = None, *, completed_call: dict | None = None
@@ -2136,6 +2173,7 @@ class AgentSession:
             provider_override=config.compression_provider or config.worker_provider,
             disable_thinking_override=config.worker_disable_thinking,
             thinking_level_override=config.worker_thinking_level,
+            budget_context=getattr(self, "_work_budget_context", None),
         )
         for chunk in accumulated:
             yield chunk
@@ -2746,6 +2784,9 @@ class AgentSession:
             consecutive_empty_responses = 0
             for iteration in range(start_iteration, self._config.max_steps):
                 self._iteration = iteration
+                budget_context = getattr(self, "_work_budget_context", None)
+                if budget_context is not None:
+                    budget_context.raise_if_stopped()
 
                 # Context compression before each LLM call
                 if self._compressor and self._compressor.should_compress(self.messages):
@@ -2812,6 +2853,7 @@ class AgentSession:
                     thinking_level_override=thinking_level,
                     on_thinking=_on_thinking,
                     max_tokens=self._response_budget,
+                    budget_context=budget_context,
                 )
                 self._accumulate_usage(message)
                 duration_ms = int((time.time() - t_start) * 1000)
@@ -2863,6 +2905,8 @@ class AgentSession:
                         self._trim_history()
                         continue
                     consecutive_empty_responses = 0
+                    if budget_context is not None:
+                        budget_context.raise_if_stopped()
                     delivered_text = await self._deliver_final_content(full_text)
                     self._record_assistant_reply(delivered_text)
                     # Fire-and-forget: index this turn into memory
@@ -3026,6 +3070,7 @@ class AgentSession:
                 _on_token,
                 disable_thinking_override=True,
                 max_tokens=self._response_budget,
+                budget_context=getattr(self, "_work_budget_context", None),
             )
             self._accumulate_usage(msg)
         except Exception as e:  # noqa: BLE001
@@ -3056,6 +3101,9 @@ class AgentSession:
         result message can be linked to its originating call (OpenAI spec
         requires it; Anthropic matches tool_result.tool_use_id by id, not order).
         """
+        budget_context = getattr(self, "_work_budget_context", None)
+        if budget_context is not None:
+            budget_context.raise_if_stopped()
         fn = tc.get("function", {})
         fn_name = fn.get("name", "")
         tc_id = tc.get("id") or ""
@@ -3105,6 +3153,8 @@ class AgentSession:
         # approval-request UX), but checking it here too keeps the two in
         # sync instead of silently relying on the second one to catch it.
         cap_gate_actions = set()
+        if budget_context is not None:
+            budget_context.raise_if_stopped()
         if skill:
             cap_gate_actions = set(skill.get("gate_actions") or [])
         action_arg = execution_args.get("action", "")
@@ -3221,6 +3271,8 @@ class AgentSession:
                 args = {**args, **self._pending_args_override}
             self._pending_args_override = None
 
+        if budget_context is not None:
+            budget_context.raise_if_stopped()
         if skill:
             receipt_options = {}
             action_id = getattr(self, "_checkpoint_action_ids", {}).get(tc_id)

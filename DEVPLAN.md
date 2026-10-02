@@ -2,8 +2,16 @@
 
 > Актуальный план и фактический остаток агентской переработки: [`AGENT_EMPLOYEE_IMPLEMENTATION_PLAN.md`](./AGENT_EMPLOYEE_IMPLEMENTATION_PLAN.md). Указанные ниже завершённые архивные фазы не означают завершение нового цифрового сотрудника.
 
-Пилот `/api/agent/chat-runs` сохраняет запросы и события в БД и исполняется worker;
-основной UI переключён на HTTP и восстанавливает события. Архивные чаты только
+Пилот `/api/agent/chat-runs` сохраняет запросы и события в БД и исполняется worker.
+
+E21.2a (2 октября 2026): common intake атомарно создаёт ledger, а physical
+streaming вызовы AgentSession занимают общий `llm_calls` до отправки. Retry и
+fallback учитываются отдельно; budget stop сохраняется в `blocked` без replan.
+Это не полный budget accounting: nested tools/AIRouter/headless, legacy baseline,
+token/cost и active/replan ещё требуют E21.2b+/E21.3. Проверки:
+`python3 -m pytest backend/tests/test_work_budget_ledger.py backend/tests/test_work_budget_provider.py backend/tests/test_durable_chat.py -q`.
+
+Основной UI переключён на HTTP и восстанавливает события. Архивные чаты только
 для чтения; checkpoint записывается на границах инструментов. Карточка и
 `POST /{id}/resume` продолжают только подтверждённый владельцем ожидающий вызов:
 точные аргументы, одноразовое решение на 30 минут, новая ревизия без повторения

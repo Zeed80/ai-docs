@@ -13,6 +13,7 @@ from app.ai.chat_checkpoint import (
     pack_checkpoint,
     unpack_checkpoint,
 )
+from app.ai.work_budget_context import WorkBudgetContext
 from app.chat.store import append_chat_message
 from app.db.agent_runtime_models import (
     AgentChannelIdentity,
@@ -533,7 +534,21 @@ async def _run_durable_chat(
         if kind == "error":
             errors.append(str(event.get("error_code") or "agent_error"))
 
+    budget_context = WorkBudgetContext(
+        work_order_id=uuid.UUID(str(work_order_id)),
+        step_id=uuid.UUID(str(step_id)),
+        attempt_id=uuid.UUID(str(attempt_id)),
+        session_factory=factory,
+    )
+    await budget_context.assert_ready()
     agent = (agent_factory or AgentOrchestrator)(collect)
+    set_budget_context = getattr(agent._executor, "set_work_budget_context", None)
+    if callable(set_budget_context):
+        set_budget_context(budget_context)
+    else:
+        # Narrow compatibility for deterministic test executors. Production's
+        # AgentSession uses the one-shot setter above.
+        agent._executor._work_budget_context = budget_context
     agent._executor._session_id = str(session_id)
     agent.hydrate_history(restored)
 
@@ -642,6 +657,7 @@ async def _run_durable_chat(
             raise ChatRunStopped("Active time budget exhausted")
         for task in done:
             await task
+        budget_context.raise_if_stopped()
     except ChatRunStopped as exc:
         raise RuntimeError(str(exc)) from exc
     finally:
@@ -651,6 +667,7 @@ async def _run_durable_chat(
         await asyncio.gather(execution, watcher, return_exceptions=True)
     if errors:
         raise RuntimeError("Agent returned errors: " + ", ".join(errors))
+    budget_context.raise_if_stopped()
     if checkpointed:
         await agent._executor.save_checkpoint("turn_finished")
     result = "".join(chunks).strip()

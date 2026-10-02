@@ -9,8 +9,15 @@
 Подробные задания находятся в [`AGENT_EMPLOYEE_EXECUTION_PLAYBOOK.md`](./AGENT_EMPLOYEE_EXECUTION_PLAYBOOK.md):
 53 небольшие карточки E00–E52, зависимости, конкретные файлы, негативные проверки,
 правила выкладки и контрольные точки независимого review. Для следующего запуска
-исполнителя брать **одну карточку**, начиная с E05.1; не просить реализовать весь
+исполнителя брать **одну карточку** по актуальным статусам и зависимостям playbook; не просить реализовать весь
 этот документ за один заход. Название/класс модели не меняет критерии безопасности.
+
+Срез 2 октября 2026: E21.1 и E21.2a приняты. Свежий common intake создаёт
+общий ledger атомарно с WorkOrder; physical streaming AgentSession calls
+резервируют `llm_calls` до provider, включая retry/fallback. Неизвестный legacy
+baseline и недоказанные конечные token/cost caps блокируют этот путь. Nested
+tools, AIRouter/headless, token/cost accounting и active/replan остаются E21.2b+/E21.3;
+вся E21 не завершена. Отчёт: `docs/agent-employee-delivery/E21-budget-ledger.md`.
 
 Срез передачи: `548ba327` — проверенный локальный commit пилота квитанций.
 Следующая за ним заготовка read-only verification (E00) завершена через режим
