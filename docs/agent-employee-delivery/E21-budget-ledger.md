@@ -364,3 +364,88 @@ Production / известные ограничения / rollback / следую
   отдельно охватить AIRouter/headless, затем доказуемый token/cost accounting,
   legacy reconciliation и E21.3. Push не выполнялся: запрет публикации
   накопленной истории не снят. Экономия лимитов количественно не измерялась.
+
+## E21.2b2 — physical capability WorkStep HTTP attempts
+
+Карточка / статус / дата / base:
+
+- E21 и E21.2 остаются `IN_PROGRESS`; ограниченный этап E21.2b2 имеет статус
+  `TESTED` и передан на независимую приёмку главному агенту.
+- Дата: 2 октября 2026 года. Base принятой линии: `6e6ddd29`.
+- Исполнитель: `gpt-5.6-sol`, resumed после usage limit предыдущего исполнителя;
+  один цикл реализации с ранними замечаниями главного агента. Commit/deploy/push
+  выполняет только главный агент. Экономия модели не измерена.
+
+Изменено и контракт:
+
+- `backend/app/tasks/work_orders.py`: только generic `kind=capability` получает
+  authoritative `WorkBudgetContext(order/step/attempt)`. После local preflight и
+  непосредственно перед каждым physical POST атомарно резервируется
+  `tool_attempts=1`; любой HTTP response, transport error или `BaseException`
+  settlement-ит одну попытку. Existing `WorkToolCall` и execution marker остаются
+  fence одного attempt; reservation не разрешает replay.
+- Max=0, legacy unbound, reserve DB failure и cancellation после reserve
+  останавливают HTTP fail-closed. Root/child конкурируют за общий последний slot.
+  Новых retries, permissions или approval semantics не добавлено.
+- Settlement failure после ответа сначала сохраняет исходный HTTP body/text,
+  status и checkpoint, затем ставит typed budget blocker. HTTP response означает
+  только полученный ответ, а не подтверждение business effect. Transport failure
+  сохраняется как unconfirmed evidence и не выдаётся за известный result.
+- Validated v1 `partial`/`outcome_unknown` сохраняют lifecycle и блокируют tail,
+  dependents, verifier и replan. `waiting_approval` сохраняет прежний generic
+  approval gate; после решения новый attempt обязан сделать новый reserve из того
+  же ledger. Arbitrary legacy 423 не становится ToolResult и не доверяет recipient
+  checkpoint. Legacy partial при failed settlement сохраняет checkpoint/output,
+  но получает typed budget blocker без retry.
+- `backend/tests/test_work_budget_work_orders.py`: isolated PostgreSQL и fake HTTP
+  покрывают zero/legacy/preflight/reserve failure, 4xx/5xx/transport/crash,
+  malformed JSON/client-exit, known/unconfirmed settlement failure, v1 lifecycle,
+  raw 423, approved fresh attempt, duplicate fence, shared root/child slot и cancel.
+
+Проверки исполнителя:
+
+- Финальный frozen профиль
+  `python3 -m pytest backend/tests/test_work_budget_work_orders.py backend/tests/test_work_order_checkpoint.py backend/tests/test_work_orders.py backend/tests/test_work_order_lease.py backend/tests/test_work_order_replanning.py backend/tests/test_work_order_verifier.py -q`
+  — 92 passed, 0 failed, 0 skipped за 14.84s.
+- Предыдущий budget regression
+  `python3 -m pytest backend/tests/test_work_budget_ledger.py backend/tests/test_work_budget_provider.py backend/tests/test_work_budget_tools.py backend/tests/test_chat_checkpoints.py backend/tests/test_durable_chat.py -q`
+  — 133 passed, 0 failed, 0 skipped за 28.44s.
+- Единственное предупреждение pytest — существующий unknown config
+  `asyncio_loop_scope`. Ruff и `git diff --check` проверяются на frozen diff.
+
+Не изменено / ограничения:
+
+- Planner/verifier direct Ollama, headless AgentSession, token/cost bounds,
+  legacy reconciliation, active time и replans не входят в E21.2b2.
+- При полной недоступности budget DB durable persistence blocker также может быть
+  недоступна; independently committed reserve/marker остаются evidence, но не
+  подтверждают outcome получателя.
+- Исполнитель не выполнял production build/restart, `/health`, commit или push;
+  реальные capability/LLM/SMTP/Telegram effects не вызывались.
+
+### Независимая приёмка E21.2b2 главным агентом
+
+- Исполнитель `gpt-5.6-sol` завершил сохранённый WIP после восстановления лимита.
+  Два тематических цикла review: сохранение/классификация ответа при malformed
+  JSON и client-exit; raw 423 не получает доверенный ToolResult/checkpoint,
+  исходный v1 failed body сохраняется без замены нормализованным ответом.
+  Последующие уточнения и соответствующие негативные тесты включены в эти циклы.
+- Независимые чистые testcontainer-процессы: прежний профиль budget/durable/
+  checkpoint/orders/channel/boundary/delegations/transport — **423 passed**;
+  lease/replanning/verifier — **27 passed**; новый профиль — **21 passed**.
+  Всего 471 проверка без failed/skipped в раздельных прогонах. Ruff check,
+  format-check и `git diff --check` прошли; известный warning `asyncio_loop_scope`.
+- Первый объединённый прогон: 468 passed, 3 failed. Причина — session-level БД
+  и старые глобальные запросы: ledger тест увидел reservations нового профиля,
+  lease тесты получили чужие ready steps. Assertions не ослаблены; отдельные
+  чистые процессы воспроизвели все три теста успешно. Полный объединённый suite
+  не объявляется зелёным; исправление изоляции fixtures остаётся отдельной задачей.
+- `make prod-build`: exit 0; backend/workers пересозданы, неизменённый frontend
+  healthy. `/health`: `{"status":"ok"}`; backend/основной worker healthy, beat up.
+  Alembic `20261001_0001 (head)`. SHA256 `tasks/work_orders.py` одинаковый в
+  checkout/backend/worker. Реальные деловые эффекты и LLM не запускались.
+- E21.2b2 REVIEWED / DEPLOYED, полная E21 остаётся IN_PROGRESS. Следующий узкий
+  этап — authoritative lifecycle бюджетирования direct Ollama planner/verifier
+  либо безопасная миграция headless; не прикреплять выдуманный running attempt
+  и не включать недоказанные token/cost bounds. Экономия лимитов не измерена.
+  Создаётся scoped локальный commit; новый push в этом этапе не выполняется.

@@ -1006,6 +1006,18 @@ Approval/preflight/local rejection не считаются dispatch. Ошибк�
 после эффекта не должна стирать результат получателя и журнал/checkpoint.
 Этот этап не подключает AIRouter/headless, token/cost или legacy baseline.
 
+**E21.2b2 (REVIEWED / DEPLOYED):** physical HTTP dispatch generic capability WorkStep
+через `tasks/work_orders.py`, с authoritative order/step/attempt и существующим
+WorkToolCall fence. Atomic tool reserve перед HTTP; settlement failure сохраняет
+наблюдённый результат до blocker, а nonterminal/approval lifecycle имеет приоритет.
+Не включает headless AgentSession без checkpoint, planner/verifier (прямой Ollama,
+не AIRouter), token/cost, legacy reconciliation или новые transport retries.
+
+После восстановления лимита Sol WIP завершён: context подключён только к
+capability runtime, recipient evidence сохраняется до blocker, новые негативные
+тесты проверены главным агентом. Общие старые test fixtures требуют отдельных
+чистых БД для ledger, lease и нового профиля; команды и результаты — в отчёте E21.
+
 E21.2a не объявляет все вызовы системы учтёнными и не закрывает E21.2.
 
 1. Сначала точные единицы: tool attempts, LLM calls, tokens, cost, active time,

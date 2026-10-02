@@ -14,7 +14,7 @@ import structlog
 from sqlalchemy import select
 
 from app.ai.chat_checkpoint import ChatNonterminalToolResult, ChatWaitingApprovalToolResult
-from app.ai.work_budget_context import BudgetExecutionStopped
+from app.ai.work_budget_context import BudgetExecutionStopped, WorkBudgetContext
 from app.domain.work_orders import (
     WorkStateError,
     append_event,
@@ -55,12 +55,16 @@ class ApprovalRequiredError(RuntimeError):
         arguments: dict[str, Any],
         *,
         tool_result: dict[str, Any] | None = None,
+        budget_stop: BudgetExecutionStopped | None = None,
+        recipient_output: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(f"Approval required for {capability}.{action}")
         self.capability = capability
         self.action = action
         self.arguments = arguments
         self.tool_result = tool_result
+        self.budget_stop = budget_stop
+        self.recipient_output = recipient_output
 
 
 class PartialProgressError(RuntimeError):
@@ -74,17 +78,78 @@ class PartialProgressError(RuntimeError):
     the point of reporting a checkpoint at all.
     """
 
-    def __init__(self, message: str, *, checkpoint: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        checkpoint: dict[str, Any],
+        budget_stop: BudgetExecutionStopped | None = None,
+        recipient_output: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.checkpoint = checkpoint
+        self.budget_stop = budget_stop
+        self.recipient_output = recipient_output
 
 
 class NonterminalToolResultError(RuntimeError):
     """A validated v1 ToolResult that must stop, not retry, a WorkOrder."""
 
-    def __init__(self, result: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        result: dict[str, Any],
+        *,
+        budget_stop: BudgetExecutionStopped | None = None,
+        recipient_output: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(str(result.get("status")))
         self.result = result
+        self.budget_stop = budget_stop
+        self.recipient_output = recipient_output
+
+
+class CapabilityBudgetExecutionStopped(BudgetExecutionStopped):
+    """Budget stop after a capability transport crossed its dispatch boundary.
+
+    Recipient evidence is deliberately an attribute rather than part of
+    ``details``: callers persist it in the attempt/tool-call output, while the
+    blocker and logs keep arbitrary response bodies out of error payloads.
+    """
+
+    def __init__(
+        self,
+        stop: BudgetExecutionStopped,
+        *,
+        recipient_output: dict[str, Any],
+    ) -> None:
+        super().__init__(stop.code, stop.message, details=dict(stop.details))
+        self.recipient_output = recipient_output
+
+
+def _budget_stop(context: Any) -> BudgetExecutionStopped | None:
+    try:
+        context.raise_if_stopped()
+    except BudgetExecutionStopped as exc:
+        return exc
+    return None
+
+
+def _capability_response_output(response: httpx.Response) -> dict[str, Any]:
+    # ``recipient_confirmed`` means only that an HTTP response was received.
+    # It never asserts that the requested business effect happened.
+    output: dict[str, Any] = {
+        "executor": "capability",
+        "http_status": response.status_code,
+        "recipient_confirmed": True,
+    }
+    if not response.content:
+        output["result"] = {}
+        return output
+    try:
+        output["result"] = response.json()
+    except Exception:
+        output["response_text"] = response.text[:8000]
+    return output
 
 
 def _action_digest(capability: str, action: str, arguments: dict[str, Any]) -> str:
@@ -216,6 +281,7 @@ async def _execute_capability(
     input_data: dict[str, Any],
     timeout_seconds: int,
     idempotency_key: str | None = None,
+    budget_context: Any | None = None,
 ) -> dict[str, Any]:
     from app.ai.agent_config import get_builtin_agent_config
     from app.ai.orchestrator import _agent_headers
@@ -236,14 +302,78 @@ async def _execute_capability(
             )
     payload = {"action": action, **arguments}
     base_url = get_builtin_agent_config().backend_url.rstrip("/")
-    async with httpx.AsyncClient(timeout=float(timeout_seconds)) as client:
-        response = await client.post(
-            f"{base_url}/api/agent/cap/{capability}",
-            json=payload,
-            headers=headers,
-        )
+    url = f"{base_url}/api/agent/cap/{capability}"
+    operation_key: str | None = None
+    settlement_ok = True
+    response: httpx.Response | None = None
+    try:
+        async with httpx.AsyncClient(timeout=float(timeout_seconds)) as client:
+            if budget_context is not None:
+                operation_key = await budget_context.prepare_tool_attempt(
+                    method="POST",
+                    url=url,
+                    request={
+                        "body": payload,
+                        "approval_granted": headers.get("X-Agent-Approval") == "granted",
+                        "idempotency_key": idempotency_key,
+                    },
+                )
+            try:
+                response = await client.post(url, json=payload, headers=headers)
+            except BaseException as exc:
+                if budget_context is not None and operation_key is not None:
+                    settlement_ok = await budget_context.charge_tool_attempt(
+                        operation_key,
+                        recipient_outcome="unconfirmed",
+                    )
+                    if not settlement_ok:
+                        stop = _budget_stop(budget_context)
+                        if stop is not None:
+                            raise CapabilityBudgetExecutionStopped(
+                                stop,
+                                recipient_output={
+                                    "executor": "capability",
+                                    "recipient_confirmed": False,
+                                    "transport_error_type": type(exc).__name__,
+                                },
+                            ) from exc
+                raise
+            else:
+                if budget_context is not None and operation_key is not None:
+                    settlement_ok = await budget_context.charge_tool_attempt(
+                        operation_key,
+                        recipient_outcome="responded",
+                    )
+    except BaseException:
+        if response is None or settlement_ok:
+            raise
+        # The response is stronger evidence than a later client-cleanup
+        # failure. Continue into normal response classification so validated
+        # nonterminal/approval lifecycle is not flattened into a budget error.
+    assert response is not None
+    recipient_output = _capability_response_output(response)
+    pending_budget_stop = None if settlement_ok else _budget_stop(budget_context)
+    from app.ai.tool_result import normalize_tool_result, result_failed
+
     if response.status_code == 423:
-        raise ApprovalRequiredError(capability, action, arguments)
+        tool_result = None
+        candidate = recipient_output.get("result")
+        if isinstance(candidate, dict) and "version" in candidate:
+            try:
+                normalized = normalize_tool_result(candidate)
+            except Exception:
+                pass
+            else:
+                if normalized.status == "waiting_approval":
+                    tool_result = normalized.model_dump(mode="json")
+        raise ApprovalRequiredError(
+            capability,
+            action,
+            arguments,
+            tool_result=tool_result if isinstance(tool_result, dict) else None,
+            budget_stop=pending_budget_stop,
+            recipient_output=recipient_output,
+        )
     if response.status_code >= 400:
         # A capability that made real progress before failing may report it
         # as {"error": ..., "checkpoint": {...}} in its response body — a
@@ -262,6 +392,13 @@ async def _execute_capability(
                 raise PartialProgressError(
                     f"Capability {capability}.{action} failed with HTTP {response.status_code}",
                     checkpoint=checkpoint,
+                    budget_stop=pending_budget_stop,
+                    recipient_output=recipient_output,
+                )
+            if pending_budget_stop is not None:
+                raise CapabilityBudgetExecutionStopped(
+                    pending_budget_stop,
+                    recipient_output=recipient_output,
                 )
             raise ConnectionError(
                 f"Capability {capability}.{action} failed with HTTP {response.status_code}"
@@ -271,11 +408,27 @@ async def _execute_capability(
             f"{response.text[:500]}"
         )
         if checkpoint:
-            raise PartialProgressError(message, checkpoint=checkpoint)
+            raise PartialProgressError(
+                message,
+                checkpoint=checkpoint,
+                budget_stop=pending_budget_stop,
+                recipient_output=recipient_output,
+            )
+        if pending_budget_stop is not None:
+            raise CapabilityBudgetExecutionStopped(
+                pending_budget_stop,
+                recipient_output=recipient_output,
+            )
         raise RuntimeError(message)
-    result = response.json() if response.content else {}
-    from app.ai.tool_result import normalize_tool_result, result_failed
-
+    if "result" in recipient_output:
+        result = recipient_output["result"]
+    elif pending_budget_stop is not None:
+        raise CapabilityBudgetExecutionStopped(
+            pending_budget_stop,
+            recipient_output=recipient_output,
+        )
+    else:
+        result = response.json()
     # Legacy maps keep their historical behaviour: E05 intentionally leaves
     # deferred operations raw.  Only a validated v1 envelope has enough
     # lifecycle meaning to stop the durable consumer before it retries,
@@ -288,11 +441,22 @@ async def _execute_capability(
                 action,
                 arguments,
                 tool_result=normalized.model_dump(mode="json"),
+                budget_stop=pending_budget_stop,
+                recipient_output=recipient_output,
             )
         if normalized.status in {"partial", "outcome_unknown"}:
-            raise NonterminalToolResultError(normalized.model_dump(mode="json"))
+            raise NonterminalToolResultError(
+                normalized.model_dump(mode="json"),
+                budget_stop=pending_budget_stop,
+                recipient_output=recipient_output,
+            )
         if normalized.status == "failed":
             result = normalized.model_dump(mode="json")
+            if pending_budget_stop is not None:
+                raise CapabilityBudgetExecutionStopped(
+                    pending_budget_stop,
+                    recipient_output=recipient_output,
+                )
             message = str(result.get("error") or result.get("message") or result)
             # A versioned failure is not the legacy checkpoint convention.
             # Its retryability cannot broaden WorkOrder's conservative retry
@@ -300,13 +464,31 @@ async def _execute_capability(
             raise RuntimeError(message)
 
     if result_failed(result):
+        recipient_output["result"] = result
         message = str(result.get("error") or result.get("message") or result)
         checkpoint = result.get("checkpoint")
         if isinstance(checkpoint, dict):
-            raise PartialProgressError(message, checkpoint=checkpoint)
+            raise PartialProgressError(
+                message,
+                checkpoint=checkpoint,
+                budget_stop=pending_budget_stop,
+                recipient_output=recipient_output,
+            )
+        if pending_budget_stop is not None:
+            raise CapabilityBudgetExecutionStopped(
+                pending_budget_stop,
+                recipient_output=recipient_output,
+            )
         raise RuntimeError(message)
     summary = json.dumps(result, ensure_ascii=False, default=str)[:8000]
-    return {"result": result, "result_summary": summary, "executor": "capability"}
+    output = {"result": result, "result_summary": summary, "executor": "capability"}
+    if pending_budget_stop is not None:
+        recipient_output["result_summary"] = summary
+        raise CapabilityBudgetExecutionStopped(
+            pending_budget_stop,
+            recipient_output=recipient_output,
+        )
+    return output
 
 
 async def _execute_step_kind(
@@ -318,6 +500,7 @@ async def _execute_step_kind(
     action: str | None,
     idempotency_key: str | None = None,
     work_order_id: uuid.UUID | None = None,
+    budget_context: Any | None = None,
 ) -> dict:
     if kind == "agent_turn":
         return await _execute_agent_turn(input_data, timeout_seconds)
@@ -325,7 +508,12 @@ async def _execute_step_kind(
         if not capability or not action:
             raise ValueError("capability step requires capability and action")
         return await _execute_capability(
-            capability, action, input_data, timeout_seconds, idempotency_key
+            capability,
+            action,
+            input_data,
+            timeout_seconds,
+            idempotency_key,
+            budget_context,
         )
     if kind == "decompose":
         if work_order_id is None:
@@ -820,6 +1008,16 @@ async def execute_claimed_step(
     from app.ai.actor_context import set_acting_user
 
     set_acting_user(owner_key)
+    capability_budget_context = (
+        WorkBudgetContext(
+            work_order_id=work_order_id,
+            step_id=step_id,
+            attempt_id=attempt_id,
+            session_factory=factory,
+        )
+        if kind == "capability"
+        else None
+    )
     try:
         if durable_chat:
             from app.tasks.durable_chat import run_durable_chat
@@ -836,6 +1034,7 @@ async def execute_claimed_step(
                 action=action,
                 idempotency_key=step_idempotency_key,
                 work_order_id=work_order_id,
+                budget_context=capability_budget_context,
             )
     except ApprovalRequiredError as exc:
         from app.db.models import Approval, ApprovalActionType
@@ -882,6 +1081,14 @@ async def execute_claimed_step(
             call_row = await db.get(WorkToolCall, call_id, with_for_update=True)
             if order and step_row and attempt_row and attempt_owns_lease(step_row, attempt_row):
                 tool_result = exc.tool_result
+                budget_error = exc.budget_stop.as_error() if exc.budget_stop is not None else None
+                if (
+                    tool_result is not None
+                    and budget_error is not None
+                    and isinstance(exc.recipient_output, dict)
+                    and isinstance(exc.recipient_output.get("result"), dict)
+                ):
+                    tool_result = exc.recipient_output["result"]
                 checkpoint = tool_result.get("checkpoint") if tool_result else None
                 evidence = tool_result.get("evidence") if tool_result else None
                 result_error = (
@@ -893,6 +1100,11 @@ async def execute_claimed_step(
                     if tool_result is not None
                     else None
                 )
+                if budget_error is not None:
+                    result_error = {
+                        **(result_error or {"code": "approval_required"}),
+                        "budget_error": budget_error,
+                    }
                 approval = Approval(
                     action_type=ApprovalActionType.agent_tool_call,
                     entity_type="work_order",
@@ -907,6 +1119,14 @@ async def execute_claimed_step(
                         "reason": "Capability gateway requires approval",
                         "action_digest": digest,
                         **({"tool_result": tool_result} if tool_result is not None else {}),
+                        **(
+                            {
+                                "recipient_output": exc.recipient_output,
+                                "budget_error": budget_error,
+                            }
+                            if budget_error is not None
+                            else {}
+                        ),
                     },
                 )
                 db.add(approval)
@@ -919,10 +1139,22 @@ async def execute_claimed_step(
                     attempt_row.error = result_error
                     step_row.output = {"result": tool_result, "executor": "capability"}
                     step_row.last_error = result_error
+                elif budget_error is not None and exc.recipient_output is not None:
+                    attempt_row.output = exc.recipient_output
+                    attempt_row.error = result_error
+                    step_row.output = exc.recipient_output
+                    step_row.last_error = result_error
                 if call_row is not None:
                     call_row.status = "waiting_approval"
                     if tool_result is not None:
-                        call_row.output = tool_result
+                        call_row.output = (
+                            exc.recipient_output
+                            if budget_error is not None and exc.recipient_output is not None
+                            else tool_result
+                        )
+                        call_row.error = result_error
+                    elif budget_error is not None and exc.recipient_output is not None:
+                        call_row.output = exc.recipient_output
                         call_row.error = result_error
                     call_row.finished_at = utcnow()
                 await transition_step(
@@ -969,24 +1201,58 @@ async def execute_claimed_step(
         # checkpoint up, see the resume_step_input merge above) gets a chance
         # to build on it rather than start over.
         error = {"code": "partial_progress", "message": str(exc), "type": type(exc).__name__}
+        if exc.budget_stop is not None:
+            error["budget_error"] = exc.budget_stop.as_error()
         async with factory() as db:
             order = await db.get(WorkOrder, work_order_id, with_for_update=True)
             step_row = await db.get(WorkStep, step_id, with_for_update=True)
             attempt_row = await db.get(WorkStepAttempt, attempt_id, with_for_update=True)
             call_row = await db.get(WorkToolCall, call_id, with_for_update=True)
             if order and step_row and attempt_row and attempt_owns_lease(step_row, attempt_row):
-                await fail_attempt(
-                    db,
-                    order=order,
-                    step=step_row,
-                    attempt=attempt_row,
-                    error=error,
-                    retryable=True,
-                    actor=worker,
-                    checkpoint=exc.checkpoint,
-                )
+                if exc.budget_stop is None:
+                    await fail_attempt(
+                        db,
+                        order=order,
+                        step=step_row,
+                        attempt=attempt_row,
+                        error=error,
+                        retryable=True,
+                        actor=worker,
+                        checkpoint=exc.checkpoint,
+                    )
+                else:
+                    now = utcnow()
+                    budget_error = exc.budget_stop.as_error()
+                    attempt_row.status = "failed"
+                    attempt_row.output = exc.recipient_output
+                    attempt_row.checkpoint = exc.checkpoint
+                    attempt_row.error = error
+                    attempt_row.finished_at = now
+                    attempt_row.heartbeat_at = now
+                    step_row.output = exc.recipient_output
+                    step_row.last_error = error
+                    step_row.lease_owner = None
+                    step_row.lease_expires_at = None
+                    step_row.next_attempt_at = None
+                    await transition_step(
+                        db,
+                        step_row,
+                        "failed",
+                        actor=worker,
+                        payload={"error": error},
+                    )
+                    order.blocker = {**budget_error, "step_id": str(step_row.id)}
+                    await transition_work_order(
+                        db,
+                        order,
+                        "blocked",
+                        actor=worker,
+                        payload={"budget_error": budget_error},
+                    )
                 if call_row is not None:
                     call_row.status = "failed"
+                    if exc.recipient_output is not None:
+                        call_row.output = exc.recipient_output
                     call_row.error = error
                     call_row.finished_at = utcnow()
                 await db.commit()
@@ -1176,14 +1442,41 @@ async def execute_claimed_step(
                     result=exc.result,
                     actor=worker,
                 )
+                if isinstance(exc, NonterminalToolResultError) and exc.budget_stop is not None:
+                    budget_error = exc.budget_stop.as_error()
+                    if isinstance(exc.recipient_output, dict) and isinstance(
+                        exc.recipient_output.get("result"), dict
+                    ):
+                        observed_result = exc.recipient_output["result"]
+                        attempt_row.output = observed_result
+                        step_row.output = {"result": observed_result, "executor": "capability"}
+                    attempt_row.error = {**(attempt_row.error or {}), "budget_error": budget_error}
+                    step_row.last_error = {
+                        **(step_row.last_error or {}),
+                        "budget_error": budget_error,
+                    }
+                    order.blocker = {**(order.blocker or {}), "budget_error": budget_error}
                 if call_row is not None:
                     call_row.status = str(exc.result["status"])
-                    call_row.output = exc.result
+                    call_row.output = (
+                        exc.recipient_output["result"]
+                        if isinstance(exc, NonterminalToolResultError)
+                        and exc.budget_stop is not None
+                        and isinstance(exc.recipient_output, dict)
+                        and isinstance(exc.recipient_output.get("result"), dict)
+                        else exc.result
+                    )
                     call_row.error = {
                         "code": f"tool_result_{exc.result['status']}",
                         "error_code": exc.result.get("error_code"),
                         "evidence": exc.result.get("evidence") or {},
                     }
+                    if isinstance(exc, NonterminalToolResultError) and exc.budget_stop is not None:
+                        call_row.error["budget_error"] = exc.budget_stop.as_error()
+                        if exc.recipient_output is not None:
+                            call_row.error["recipient_http_status"] = exc.recipient_output.get(
+                                "http_status"
+                            )
                     call_row.finished_at = utcnow()
                 await db.commit()
         return False
@@ -1193,6 +1486,16 @@ async def execute_claimed_step(
             # loser must not fail or unblock that state while the winner runs.
             return False
         error = {**exc.as_error(), "type": type(exc).__name__}
+        recipient_output = getattr(exc, "recipient_output", None)
+        recipient_confirmed = (
+            recipient_output.get("recipient_confirmed")
+            if isinstance(recipient_output, dict)
+            else None
+        )
+        if recipient_confirmed is not None:
+            error["recipient_confirmed"] = recipient_confirmed
+        if isinstance(recipient_output, dict) and recipient_output.get("transport_error_type"):
+            error["transport_error_type"] = recipient_output["transport_error_type"]
         async with factory() as db:
             order = await db.get(WorkOrder, work_order_id, with_for_update=True)
             step_row = await db.get(WorkStep, step_id, with_for_update=True)
@@ -1202,9 +1505,16 @@ async def execute_claimed_step(
                 now = utcnow()
                 attempt_row.status = "failed"
                 attempt_row.error = error
+                if recipient_confirmed is True:
+                    attempt_row.output = recipient_output
+                    result = recipient_output.get("result")
+                    if isinstance(result, dict) and isinstance(result.get("checkpoint"), dict):
+                        attempt_row.checkpoint = result["checkpoint"]
                 attempt_row.finished_at = now
                 attempt_row.heartbeat_at = now
                 step_row.last_error = error
+                if recipient_confirmed is True:
+                    step_row.output = recipient_output
                 step_row.lease_owner = None
                 step_row.lease_expires_at = None
                 step_row.next_attempt_at = None
@@ -1224,7 +1534,11 @@ async def execute_claimed_step(
                     payload={"budget_error": error},
                 )
                 if call_row is not None:
-                    call_row.status = "failed"
+                    call_row.status = (
+                        "failed" if recipient_confirmed is not False else "outcome_unknown"
+                    )
+                    if isinstance(recipient_output, dict):
+                        call_row.output = recipient_output
                     call_row.error = error
                     call_row.finished_at = now
                 await db.commit()

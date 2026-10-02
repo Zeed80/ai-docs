@@ -18,7 +18,10 @@
 baseline и недоказанные конечные token/cost caps блокируют этот путь. E21.2b1
 подключает nested physical HTTP attempts, включая reviewed read retries, к ledger;
 approval/preflight расходуют ноль, settlement failure не стирает recipient outcome.
-AIRouter/headless, legacy reconciliation, token/cost accounting и active/replan остаются E21.2b+/E21.3;
+E21.2b2 принят для generic capability HTTP WorkStep: authoritative context,
+reserve/settle, recipient evidence и nonterminal/approval lifecycle без новых retry.
+Planner/verifier (direct Ollama), AIRouter/headless, legacy reconciliation,
+token/cost accounting и active/replan остаются E21.2b+/E21.3;
 вся E21 не завершена. Отчёт: `docs/agent-employee-delivery/E21-budget-ledger.md`.
 
 Срез передачи: `548ba327` — проверенный локальный commit пилота квитанций.

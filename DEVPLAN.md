@@ -11,7 +11,10 @@ E21.2b1 подключает physical HTTP attempts вложенных tools к 
 approval/preflight расходуют ноль, разрешённые read retries учитываются отдельно.
 Settlement failure сохраняет результат и checkpoint до остановки; неизвестный
 эффект не разрешает обычный resume. Проверка: `python3 -m pytest backend/tests/test_work_budget_tools.py -q`.
-Это не полный budget accounting: AIRouter/headless, legacy baseline,
+E21.2b2 подключает generic capability WorkStep HTTP к тому же ledger и сохраняет
+ответ получателя при settlement failure. Новый профиль запускается отдельно:
+`python3 -m pytest backend/tests/test_work_budget_work_orders.py -q`.
+Это не полный budget accounting: planner/verifier (direct Ollama), AIRouter/headless, legacy baseline,
 token/cost и active/replan ещё требуют E21.2b+/E21.3. Проверки:
 `python3 -m pytest backend/tests/test_work_budget_ledger.py backend/tests/test_work_budget_provider.py backend/tests/test_durable_chat.py -q`.
 
