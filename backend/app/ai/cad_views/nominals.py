@@ -414,9 +414,12 @@ def nominal_revolve(
             index = end + 1
         return out
 
-    new_outer = _thread_ends(
-        _flatten_spikes(fix_points(outer, outer_diameters, True), outer_diameters),
-        threads or [],
+    new_outer = _overall_diameter(
+        _thread_ends(
+            _flatten_spikes(fix_points(outer, outer_diameters, True), outer_diameters),
+            threads or [],
+        ),
+        outer_diameters,
     )
     new_bore = fix_points(bore, bore_diameters, False, bore_share)
     # Станция расточки, сведённая номиналом на станцию уступа снаружи, —
@@ -458,6 +461,34 @@ def nominal_revolve(
                 a["r"] = round(max(0.0, min(a["r"], limit - 0.05)), 4)
                 b["r"] = round(max(0.0, min(b["r"], limit - 0.05)), 4)
     return new_outer, new_bore, changed
+
+
+def _overall_diameter(points: list[dict], diameters: list[float]) -> list[dict]:
+    """Наибольшая надпись Ø — габарит по диаметру: если её не объясняет ни
+    одна площадка, а наибольшая площадка не надписана и меньше не более чем
+    на 20 %, — это она (колесо part_06: зубья в разрезе не штрихуют, венец
+    мерился 39,5 при Ø46 по вершинам)."""
+    if not diameters or len(points) < 2:
+        return points
+    largest = max(diameters)
+    labelled = {round(d / 2.0, 4) for d in diameters}
+    plateaus = [
+        (a["r"], i)
+        for i, (a, b) in enumerate(zip(points, points[1:]))
+        if abs(a["r"] - b["r"]) <= 1e-6 and b["z"] - a["z"] > 1e-6
+    ]
+    if not plateaus:
+        return points
+    radius, _index = max(plateaus)
+    if any(abs(r - largest / 2.0) <= 1e-6 for r, _i in plateaus):
+        return points
+    if round(radius, 4) in labelled or not 0.8 * largest <= 2.0 * radius < largest:
+        return points
+    out = [dict(p) for p in points]
+    for p in out:
+        if abs(p["r"] - radius) <= 1e-6:
+            p["r"] = round(largest / 2.0, 4)
+    return out
 
 
 def _thread_ends(points: list[dict], threads: list[float]) -> list[dict]:

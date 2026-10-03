@@ -195,3 +195,20 @@ def test_a_long_end_plateau_with_a_thread_label_is_the_thread():
     assert out[0]["r"] == out[1]["r"] == 9.0
     # Целый надписанный Ø22 на другом конце — номинал ступени, не M24.
     assert out[-1]["r"] == 11.0
+
+
+def test_an_unlabelled_largest_plateau_is_the_overall_diameter():
+    from app.ai.cad_views.nominals import _overall_diameter
+
+    # Колесо part_06: венец мерился 39,48 при Ø46 по вершинам зубьев.
+    points = [
+        {"z": 0.0, "r": 19.74},
+        {"z": 6.0, "r": 19.74},
+        {"z": 6.0, "r": 7.0},
+        {"z": 15.0, "r": 7.0},
+    ]
+    out = _overall_diameter(points, [46.0, 38.0, 16.0, 14.0, 7.0])
+    assert out[0]["r"] == out[1]["r"] == 23.0
+    # Надписанная наибольшая площадка (Ø38) — не трогается.
+    labelled = [dict(p, r=19.0) if p["r"] > 10 else p for p in points]
+    assert _overall_diameter(labelled, [46.0, 38.0, 14.0])[0]["r"] == 19.0
