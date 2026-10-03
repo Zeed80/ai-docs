@@ -177,3 +177,21 @@ def test_a_measured_keyway_follows_the_station_mapping():
     assert abs(remap_station(91.45, mapping) - 90.97) < 0.05
     # Вне привязанных станций — как есть.
     assert remap_station(190.0, mapping) == 190.0
+
+
+def test_a_long_end_plateau_with_a_thread_label_is_the_thread():
+    from app.ai.cad_views.nominals import _thread_ends
+
+    # z4-r4: M18 нарисована как 16,2 и привязалась к Ø15,7 проточки.
+    points = [
+        {"z": 0.0, "r": 7.85},
+        {"z": 13.0, "r": 7.85},
+        {"z": 13.0, "r": 12.5},
+        {"z": 160.0, "r": 12.5},
+        {"z": 160.0, "r": 11.0},
+        {"z": 185.0, "r": 11.0},
+    ]
+    out = _thread_ends(points, [18.0, 24.0])
+    assert out[0]["r"] == out[1]["r"] == 9.0
+    # Целый надписанный Ø22 на другом конце — номинал ступени, не M24.
+    assert out[-1]["r"] == 11.0

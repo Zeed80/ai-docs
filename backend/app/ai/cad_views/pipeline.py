@@ -1689,6 +1689,13 @@ def build_revolve(
             measured=measured,
             prefer_measured=unscaled,
             station_map=station_map,
+            threads=[
+                lab.value
+                for lab in (
+                    parse_label(t) for t in [*label_texts, *sum((region_labels or {}).values(), [])]
+                )
+                if lab.kind == "thread" and lab.value
+            ],
         )
 
     try:

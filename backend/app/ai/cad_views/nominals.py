@@ -318,6 +318,7 @@ def nominal_revolve(
     measured: dict[float, float] | None = None,
     prefer_measured: bool = False,
     station_map: dict[float, float] | None = None,
+    threads: list[float] | None = None,
 ) -> tuple[list[dict], list[dict], int]:
     """Профиль тела вращения — в номиналах: станции вдоль оси и Ø площадок.
 
@@ -413,7 +414,10 @@ def nominal_revolve(
             index = end + 1
         return out
 
-    new_outer = _flatten_spikes(fix_points(outer, outer_diameters, True), outer_diameters)
+    new_outer = _thread_ends(
+        _flatten_spikes(fix_points(outer, outer_diameters, True), outer_diameters),
+        threads or [],
+    )
     new_bore = fix_points(bore, bore_diameters, False, bore_share)
     # Станция расточки, сведённая номиналом на станцию уступа снаружи, —
     # стенка нулевой толщины и тело из двух частей («Опора»: уступ Ø7,6→Ø11,5
@@ -454,6 +458,55 @@ def nominal_revolve(
                 a["r"] = round(max(0.0, min(a["r"], limit - 0.05)), 4)
                 b["r"] = round(max(0.0, min(b["r"], limit - 0.05)), 4)
     return new_outer, new_bore, changed
+
+
+def _thread_ends(points: list[dict], threads: list[float]) -> list[dict]:
+    """Концевая площадка с надписью резьбы — резьба.
+
+    Наружный Ø резьбы на листе меряется тоньше надписи: сплошная основная
+    линия у резьбы по наружному Ø, но скан и тонкая линия внутреннего Ø
+    сводят замер на 4–15 % вниз (p007: M20 — 18,8…19,3; z4-r4: M18 — 16,2 и
+    привязка к Ø15,7 проточки). Проточка под резьбу короткая и концом
+    детали не бывает, поэтому надпись резьбы у длинной концевой площадки
+    (≥ 3 % длины) важнее ближайшей. Только если замер не больше резьбы и
+    меньше её не более чем на 15 %."""
+    if not threads or len(points) < 2:
+        return points
+    out = [dict(p) for p in points]
+    total = max(p["z"] for p in out) - min(p["z"] for p in out)
+
+    def end_segment(indices: list[int]) -> tuple[int, int] | None:
+        for i, j in zip(indices, indices[1:]):
+            a, b = out[i], out[j]
+            length = abs(b["z"] - a["z"])
+            if length <= 1e-6:
+                continue
+            if length < 0.03 * total:
+                # Фаска у торца — пропускается, дальше сама площадка.
+                continue
+            return i, j
+        return None
+
+    forward = list(range(len(out)))
+    for indices in (forward, forward[::-1]):
+        found = end_segment(indices)
+        if found is None:
+            continue
+        i, j = found
+        a, b = out[i], out[j]
+        if abs(a["r"] - b["r"]) > 0.06 * max(a["r"], b["r"], 1e-6):
+            continue
+        measured = a["r"] + b["r"]
+        # Целый Ø — номинал ступени («Ø22» на конце z4-r4), его не трогать;
+        # дробный — Ø дна проточки (Ø15,7) или не привязанный замер.
+        if abs(a["r"] - b["r"]) <= 1e-6 and abs(measured - round(measured)) <= 1e-6:
+            continue
+        fitting = [t for t in threads if measured - 1e-6 <= t <= 1.15 * measured]
+        if not fitting:
+            continue
+        nominal = min(fitting) / 2.0
+        a["r"] = b["r"] = round(nominal, 4)
+    return out
 
 
 def _flatten_spikes(points: list[dict], diameters: list[float]) -> list[dict]:
