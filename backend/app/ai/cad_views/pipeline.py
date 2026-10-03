@@ -1062,6 +1062,45 @@ def _clip_to_overall(
     )
 
 
+def _figures_in(gray: Any, pictures: list[Any], limit: int = 4) -> list[Any]:
+    """Отдельные фигуры внутри рамки, охватившей полстраницы.
+
+    Модель обводит «главным видом» всю страницу чертежа с сечениями,
+    выносными элементами и штампом (слайд c8d8313e_p005: вал занимает
+    десятую часть рамки) — профиль строился не по валу. Фигура — связные
+    основные линии; рамка листа и штамп (шире 90 % рамки) — не фигуры.
+    Выбирают надписи."""
+    from dataclasses import replace
+
+    import cv2
+    import numpy as np
+
+    from app.ai.cad_views.extrude_body import main_line_mask
+
+    g = np.asarray(gray)
+    height, width = g.shape[:2]
+    out = []
+    for region in pictures:
+        x0, y0, x1, y1 = (int(v) for v in region.box)
+        x0, y0, x1, y1 = max(0, x0), max(0, y0), min(width, x1), min(height, y1)
+        area = (x1 - x0) * (y1 - y0)
+        if area < 0.2 * width * height:
+            continue
+        _ink, thick, line = main_line_mask(g[y0:y1, x0:x1])
+        reach = max(3, int(round(2 * line)))
+        joined = cv2.dilate(thick.astype(np.uint8), np.ones((reach, reach), np.uint8))
+        count, _labels, stats, _c = cv2.connectedComponentsWithStats(joined, 8)
+        figures = []
+        for index in range(1, count):
+            bx, by, bw, bh, _a = (int(v) for v in stats[index])
+            if bw > 0.9 * (x1 - x0) or bh > 0.9 * (y1 - y0) or bw * bh < 0.01 * area:
+                continue
+            figures.append((bw * bh, (x0 + bx, y0 + by, x0 + bx + bw, y0 + by + bh)))
+        for k, (_a, box) in enumerate(sorted(figures, reverse=True)[:limit]):
+            out.append(replace(region, n=3000 + 10 * int(region.n) + k, box=box))
+    return out
+
+
 def _ordinal_diameters(
     outer: list[dict[str, float]],
     bore: list[dict[str, float]],
@@ -1271,6 +1310,7 @@ def build_revolve(
     best = None
     tried: list[str] = []
     candidates = ordered[:6] + sorted(spare, key=lambda r: -area(r))[:2]
+    candidates += _figures_in(gray, ordered[:2])
     if unscaled:
         # Не в масштабе масштаб не отсекает чужое — изображение берётся
         # целиком: рамка, обрезавшая деталь, давала её часть.

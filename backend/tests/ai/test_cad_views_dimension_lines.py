@@ -126,3 +126,26 @@ def test_profile_is_clipped_by_the_overall_dimension_only():
     assert clipped is not None and clipped.x1 == 2071
     # Наибольший найденный размер, но не габарит листа, — не обрезает.
     assert _clip_to_overall(profile, [(1.0, 2071.0, 120.0)], 4.0, 185.0) is None
+
+
+def test_a_page_sized_box_is_split_into_figures():
+    import cv2
+    import numpy as np
+
+    from app.ai.cad_views.pipeline import _figures_in
+    from app.ai.cad_views.sheet_reading import Region
+
+    # Рамка «главного вида» на всю страницу: вал и два сечения отдельно.
+    g = np.full((1000, 1400), 255, np.uint8)
+    cv2.rectangle(g, (20, 20), (1380, 980), 0, 6)  # рамка листа — не фигура
+    cv2.rectangle(g, (200, 200), (900, 320), 0, 6)
+    cv2.circle(g, (300, 700), 90, 0, 6)
+    cv2.circle(g, (700, 700), 90, 0, 6)
+    region = Region(1, (10, 10, 1390, 990), "view", "главный вид")
+    boxes = sorted(f.box for f in _figures_in(g, [region]))
+    assert len(boxes) == 3
+    # Рамка фигуры — с полем на толщину линии.
+    assert any(abs(b[0] - 200) <= 12 and abs(b[2] - 900) <= 12 for b in boxes)
+    # Рамка меньше пятой части листа не делится.
+    small = Region(2, (190, 190, 910, 330), "view", "главный вид")
+    assert _figures_in(g, [small]) == []
