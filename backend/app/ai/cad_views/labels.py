@@ -102,6 +102,20 @@ def parse_label(text: str) -> Label:
     )
     if match:
         return Label(raw, "diameter", value=_num(match.group("outer")), extras={"spline": True})
+    # Английские листы: «DIA 38», «SQ THD, DIA 38×7» (прямоугольная резьба
+    # Ø38 с шагом 7) — диаметр словом (домкрат 2cb28437_p063).
+    match = re.search(r"\bDIA\.?\s*" + _NUM + r"(?:\s*x\s*" + _NUM + r")?", clean, re.I)
+    if match:
+        if re.search(r"\bTHD\b|\bTHREAD", clean, re.I):
+            return Label(
+                raw,
+                "thread",
+                value=_num(match.group(1)),
+                pitch=_num(match.group(2)) if match.group(2) else None,
+                depth=depth,
+                count=count,
+            )
+        return Label(raw, "diameter", value=_num(match.group(1)), depth=depth, count=count)
     # Резьба: M10x0,5-6g, M24x1,5, G1/2.
     match = re.search(r"(?<![A-Za-zА-Яа-я])[MМ]\s*" + _NUM + r"(?:\s*x\s*" + _NUM + r")?", clean)
     if match:

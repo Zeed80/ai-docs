@@ -784,28 +784,196 @@ def section_features(
     return found
 
 
+def _grown_pictures(gray: Any, pictures: list[Any]) -> list[Any]:
+    """Рамки изображений, расширенные до основных линий, что выходят за край.
+
+    Модель обводит изображение не целиком (шпиндель 793539cc_p013: «главный
+    вид» на левую треть вала) — профиль обрывается на краю рамки, габарит
+    ложится на часть детали. Контур детали — связные основные линии: рамка
+    растёт до тех, что её пересекают (рамка листа и штамп — нет: они больше
+    половины листа). Выбирают надписи.
+    """
+    from dataclasses import replace
+
+    import cv2
+    import numpy as np
+
+    from app.ai.cad_views.extrude_body import main_line_mask
+
+    g = np.asarray(gray)
+    height, width = g.shape[:2]
+    _ink, thick, line = main_line_mask(g)
+    reach = max(3, int(round(1.5 * line)))
+    joined = cv2.dilate(thick.astype(np.uint8), np.ones((reach, reach), np.uint8))
+    _count, labels, stats, _c = cv2.connectedComponentsWithStats(joined, 8)
+    grown = []
+    for region in pictures:
+        x0, y0, x1, y1 = (int(v) for v in region.box)
+        x0, y0 = max(0, x0), max(0, y0)
+        x1, y1 = min(width, x1), min(height, y1)
+        if x1 <= x0 or y1 <= y0:
+            continue
+        box = [x0, y0, x1, y1]
+        for index in np.unique(labels[y0:y1, x0:x1]):
+            if index == 0:
+                continue
+            bx, by, bw, bh, _area = (int(v) for v in stats[index])
+            if bw * bh > 0.5 * width * height or bw > 0.9 * width or bh > 0.9 * height:
+                continue  # рамка листа, штамп
+            box = [min(box[0], bx), min(box[1], by), max(box[2], bx + bw), max(box[3], by + bh)]
+        if (box[2] - box[0]) * (box[3] - box[1]) >= 1.3 * (x1 - x0) * (y1 - y0):
+            grown.append(replace(region, n=2000 + int(region.n), box=tuple(box)))
+    return grown
+
+
+def _span_stations(
+    gray: Any,
+    crop: Any,
+    profile: Any,
+    factor: float,
+    origin: tuple[int, int],
+    vertical: bool,
+    line: float,
+    axial: float,
+    labels: list[float],
+    interpolate: bool = False,
+) -> dict[float, float]:
+    """{z замера, мм: номинал} — станции по размерным линиям листа.
+
+    Ряды размеров лежат вне выреза изображения, поэтому ищутся на листе
+    (повёрнутом, если ось вертикальна); пары выносных переводятся обратно в
+    столбцы выреза."""
+    import numpy as np
+
+    from app.ai.cad_views.dimension_lines import axial_spans, match_spans, stations_from_spans
+
+    g = np.asarray(gray)
+    if vertical:
+        # Вырез повёрнут rot90: столбец выреза — строка листа, строка выреза
+        # i — столбец листа origin_x + (H − 1 − i) / factor.
+        image = np.ascontiguousarray(np.rot90(g))
+        along0 = origin[1]
+        width = g.shape[1]
+        height_crop = crop.shape[0]
+
+        def across(i: float) -> float:
+            return width - 1 - (origin[0] + (height_crop - 1 - i) / factor)
+
+    else:
+        image = g
+        along0 = origin[0]
+
+        def across(i: float) -> float:
+            return origin[1] + i / factor
+
+    xs = [along0 + x / factor for x, _r in profile.outer]
+    rs = [r / factor for _x, r in profile.outer]
+    if len(xs) < 2:
+        return {}
+
+    def radius_at(x: float) -> float:
+        if x < xs[0] or x > xs[-1]:
+            return 0.0
+        return float(np.interp(x, xs, rs))
+
+    length_px = xs[-1] - xs[0]
+    spans = axial_spans(
+        image,
+        xs[0],
+        xs[-1],
+        across(profile.axis_y),
+        radius_at,
+        line / factor,
+        reach=max(rs) + 0.3 * length_px,
+    )
+    # В масштабе размер обязан сойтись с масштабом листа (±10 %): по одному
+    # порядку длин «56» ложилось на звено 18 мм (вал-шестерня part_01).
+    matched = match_spans(
+        [(s.a, s.b) for s in spans],
+        labels,
+        scale=None if interpolate else axial * factor,
+        spread=2.0 if interpolate else 1.1,
+    )
+    stations = sorted(
+        {along0 + x / factor for x, _r in profile.outer}
+        | {along0 + profile.x0 / factor, along0 + profile.x1 / factor}
+    )
+    # В масштабе станции без размера остаются замером (их привяжет цепочка
+    # надписей); не в масштабе — пропорционально между известными.
+    solved = stations_from_spans(
+        stations, matched, tolerance=max(1.5 * line / factor, 2.0), interpolate=interpolate
+    )
+    out: dict[float, float] = {}
+    for x_sheet, nominal in solved.items():
+        x_crop = (x_sheet - along0) * factor
+        z = round(round((x_crop - profile.x0) * axial, 4), 6)
+        out[z] = round(nominal, 4)
+    return out
+
+
 def _ordinal_diameters(
     outer: list[dict[str, float]],
     bore: list[dict[str, float]],
     shafts: list[float],
     holes: list[float],
+    surplus: bool = True,
 ) -> tuple[list[dict[str, float]], list[dict[str, float]]] | None:
     """Ø площадок по порядку величины: наружные — наибольшие надписи,
     расточка — наименьшие (надписи отверстий «H» — только ей). None — число
     различных площадок не равно числу надписей."""
 
+    length = max((float(p["z"]) for p in outer), default=0.0)
+
     def radii(points: list[dict[str, float]]) -> list[float]:
+        # Площадка у торца короче 3 % длины — не ступень, а фаска или скругление,
+        # нарисованные уступом (шпиндель: торец с фаской 1,5 — «Ø10,6» на
+        # 0,9 мм); Ø ей — по соседней ступени.
+        ends = {round(float(p["z"]), 4) for p in (points[:1] + points[-1:])}
         found = {
             round(float(a["r"]), 4)
             for a, b in zip(points, points[1:])
             if abs(float(a["r"]) - float(b["r"])) <= 1e-6
             and float(b["z"]) - float(a["z"]) > 1e-6
             and float(a["r"]) > 0
+            and not (
+                {round(float(a["z"]), 4), round(float(b["z"]), 4)} & ends
+                and float(b["z"]) - float(a["z"]) < 0.03 * length
+            )
         }
         return sorted(found)
 
     outer_r, bore_r = radii(outer), radii(bore)
     labels = sorted(set(shafts) | set(holes))
+    if len(outer_r) + len(bore_r) > len(labels):
+        # Площадок больше, чем надписей: узкая впадина между двумя более
+        # высокими ступенями без своей надписи — прорезь или канавка, а не
+        # ступень (золотник: прорезь 2,5 до расточки). Её Ø — по соседям.
+        narrow = set()
+        for i in range(1, len(outer) - 2):
+            a, b = outer[i], outer[i + 1]
+            r = round(float(a["r"]), 4)
+            if (
+                abs(float(a["r"]) - float(b["r"])) <= 1e-6
+                and float(b["z"]) - float(a["z"]) < 0.05 * length
+                and float(outer[i - 1]["r"]) > float(a["r"])
+                and float(outer[i + 2]["r"]) > float(b["r"])
+            ):
+                narrow.add(r)
+        kept = [r for r in outer_r if r not in narrow]
+        if narrow and kept and len(kept) + len(bore_r) == len(labels):
+            outer_r = kept
+    if surplus and not bore_r and not holes and len(labels) > len(outer_r) >= 2:
+        # Надписей больше, чем площадок: лишние — элементы, которых нет на
+        # силуэте (резьбовое отверстие и выточка головки винта домкрата: Ø22,
+        # M12 при ступенях Ø65 и Ø38). Наружным — наибольшие, если пропорции
+        # замера с ними согласны (лист не в масштабе искажает их, но не
+        # вдвое).
+        top = labels[-len(outer_r) :]
+        if all(
+            0.5 <= (outer_r[i + 1] / outer_r[i]) / (top[i + 1] / top[i]) <= 2.0
+            for i in range(len(top) - 1)
+        ):
+            labels = top
     if not outer_r or len(labels) != len(outer_r) + len(bore_r):
         return None
     inner_labels, outer_labels = labels[: len(bore_r)], labels[len(bore_r) :]
@@ -819,7 +987,24 @@ def _ordinal_diameters(
     def apply(
         points: list[dict[str, float]], mapping: dict[float, float]
     ) -> list[dict[str, float]]:
-        return [{**p, "r": mapping.get(round(float(p["r"]), 4), float(p["r"]))} for p in points]
+        out = []
+        for i, p in enumerate(points):
+            r = round(float(p["r"]), 4)
+            if r in mapping or r <= 0:
+                out.append({**p, "r": mapping.get(r, float(p["r"]))})
+                continue
+            # Не ступень — в отношении ближайшей по оси площадки.
+            near = min(
+                (q for q in points if round(float(q["r"]), 4) in mapping),
+                key=lambda q: abs(float(q["z"]) - float(p["z"])),
+                default=None,
+            )
+            if near is None:
+                out.append(dict(p))
+                continue
+            ratio = mapping[round(float(near["r"]), 4)] / float(near["r"])
+            out.append({**p, "r": round(float(p["r"]) * ratio, 4)})
+        return out
 
     return apply(outer, mapping_outer), apply(bore, mapping_bore)
 
@@ -840,6 +1025,8 @@ def build_revolve(
     — как Ø10,7): осевой масштаб — по длинам независимо от радиального, Ø
     площадок — надписи по порядку величины, если их столько же, сколько
     площадок. Форма — с листа, числа — надписями, как читает инженер."""
+    from collections import Counter
+
     import numpy as np
 
     from app.ai.cad_views.labels import parse_label
@@ -862,6 +1049,11 @@ def build_revolve(
     except Exception:  # noqa: BLE001 — лист без штампа или необычный
         block = None
     paper = block.paper_px_per_mm if block is not None else None
+    if unscaled and paper is not None:
+        # Лист с основной надписью ЕСКД начерчен в масштабе: «форма с листа,
+        # числа надписями» на нём подбором объясняет почти любые надписи
+        # (литой корпус-тройник p011 — «тело вращения» с 96 % надписей).
+        return ViewsResult(False, "лист с основной надписью — в масштабе, эскизом не читается")
     pictures = [r for r in reading.regions if r.role in ("view", "section")]
     if part:
         pictures = [r for r in pictures if (r.part or "") == part] or pictures
@@ -927,7 +1119,12 @@ def build_revolve(
     notes: list[str] = []
     best = None
     tried: list[str] = []
-    for region in ordered[:6] + sorted(spare, key=lambda r: -area(r))[:2]:
+    candidates = ordered[:6] + sorted(spare, key=lambda r: -area(r))[:2]
+    if unscaled:
+        # Не в масштабе масштаб не отсекает чужое — изображение берётся
+        # целиком: рамка, обрезавшая деталь, давала её часть.
+        candidates += _grown_pictures(gray, ordered[:6])
+    for region in candidates:
         crop, factor, origin = prepare(gray, region.box)
         line = _line_px(crop)
         vertical, symmetry = _symmetric_orientation(crop, line)
@@ -1116,9 +1313,15 @@ def build_revolve(
                             options.append((found_hits, found))
                     if options:
                         hits, radial = max(options)
+            if unscaled and (radial is None or hits < 2):
+                # Не в масштабе Ø площадок не объясняет ни один общий масштаб
+                # (шпиндель: Ø13 нарисован как 11,6 при Ø18 как 18,7) — их
+                # назначат надписи по порядку; масштаб — по габариту.
+                radial, _along = fit_axial_scale(profile, linear)
+                hits = 0
             source = "разрез" if hatched else "силуэт"
             tried.append(f"{region.name or region.n} ({source}): объяснено надписей {hits}")
-            if radial is None or hits < 2:
+            if radial is None or (hits < 2 and not unscaled):
                 continue
             # По ЕСКД каждый диаметр образмерен: площадка намного больше
             # наибольшей надписи Ø — чужие линии в профиле (размерные,
@@ -1173,7 +1376,28 @@ def build_revolve(
                 # Не в масштабе Ø назначаются по порядку — нужен вариант, где
                 # площадок ровно столько, сколько надписей Ø (разрез с
                 # расточкой, а не силуэт без неё).
-                key = (count == len(set(shafts) | set(holes)), *key)
+                # Целиком деталь показывает то изображение, на изломах
+                # которого лежит больше длин листа (часть вала объясняет
+                # лишь свои: шпиндель — 10, 2, 22 из 127).
+                _scale, along_hits = fit_axial_scale(profile, sheet_sets[3])
+                # Площадкам хватает надписей — тем же правилом, что назначит
+                # Ø (`_ordinal_diameters`: фаски у торцов и узкие прорези не
+                # ступени).
+                rough_outer, rough_bore = revolve_points(profile, radial, radial)
+                # Точное совпадение числа площадок с надписями важнее
+                # назначения с лишними надписями: вариант без расточки
+                # «объяснял» Ø13 втулки лишним (p015).
+                exact = (
+                    _ordinal_diameters(
+                        rough_outer, rough_bore, shafts or diameters, holes, surplus=False
+                    )
+                    is not None
+                )
+                fits = exact or (
+                    _ordinal_diameters(rough_outer, rough_bore, shafts or diameters, holes)
+                    is not None
+                )
+                key = (fits, exact, along_hits, *key)
             if best is None or key > best[0]:
                 best = (key, region, crop, factor, origin, line, vertical, profile, radial, hits)
                 chosen_sets = (diameters, holes, shafts, linear)
@@ -1194,6 +1418,34 @@ def build_revolve(
     from app.ai.cad_views.nominals import nominal_revolve
 
     length = max((p["z"] for p in outer), default=0.0)
+    if unscaled:
+        # Ø — надписями по порядку ДО номиналов: привязка Ø к надписям по
+        # замеру (радиальный масштаб здесь неверен) портила площадки, и
+        # порядок уже не сходился (золотник).
+        ordered = _ordinal_diameters(outer, bore, shafts or diameters, holes)
+        if ordered is None:
+            return ViewsResult(
+                False,
+                "лист не в масштабе, а надписей Ø не столько же, сколько площадок",
+                notes=notes,
+            )
+        outer, bore = ordered
+        # Эскиз токарной детали — площадки и короткие фаски. Наклонные
+        # участки на заметной части длины — не тело вращения, а что-то,
+        # подогнанное надписями (литой корпус p011: 34 % длины — «конусы»).
+        total = max((float(p["z"]) for p in outer), default=0.0)
+        sloped = sum(
+            float(b["z"]) - float(a["z"])
+            for a, b in zip(outer, outer[1:])
+            if float(b["z"]) - float(a["z"]) > 1e-6 and abs(float(a["r"]) - float(b["r"])) > 1e-6
+        )
+        if total <= 0 or sloped > 0.15 * total:
+            return ViewsResult(
+                False,
+                f"эскиз не похож на тело вращения: наклонные участки {sloped:.1f} из {total:.1f} мм",
+                notes=notes,
+            )
+        notes.append("лист не в масштабе: форма с листа, Ø и длины — надписями")
     raw_outer, raw_bore = outer, bore
 
     def nominal(chain: list[float]) -> tuple[list[dict], list[dict], int]:
@@ -1207,17 +1459,30 @@ def build_revolve(
             tolerance=max(1.2 * line * axial, (0.05 if unscaled else 0.006) * length),
             bore_share=0.07 if holes else 0.03,
             diameter_tolerance_mm=1.2 * line * radial,
+            measured=measured,
+            prefer_measured=unscaled,
         )
 
+    try:
+        measured = _span_stations(
+            gray,
+            crop,
+            profile,
+            factor,
+            origin,
+            vertical,
+            line,
+            axial,
+            # Надписи листа и изображения — объединением с кратностью (одна
+            # надпись в обоих списках — один размер).
+            list((Counter(sheet_sets[3]) | Counter(linear)).elements()),
+            interpolate=unscaled,
+        )
+    except Exception:  # noqa: BLE001 — размерные линии не обязательны
+        measured = {}
+    if measured:
+        notes.append(f"станции по размерным линиям листа: {len(measured)}")
     outer, bore, snapped = nominal(linear)
-    if unscaled:
-        ordered = _ordinal_diameters(outer, bore, shafts or diameters, holes)
-        if ordered is None:
-            return ViewsResult(
-                False, "лист не в масштабе, а надписей Ø не столько же, сколько площадок"
-            )
-        outer, bore = ordered
-        notes.append("лист не в масштабе: форма с листа, Ø и длины — надписями")
     if snapped:
         notes.append(f"номиналы надписей: исправлено {snapped} значений замера")
     candidate = revolve_candidate(outer, bore, part or main.part or "деталь")
@@ -1573,17 +1838,25 @@ def choose_body(
             )
     coverage = best.coverage
     total = len(coverage.get("explained") or []) + len(coverage.get("missing") or [])
-    if (
+    weak = (
         total >= _COVERAGE_MIN_LABELS
         and coverage.get("share") is not None
         and coverage["share"] < _MIN_COVERAGE
-    ):
+    )
+    # Габарит вне тела — построена часть детали (рамка обрезала вал, масштаб
+    # подобран по надписям этой части: шпиндель 22 мм из 127).
+    partial = total >= _COVERAGE_MIN_LABELS and not rank(best)[1]
+    if weak or partial:
         # Лист не в масштабе — форма с листа, числа надписями; принимается,
-        # только если такое тело надписи объясняет.
+        # только если такое тело надписи объясняет (и габарит, если его не
+        # объяснило тело в масштабе).
         sketch = build_revolve(gray, reading, labels, region_labels=region_labels, unscaled=True)
         if sketch.ok:
             sketch.coverage = label_coverage(sketch, merged)
-            if (sketch.coverage.get("share") or 0.0) >= _MIN_COVERAGE:
+            share = sketch.coverage.get("share") or 0.0
+            if share >= _MIN_COVERAGE and (
+                weak or (rank(sketch)[1] and share >= (coverage.get("share") or 0.0))
+            ):
                 sketch.notes.append(f"в масштабе листа надписей на теле {coverage['share']:.0%}")
                 return sketch
     if (

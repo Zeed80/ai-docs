@@ -315,6 +315,8 @@ def nominal_revolve(
     tolerance: float,
     bore_share: float = 0.03,
     diameter_tolerance_mm: float = 0.0,
+    measured: dict[float, float] | None = None,
+    prefer_measured: bool = False,
 ) -> tuple[list[dict], list[dict], int]:
     """Профиль тела вращения — в номиналах: станции вдоль оси и Ø площадок.
 
@@ -338,6 +340,15 @@ def nominal_revolve(
         if _explained(chained, labels, tolerance) > _explained(plain, labels, tolerance)
         else plain
     )
+    if measured:
+        # Станции по размерным линиям листа (`dimension_lines`): надпись
+        # привязана к своей паре станций местом линии, а не близостью длины.
+        # На листе в масштабе — только если объясняет больше надписей; не в
+        # масштабе — и при равенстве (длины там не различают звенья).
+        ours = _explained(measured, labels, tolerance)
+        theirs = _explained(mapping, labels, tolerance)
+        if ours > theirs or (prefer_measured and ours >= theirs):
+            mapping = {**{k: v for k, v in mapping.items() if k not in measured}, **measured}
     changed = 0
 
     def fix_points(
