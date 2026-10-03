@@ -44,6 +44,7 @@ def axial_spans(
     radius_at: Callable[[float], float],
     line: float,
     reach: float,
+    stations: list[float] | None = None,
 ) -> list[AxialSpan]:
     """Размерные линии вдоль горизонтальной оси вида (координаты листа).
 
@@ -85,7 +86,15 @@ def axial_spans(
         column = left + (w - 1) / 2.0
         near = 0.0 if top <= a_axis <= top + h else min(abs(top - a_axis), abs(top + h - a_axis))
         r = outline_r(column)
-        if r <= 0 or near > r + 4 * step:
+        # Выносная начинается у контура; с зазором (учебные листы рисуют её
+        # отступив от детали: золотник p014 — 51 px при линии 6 px) — только
+        # на станции профиля: чужая вертикаль с зазором делила размер 60
+        # синтетического вала надвое.
+        if r <= 0 or near > r + 12 * step:
+            continue
+        if near > r + 4 * step and not any(
+            abs(column + cx0 - x) <= 2 * step for x in (stations or [])
+        ):
             continue
         witnesses.append((column, top, top + h - 1))
 
@@ -167,6 +176,7 @@ def match_spans(
     labels: list[float],
     scale: float | None = None,
     spread: float = 2.0,
+    slack_px: float = 0.0,
 ) -> list[tuple[float, float, float]]:
     """Надписи — размерным линиям по порядку длин: [(a, b, надпись)].
 
@@ -182,6 +192,19 @@ def match_spans(
     values = sorted(v for v in labels if v > 0)
     if not ordered or not values:
         return []
+    if scale is not None and spread <= 1.1:
+        # Лист в масштабе: каждой линии — ближайшая надпись в 1,5 %; порядок
+        # длин не нужен, а ложная линия соседнего ряда при нём «крадёт»
+        # надпись у настоящей (part_01: «16» ушло линии 15,8 мм).
+        out = []
+        for a, b in ordered:
+            mm = (b - a) * scale
+            nearest = min(values, key=lambda v: abs(v - mm))
+            # Допуск — 1,5 % или две толщины линии: у коротких размеров
+            # погрешность концов в пикселях больше доли (shaft-2: «20» — 19,6).
+            if abs(nearest - mm) <= max(0.015 * nearest, slack_px * scale):
+                out.append((a, b, nearest))
+        return out
     if scale is None:
         scale = values[-1] / max(1e-9, ordered[-1][1] - ordered[-1][0])
     n, m = len(ordered), len(values)
@@ -277,3 +300,33 @@ def stations_from_spans(
             p, q = left[-1], right[0]
             out[x] = known[p] + (known[q] - known[p]) * (x - p) / (q - p)
     return {x: out[member[x]] for x in raw if member[x] in out}
+
+
+def scale_from_spans(
+    spans: list[tuple[float, float]], labels: list[float], share: float = 0.015
+) -> tuple[float | None, int]:
+    """(мм/px, число размерных линий, объяснённых надписями) — масштаб вдоль
+    оси по самим размерным линиям.
+
+    На листе с плотным рядом близких Ø (24,5; 25; 29,5 … 35) масштаб по Ø
+    подбирается неверно (вал-шестерня part_01: на 12 %), а цепочка размеров
+    при верном масштабе сходится вся — 16, 56, 54, 14,5, 18, 23,5 и 182."""
+    values = sorted({v for v in labels if v > 0})
+    lengths = [b - a for a, b in spans if b - a > 0]
+    if not values or not lengths:
+        return None, 0
+    best: tuple[int, float, float] | None = None
+    for px in lengths:
+        for value in values:
+            scale = value / px
+            hits, residual = 0, 0.0
+            for other in lengths:
+                mm = other * scale
+                nearest = min(values, key=lambda v: abs(v - mm))
+                if abs(nearest - mm) <= share * nearest:
+                    hits += 1
+                    residual += abs(nearest - mm) / nearest
+            key = (hits, -residual, scale)
+            if best is None or key[:2] > best[:2]:
+                best = key
+    return (best[2], best[0]) if best else (None, 0)

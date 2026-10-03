@@ -92,3 +92,37 @@ def test_english_diameter_and_square_thread():
     assert (thread.kind, thread.value, thread.pitch) == ("thread", 38.0, 7.0)
     assert parse_label("DIA 38").kind == "diameter"
     assert parse_label("MEDIA 5").kind == "text"
+
+
+def test_axial_scale_from_the_dimension_chain():
+    from app.ai.cad_views.dimension_lines import scale_from_spans
+
+    # Вал-шестерня part_01: цепочка 16 · 56 · 54 · 14,5 · 18 при 11,45 px/мм
+    # и плотный ряд Ø, по которым масштаб уезжал на 12 %.
+    px = 1 / 0.08735
+    spans, x = [], 383.0
+    for value in (16, 56, 54, 14.5, 18):
+        spans.append((x, x + value * px))
+        x += value * px
+    scale, hits = scale_from_spans(spans, [16, 56, 54, 14.5, 18, 23.5, 182, 4.5])
+    assert hits == 5
+    assert abs(scale - 0.08735) < 1e-4
+
+
+def test_profile_is_clipped_by_the_overall_dimension_only():
+    from app.ai.cad_views.pipeline import _clip_to_overall
+    from app.ai.cad_views.revolve_profile import HalfProfile
+
+    profile = HalfProfile(
+        axis_y=100.0,
+        line_px=4.0,
+        x0=0,
+        x1=2300,
+        outer=[(0, 50.0), (2080, 50.0), (2080, 30.0), (2300, 30.0)],
+        inner=[],
+    )
+    # Габарит 182 — от левого торца до 2071: за ним выносной элемент.
+    clipped = _clip_to_overall(profile, [(1.0, 2071.0, 182.0)], 4.0, 182.0)
+    assert clipped is not None and clipped.x1 == 2071
+    # Наибольший найденный размер, но не габарит листа, — не обрезает.
+    assert _clip_to_overall(profile, [(1.0, 2071.0, 120.0)], 4.0, 185.0) is None

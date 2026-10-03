@@ -555,6 +555,63 @@ def _plain_steps(outer: list[dict[str, Any]]) -> list[tuple[float, float, float]
     return steps
 
 
+def _slanted_ends(
+    half: list[Any], ink: Any, axis: int, line: float, x0: int, x1: int
+) -> tuple[int, int]:
+    """Силуэт, продлённый у торцов наклонной кромкой — конусом.
+
+    Силуэт строится по горизонтальным штрихам, и конус под 45° стирается
+    (фланец золотника p014 терял 7 из 10 мм). Продление — только прямой
+    (у окружности соседнего вида кромка тоже наклонная, но не прямая),
+    симметричной оси и продолжающей контур от торца."""
+    import numpy as np
+
+    def slanted(x: int) -> float | None:
+        raw = np.diff(np.concatenate([[0], ink[:, x], [0]]))
+        centres = [
+            (a + b - 1) / 2.0
+            for a, b in zip(np.where(raw == 1)[0], np.where(raw == -1)[0])
+            if 0.9 * line <= b - a <= 2.5 * line
+        ]
+        up = [axis - c for c in centres if c < axis - line]
+        down = [c - axis for c in centres if c > axis + line]
+        pairs = [r for r in up if any(abs(r - q) <= 1.5 * line for q in down)]
+        return max(pairs) if pairs else None
+
+    def extend(start: int, step: int) -> int:
+        points: list[tuple[int, float]] = []
+        previous = half[start]
+        x = start + step
+        missed = 0
+        # Угол у торца уступа — пятно, не штрих: несколько столбцов без пары.
+        while 0 <= x < len(half) and previous is not None:
+            r = slanted(x)
+            if r is None or abs(r - previous) > 2.0 * line + missed * 5.0:
+                missed += 1
+                if missed > 2 * line:
+                    break
+                x += step
+                continue
+            missed = 0
+            points.append((x, r))
+            previous = r
+            x += step
+        if len(points) < 3 * line:
+            return start
+        xs = np.array([p[0] for p in points], float)
+        rs = np.array([p[1] for p in points], float)
+        slope, intercept = np.polyfit(xs, rs, 1)
+        if not 0.2 <= abs(slope) <= 5.0:
+            return start
+        if np.abs(rs - (slope * xs + intercept)).max() > line:
+            return start
+        for px, pr in points:
+            half[px] = pr
+        return points[-1][0]
+
+    return extend(x0, -1), extend(x1, +1)
+
+
 def silhouette_profile(gray: Any, line: float, axis: int | None = None) -> Any:
     """Профиль тела вращения по неразрезанному виду: силуэт, без расточки."""
     import cv2
@@ -603,6 +660,7 @@ def silhouette_profile(gray: Any, line: float, axis: int | None = None) -> Any:
         else:
             runs.append([x, x])
     x0, x1 = max(runs, key=lambda r: r[1] - r[0])
+    x0, x1 = _slanted_ends(half, ink, axis, line, x0, x1)
     known = [x for x in range(x0, x1 + 1) if half[x] is not None]
     levels = [half[k] for k in known]
     points = [
@@ -826,7 +884,7 @@ def _grown_pictures(gray: Any, pictures: list[Any]) -> list[Any]:
     return grown
 
 
-def _span_stations(
+def _axial_matches(
     gray: Any,
     crop: Any,
     profile: Any,
@@ -837,15 +895,17 @@ def _span_stations(
     axial: float,
     labels: list[float],
     interpolate: bool = False,
-) -> dict[float, float]:
-    """{z замера, мм: номинал} — станции по размерным линиям листа.
+) -> tuple[list[tuple[float, float, float]], float | None]:
+    """Размерные линии вдоль оси с надписями: ([(a, b, мм)], масштаб) — a и b
+    столбцы выреза, масштаб (мм/px выреза) — по самим линиям, если он
+    объясняет больше надписей, чем заданный; иначе None.
 
     Ряды размеров лежат вне выреза изображения, поэтому ищутся на листе
     (повёрнутом, если ось вертикальна); пары выносных переводятся обратно в
     столбцы выреза."""
     import numpy as np
 
-    from app.ai.cad_views.dimension_lines import axial_spans, match_spans, stations_from_spans
+    from app.ai.cad_views.dimension_lines import axial_spans, match_spans, scale_from_spans
 
     g = np.asarray(gray)
     if vertical:
@@ -869,7 +929,7 @@ def _span_stations(
     xs = [along0 + x / factor for x, _r in profile.outer]
     rs = [r / factor for _x, r in profile.outer]
     if len(xs) < 2:
-        return {}
+        return [], None
 
     def radius_at(x: float) -> float:
         if x < xs[0] or x > xs[-1]:
@@ -884,31 +944,122 @@ def _span_stations(
         across(profile.axis_y),
         radius_at,
         line / factor,
-        reach=max(rs) + 0.3 * length_px,
+        # Ряды размеров короткой толстой детали уходят дальше её длины
+        # (золотник: габарит 30 — на 1,8 радиуса от оси).
+        reach=max(rs) + max(0.3 * length_px, max(rs)),
+        stations=xs,
     )
+    pairs = [(s.a, s.b) for s in spans]
+    sheet_scale = axial * factor
+    found = None
+    if not interpolate:
+        # Масштаб по самим размерным линиям, если они объясняют больше
+        # надписей, чем масштаб профиля (часть линий — от чужих выносных).
+        by_lines, hits = scale_from_spans(pairs, labels)
+        current = sum(
+            1
+            for a, b in pairs
+            if any(abs((b - a) * sheet_scale - v) <= 0.015 * v for v in labels if v > 0)
+        )
+        # И длина профиля с ним — габарит (наибольшая надпись): плотный ряд
+        # надписей даёт и случайные совпадения линий (p121, z4-r4).
+        overall = max((v for v in labels if v > 0), default=None)
+        length_px = (profile.x1 - profile.x0) / factor
+        if (
+            by_lines is not None
+            and hits >= 3
+            and hits > current
+            and overall is not None
+            and abs(length_px * by_lines - overall) <= 0.01 * overall
+            # и с ним габарит сходится лучше, чем с прежним (shaft-4: 221,6
+            # против 219,9 при 220 — прежний верен).
+            and abs(length_px * by_lines - overall) < abs(length_px * sheet_scale - overall)
+        ):
+            sheet_scale = by_lines
+            found = by_lines / factor
     # В масштабе размер обязан сойтись с масштабом листа (±10 %): по одному
-    # порядку длин «56» ложилось на звено 18 мм (вал-шестерня part_01).
+    # порядку длин «56» ложилось на звено 18 мм.
     matched = match_spans(
-        [(s.a, s.b) for s in spans],
+        pairs,
         labels,
-        scale=None if interpolate else axial * factor,
+        scale=None if interpolate else sheet_scale,
         spread=2.0 if interpolate else 1.1,
+        slack_px=2.0 * line / factor,
     )
-    stations = sorted(
-        {along0 + x / factor for x, _r in profile.outer}
-        | {along0 + profile.x0 / factor, along0 + profile.x1 / factor}
-    )
+    return [((a - along0) * factor, (b - along0) * factor, v) for a, b, v in matched], found
+
+
+def _span_stations(
+    profile: Any,
+    matched: list[tuple[float, float, float]],
+    line: float,
+    axial: float,
+    interpolate: bool = False,
+) -> dict[float, float]:
+    """{z замера, мм: номинал} — станции по размерным линиям листа."""
+    from app.ai.cad_views.dimension_lines import stations_from_spans
+
+    stations = sorted({x for x, _r in profile.outer} | {profile.x0, profile.x1})
     # В масштабе станции без размера остаются замером (их привяжет цепочка
     # надписей); не в масштабе — пропорционально между известными.
     solved = stations_from_spans(
-        stations, matched, tolerance=max(1.5 * line / factor, 2.0), interpolate=interpolate
+        stations, matched, tolerance=max(1.5 * line, 2.0), interpolate=interpolate
     )
-    out: dict[float, float] = {}
-    for x_sheet, nominal in solved.items():
-        x_crop = (x_sheet - along0) * factor
-        z = round(round((x_crop - profile.x0) * axial, 4), 6)
-        out[z] = round(nominal, 4)
-    return out
+    return {
+        round(round((x - profile.x0) * axial, 4), 6): round(nominal, 4)
+        for x, nominal in solved.items()
+    }
+
+
+def _clip_to_overall(
+    profile: Any, matched: list[tuple[float, float, float]], line: float, overall: float | None
+) -> Any | None:
+    """Профиль, обрезанный по выносным габарита, если он длиннее детали.
+
+    Габарит — наибольший размер: один его конец на торце профиля, другой
+    внутри — за ним не деталь, а захваченные линии (вал-шестерня part_01:
+    выносной элемент «Б» у правого торца продлил вал на 9 мм, и все длины
+    съехали на 12 %)."""
+    from app.ai.cad_views.revolve_profile import HalfProfile
+
+    # Только сам габарит — наибольшая надпись листа: наибольший из найденных
+    # размеров бывает звеном («120» на z4-r4 при габарите 185).
+    found = [m for m in matched if overall is not None and abs(m[2] - overall) <= 1e-6]
+    if not found:
+        return None
+    a, b, _v = found[0]
+    span = profile.x1 - profile.x0
+    tol = max(2.0 * line, 0.005 * span)
+    lo, hi = float(profile.x0), float(profile.x1)
+    if abs(a - lo) <= tol and lo + 0.5 * span < b < hi - max(tol, 0.02 * span):
+        hi = b
+    elif abs(b - hi) <= tol and lo + max(tol, 0.02 * span) < a < hi - 0.5 * span:
+        lo = a
+    else:
+        return None
+
+    def clip(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+        import numpy as np
+
+        if not points:
+            return points
+        xs = [x for x, _r in points]
+        rs = [r for _x, r in points]
+        inside = [(x, r) for x, r in points if lo < x < hi]
+        return [
+            (lo, float(np.interp(lo, xs, rs))),
+            *inside,
+            (hi, float(np.interp(hi, xs, rs))),
+        ]
+
+    return HalfProfile(
+        axis_y=profile.axis_y,
+        line_px=profile.line_px,
+        x0=int(round(lo)),
+        x1=int(round(hi)),
+        outer=clip(profile.outer),
+        inner=clip(profile.inner) if profile.inner else [],
+    )
 
 
 def _ordinal_diameters(
@@ -1413,6 +1564,39 @@ def build_revolve(
     notes.append("выбор изображения: " + "; ".join(tried))
     axial, _ = fit_axial_scale(profile, linear, near=None if unscaled else radial)
     axial = axial or radial
+    # Размерные линии вдоль оси: надписи листа и изображения — объединением
+    # с кратностью (одна надпись в обоих списках — один размер).
+    try:
+        matched, by_lines = _axial_matches(
+            gray,
+            crop,
+            profile,
+            factor,
+            origin,
+            vertical,
+            line,
+            axial,
+            list((Counter(sheet_sets[3]) | Counter(linear)).elements()),
+            interpolate=unscaled,
+        )
+    except Exception:  # noqa: BLE001 — размерные линии не обязательны
+        matched, by_lines = [], None
+    if by_lines is not None:
+        notes.append(f"масштаб вдоль оси — по размерным линиям: {axial:.5f} → {by_lines:.5f} мм/px")
+        axial = by_lines
+        if abs(radial / axial - 1.0) > 0.05:
+            # Лист в масштабе: поперёк — тот же масштаб; Ø — заново рядом с ним.
+            again, again_hits = fit_scale(profile, shafts, holes, near=axial, spread=0.04)
+            radial = again if again is not None and again_hits >= 2 else axial
+    clipped = _clip_to_overall(profile, matched, line, max([*sheet_sets[3], *linear], default=None))
+    if clipped is not None:
+        notes.append(
+            f"профиль обрезан по габариту: {profile.x1 - profile.x0} → {clipped.x1 - clipped.x0} px"
+        )
+        profile = clipped
+        if by_lines is None:
+            axial, _ = fit_axial_scale(profile, linear, near=None if unscaled else radial)
+            axial = axial or radial
     outer, bore = revolve_points(profile, axial, radial)
     # C2: станции и Ø площадок — номиналы надписей (перечерчивание инженером).
     from app.ai.cad_views.nominals import nominal_revolve
@@ -1464,20 +1648,7 @@ def build_revolve(
         )
 
     try:
-        measured = _span_stations(
-            gray,
-            crop,
-            profile,
-            factor,
-            origin,
-            vertical,
-            line,
-            axial,
-            # Надписи листа и изображения — объединением с кратностью (одна
-            # надпись в обоих списках — один размер).
-            list((Counter(sheet_sets[3]) | Counter(linear)).elements()),
-            interpolate=unscaled,
-        )
+        measured = _span_stations(profile, matched, line, axial, interpolate=unscaled)
     except Exception:  # noqa: BLE001 — размерные линии не обязательны
         measured = {}
     if measured:
