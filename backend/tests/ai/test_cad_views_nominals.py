@@ -145,3 +145,24 @@ def test_a_whole_nominal_wins_over_a_groove_diameter_in_tolerance():
     # Единственный кандидат — как раньше, и мелкие номиналы не трогаются.
     assert snap_diameter(6.48, [6.0, 6.5]) == 6.5
     assert snap_diameter(49.6, [49.5]) == 49.5
+
+
+def test_an_unlabelled_spike_over_a_plateau_is_flattened():
+    from app.ai.cad_views.nominals import _flatten_spikes
+
+    # z4-r4: след контура паза над Ø25 — не ступень Ø26,24.
+    points = [
+        {"z": 15.0, "r": 12.5},
+        {"z": 19.0, "r": 12.5},
+        {"z": 19.0, "r": 13.12},
+        {"z": 25.0, "r": 12.5},
+        {"z": 31.0, "r": 12.5},
+        {"z": 31.0, "r": 17.5},
+        {"z": 60.0, "r": 17.5},
+    ]
+    flat = _flatten_spikes(points, [25.0, 35.0])
+    assert {p["r"] for p in flat} == {12.5, 17.5}
+    # Надписанный Ø между равными соседями — настоящая ступень (бурт).
+    collar = [dict(p) for p in points]
+    collar[2]["r"] = 13.0
+    assert 13.0 in {p["r"] for p in _flatten_spikes(collar, [25.0, 26.0, 35.0])}

@@ -74,8 +74,13 @@ def parse_label(text: str) -> Label:
         return Label(raw, "text")
     if _DESIGNATION.search(clean) and not re.search(_DIAMETER_MARK, clean):
         return Label(raw, "designation")
-    # Шероховатость: Ra 3,2 / Rz 20.
+    # Шероховатость: Ra 3,2 / Rz 20. Если перед ней размер («Ø22 Ra 1,6» —
+    # модель выписала знак шероховатости вместе с размером ступени), она
+    # снимается и разбирается размер: иначе Ø22 терялся (z4-r4).
     match = re.search(r"\bR([az])\s*" + _NUM, clean)
+    if match and re.search(_DIAMETER_MARK + r"\s*\d|[MМ]\s*\d", clean[: match.start()]):
+        clean = (clean[: match.start()] + clean[match.end() :]).strip()
+        match = None
     if match:
         return Label(
             raw, "roughness", value=_num(match.group(2)), extras={"param": "R" + match.group(1)}

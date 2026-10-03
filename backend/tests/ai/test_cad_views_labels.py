@@ -93,3 +93,12 @@ def test_a_spline_designation_gives_the_outer_diameter():
     ):
         label = parse_label(text)
         assert label.kind == "diameter" and label.value == outer, text
+
+
+def test_roughness_written_after_a_diameter_keeps_the_diameter():
+    from app.ai.cad_views.labels import parse_label
+
+    # z4-r4: модель выписала знак шероховатости вместе с Ø ступени.
+    assert (parse_label("Ø22 Ra 1,6").kind, parse_label("Ø22 Ra 1,6").value) == ("diameter", 22.0)
+    assert parse_label("φ22 √Ra1,6").value == 22.0
+    assert parse_label("Ra 1,6").kind == "roughness"

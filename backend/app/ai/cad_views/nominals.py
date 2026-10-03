@@ -408,7 +408,7 @@ def nominal_revolve(
             index = end + 1
         return out
 
-    new_outer = fix_points(outer, outer_diameters, True)
+    new_outer = _flatten_spikes(fix_points(outer, outer_diameters, True), outer_diameters)
     new_bore = fix_points(bore, bore_diameters, False, bore_share)
     # Станция расточки, сведённая номиналом на станцию уступа снаружи, —
     # стенка нулевой толщины и тело из двух частей («Опора»: уступ Ø7,6→Ø11,5
@@ -449,6 +449,52 @@ def nominal_revolve(
                 a["r"] = round(max(0.0, min(a["r"], limit - 0.05)), 4)
                 b["r"] = round(max(0.0, min(b["r"], limit - 0.05)), 4)
     return new_outer, new_bore, changed
+
+
+def _flatten_spikes(points: list[dict], diameters: list[float]) -> list[dict]:
+    """Выброс над площадкой — не ступень: вершины между двумя точками одного
+    номинального радиуса, отклонённые до 8 % и не объяснённые надписью,
+    ставятся на этот радиус (z4-r4: Ø25 → 26,2 → Ø25 на 6 мм — след контура
+    паза; ступень не засчитывалась)."""
+    out = [dict(p) for p in points]
+    labelled = {round(d / 2.0, 4) for d in diameters}
+    changed = True
+    while changed:
+        changed = False
+        for i in range(1, len(out) - 1):
+            r = out[i]["r"]
+            if round(r, 4) in labelled:
+                continue
+            # Соседи по обе стороны с другим z (две точки уступа — одна станция).
+            left = next((out[j] for j in range(i - 1, -1, -1) if abs(out[j]["r"] - r) > 1e-6), None)
+            right = next(
+                (out[j] for j in range(i + 1, len(out)) if abs(out[j]["r"] - r) > 1e-6), None
+            )
+            if left is None or right is None or abs(left["r"] - right["r"]) > 1e-6:
+                continue
+            base = left["r"]
+            if round(base, 4) not in labelled or abs(r - base) > 0.08 * base:
+                continue
+            for j in range(len(out)):
+                if (
+                    abs(out[j]["r"] - r) <= 1e-6
+                    and out[j]["z"] >= left["z"]
+                    and out[j]["z"] <= right["z"]
+                ):
+                    out[j]["r"] = base
+            changed = True
+            break
+    # Подряд идущие точки одного радиуса на одном z — лишние.
+    cleaned: list[dict] = []
+    for p in out:
+        if (
+            cleaned
+            and abs(cleaned[-1]["z"] - p["z"]) <= 1e-6
+            and abs(cleaned[-1]["r"] - p["r"]) <= 1e-6
+        ):
+            continue
+        cleaned.append(p)
+    return cleaned
 
 
 def _replace_zone(points: list[dict], z0: float, z1: float) -> list[dict] | None:
