@@ -449,3 +449,62 @@ Production / известные ограничения / rollback / следую
   либо безопасная миграция headless; не прикреплять выдуманный running attempt
   и не включать недоказанные token/cost bounds. Экономия лимитов не измерена.
   Создаётся scoped локальный commit; новый push в этом этапе не выполняется.
+
+## E21.2b3 — direct Ollama semantic verifier
+
+- Статус ограниченного этапа: `TESTED`, передан главному агенту на независимый
+  review. E21/E21.2 остаются `IN_PROGRESS`. Исполнитель: `gpt-5.6-sol`, high;
+  два review-тематических цикла (расположение detached context и terminal FSM
+  budget stop). Commit/deploy/push выполняет только главный агент.
+- `verify_semantic_criteria` получает server-owned snapshot owner/active plan/
+  revision/pending criteria/succeeded outputs, освобождает транзакцию до budget
+  reserve и Ollama HTTP, а перед verdict повторно сверяет полный SHA-256 digest.
+  Arbitrary blocked/canceled/budget-stopped order не открывает verifier заново.
+- `DetachedVerifierBudgetContext` не создаёт фиктивный `WorkStepAttempt`.
+  Zero-unit once fence запрещает duplicate/crash replay; каждый фактический
+  Ollama POST, включая parse/transport retry, independently резервирует и
+  settlement-ит `llm_calls=1`. Duplicate loser не меняет состояние winner.
+- Только resolved provider `ollama` разрешён этому пути. Legacy без ledger,
+  исчерпанный LLM budget, finite token/cost caps и budget DB failures блокируют
+  вызов до GPU/client/HTTP. Client preflight не расходует слот. Settlement
+  failure сохраняет reservation evidence, не применяет verdict и переводит
+  `verifying` в durable `blocked`, не разрешая новый generation fence.
+- Изолированный PostgreSQL профиль
+  `python3 -m pytest backend/tests/test_work_budget_verifier.py -q` — **17 passed**.
+  Негативные проверки: provider mismatch, zero/token/cost/legacy, reserve/settle
+  failure, client enter, physical JSON retry, concurrent duplicate, provider
+  crash/replay, stale revision/output/criterion, cancel during request и shared
+  parent/child last slot.
+- Отдельные regression-процессы: `test_work_budget_tools.py` — **16 passed**;
+  `test_work_order_verifier.py test_work_order_checkpoint.py` — **40 passed**;
+  `test_work_budget_provider.py tests/ai/test_ollama_inference_options.py` —
+  **20 passed**. Ruff check/format-check и `git diff --check` прошли; известное
+  предупреждение `asyncio_loop_scope`, failed/skipped нет.
+- Не входят: planner direct Ollama, cloud/AIRouter, headless paths, token/cost
+  accounting, legacy reconciliation, schema/migrations, permissions и новые
+  transport retries. Production build/restart/health исполнитель не запускал.
+
+### Независимая приёмка E21.2b3 — 3 октября 2026
+
+- Исполнитель `gpt-5.6-sol`, один writer. Два тематических review gates:
+  расположение detached класса с полным сохранением прежнего WorkBudgetContext;
+  reserve непосредственно перед POST после local preflight. После них сеньор
+  отдельно разобрал причину FSM-дефекта: budget stop из `verifying` оставлял
+  повторно доступный lifecycle. Минимальный переход в `blocked` и тест повторной
+  доставки закрыли дефект; новых функциональных циклов/областей не добавляли.
+- Независимые процессы с чистыми testcontainer БД: новый verifier — **17 passed**;
+  прежний budget/durable/checkpoint/orders/channel/boundary/delegations/transport
+  плюс обычные Ollama inference options — **435 passed**; generic capability —
+  **21 passed**; lease/replanning/verifier — **27 passed**. Всего **500 passed**,
+  без failed/skipped. Ruff check/format-check и `git diff --check` прошли.
+  Единственный warning — существующий `asyncio_loop_scope`.
+- `make prod-build`: exit 0, backend/workers пересозданы; frontend неизменён,
+  healthy. `/health`: `{"status":"ok"}`. Backend/основной worker healthy,
+  beat запущен, Alembic `20261001_0001 (head)`. SHA256 трёх production-файлов
+  совпадает в checkout/backend/worker. Проверки использовали fake HTTP; реальные
+  LLM/деловые эффекты не запускались. Миграций данных нет.
+- E21.2b3 REVIEWED / DEPLOYED. Другие providers semantic verifier пока запрещены;
+  полная E21 остаётся IN_PROGRESS. Следующий gate — detached lifecycle planner,
+  отдельно headless migration, проверяемые token/cost bounds, legacy baseline
+  и E21.3. Scoped локальный commit, push не выполнялся; чужие CAD-коммиты сохранены.
+  Экономия лимитов не измерена.

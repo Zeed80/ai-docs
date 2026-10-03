@@ -14,7 +14,11 @@ Settlement failure сохраняет результат и checkpoint до ос
 E21.2b2 подключает generic capability WorkStep HTTP к тому же ledger и сохраняет
 ответ получателя при settlement failure. Новый профиль запускается отдельно:
 `python3 -m pytest backend/tests/test_work_budget_work_orders.py -q`.
-Это не полный budget accounting: planner/verifier (direct Ollama), AIRouter/headless, legacy baseline,
+E21.2b3 подключает semantic verifier direct Ollama: snapshot/once-fence без
+фиктивной WorkStepAttempt, physical retries учитываются отдельно, stale verdict
+отбрасывается. Проверка: `python3 -m pytest backend/tests/test_work_budget_verifier.py -q`.
+Другие providers этого verifier и конечные token/cost caps пока fail-closed.
+Это не полный budget accounting: planner (direct Ollama), AIRouter/headless, legacy baseline,
 token/cost и active/replan ещё требуют E21.2b+/E21.3. Проверки:
 `python3 -m pytest backend/tests/test_work_budget_ledger.py backend/tests/test_work_budget_provider.py backend/tests/test_durable_chat.py -q`.
 

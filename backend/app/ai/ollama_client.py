@@ -514,6 +514,7 @@ async def generate_json(
     max_tokens: int = 4096,
     timeout_seconds: float = 120.0,
     salvage_truncated: bool = False,
+    budget_context=None,
 ) -> dict:
     """Generate structured JSON — routes to the correct backend based on provider.
 
@@ -534,11 +535,18 @@ async def generate_json(
 
     Falls back to regex JSON extraction if the model wraps output in markdown.
     """
-    _ensure_gpu_free()
+    # Existing callers keep the original eager GPU guard.  A budgeted verifier
+    # must resolve and validate its provider first so an unsupported route or a
+    # zero/legacy budget cannot cause even this provider-side preparation.
+    if budget_context is None:
+        _ensure_gpu_free()
     if model is None or provider is None:
         _model, _provider = _runtime_ocr_model_and_provider()
         model = model or _model
         provider = provider or _provider
+    if budget_context is not None:
+        await budget_context.assert_supported_provider(provider)
+        await budget_context.preflight_provider_call(provider)
 
     breaker = _get_breaker(model)
     if not breaker.is_available:
@@ -642,9 +650,27 @@ async def generate_json(
     raw = ""
     for attempt in range(3):
         try:
+            operation_key = None
+            if budget_context is not None:
+                _ensure_gpu_free()
             async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+                if budget_context is not None:
+                    operation_key = await budget_context.prepare_provider_call(
+                        provider=provider,
+                        provider_attempt=attempt + 1,
+                        request={"url": url, "payload": payload},
+                    )
                 start = time.time()
-                response = await client.post(url, json=payload)
+                dispatched = False
+                try:
+                    # Treat cancellation/crash after entering this await as a
+                    # consumed physical attempt; its committed reservation is
+                    # never reopened for automatic replay.
+                    dispatched = True
+                    response = await client.post(url, json=payload)
+                finally:
+                    if operation_key is not None and dispatched:
+                        await budget_context.charge_provider_call(operation_key)
                 elapsed_ms = int((time.time() - start) * 1000)
 
             response.raise_for_status()

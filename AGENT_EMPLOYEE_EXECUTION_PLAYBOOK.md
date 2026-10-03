@@ -1020,6 +1020,13 @@ capability runtime, recipient evidence сохраняется до blocker, но
 
 E21.2a не объявляет все вызовы системы учтёнными и не закрывает E21.2.
 
+**E21.2b3 (REVIEWED / DEPLOYED):** semantic verifier direct Ollama, отдельный snapshot
+owner/active plan/revision/criteria/results и once-fence без выдуманного running
+WorkStepAttempt. Независимый reserve перед каждой physical попыткой, postflight
+сверяет snapshot до verdict. Известные конечные token/cost caps без доказанных
+bounds, legacy unbound и другие providers блокируются до dispatch. Planner
+остаётся отдельным этапом: его model call сейчас находится внутри caller TX.
+
 1. Сначала точные единицы: tool attempts, LLM calls, tokens, cost, active time,
    replan count. Ожидание человека не смешивать с активным временем без ADR.
 2. Целевые defaults: 2 часа active, 200 tools, 50 LLM calls, 3 replans. Не включать

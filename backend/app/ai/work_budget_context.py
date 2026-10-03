@@ -6,11 +6,15 @@ import asyncio
 import hashlib
 import json
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any
 
+from sqlalchemy import case, func, select
+
 from app.db.models import WorkOrder, WorkStep, WorkStepAttempt
-from app.db.work_budget_models import WorkBudgetLedger
+from app.db.work_budget_models import WorkBudgetLedger, WorkBudgetReservation
 from app.domain.work_budget_ledger import (
     BudgetBindingConflict,
     BudgetExceeded,
@@ -428,3 +432,247 @@ class WorkBudgetContext:
                 )
             )
             return False
+
+
+@dataclass(frozen=True)
+class DetachedVerifierBudgetContext:
+    """Shared-ledger fence for one authoritative verifier snapshot."""
+
+    work_order_id: uuid.UUID
+    owner_key: str
+    snapshot_digest: str
+    operation_scope: str
+    session_factory: Any = field(repr=False, compare=False)
+    snapshot_is_current: Callable[[], Awaitable[bool]] = field(repr=False, compare=False)
+    _state: _ExecutionState = field(default_factory=_ExecutionState, repr=False, compare=False)
+
+    async def _stop(self, error: BudgetExecutionStopped) -> BudgetExecutionStopped:
+        async with self._state.lock:
+            if self._state.stopped is None:
+                self._state.stopped = error
+            return self._state.stopped
+
+    def raise_if_stopped(self) -> None:
+        if self._state.stopped is not None:
+            raise self._state.stopped
+
+    async def assert_supported_provider(self, provider: str | None) -> None:
+        self.raise_if_stopped()
+        if provider != "ollama":
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "verification_provider_unsupported",
+                    "Budgeted semantic verification supports direct Ollama only",
+                    details={"provider": str(provider or "")},
+                )
+            )
+
+    async def _assert_current(self) -> None:
+        self.raise_if_stopped()
+        try:
+            current = await self.snapshot_is_current()
+        except Exception as exc:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "verification_state_unavailable",
+                    "Verifier state could not be revalidated; provider dispatch is forbidden",
+                    details={"budget_error": str(exc)},
+                )
+            ) from exc
+        if not current:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "verification_snapshot_stale",
+                    "Verifier inputs changed before provider dispatch",
+                )
+            )
+
+    async def _assert_budget_bounds(self) -> None:
+        try:
+            async with self.session_factory() as db:
+                order = await db.get(WorkOrder, self.work_order_id)
+                if order is None or order.owner_key != self.owner_key:
+                    raise BudgetBindingConflict("Verifier WorkOrder owner binding changed")
+                if order.budget_ledger_id is None:
+                    raise await self._stop(
+                        BudgetExecutionStopped(
+                            "legacy_budget_baseline_required",
+                            "Work has no intake-time ledger; legacy reconciliation is required",
+                        )
+                    )
+                ledger = await db.get(WorkBudgetLedger, order.budget_ledger_id)
+                if ledger is None or ledger.owner_key != self.owner_key:
+                    raise BudgetBindingConflict("Verifier budget binding is invalid")
+                if ledger.max_tokens is not None:
+                    raise await self._stop(
+                        BudgetExecutionStopped(
+                            "token_budget_enforcement_unavailable",
+                            "A finite total-token bound cannot be proven for this verifier call",
+                            details={"dimension": "tokens", "limit": str(ledger.max_tokens)},
+                        )
+                    )
+                if ledger.max_cost_usd is not None:
+                    raise await self._stop(
+                        BudgetExecutionStopped(
+                            "cost_budget_enforcement_unavailable",
+                            "A finite cost bound cannot be proven for this verifier call",
+                            details={"dimension": "cost_usd", "limit": str(ledger.max_cost_usd)},
+                        )
+                    )
+                amount = case(
+                    (
+                        WorkBudgetReservation.state == "charged",
+                        WorkBudgetReservation.actual_units,
+                    ),
+                    else_=WorkBudgetReservation.reserved_units,
+                )
+                used = Decimal(
+                    await db.scalar(
+                        select(func.coalesce(func.sum(amount), 0)).where(
+                            WorkBudgetReservation.ledger_id == ledger.id,
+                            WorkBudgetReservation.dimension == "llm_calls",
+                        )
+                    )
+                    or 0
+                )
+                if used >= Decimal(ledger.max_llm_calls):
+                    raise await self._stop(
+                        BudgetExecutionStopped(
+                            "llm_call_budget_exceeded",
+                            "LLM call budget is exhausted",
+                            details={"used_or_reserved": str(used)},
+                        )
+                    )
+        except BudgetExecutionStopped:
+            raise
+        except Exception as exc:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "llm_budget_state_unavailable",
+                    "Verifier budget state could not be checked; provider dispatch is forbidden",
+                    details={"budget_error": str(exc)},
+                )
+            ) from exc
+
+    async def _claim_once(self) -> None:
+        async with self._state.lock:
+            if self._state.stopped is not None:
+                raise self._state.stopped
+            if self._state.execution_claimed:
+                return
+            operation_key = f"verify:{self.operation_scope}:once"
+            try:
+                _, created = await reserve_budget_for_dispatch(
+                    self.session_factory,
+                    work_order_id=self.work_order_id,
+                    operation_key=operation_key,
+                    dimension="llm_calls",
+                    units=0,
+                    request_digest=self.snapshot_digest,
+                )
+            except Exception as exc:
+                self._state.stopped = BudgetExecutionStopped(
+                    "verification_fence_failed",
+                    "Verifier fence could not be committed; provider dispatch is forbidden",
+                    details={"budget_error": str(exc)},
+                )
+                raise self._state.stopped from exc
+            if not created:
+                self._state.stopped = BudgetExecutionStopped(
+                    "verification_execution_already_started",
+                    "This verifier snapshot already crossed its execution boundary",
+                    details={"operation_key": operation_key},
+                )
+                raise self._state.stopped
+            self._state.execution_claimed = True
+
+    async def prepare_provider_call(
+        self, *, provider: str, provider_attempt: int, request: dict[str, Any]
+    ) -> str:
+        await self.preflight_provider_call(provider)
+        await self._claim_once()
+        await self._assert_current()
+        request_digest = hashlib.sha256(
+            json.dumps(
+                request,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                default=str,
+            ).encode()
+        ).hexdigest()
+        operation_key = f"verify:{self.operation_scope}:p{provider_attempt}"
+        try:
+            _, created = await reserve_budget_for_dispatch(
+                self.session_factory,
+                work_order_id=self.work_order_id,
+                operation_key=operation_key,
+                dimension="llm_calls",
+                units=1,
+                request_digest=request_digest,
+            )
+        except BudgetExceeded as exc:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "llm_call_budget_exceeded",
+                    "LLM call budget is exhausted",
+                    details={"budget_error": str(exc)},
+                )
+            ) from exc
+        except (BudgetBindingConflict, BudgetReservationConflict, BudgetLedgerError) as exc:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "llm_budget_reservation_failed",
+                    "Verifier LLM reservation failed",
+                    details={"budget_error": str(exc)},
+                )
+            ) from exc
+        except Exception as exc:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "llm_budget_reservation_unavailable",
+                    "Verifier LLM reservation could not be committed",
+                    details={"budget_error": str(exc)},
+                )
+            ) from exc
+        if not created:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "llm_provider_operation_already_recorded",
+                    "This verifier provider attempt was already recorded",
+                    details={"operation_key": operation_key},
+                )
+            )
+        await self._assert_current()
+        return operation_key
+
+    async def preflight_provider_call(self, provider: str | None) -> None:
+        """Fail closed before GPU/client preparation without consuming a slot."""
+        await self.assert_supported_provider(provider)
+        await self._assert_current()
+        await self._assert_budget_bounds()
+
+    async def charge_provider_call(self, operation_key: str) -> None:
+        try:
+            await settle_budget(
+                self.session_factory,
+                work_order_id=self.work_order_id,
+                operation_key=operation_key,
+                actual_units=1,
+            )
+        except (BudgetBindingConflict, BudgetReservationConflict, BudgetLedgerError) as exc:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "llm_budget_settlement_failed",
+                    "Verifier LLM call was dispatched but settlement failed",
+                    details={"budget_error": str(exc), "operation_key": operation_key},
+                )
+            ) from exc
+        except Exception as exc:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "llm_budget_settlement_unavailable",
+                    "Verifier LLM call was dispatched but settlement was unavailable",
+                    details={"budget_error": str(exc), "operation_key": operation_key},
+                )
+            ) from exc

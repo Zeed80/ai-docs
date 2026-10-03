@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import socket
 import uuid
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
@@ -720,80 +722,211 @@ async def process_pending_work_learnings(limit: int = 20) -> int:
     return processed
 
 
+@dataclass(frozen=True)
+class _VerifierSnapshot:
+    work_order_id: uuid.UUID
+    owner_key: str
+    plan_id: uuid.UUID
+    plan_revision: int
+    criterion_ids: tuple[uuid.UUID, ...]
+    evidence: dict[str, Any]
+    digest: str
+
+
+async def _read_verifier_snapshot(
+    db: Any, work_order_id: uuid.UUID, *, lock_order: bool
+) -> _VerifierSnapshot | None:
+    """Read the complete server-owned verifier input under the order lock."""
+    from app.db.models import WorkAcceptanceCriterion, WorkOrder, WorkPlan, WorkStep
+
+    order = await db.get(WorkOrder, work_order_id, with_for_update=lock_order)
+    if order is None or order.status not in {"blocked", "verifying"}:
+        return None
+    plans = list(
+        (
+            await db.execute(
+                select(WorkPlan)
+                .where(
+                    WorkPlan.work_order_id == order.id,
+                    WorkPlan.revision == order.plan_revision,
+                    WorkPlan.status == "active",
+                )
+                .order_by(WorkPlan.id)
+            )
+        ).scalars()
+    )
+    if len(plans) != 1:
+        return None
+    plan = plans[0]
+    criteria = list(
+        (
+            await db.execute(
+                select(WorkAcceptanceCriterion)
+                .where(
+                    WorkAcceptanceCriterion.work_order_id == order.id,
+                    WorkAcceptanceCriterion.required.is_(True),
+                    WorkAcceptanceCriterion.status == "pending",
+                )
+                .order_by(WorkAcceptanceCriterion.criterion_key, WorkAcceptanceCriterion.id)
+            )
+        ).scalars()
+    )
+    if not criteria:
+        return None
+    criterion_keys = [row.criterion_key for row in criteria]
+    if order.status == "blocked":
+        blocker = order.blocker or {}
+        if blocker.get("code") != "independent_verification_required" or sorted(
+            blocker.get("criteria") or []
+        ) != sorted(criterion_keys):
+            return None
+    steps = list(
+        (
+            await db.execute(
+                select(WorkStep)
+                .where(
+                    WorkStep.work_order_id == order.id,
+                    WorkStep.plan_id == plan.id,
+                    WorkStep.state == "succeeded",
+                )
+                .order_by(WorkStep.finished_at, WorkStep.id)
+            )
+        ).scalars()
+    )
+    evidence = {
+        "objective": order.objective,
+        "description": order.description,
+        "constraints": order.constraints,
+        "criteria": [
+            {
+                "id": str(row.id),
+                "key": row.criterion_key,
+                "description": row.description,
+                "predicate": row.predicate,
+            }
+            for row in criteria
+        ],
+        "outputs": [{"step": row.step_key, "output": row.output} for row in steps],
+    }
+    identity = {
+        "work_order_id": str(order.id),
+        "owner_key": order.owner_key,
+        "status": order.status,
+        "blocker": order.blocker,
+        "plan_id": str(plan.id),
+        "plan_revision": order.plan_revision,
+        "evidence": evidence,
+    }
+    digest = hashlib.sha256(
+        json.dumps(
+            identity,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            default=str,
+        ).encode()
+    ).hexdigest()
+    return _VerifierSnapshot(
+        work_order_id=order.id,
+        owner_key=order.owner_key,
+        plan_id=plan.id,
+        plan_revision=order.plan_revision,
+        criterion_ids=tuple(row.id for row in criteria),
+        evidence=evidence,
+        digest=digest,
+    )
+
+
+async def _verifier_snapshot_is_current(factory: Any, snapshot: _VerifierSnapshot) -> bool:
+    async with factory() as db:
+        current = await _read_verifier_snapshot(db, snapshot.work_order_id, lock_order=True)
+        return current is not None and current.digest == snapshot.digest
+
+
+async def _persist_verifier_stop(
+    factory: Any, snapshot: _VerifierSnapshot, stop: BudgetExecutionStopped
+) -> bool:
+    if stop.code == "verification_execution_already_started":
+        # A concurrent loser must not mutate the winner's authoritative state.
+        return False
+    async with factory() as db:
+        current = await _read_verifier_snapshot(db, snapshot.work_order_id, lock_order=True)
+        if current is None or current.digest != snapshot.digest:
+            return False
+        from app.db.models import WorkOrder
+
+        order = await db.get(WorkOrder, snapshot.work_order_id)
+        if order is None:
+            return False
+        order.blocker = stop.as_error()
+        if order.status == "verifying":
+            await transition_work_order(
+                db,
+                order,
+                "blocked",
+                actor="automatic-semantic-verifier",
+                payload={"reason": stop.code},
+            )
+        await append_event(
+            db,
+            order.id,
+            "verification.budget_stopped",
+            actor="automatic-semantic-verifier",
+            payload={"code": stop.code, "plan_revision": snapshot.plan_revision},
+        )
+        await db.commit()
+        return True
+
+
 async def verify_semantic_criteria(
     work_order_id: uuid.UUID, *, session_factory: Any | None = None
 ) -> bool:
     """Use a separate model call to judge unresolved semantic criteria."""
-    from sqlalchemy import select
-
     from app.ai.model_resolver import get_reasoning_model
     from app.ai.ollama_client import generate_json
-    from app.db.models import WorkAcceptanceCriterion, WorkOrder, WorkStep
+    from app.ai.work_budget_context import DetachedVerifierBudgetContext
+    from app.db.models import WorkAcceptanceCriterion, WorkOrder
     from app.db.session import _get_session_factory
 
     factory = session_factory or _get_session_factory()
     async with factory() as db:
-        order = await db.get(WorkOrder, work_order_id)
-        if order is None or order.status not in {"blocked", "verifying"}:
-            return False
-        criteria = list(
-            (
-                await db.execute(
-                    select(WorkAcceptanceCriterion).where(
-                        WorkAcceptanceCriterion.work_order_id == order.id,
-                        WorkAcceptanceCriterion.required.is_(True),
-                        WorkAcceptanceCriterion.status == "pending",
-                    )
-                )
-            ).scalars()
-        )
-        if not criteria:
-            return order.status == "completed"
-        steps = list(
-            (
-                await db.execute(
-                    select(WorkStep)
-                    .where(WorkStep.work_order_id == order.id, WorkStep.state == "succeeded")
-                    .order_by(WorkStep.finished_at)
-                )
-            ).scalars()
-        )
-        verification_revision = order.plan_revision
-        from app.db.models import WorkPlan
-
-        active_plan_id = await db.scalar(
-            select(WorkPlan.id).where(
-                WorkPlan.work_order_id == order.id, WorkPlan.revision == verification_revision
-            )
-        )
-        steps = [step for step in steps if step.plan_id == active_plan_id]
-        evidence = {
-            "objective": order.objective,
-            "description": order.description,
-            "constraints": order.constraints,
-            "criteria": [
-                {
-                    "id": str(row.id),
-                    "key": row.criterion_key,
-                    "description": row.description,
-                    "predicate": row.predicate,
-                }
-                for row in criteria
-            ],
-            "outputs": [{"step": row.step_key, "output": row.output} for row in steps],
-        }
+        snapshot = await _read_verifier_snapshot(db, work_order_id, lock_order=True)
+    if snapshot is None:
+        return False
     model = get_reasoning_model(confidential=True)
-    verdict = await generate_json(
-        json.dumps(evidence, ensure_ascii=False, default=str),
-        model=model.model,
-        provider=model.provider,
-        system="""You are an independent acceptance verifier. Judge only from supplied evidence.
+    scope = f"{snapshot.work_order_id.hex}:r{snapshot.plan_revision}:{snapshot.digest[:24]}"
+    budget_context = DetachedVerifierBudgetContext(
+        work_order_id=snapshot.work_order_id,
+        owner_key=snapshot.owner_key,
+        snapshot_digest=snapshot.digest,
+        operation_scope=scope,
+        session_factory=factory,
+        snapshot_is_current=lambda: _verifier_snapshot_is_current(factory, snapshot),
+    )
+    try:
+        verdict = await generate_json(
+            json.dumps(snapshot.evidence, ensure_ascii=False, default=str),
+            model=model.model,
+            provider=model.provider,
+            system="""You are an independent acceptance verifier. Judge only from supplied evidence.
 Return JSON: {verdicts:[{criterion_id,ok,reason,checks:[string]}]}. Fail closed when
 evidence is missing, contradictory, or does not demonstrate the objective. JSON only.""",
-        temperature=0.0,
-        max_tokens=4096,
-        timeout_seconds=120,
-    )
+            temperature=0.0,
+            max_tokens=4096,
+            timeout_seconds=120,
+            budget_context=budget_context,
+        )
+    except BudgetExecutionStopped as stop:
+        await _persist_verifier_stop(factory, snapshot, stop)
+        return False
+    except Exception as exc:
+        stop = BudgetExecutionStopped(
+            "verification_provider_failed",
+            "Semantic verifier provider failed without a supported verdict",
+            details={"provider_error": str(exc)[:1000]},
+        )
+        await _persist_verifier_stop(factory, snapshot, stop)
+        return False
     from pydantic import ValidationError
 
     from app.ai.tool_result import VerifierResponse
@@ -805,10 +938,13 @@ evidence is missing, contradictory, or does not demonstrate the objective. JSON 
         by_id = {}
     completed = False
     async with factory() as db:
-        order = await db.get(WorkOrder, work_order_id, with_for_update=True)
-        if order is None or order.plan_revision != verification_revision:
+        current = await _read_verifier_snapshot(db, work_order_id, lock_order=True)
+        if current is None or current.digest != snapshot.digest:
             return False
-        for criterion_id in [row.id for row in criteria]:
+        order = await db.get(WorkOrder, work_order_id)
+        if order is None:
+            return False
+        for criterion_id in snapshot.criterion_ids:
             criterion = await db.get(WorkAcceptanceCriterion, criterion_id, with_for_update=True)
             if criterion is None or criterion.status != "pending":
                 continue

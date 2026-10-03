@@ -20,7 +20,9 @@ baseline и недоказанные конечные token/cost caps блоки
 approval/preflight расходуют ноль, settlement failure не стирает recipient outcome.
 E21.2b2 принят для generic capability HTTP WorkStep: authoritative context,
 reserve/settle, recipient evidence и nonterminal/approval lifecycle без новых retry.
-Planner/verifier (direct Ollama), AIRouter/headless, legacy reconciliation,
+E21.2b3 принят для semantic verifier direct Ollama: detached snapshot/once-fence,
+physical LLM attempts и stale/cancel guards. Другие providers verifier пока
+fail-closed. Planner (direct Ollama), AIRouter/headless, legacy reconciliation,
 token/cost accounting и active/replan остаются E21.2b+/E21.3;
 вся E21 не завершена. Отчёт: `docs/agent-employee-delivery/E21-budget-ledger.md`.
 
