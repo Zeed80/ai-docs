@@ -166,3 +166,14 @@ def test_an_unlabelled_spike_over_a_plateau_is_flattened():
     collar = [dict(p) for p in points]
     collar[2]["r"] = 13.0
     assert 13.0 in {p["r"] for p in _flatten_spikes(collar, [25.0, 26.0, 35.0])}
+
+
+def test_a_measured_keyway_follows_the_station_mapping():
+    from app.ai.cad_views.nominals import remap_station
+
+    # z4-r4: уступы 66,06 → 67 и 93,61 → 93; паз в замере 69,24…91,45.
+    mapping = {0.0: 0.0, 66.06: 67.0, 93.61: 93.0, 185.0: 185.0}
+    assert abs(remap_station(69.24, mapping) - 70.0) < 0.05
+    assert abs(remap_station(91.45, mapping) - 90.97) < 0.05
+    # Вне привязанных станций — как есть.
+    assert remap_station(190.0, mapping) == 190.0

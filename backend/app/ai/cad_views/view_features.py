@@ -252,7 +252,11 @@ def side_view_features(
         z0, z1 = z_of(a), z_of(b)
         # Ø ступени — номинал надписи: сырой замер 22,3 при Ø22 выбирал
         # сечение ГОСТ из диапазона 22–30 (8×4 вместо 6×3,5, shaft-6).
-        step = snap(2 * outer_at((z0 + z1) / 2), diameter_labels or [], share=0.03)
+        # Ø ступени — медиана по длине паза: в середине паза контур
+        # «вспухает» следом самого паза (z4-r4: 31,2 при Ø30 — сечение ГОСТ
+        # 10×5 вместо 8×4).
+        samples = sorted(2 * outer_at(z0 + (z1 - z0) * k / 20.0) for k in range(21))
+        step = snap(samples[10], diameter_labels or [], share=0.03)
         width = 2 * radius * radial_mm_per_px
         standard = standard_section(step)
         depth = None

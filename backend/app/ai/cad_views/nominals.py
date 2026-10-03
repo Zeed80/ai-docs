@@ -317,6 +317,7 @@ def nominal_revolve(
     diameter_tolerance_mm: float = 0.0,
     measured: dict[float, float] | None = None,
     prefer_measured: bool = False,
+    station_map: dict[float, float] | None = None,
 ) -> tuple[list[dict], list[dict], int]:
     """Профиль тела вращения — в номиналах: станции вдоль оси и Ø площадок.
 
@@ -349,6 +350,10 @@ def nominal_revolve(
         theirs = _explained(mapping, labels, tolerance)
         if ours > theirs or (prefer_measured and ours >= theirs):
             mapping = {**{k: v for k, v in mapping.items() if k not in measured}, **measured}
+    if station_map is not None:
+        # Привязка станций — наружу: элементы, найденные в замере (пазы),
+        # переводятся в номиналы той же привязкой.
+        station_map.update(mapping)
     changed = 0
 
     def fix_points(
@@ -593,3 +598,20 @@ __all__ = [
     "snap_axis",
     "snap_diameter",
 ]
+
+
+def remap_station(z: float, station_map: dict[float, float]) -> float:
+    """Координата замера → номинал: кусочно-линейно между соседними
+    привязанными станциями (паз на листе не в масштабе сдвинут вместе с
+    уступами: z4-r4 — 69,2 при 71 от надписей)."""
+    pairs = sorted(station_map.items())
+    if len(pairs) < 2:
+        return z
+    below = [p for p in pairs if p[0] <= z]
+    above = [p for p in pairs if p[0] >= z]
+    if not below or not above:
+        return z
+    (a, na), (b, nb) = below[-1], above[0]
+    if b - a <= 1e-9:
+        return na + (z - a)
+    return na + (nb - na) * (z - a) / (b - a)

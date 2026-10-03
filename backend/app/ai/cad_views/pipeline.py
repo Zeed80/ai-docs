@@ -1672,7 +1672,10 @@ def build_revolve(
         notes.append("лист не в масштабе: форма с листа, Ø и длины — надписями")
     raw_outer, raw_bore = outer, bore
 
+    station_map: dict[float, float] = {}
+
     def nominal(chain: list[float]) -> tuple[list[dict], list[dict], int]:
+        station_map.clear()
         return nominal_revolve(
             raw_outer,
             raw_bore,
@@ -1685,6 +1688,7 @@ def build_revolve(
             diameter_tolerance_mm=1.2 * line * radial,
             measured=measured,
             prefer_measured=unscaled,
+            station_map=station_map,
         )
 
     try:
@@ -1795,6 +1799,16 @@ def build_revolve(
         if chain != list(linear):
             outer, bore, _again = nominal(chain)
             candidate = revolve_candidate(outer, bore, part or main.part or "деталь")
+    # Паз найден в замере, ступени — в номиналах: концы паза переводятся той
+    # же привязкой станций (лист не в масштабе сдвигает паз вместе с уступами).
+    from app.ai.cad_views.nominals import remap_station
+
+    for item in features:
+        if item.get("keyway") and station_map:
+            z0, z1 = (remap_station(float(z), station_map) for z in item["keyway"])
+            if z1 > z0:
+                item["keyway"] = [round(z0, 3), round(z1, 3)]
+                item["origin_mm"][2] = round((z0 + z1) / 2.0, 3)
     # Поверхность под поперечным отверстием — цилиндр по соседям, а не дуги
     # пересечения из разреза; фаска «c×45°» — у входа резьбы.
     from app.ai.cad_views.nominals import bridge_cross_holes, chamfer_threaded_end
