@@ -1027,6 +1027,12 @@ WorkStepAttempt. Независимый reserve перед каждой physical
 bounds, legacy unbound и другие providers блокируются до dispatch. Planner
 остаётся отдельным этапом: его model call сейчас находится внутри caller TX.
 
+**E21.2b4 (REVIEWED / DEPLOYED):** detached planner direct Ollama для обоих runtime
+callers (API и scheduler). Снимок authoritative inputs, once-fence и physical
+LLM reserve вне caller TX; postflight перед применением плана/fallback.
+Budget stop не создаёт fallback и не запускает executor. API создаёт ledger
+только для свежего order; historic baseline не подменяется нулём.
+
 1. Сначала точные единицы: tool attempts, LLM calls, tokens, cost, active time,
    replan count. Ожидание человека не смешивать с активным временем без ADR.
 2. Целевые defaults: 2 часа active, 200 tools, 50 LLM calls, 3 replans. Не включать

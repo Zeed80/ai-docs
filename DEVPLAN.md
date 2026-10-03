@@ -18,7 +18,10 @@ E21.2b3 подключает semantic verifier direct Ollama: snapshot/once-fenc
 фиктивной WorkStepAttempt, physical retries учитываются отдельно, stale verdict
 отбрасывается. Проверка: `python3 -m pytest backend/tests/test_work_budget_verifier.py -q`.
 Другие providers этого verifier и конечные token/cost caps пока fail-closed.
-Это не полный budget accounting: planner (direct Ollama), AIRouter/headless, legacy baseline,
+E21.2b4 переводит API/scheduler planner на detached snapshot/model/postflight:
+ledger свежего API order создаётся до commit, budget stop не создаёт fallback.
+Проверка: `python3 -m pytest backend/tests/test_work_budget_planner.py -q` отдельно.
+Это не полный budget accounting: AIRouter/headless, legacy baseline,
 token/cost и active/replan ещё требуют E21.2b+/E21.3. Проверки:
 `python3 -m pytest backend/tests/test_work_budget_ledger.py backend/tests/test_work_budget_provider.py backend/tests/test_durable_chat.py -q`.
 

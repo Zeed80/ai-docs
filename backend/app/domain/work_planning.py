@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import uuid
+from dataclasses import dataclass, replace
 from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
@@ -135,6 +138,27 @@ class PlannedWork(BaseModel):
     verification_plan: dict[str, Any] = Field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class PlannerSnapshot:
+    """Immutable server-owned input for one detached planner execution."""
+
+    work_order_id: uuid.UUID
+    owner_key: str
+    status: str
+    plan_revision: int
+    objective: str
+    description: str | None
+    constraints: dict[str, Any]
+    budgets: dict[str, Any]
+    metadata_: dict[str, Any]
+    blocker: dict[str, Any] | None
+    completed_context: list[dict[str, Any]]
+    authority_digest: str
+    connector_hints: list[dict[str, Any]]
+    capability_catalog: list[dict[str, Any]]
+    digest: str
+
+
 def _action_names(capability: CapabilityDefinition) -> set[str]:
     action = (capability.parameters.get("properties") or {}).get("action") or {}
     description = str(action.get("description") or "")
@@ -183,11 +207,14 @@ def _planner_catalog() -> list[dict[str, Any]]:
 
 
 async def generate_capability_plan(
-    order: WorkOrder,
+    order: WorkOrder | PlannerSnapshot,
     *,
     completed_context: list[dict[str, Any]] | None = None,
     failure_context: dict[str, Any] | None = None,
     planner_error_context: str | None = None,
+    connector_hints: list[dict[str, Any]] | None = None,
+    capability_catalog: list[dict[str, Any]] | None = None,
+    budget_context: Any | None = None,
 ) -> PlannedWork:
     """Ask the reasoning model for a bounded DAG grounded in the live manifest."""
     from app.ai.model_resolver import get_reasoning_model
@@ -199,11 +226,11 @@ async def generate_capability_plan(
     # open-ended web discovery in the first place). Best-effort: an empty
     # list changes nothing about the prompt below, and find_connector_hints
     # itself never raises.
-    connector_hints: list[dict[str, Any]] = []
-    if is_exploratory(order):
+    resolved_connector_hints: list[dict[str, Any]] = connector_hints or []
+    if connector_hints is None and is_exploratory(order):
         from app.ai.connectors import find_connector_hints
 
-        connector_hints = await find_connector_hints(order.objective)
+        resolved_connector_hints = await find_connector_hints(order.objective)
     prompt = json.dumps(
         {
             "objective": order.objective,
@@ -214,8 +241,10 @@ async def generate_capability_plan(
             "completed_steps": completed_context or [],
             "last_failure": failure_context,
             "last_planner_error": planner_error_context,
-            "connector_hints": connector_hints,
-            "capabilities": _planner_catalog(),
+            "connector_hints": resolved_connector_hints,
+            "capabilities": capability_catalog
+            if capability_catalog is not None
+            else _planner_catalog(),
         },
         ensure_ascii=False,
         default=str,
@@ -294,6 +323,7 @@ not_found entry's "attempts" lists what was actually tried and how each attempt 
         temperature=0.0,
         max_tokens=8192,
         timeout_seconds=180,
+        budget_context=budget_context,
     )
     try:
         return validate_capability_plan(PlannedWork.model_validate(raw))
@@ -351,54 +381,117 @@ def _summarize_step_output(step: WorkStep) -> Any:
     return {"_truncated_output": serialized[:_MAX_STEP_OUTPUT_CHARS] + "...[truncated]"}
 
 
-async def plan_work_order(
-    db: AsyncSession,
-    order: WorkOrder,
-    *,
-    use_model: bool = True,
-    actor: str = "capability-planner",
-) -> tuple[Any, list[WorkStep]]:
+def _planner_digest(payload: dict[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            default=str,
+        ).encode()
+    ).hexdigest()
+
+
+async def _read_planner_snapshot(
+    db: AsyncSession, work_order_id: uuid.UUID, *, lock_order: bool
+) -> PlannerSnapshot | None:
+    """Read every mutable DB input used by the planner under the order lock."""
+    order = await db.get(WorkOrder, work_order_id, with_for_update=lock_order)
+    if order is None or order.status not in {"received", "planning", "replanning"}:
+        return None
     completed = list(
         (
             await db.execute(
                 select(WorkStep)
                 .where(WorkStep.work_order_id == order.id, WorkStep.state == "succeeded")
-                .order_by(WorkStep.finished_at)
+                .order_by(WorkStep.finished_at, WorkStep.id)
             )
         ).scalars()
     )
-    context = [
+    completed_context = [
         {"step_key": step.step_key, "title": step.title, "output": _summarize_step_output(step)}
         for step in completed
     ]
-    failure = order.blocker
+    authority = {
+        "work_order_id": str(order.id),
+        "owner_key": order.owner_key,
+        "status": order.status,
+        "plan_revision": order.plan_revision,
+        "objective": order.objective,
+        "description": order.description,
+        "constraints": order.constraints,
+        "budgets": order.budgets,
+        "metadata": order.metadata_,
+        "blocker": order.blocker,
+        "completed_steps": completed_context,
+    }
+    authority_digest = _planner_digest(authority)
+    return PlannerSnapshot(
+        work_order_id=order.id,
+        owner_key=order.owner_key,
+        status=order.status,
+        plan_revision=order.plan_revision,
+        objective=order.objective,
+        description=order.description,
+        constraints=dict(order.constraints or {}),
+        budgets=dict(order.budgets or {}),
+        metadata_=dict(order.metadata_ or {}),
+        blocker=dict(order.blocker) if order.blocker else None,
+        completed_context=completed_context,
+        authority_digest=authority_digest,
+        connector_hints=[],
+        capability_catalog=[],
+        digest=authority_digest,
+    )
+
+
+async def _freeze_planner_request(snapshot: PlannerSnapshot) -> PlannerSnapshot:
+    """Freeze non-authoritative prompt enrichments into the dispatch digest."""
+    connector_hints: list[dict[str, Any]] = []
+    if is_exploratory(snapshot):
+        from app.ai.connectors import find_connector_hints
+
+        connector_hints = await find_connector_hints(snapshot.objective)
+    capability_catalog = _planner_catalog()
+    digest = _planner_digest(
+        {
+            "authority_digest": snapshot.authority_digest,
+            "connector_hints": connector_hints,
+            "capabilities": capability_catalog,
+        }
+    )
+    return replace(
+        snapshot,
+        connector_hints=connector_hints,
+        capability_catalog=capability_catalog,
+        digest=digest,
+    )
+
+
+async def _apply_planning_result(
+    db: AsyncSession,
+    order: WorkOrder,
+    *,
+    planned: PlannedWork,
+    use_model: bool,
+    actor: str,
+    fallback_reason: str | None,
+    fallback_error: str | None = None,
+) -> tuple[Any, list[WorkStep]]:
     metadata = dict(order.metadata_ or {})
-    planner_error_context = metadata.get("last_planner_error")
-    fallback_reason: str | None = None
-    try:
-        planned = (
-            await generate_capability_plan(
-                order,
-                completed_context=context,
-                failure_context=failure,
-                planner_error_context=planner_error_context,
-            )
-            if use_model
-            else fallback_plan(order)
-        )
+    if fallback_reason is None:
         if "planner_fallback_streak" in metadata or "last_planner_error" in metadata:
             metadata.pop("planner_fallback_streak", None)
             metadata.pop("last_planner_error", None)
             order.metadata_ = metadata
-    except Exception as exc:  # noqa: BLE001 - fallback is intentionally durable
-        fallback_reason = str(exc)[:500]
-        planned = fallback_plan(order, reason=fallback_reason)
+    else:
         await append_event(
             db,
             order.id,
             "plan.fallback_used",
             actor=actor,
-            payload={"error": str(exc)[:1000]},
+            payload={"error": str(fallback_error or fallback_reason)[:1000]},
         )
         if use_model:
             metadata["planner_fallback_streak"] = (
@@ -440,6 +533,174 @@ async def plan_work_order(
                 payload={"reason": "planner_schema_failure_streak", "streak": streak},
             )
     return plan, steps
+
+
+async def plan_work_order(
+    db: AsyncSession,
+    order: WorkOrder,
+    *,
+    use_model: bool = True,
+    actor: str = "capability-planner",
+) -> tuple[Any, list[WorkStep]]:
+    """Legacy in-transaction test/no-model seam.
+
+    Runtime model callers use :func:`plan_work_order_detached`; keeping this
+    helper preserves the established pure planner/fallback unit contracts.
+    """
+    completed = list(
+        (
+            await db.execute(
+                select(WorkStep)
+                .where(WorkStep.work_order_id == order.id, WorkStep.state == "succeeded")
+                .order_by(WorkStep.finished_at, WorkStep.id)
+            )
+        ).scalars()
+    )
+    context = [
+        {"step_key": step.step_key, "title": step.title, "output": _summarize_step_output(step)}
+        for step in completed
+    ]
+    fallback_reason: str | None = None
+    fallback_error: str | None = None
+    try:
+        planned = (
+            await generate_capability_plan(
+                order,
+                completed_context=context,
+                failure_context=order.blocker,
+                planner_error_context=(order.metadata_ or {}).get("last_planner_error"),
+            )
+            if use_model
+            else fallback_plan(order)
+        )
+    except Exception as exc:  # noqa: BLE001 - fallback is intentionally durable
+        fallback_error = str(exc)
+        fallback_reason = fallback_error[:500]
+        planned = fallback_plan(order, reason=fallback_reason)
+    return await _apply_planning_result(
+        db,
+        order,
+        planned=planned,
+        use_model=use_model,
+        actor=actor,
+        fallback_reason=fallback_reason,
+        fallback_error=fallback_error,
+    )
+
+
+async def _planner_snapshot_is_current(factory: Any, snapshot: PlannerSnapshot) -> bool:
+    async with factory() as db:
+        current = await _read_planner_snapshot(db, snapshot.work_order_id, lock_order=True)
+        return current is not None and current.authority_digest == snapshot.authority_digest
+
+
+async def _persist_planner_stop(
+    factory: Any, snapshot: PlannerSnapshot, stop: Any, *, actor: str
+) -> bool:
+    if stop.code == "planning_execution_already_started":
+        # A concurrent loser must not overwrite the winner's planning state.
+        return False
+    async with factory() as db:
+        current = await _read_planner_snapshot(db, snapshot.work_order_id, lock_order=True)
+        if current is None or current.authority_digest != snapshot.authority_digest:
+            return False
+        order = await db.get(WorkOrder, snapshot.work_order_id)
+        if order is None:
+            return False
+        order.blocker = stop.as_error()
+        if "blocked" in WORK_TRANSITIONS.get(order.status, frozenset()):
+            await transition_work_order(
+                db,
+                order,
+                "blocked",
+                actor=actor,
+                payload={"reason": stop.code},
+            )
+        await append_event(
+            db,
+            order.id,
+            "planning.budget_stopped",
+            actor=actor,
+            payload={"code": stop.code, "plan_revision": snapshot.plan_revision},
+        )
+        await db.commit()
+        return True
+
+
+async def plan_work_order_detached(
+    work_order_id: uuid.UUID,
+    *,
+    session_factory: Any | None = None,
+    actor: str = "capability-planner",
+) -> bool:
+    """Plan from a frozen snapshot without holding a caller transaction."""
+    from app.ai.planner_budget_context import DetachedPlannerBudgetContext
+    from app.ai.work_budget_context import BudgetExecutionStopped
+    from app.db.session import _get_session_factory
+
+    factory = session_factory or _get_session_factory()
+    async with factory() as db:
+        authority_snapshot = await _read_planner_snapshot(db, work_order_id, lock_order=True)
+    if authority_snapshot is None:
+        return False
+    snapshot = authority_snapshot
+    fallback_reason: str | None = None
+    fallback_error: str | None = None
+    try:
+        snapshot = await _freeze_planner_request(authority_snapshot)
+        # The once fence belongs to the authoritative DB snapshot, not to
+        # best-effort prompt enrichments.  Two concurrent workers must not gain
+        # separate dispatch licences merely because connector hints changed.
+        scope = (
+            f"{snapshot.work_order_id.hex}:r{snapshot.plan_revision}:"
+            f"{snapshot.authority_digest[:24]}"
+        )
+        budget_context = DetachedPlannerBudgetContext(
+            work_order_id=snapshot.work_order_id,
+            owner_key=snapshot.owner_key,
+            snapshot_digest=snapshot.authority_digest,
+            prompt_digest=snapshot.digest,
+            operation_scope=scope,
+            session_factory=factory,
+            snapshot_is_current=lambda: _planner_snapshot_is_current(factory, snapshot),
+        )
+        planned = await generate_capability_plan(
+            snapshot,
+            completed_context=snapshot.completed_context,
+            failure_context=snapshot.blocker,
+            planner_error_context=snapshot.metadata_.get("last_planner_error"),
+            connector_hints=snapshot.connector_hints,
+            capability_catalog=snapshot.capability_catalog,
+            budget_context=budget_context,
+        )
+    except BudgetExecutionStopped as stop:
+        await _persist_planner_stop(factory, snapshot, stop, actor=actor)
+        return False
+    except Exception as exc:  # noqa: BLE001 - preserve the established fallback policy
+        fallback_error = str(exc)
+        fallback_reason = fallback_error[:500]
+        planned = fallback_plan(snapshot, reason=fallback_reason)
+
+    async with factory() as db:
+        current = await _read_planner_snapshot(db, work_order_id, lock_order=True)
+        if current is None or current.authority_digest != snapshot.authority_digest:
+            return False
+        order = await db.get(WorkOrder, work_order_id)
+        if order is None:
+            return False
+        await _apply_planning_result(
+            db,
+            order,
+            planned=planned,
+            use_model=True,
+            actor=actor,
+            fallback_reason=fallback_reason,
+            fallback_error=fallback_error,
+        )
+        if order.status not in {"blocked", "failed"}:
+            order.blocker = None
+        await db.commit()
+    return True
 
 
 def _path_get(value: Any, path: str | None) -> Any:

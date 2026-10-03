@@ -40,6 +40,7 @@ Read-only сверка AgentTask по квитанции (E00): тот же на
 Вложенные physical HTTP attempts, shared last-slot и сохранение результата при settlement failure (E21.2b1): `python3 -m pytest backend/tests/test_work_budget_tools.py backend/tests/test_chat_checkpoints.py backend/tests/test_durable_chat.py -q`.
 Generic capability HTTP attempts и durable recipient evidence (E21.2b2): `python3 -m pytest backend/tests/test_work_budget_work_orders.py -q`. Запускать этот профиль отдельным процессом: старые ledger/lease тесты используют общие session fixtures и глобальные выборки.
 Semantic verifier direct Ollama, detached snapshot/fence и stale/cancel gates (E21.2b3): `python3 -m pytest backend/tests/test_work_budget_verifier.py -q` отдельным процессом с чистой БД. Прочие providers для этого verifier пока fail-closed.
+Detached planner direct Ollama, API fresh ledger и scheduler fence (E21.2b4): `python3 -m pytest backend/tests/test_work_budget_planner.py -q` отдельным процессом с чистой БД. Budget stop не создаёт fallback и не запускает `run_now` executor.
 Пилот долговечного чата: `python3 -m pytest backend/tests/test_durable_chat.py backend/tests/test_work_order_checkpoint.py -q`.
 Снимки исполнения и одноразовое продолжение после подтверждения владельца: `python3 -m pytest backend/tests/test_chat_checkpoints.py -q`.
 Журнал логических действий, наблюдения владельца и миграция: `python3 -m pytest backend/tests/test_chat_action_journal.py -q`.

@@ -190,6 +190,11 @@ async def create_order(
     db: AsyncSession = Depends(get_db),
     user: UserInfo = Depends(get_current_user),
 ) -> WorkOrder:
+    if body.parent_id is not None:
+        # Resolve parent visibility before creating or committing a child.  The
+        # shared-ledger initializer below remains authoritative for lineage and
+        # same-owner binding.
+        await _get_owned_order(db, body.parent_id, user, lock=True)
     criteria = [criterion.model_dump() for criterion in body.acceptance_criteria] or None
     if body.source == "durable_chat":
         raise HTTPException(409, "Durable chat requests must use /api/agent/chat-runs")
@@ -207,6 +212,13 @@ async def create_order(
         parent_id=body.parent_id,
         metadata=body.metadata,
     )
+    from app.domain.work_budget_ledger import BudgetLedgerError, initialize_budget_ledger
+
+    try:
+        await initialize_budget_ledger(db, order.id)
+    except BudgetLedgerError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if body.steps:
         try:
             await create_work_plan(
@@ -221,17 +233,22 @@ async def create_order(
         from app.config import settings
         from app.domain.work_planning import plan_work_order
 
-        if settings.app_env == "test" or body.run_now:
-            await plan_work_order(db, order, use_model=body.run_now and settings.app_env != "test")
+        if settings.app_env == "test":
+            await plan_work_order(db, order, use_model=False)
         else:
             await transition_work_order(db, order, "planning", actor="capability-planner")
     await db.commit()
     await db.refresh(order)
-    if not body.steps and not body.run_now and order.status == "planning":
+    if not body.steps and body.run_now and order.status == "planning":
+        from app.domain.work_planning import plan_work_order_detached
+
+        await plan_work_order_detached(order.id)
+        await db.refresh(order)
+    elif not body.steps and not body.run_now and order.status == "planning":
         from app.tasks.work_orders import plan_work_order_task
 
         plan_work_order_task.apply_async(args=[str(order.id)], queue="scheduler")
-    if body.run_now:
+    if body.run_now and order.status == "ready":
         from app.config import settings
         from app.tasks.work_orders import execute_work_order_now
 

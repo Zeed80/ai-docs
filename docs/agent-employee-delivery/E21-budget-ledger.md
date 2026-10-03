@@ -508,3 +508,66 @@ Production / известные ограничения / rollback / следую
   отдельно headless migration, проверяемые token/cost bounds, legacy baseline
   и E21.3. Scoped локальный commit, push не выполнялся; чужие CAD-коммиты сохранены.
   Экономия лимитов не измерена.
+
+### Независимая приёмка E21.2b4 — 3 октября 2026
+
+- Исполнитель `gpt-5.6-sol`, один writer. Review потребовал сохранить ordinary
+  fallback при ошибке подготовки catalog/hints. Once-fence привязан к stable
+  authoritative digest; physical reservation хранит полный frozen request digest.
+  Оба runtime callers проверены: API и scheduler, без caller lock на model call.
+- Независимые чистые процессы: planner **23 passed**, прежний budget/durable/
+  channel/permissions/transport/Ollama профиль **435 passed**, verifier budget
+  **17 passed**, generic capability **21 passed**, exploratory/replanning/lease/
+  verifier **52 passed**. Всего **548 passed**, без failed/skipped; Ruff check,
+  format-check и diff-check успешны, известный warning `asyncio_loop_scope`.
+- `make prod-build`: exit 0. `/health`: `{"status":"ok"}`; backend и основной
+  worker healthy, beat up, неизменённый frontend healthy. Alembic
+  `20261001_0001 (head)`; SHA256 четырёх production-файлов одинаковы в
+  checkout/backend/worker. Реальные LLM/деловые эффекты не запускались.
+- E21.2b4 REVIEWED / DEPLOYED; fresh API ledger создаётся атомарно, чужой parent
+  возвращает 404 без child, historic unbound parent — 409 без zero baseline.
+  Бюджетный stop возвращает persisted blocked 201 и не запускает executor.
+  Другие providers planner пока fail-closed. Общая E21 не завершена.
+- Следующий gate — headless migration и оставшиеся token/cost, legacy, active/
+  replan части. Scoped локальный commit; push не выполнялся. Экономия не измерена.
+
+## E21.2b4 — detached direct-Ollama capability planner
+
+- Статус ограниченного этапа: `TESTED`, передан главному агенту на независимый
+  review. E21/E21.2 остаются `IN_PROGRESS`. Исполнитель: `gpt-5.6-sol`; один
+  пишущий агент, без дочерних агентов. Commit/deploy/push выполняет только главный
+  агент; экономия модели количественно не измерена.
+- Оба production caller (`POST /api/work-orders` и scheduler `_plan_order`) теперь
+  используют detached lifecycle: authoritative snapshot читается под `WorkOrder`
+  lock, caller transaction освобождается до Ollama, а новый lock и полный digest
+  DB-входов предшествуют применению model plan или прежнего fallback. Snapshot
+  включает owner/status/revision/objective/description/constraints/budgets/metadata/
+  blocker и завершённые outputs. Frozen connector hints и capability manifest
+  входят в dispatch digest; postflight не перечитывает их, потому что это уже
+  замороженное необязательное обогащение запроса, а не mutable authority работы.
+- Отдельный `DetachedPlannerBudgetContext` не наследует verifier context и не
+  создаёт фиктивный `WorkStepAttempt`. Direct Ollama — единственный поддержанный
+  provider. Zero-unit once fence запрещает duplicate/crash replay; каждый physical
+  POST, включая JSON retry, independently резервирует и settlement-ит
+  `llm_calls=1` непосредственно у общего root ledger.
+- Legacy unbound, исчерпанный LLM budget, finite token/cost caps, unsupported
+  provider и budget reserve/settlement failures блокируют planning typed reason
+  до fallback/executor. Обычные provider/schema/config `Exception` сохраняют
+  прежний fallback plan, event и streak, но результат применяется только после
+  свежего postflight. Stale/canceled snapshot не получает план и не перезаписывается.
+- API создаёт ledger в одной intake transaction с каждым свежим API WorkOrder,
+  включая manual steps. Parent visibility проверяется до создания child; historic
+  unbound lineage получает 409 без выдуманного zero baseline. `run_now` budget stop
+  возвращает durable blocked WorkOrder с HTTP 201 и не запускает executor.
+- Новый изолированный fake-HTTP/PostgreSQL профиль
+  `python3 -m pytest backend/tests/test_work_budget_planner.py -q` — **23 passed**.
+  Planner/API/replanning regression — **42 passed**; verifier/provider/Ollama-hook
+  regression — **37 passed**. Ruff check и format прошли. Первый sandboxed запуск
+  не получил доступ к Docker testcontainers (22 setup errors, код не исполнялся);
+  первый реальный прогон дал 21 passed и одно неверное ожидание числа legacy retry,
+  после исправления только теста финальный профиль зелёный. Единственный warning —
+  существующий неизвестный pytest option `asyncio_loop_scope`.
+- Не входят: AIRouter/cloud/headless callers, token/cost accounting, legacy
+  reconciliation, active time/replan ledger, миграции данных, новые permissions или
+  transport retries. Реальные LLM и деловые эффекты не вызывались; production
+  build/restart/health исполнитель не запускал.

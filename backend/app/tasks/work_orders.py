@@ -1850,25 +1850,12 @@ async def _dispatch_ready_work(limit: int = 10) -> int:
     return len(claimed_ids)
 
 
-async def _plan_order(work_order_id: uuid.UUID) -> bool:
-    from app.db.models import WorkOrder
+async def _plan_order(work_order_id: uuid.UUID, *, session_factory: Any | None = None) -> bool:
     from app.db.session import _get_session_factory
-    from app.domain.work_planning import plan_work_order
+    from app.domain.work_planning import plan_work_order_detached
 
-    factory = _get_session_factory()
-    async with factory() as db:
-        order = await db.get(WorkOrder, work_order_id, with_for_update=True)
-        if order is None or order.status not in {"received", "planning", "replanning"}:
-            return False
-        await plan_work_order(db, order, use_model=True)
-        # Ф4-re post-mortem: plan_work_order can now itself transition the
-        # order straight to "blocked" (planner_schema_failure_streak) and
-        # set order.blocker to explain why — unconditionally clearing it
-        # here would immediately erase that reason on every commit.
-        if order.status not in ("blocked", "failed"):
-            order.blocker = None
-        await db.commit()
-        return True
+    factory = session_factory or _get_session_factory()
+    return await plan_work_order_detached(work_order_id, session_factory=factory)
 
 
 @celery_app.task(name="work.plan_order", queue="scheduler", max_retries=0, ignore_result=True)
