@@ -40,6 +40,8 @@ isProject: false
 [`AGENT_EMPLOYEE_DELIVERY_ROADMAP.md`](./AGENT_EMPLOYEE_DELIVERY_ROADMAP.md).
 Восемь пакетов пользовательского результата, ранний eval runner R0 и реальные
 зависимости вместо сплошной цепочки E00–E52; обязательные security gates сохранены.
+R0 fake runner/10 cases принят, следующий этап P1.1 (остаток E21); полный corpus
+и качество живой модели ещё не приняты.
 
 Доступен HTTP-пилот долговечного чата `/api/agent/chat-runs`: атомарный приём,
 идемпотентность и сохранённые события. При потере worker запуск блокируется, а не

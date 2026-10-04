@@ -1474,7 +1474,9 @@ DocumentChunk, embeddings, documents/mail/artifacts и существующие 
 ### E49 — Схема приёмочных заданий и runner
 
 **Статус:** IN_PROGRESS, ранний R0 foundation принят в ограниченном fake scope;
-отчёт `docs/agent-employee-delivery/R0-eval-foundation.md`.
+foundation и десять outcome cases: `docs/agent-employee-delivery/R0-eval-foundation.md`,
+`docs/agent-employee-delivery/R0-eval-corpus.md`. Полный multi-capability runner
+и live приёмка остаются впереди.
 **После:** E48 в исторической очереди; ранний срез разрешён delivery roadmap.
 **Читать:** существующие `ai/evals/`; создать отдельный employee corpus, не смешивать
 его показатели с CAD pixel/geometry метриками или тестами роли.
@@ -1492,7 +1494,8 @@ DocumentChunk, embeddings, documents/mail/artifacts и существующие 
 
 ### E50 — 120 синтетических задач
 
-**Статус:** TODO. **После:** E49.
+**Статус:** IN_PROGRESS, начальный R0 corpus 10/120 принят в fake scope.
+**После:** E49; инкрементальное пополнение разрешено delivery roadmap.
 
 1. Пять групп по 24: браузер, файлы, данные, коммуникации, координация.
 2. В каждой группе 8 простых, 8 многошаговых, 8 с recovery/неполным контекстом.

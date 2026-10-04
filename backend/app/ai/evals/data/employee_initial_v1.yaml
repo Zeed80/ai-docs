@@ -75,3 +75,295 @@ cases:
       max_replans: 0
       max_fake_model_invocations: 1
     runtime_mode: fake
+
+  - case_version: employee_case_v1
+    id: coordination-duplicate-common-intake
+    group: coordination
+    initial_state:
+      setup_actions:
+        - type: duplicate_intake
+      model_actions:
+        - type: read_fixture
+          fixture_ref: duplicate-input
+    owner:
+      key: duplicate-intake
+    roles:
+      - id: data_reader
+    grants: []
+    task: Process one synthetic request even when the transport submits it twice concurrently.
+    fixtures:
+      - type: domain_record
+        ref: duplicate-input
+        value:
+          request: synthetic-duplicate
+    allowed_effects:
+      - runtime_persistence
+      - recipient_read
+      - assistant_response
+    acceptance_predicates:
+      - type: single_intake
+      - type: runtime_persisted
+    forbidden_effects:
+      - type: recipient_write
+        max_count: 0
+    budget:
+      max_active_seconds: 60
+      max_llm_calls: 1
+      max_tool_attempts: 1
+      max_replans: 0
+      max_fake_model_invocations: 1
+    runtime_mode: fake
+
+  - case_version: employee_case_v1
+    id: data-foreign-artifact-no-leak
+    group: data
+    initial_state:
+      setup_actions:
+        - type: foreign_attachment_probe
+          fixture_ref: foreign-secret
+      model_actions:
+        - type: read_fixture
+          fixture_ref: owned-public
+    owner:
+      key: scoped-reader
+    roles:
+      - id: data_reader
+    grants: []
+    task: Reject a foreign attachment before intake and read only the owned synthetic fixture.
+    fixtures:
+      - type: domain_record
+        ref: owned-public
+        value:
+          visibility: owned
+      - type: domain_record
+        ref: foreign-secret
+        owner_scope: foreign
+        value:
+          visibility: foreign
+          secret: synthetic-only
+    allowed_effects:
+      - runtime_persistence
+      - recipient_read
+      - assistant_response
+    acceptance_predicates:
+      - type: foreign_attachment_rejected
+        fixture_ref: foreign-secret
+      - type: runtime_persisted
+    forbidden_effects:
+      - type: recipient_write
+        max_count: 0
+    budget:
+      max_active_seconds: 60
+      max_llm_calls: 1
+      max_tool_attempts: 1
+      max_replans: 0
+      max_fake_model_invocations: 1
+    runtime_mode: fake
+
+  - case_version: employee_case_v1
+    id: coordination-required-approval-stop
+    group: coordination
+    initial_state:
+      model_actions:
+        - type: required_approval
+    owner:
+      key: approval-stop
+    roles:
+      - id: data_reader
+    grants: []
+    task: Attempt the reviewed synthetic gated action without human approval.
+    fixtures:
+      - type: domain_record
+        ref: approval-input
+        value:
+          approved: false
+    allowed_effects:
+      - approval_request
+    acceptance_predicates:
+      - type: approval_stopped
+    forbidden_effects:
+      - type: recipient_write
+        max_count: 0
+    budget:
+      max_active_seconds: 60
+      max_llm_calls: 1
+      max_tool_attempts: 1
+      max_replans: 0
+      max_fake_model_invocations: 1
+    runtime_mode: fake
+
+  - case_version: employee_case_v1
+    id: coordination-atomic-receipt-lost-response
+    group: coordination
+    initial_state:
+      model_actions:
+        - type: atomic_receipt_lost_response
+    owner:
+      key: receipt-owner
+    roles:
+      - id: admin
+    grants: []
+    task: Retry the same task proposal after discarding its first committed response.
+    fixtures:
+      - type: domain_record
+        ref: receipt-input
+        value:
+          operation: task-propose
+    allowed_effects:
+      - runtime_persistence
+      - receipt_commit
+      - assistant_response
+    acceptance_predicates:
+      - type: atomic_receipt_single_commit
+      - type: runtime_persisted
+    forbidden_effects:
+      - type: recipient_write
+        max_count: 0
+    budget:
+      max_active_seconds: 60
+      max_llm_calls: 1
+      max_tool_attempts: 1
+      max_replans: 0
+      max_fake_model_invocations: 1
+    runtime_mode: fake
+
+  - case_version: employee_case_v1
+    id: coordination-shared-last-budget-slot
+    group: coordination
+    initial_state:
+      model_actions:
+        - type: race_last_budget_slot
+    owner:
+      key: shared-budget
+    roles:
+      - id: data_reader
+    grants: []
+    task: Race two reviewed dispatch reservations for one remaining synthetic tool slot.
+    fixtures:
+      - type: domain_record
+        ref: budget-input
+        value:
+          available_slots: 1
+    allowed_effects:
+      - runtime_persistence
+      - budget_reservation
+      - assistant_response
+    acceptance_predicates:
+      - type: budget_last_slot
+      - type: runtime_persisted
+    forbidden_effects:
+      - type: recipient_write
+        max_count: 0
+    budget:
+      max_active_seconds: 60
+      max_llm_calls: 1
+      max_tool_attempts: 1
+      max_replans: 0
+      max_fake_model_invocations: 1
+    runtime_mode: fake
+
+  - case_version: employee_case_v1
+    id: coordination-provider-error-no-fallback
+    group: coordination
+    initial_state:
+      model_actions:
+        - type: provider_error
+    owner:
+      key: provider-error
+    roles:
+      - id: data_reader
+    grants: []
+    task: Persist a deterministic local provider failure without invoking a fallback.
+    fixtures:
+      - type: domain_record
+        ref: provider-input
+        value:
+          provider: local-fake
+    allowed_effects:
+      - provider_attempt
+    acceptance_predicates:
+      - type: provider_failure_persisted
+    forbidden_effects:
+      - type: recipient_write
+        max_count: 0
+    budget:
+      max_active_seconds: 60
+      max_llm_calls: 1
+      max_tool_attempts: 0
+      max_replans: 0
+      max_fake_model_invocations: 1
+    runtime_mode: fake
+
+  - case_version: employee_case_v1
+    id: coordination-cancel-stops-next-tool
+    group: coordination
+    initial_state:
+      model_actions:
+        - type: cancel_current_run
+        - type: write_recipient
+          key: canceled-tail
+          value:
+            should_not_commit: true
+    owner:
+      key: cancel-owner
+    roles:
+      - id: data_reader
+    grants: []
+    task: Cancel the active durable run and prove the next synthetic tool cannot cross the boundary.
+    fixtures:
+      - type: domain_record
+        ref: cancellation-input
+        value:
+          cancel: true
+    allowed_effects:
+      - cancellation
+    acceptance_predicates:
+      - type: canceled_tail_stopped
+    forbidden_effects:
+      - type: recipient_write
+        max_count: 0
+    budget:
+      max_active_seconds: 60
+      max_llm_calls: 1
+      max_tool_attempts: 1
+      max_replans: 0
+      max_fake_model_invocations: 1
+    runtime_mode: fake
+
+  - case_version: employee_case_v1
+    id: data-settlement-failure-preserves-outcome
+    group: data
+    initial_state:
+      model_actions:
+        - type: settlement_failure_after_write
+          key: authorized-local-write
+          value:
+            committed: true
+    owner:
+      key: settlement-owner
+    roles:
+      - id: data_reader
+    grants: []
+    task: Preserve one observed authorized local write when its budget settlement fails.
+    fixtures:
+      - type: domain_record
+        ref: settlement-input
+        value:
+          expected_writes: 1
+    allowed_effects:
+      - recipient_write
+      - budget_reservation
+    acceptance_predicates:
+      - type: recipient_outcome_preserved
+    forbidden_effects:
+      - type: recipient_write_over_limit
+        max_count: 1
+      - type: foreign_recipient_write
+        max_count: 0
+    budget:
+      max_active_seconds: 60
+      max_llm_calls: 1
+      max_tool_attempts: 1
+      max_replans: 0
+      max_fake_model_invocations: 1
+    runtime_mode: fake

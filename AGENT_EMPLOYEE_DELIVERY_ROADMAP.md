@@ -12,7 +12,7 @@
 - ограничения полномочий из `AGENTS.md` и
   `AGENT_EMPLOYEE_ORCHESTRATION.md`.
 
-Все пакеты и назначения ниже имеют статус **PLANNED**, пока отдельный отчёт,
+Все пакеты и назначения ниже по умолчанию имеют статус **PLANNED**, пока отдельный отчёт,
 проверки, независимый review и, где применимо, production-приёмка не докажут
 обратное. Наличие строки в roadmap не означает готовность кода или продукта.
 
@@ -66,7 +66,7 @@ planner direct Ollama для API/scheduler, свежий ledger для ново�
 | P5 Legacy migration | E43 | Только доказанный перенос старой общей памяти | PLANNED |
 | P6 UX and operations | E45–E47 | Work UI, permission builder, cost/operations signals | PLANNED |
 | P7 Retired surfaces | E48 | Удаление только после доказанной миграции callers | PLANNED |
-| P8 Evaluation and release | E49–E52 | Изолированный corpus, security/chaos и решение о rollout | PLANNED |
+| P8 Evaluation and release | E49–E52 | Изолированный corpus, security/chaos и решение о rollout; принят только R0 | IN_PROGRESS |
 
 E00–E20 остаются историческим baseline. Ни одна карточка не потеряна и не получила
 новый статус из-за перегруппировки.
@@ -313,12 +313,14 @@ forbidden-effect counters, сохраняет model/config/code/fixture versions
 **Security gate P8.** Forbidden effects и cross-user leaks — отдельный veto.
 Их нельзя усреднить с полезностью, скоростью или стоимостью.
 
-## 13. Следующее ограниченное назначение R0
+## 13. R0 — ранний приёмочный runner и начальные cases
 
-**Статус: IN_PROGRESS.** Первый foundation-срез (два demo cases) независимо
-проверен; отчёт: `docs/agent-employee-delivery/R0-eval-foundation.md`.
-Расширение до десяти и полная изоляция ещё не приняты. R0 — не платный benchmark
-и не заявление о качестве модели.
+**Статус: REVIEWED / DEPLOYED в ограниченном R0 scope.** Foundation и расширение до десяти
+cases, concurrent isolation и ledger regression независимо проверены:
+`docs/agent-employee-delivery/R0-eval-foundation.md`,
+`docs/agent-employee-delivery/R0-eval-corpus.md` (180 passed совместно).
+Весь backend suite, полный E49/E50 и live quality не приняты. Следующее задание —
+P1.1 (остаток E21); R0 не является платным benchmark или заявлением о качестве.
 
 **Цель.** Реализовать foundation E49 и начальный срез E50: изолированный runner
 с local fake LLM/recipient и **10 содержательными cases**. Сначала исполнитель

@@ -31,10 +31,13 @@ The target implementation structure is:
 
 Актуальный агентский срез: `AGENT_EMPLOYEE_IMPLEMENTATION_PLAN.md`.
 Подробный план передачи реализации: `AGENT_EMPLOYEE_EXECUTION_PLAYBOOK.md`.
-Порядок укрупнённых пакетов: `AGENT_EMPLOYEE_DELIVERY_ROADMAP.md`; следующий этап R0.
+Порядок укрупнённых пакетов: `AGENT_EMPLOYEE_DELIVERY_ROADMAP.md`; R0 принят в
+ограниченном fake scope, следующий этап P1.1 (остаток E21).
 При продолжении брать одно связное задание внутри пакета, допускающее несколько
 карточек E00–E52. Проверять DAG, неизменяемые ограничения и Definition of Done;
 security gates не отменяются. Не считать существующий WIP проверенным.
+Начальный employee corpus/изоляция (R0): `python3 -m pytest backend/tests/test_employee_eval_harness.py backend/tests/test_work_budget_ledger.py backend/tests/test_work_order_lease.py -q`.
+Расширенная R0-приёмка: тот же профиль плюс `backend/tests/test_action_receipts.py backend/tests/test_work_budget_tools.py backend/tests/test_chat_checkpoints.py` (отдельная test DB, не production).
 Атомарная квитанция получателя (пилот task_propose): `python3 -m pytest backend/tests/test_action_receipts.py -q`.
 Read-only сверка AgentTask по квитанции (E00): тот же набор и `backend/tests/test_chat_action_journal.py`; отчёт в `docs/agent-employee-delivery/E00-receipt-verification.md`.
 Проверки границ и разрешений: `python3 -m pytest backend/tests/test_agent_execution_boundary.py backend/tests/test_agent_delegations.py -q`.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
+from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -25,8 +26,8 @@ from app.ai.evals.employee_harness import (
     EmployeeDispatchResult,
     EmployeeEvalHarness,
 )
-from app.db.agent_runtime_models import DurableChatRun
-from app.db.models import ChatMessage, ChatSession, Document, WorkOrder
+from app.db.agent_runtime_models import ActionReceipt, DurableChatRun
+from app.db.models import AgentTask, ChatMessage, ChatSession, Document, WorkOrder
 
 _CORPUS_PATH = (
     Path(__file__).parents[1] / "app" / "ai" / "evals" / "data" / "employee_initial_v1.yaml"
@@ -50,9 +51,13 @@ class _TestRuntimeAdapter:
         attempt_id,
         session_factory,
         agent_factory,
+        runtime_scenario,
+        scenario_state,
     ) -> EmployeeDispatchResult:
         if os.environ.get("APP_ENV") != "test":
             raise RuntimeError("Employee fake runtime adapter is test-only")
+        from app.ai import agent_config, agent_loop, work_budget_context
+        from app.ai.agent_config import BuiltinAgentConfig
         from app.tasks import durable_chat, work_orders
 
         async with type(self)._global_patch_lock:
@@ -81,17 +86,43 @@ class _TestRuntimeAdapter:
             def verification_not_dispatched(*args, **kwargs):
                 return None
 
+            async def forbidden_http(*args, **kwargs):
+                scenario_state.approval_http_effects += 1
+                return {"unexpected": True}
+
+            async def local_provider_error(*args, **kwargs):
+                scenario_state.provider_attempts += 1
+                raise RuntimeError("employee eval local provider failure")
+
+            async def unavailable_settlement(*args, **kwargs):
+                raise RuntimeError("employee eval settlement unavailable")
+
             # execute_claimed_step imports run_durable_chat at dispatch time.
             # The lock covers the complete patch lifetime and both attributes
             # are restored by the context managers even if the worker fails.
-            with (
-                patch.object(durable_chat, "run_durable_chat", injected_worker),
-                patch.object(
-                    work_orders.verify_work_step,
-                    "apply_async",
-                    verification_not_dispatched,
-                ),
-            ):
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(durable_chat, "run_durable_chat", injected_worker))
+                stack.enter_context(
+                    patch.object(
+                        work_orders.verify_work_step,
+                        "apply_async",
+                        verification_not_dispatched,
+                    )
+                )
+                if runtime_scenario == "required_approval":
+                    config = BuiltinAgentConfig(approval_gates=["employee_eval_guard"])
+                    stack.enter_context(
+                        patch.object(agent_config, "get_builtin_agent_config", lambda: config)
+                    )
+                    stack.enter_context(patch.object(agent_loop, "execute_skill", forbidden_http))
+                elif runtime_scenario == "provider_error":
+                    stack.enter_context(
+                        patch.object(agent_loop, "_call_ollama_streaming", local_provider_error)
+                    )
+                elif runtime_scenario == "settlement_failure_after_write":
+                    stack.enter_context(
+                        patch.object(work_budget_context, "settle_budget", unavailable_settlement)
+                    )
                 settled = await work_orders.execute_claimed_step(
                     step_id,
                     attempt_id,
@@ -411,3 +442,165 @@ async def test_employee_runner_cleans_only_owned_rows_after_phase_failure(
         for message_id in (world.user_message_id, world.result_message_id):
             if message_id is not None:
                 assert await db.get(ChatMessage, message_id) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case_id", "predicate_type"),
+    [
+        ("coordination-duplicate-common-intake", "single_intake"),
+        ("data-foreign-artifact-no-leak", "foreign_attachment_rejected"),
+        ("coordination-required-approval-stop", "approval_stopped"),
+        ("coordination-atomic-receipt-lost-response", "atomic_receipt_single_commit"),
+        ("coordination-shared-last-budget-slot", "budget_last_slot"),
+        ("coordination-provider-error-no-fallback", "provider_failure_persisted"),
+        ("coordination-cancel-stops-next-tool", "canceled_tail_stopped"),
+        ("data-settlement-failure-preserves-outcome", "recipient_outcome_preserved"),
+    ],
+)
+async def test_employee_runner_exercises_reviewed_runtime_boundary(
+    test_engine, case_id, predicate_type
+):
+    runner, _, cases = _harness(test_engine)
+    result = await runner.run_case(cases[case_id])
+    verdict = next(
+        item for item in result.predicate_verdicts if item.predicate["type"] == predicate_type
+    )
+
+    assert verdict.passed is True
+    assert result.status == "passed"
+    assert all(counter.passed for counter in result.forbidden_counters)
+    if case_id == "coordination-required-approval-stop":
+        assert verdict.evidence["local_http_effects"] == 0
+        assert verdict.evidence["persisted_confirmation_events"] == 1
+        assert result.budget_usage.physical_tool_attempts == 0
+    elif case_id == "coordination-atomic-receipt-lost-response":
+        assert verdict.evidence["owned_receipt_count"] == 1
+        assert verdict.evidence["logical_action_result_recorded"] is False
+    elif case_id == "coordination-provider-error-no-fallback":
+        assert verdict.evidence["local_fake_provider_attempts"] == 1
+        assert verdict.evidence["fallback_attempts"] == 0
+        assert result.budget_usage.physical_llm_calls == 1
+    elif case_id == "data-settlement-failure-preserves-outcome":
+        assert verdict.evidence["owned_recipient_writes"] == 1
+        assert verdict.evidence["reservation_state"] == "reserved"
+        assert result.budget_usage.physical_tool_attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_employee_runner_isolates_concurrent_cases_with_shared_adapter(test_engine):
+    corpus, cases = _cases()
+    adapter = _TestRuntimeAdapter()
+    runner = EmployeeEvalHarness(
+        async_sessionmaker(test_engine, expire_on_commit=False),
+        runtime_adapter=adapter,
+        fixture_version=corpus.fixture_version,
+        code_revision="test-revision-77011c77",
+        test_world_confirmation="isolated_test_database",
+    )
+    first, second = await asyncio.gather(
+        runner.run_case(cases["coordination-duplicate-common-intake"]),
+        runner.run_case(cases["data-foreign-artifact-no-leak"]),
+    )
+
+    assert first.status == second.status == "passed"
+    assert first.namespace_id != second.namespace_id
+    assert first.owner_key != second.owner_key
+    assert set(first.fixture_ids.values()).isdisjoint(second.fixture_ids.values())
+    assert {entry.event_id for entry in first.trace_reference.entries}.isdisjoint(
+        entry.event_id for entry in second.trace_reference.entries
+    )
+    assert adapter.dispatch_calls == 2
+    assert adapter.worker_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_employee_receipt_cleanup_uses_committed_owner_receipt_after_lost_replay(
+    test_engine, monkeypatch
+):
+    from app.api import agent_control_plane
+
+    runner, _, cases = _harness(test_engine)
+    original = agent_control_plane.propose_agent_task_tool
+    calls = 0
+    captured = {}
+    original_submit = runner._submit_and_claim
+
+    async def observed_submit(case, world):
+        captured["world"] = world
+        await original_submit(case, world)
+
+    async def lose_replay(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("synthetic replay response lost")
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(runner, "_submit_and_claim", observed_submit)
+    monkeypatch.setattr(agent_control_plane, "propose_agent_task_tool", lose_replay)
+    result = await runner.run_case(cases["coordination-atomic-receipt-lost-response"])
+
+    assert result.status == "failed"
+    world = captured["world"]
+    assert world.receipt_action_id is not None
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as db:
+        assert await db.get(ActionReceipt, world.receipt_action_id) is None
+        tasks = list(await db.scalars(select(AgentTask)))
+        assert all(
+            (task.metadata_ or {}).get("employee_eval_namespace") != world.namespace_id
+            for task in tasks
+        )
+
+
+@pytest.mark.asyncio
+async def test_employee_receipt_predicate_rejects_duplicate_namespace_task(
+    test_engine, monkeypatch
+):
+    from app.api import agent_control_plane
+
+    runner, _, cases = _harness(test_engine)
+    original = agent_control_plane.propose_agent_task_tool
+    calls = 0
+    duplicate_id = None
+
+    async def insert_duplicate_after_receipt(payload, db, user, key):
+        nonlocal calls, duplicate_id
+        calls += 1
+        response = await original(payload, db, user, key)
+        if calls == 2:
+            duplicate = AgentTask(
+                objective=payload.objective,
+                role=payload.role,
+                status="proposed",
+                metadata_=dict(payload.metadata or {}),
+            )
+            db.add(duplicate)
+            await db.commit()
+            duplicate_id = duplicate.id
+        return response
+
+    monkeypatch.setattr(
+        agent_control_plane,
+        "propose_agent_task_tool",
+        insert_duplicate_after_receipt,
+    )
+    try:
+        result = await runner.run_case(cases["coordination-atomic-receipt-lost-response"])
+        verdict = next(
+            item
+            for item in result.predicate_verdicts
+            if item.predicate["type"] == "atomic_receipt_single_commit"
+        )
+        assert result.status == "failed"
+        assert verdict.passed is False
+        assert verdict.evidence["namespace_task_commits"] == 2
+    finally:
+        if duplicate_id is not None:
+            factory = async_sessionmaker(test_engine, expire_on_commit=False)
+            async with factory() as db:
+                duplicate = await db.get(AgentTask, duplicate_id)
+                if duplicate is not None:
+                    await db.delete(duplicate)
+                    await db.commit()

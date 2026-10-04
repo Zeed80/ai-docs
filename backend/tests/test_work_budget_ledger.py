@@ -318,8 +318,18 @@ async def test_concurrent_last_slot_is_reserved_once_across_parent_and_child(tes
     factory = _factory(test_engine)
     root_id = await _fresh_order(factory, budgets={"max_tool_attempts": 1})
     child_id = await _fresh_order(factory, parent_id=root_id)
+    foreign_id = await _fresh_order(factory, budgets={"max_tool_attempts": 1})
     try:
-        await bind_budget_ledger(factory, root_id)
+        root_ledger = await bind_budget_ledger(factory, root_id)
+        foreign_ledger = await bind_budget_ledger(factory, foreign_id)
+        foreign_reservation = await reserve_budget(
+            factory,
+            work_order_id=foreign_id,
+            operation_key="tool:foreign",
+            dimension="tool_attempts",
+            units=1,
+            request_digest=REQUEST_DIGEST,
+        )
 
         async def attempt(order_id, key):
             try:
@@ -339,11 +349,34 @@ async def test_concurrent_last_slot_is_reserved_once_across_parent_and_child(tes
             attempt(root_id, "tool:root"), attempt(child_id, "tool:child")
         )
         assert sum(item is not None for item in results) == 1
+        winner_id = next(item for item in results if item is not None)
         async with factory() as db:
-            rows = list(await db.scalars(select(WorkBudgetReservation)))
-            assert len([row for row in rows if row.operation_key.startswith("tool:")]) == 1
+            # The old global query observes the unrelated ledger and therefore
+            # reports two tool rows. Keep the contamination explicit, then
+            # assert this scenario only through its exact shared ledger.
+            unscoped = list(
+                await db.scalars(
+                    select(WorkBudgetReservation).where(
+                        WorkBudgetReservation.id.in_([winner_id, foreign_reservation.id])
+                    )
+                )
+            )
+            assert len(unscoped) == 2
+            rows = list(
+                await db.scalars(
+                    select(WorkBudgetReservation).where(
+                        WorkBudgetReservation.ledger_id == root_ledger.id,
+                        WorkBudgetReservation.operation_key.startswith("tool:"),
+                    )
+                )
+            )
+            assert len(rows) == 1
+            foreign = await db.get(WorkBudgetReservation, foreign_reservation.id)
+            assert foreign is not None
+            assert foreign.ledger_id == foreign_ledger.id
+            assert foreign.operation_key == "tool:foreign"
     finally:
-        await _cleanup(factory, [root_id, child_id])
+        await _cleanup(factory, [root_id, child_id, foreign_id])
 
 
 @pytest.mark.asyncio

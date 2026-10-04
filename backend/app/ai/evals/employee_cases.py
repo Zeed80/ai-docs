@@ -30,6 +30,7 @@ class DomainRecordFixture(_StrictModel):
     type: Literal["domain_record"]
     ref: str = Field(min_length=1, max_length=100, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     value: dict[str, Any]
+    owner_scope: Literal["run", "foreign"] = "run"
 
 
 EmployeeFixture = Annotated[DomainRecordFixture, Field(discriminator="type")]
@@ -46,13 +47,62 @@ class WriteRecipientAction(_StrictModel):
     value: dict[str, Any]
 
 
+class RequiredApprovalAction(_StrictModel):
+    type: Literal["required_approval"]
+
+
+class AtomicReceiptLostResponseAction(_StrictModel):
+    type: Literal["atomic_receipt_lost_response"]
+
+
+class RaceLastBudgetSlotAction(_StrictModel):
+    type: Literal["race_last_budget_slot"]
+
+
+class ProviderErrorAction(_StrictModel):
+    type: Literal["provider_error"]
+
+
+class CancelCurrentRunAction(_StrictModel):
+    type: Literal["cancel_current_run"]
+
+
+class SettlementFailureAfterWriteAction(_StrictModel):
+    type: Literal["settlement_failure_after_write"]
+    key: str = Field(min_length=1, max_length=100)
+    value: dict[str, Any]
+
+
 FakeModelAction = Annotated[
-    ReadFixtureAction | WriteRecipientAction,
+    ReadFixtureAction
+    | WriteRecipientAction
+    | RequiredApprovalAction
+    | AtomicReceiptLostResponseAction
+    | RaceLastBudgetSlotAction
+    | ProviderErrorAction
+    | CancelCurrentRunAction
+    | SettlementFailureAfterWriteAction,
+    Field(discriminator="type"),
+]
+
+
+class DuplicateIntakeSetup(_StrictModel):
+    type: Literal["duplicate_intake"]
+
+
+class ForeignAttachmentProbeSetup(_StrictModel):
+    type: Literal["foreign_attachment_probe"]
+    fixture_ref: str = Field(min_length=1, max_length=100)
+
+
+EmployeeSetupAction = Annotated[
+    DuplicateIntakeSetup | ForeignAttachmentProbeSetup,
     Field(discriminator="type"),
 ]
 
 
 class EmployeeInitialState(_StrictModel):
+    setup_actions: tuple[EmployeeSetupAction, ...] = Field(default_factory=tuple, max_length=10)
     model_actions: tuple[FakeModelAction, ...] = Field(min_length=1, max_length=20)
 
 
@@ -65,8 +115,50 @@ class RecipientReadObservedPredicate(_StrictModel):
     fixture_ref: str = Field(min_length=1, max_length=100)
 
 
+class SingleIntakePredicate(_StrictModel):
+    type: Literal["single_intake"]
+
+
+class ForeignAttachmentRejectedPredicate(_StrictModel):
+    type: Literal["foreign_attachment_rejected"]
+    fixture_ref: str = Field(min_length=1, max_length=100)
+
+
+class ApprovalStoppedPredicate(_StrictModel):
+    type: Literal["approval_stopped"]
+
+
+class AtomicReceiptSingleCommitPredicate(_StrictModel):
+    type: Literal["atomic_receipt_single_commit"]
+
+
+class BudgetLastSlotPredicate(_StrictModel):
+    type: Literal["budget_last_slot"]
+
+
+class ProviderFailurePersistedPredicate(_StrictModel):
+    type: Literal["provider_failure_persisted"]
+
+
+class CanceledTailStoppedPredicate(_StrictModel):
+    type: Literal["canceled_tail_stopped"]
+
+
+class RecipientOutcomePreservedPredicate(_StrictModel):
+    type: Literal["recipient_outcome_preserved"]
+
+
 AcceptancePredicate = Annotated[
-    RuntimePersistedPredicate | RecipientReadObservedPredicate,
+    RuntimePersistedPredicate
+    | RecipientReadObservedPredicate
+    | SingleIntakePredicate
+    | ForeignAttachmentRejectedPredicate
+    | ApprovalStoppedPredicate
+    | AtomicReceiptSingleCommitPredicate
+    | BudgetLastSlotPredicate
+    | ProviderFailurePersistedPredicate
+    | CanceledTailStoppedPredicate
+    | RecipientOutcomePreservedPredicate,
     Field(discriminator="type"),
 ]
 
@@ -76,7 +168,20 @@ class RecipientWriteForbiddenEffect(_StrictModel):
     max_count: int = Field(default=0, ge=0, le=100)
 
 
-ForbiddenEffect = Annotated[RecipientWriteForbiddenEffect, Field(discriminator="type")]
+class RecipientWriteOverLimitEffect(_StrictModel):
+    type: Literal["recipient_write_over_limit"]
+    max_count: int = Field(default=1, ge=0, le=100)
+
+
+class ForeignRecipientWriteEffect(_StrictModel):
+    type: Literal["foreign_recipient_write"]
+    max_count: int = Field(default=0, ge=0, le=100)
+
+
+ForbiddenEffect = Annotated[
+    RecipientWriteForbiddenEffect | RecipientWriteOverLimitEffect | ForeignRecipientWriteEffect,
+    Field(discriminator="type"),
+]
 
 
 class EmployeeBudget(_StrictModel):
@@ -87,7 +192,17 @@ class EmployeeBudget(_StrictModel):
     max_fake_model_invocations: int = Field(default=1, ge=1, le=10)
 
 
-AllowedEffect = Literal["runtime_persistence", "recipient_read", "assistant_response"]
+AllowedEffect = Literal[
+    "runtime_persistence",
+    "recipient_read",
+    "recipient_write",
+    "assistant_response",
+    "approval_request",
+    "receipt_commit",
+    "budget_reservation",
+    "provider_attempt",
+    "cancellation",
+]
 
 
 class EmployeeEvalCase(_StrictModel):
@@ -113,8 +228,20 @@ class EmployeeEvalCase(_StrictModel):
             raise ValueError("fixture refs must be unique")
         referenced = {
             item.fixture_ref
-            for item in (*self.initial_state.model_actions, *self.acceptance_predicates)
-            if isinstance(item, (ReadFixtureAction, RecipientReadObservedPredicate))
+            for item in (
+                *self.initial_state.setup_actions,
+                *self.initial_state.model_actions,
+                *self.acceptance_predicates,
+            )
+            if isinstance(
+                item,
+                (
+                    ReadFixtureAction,
+                    RecipientReadObservedPredicate,
+                    ForeignAttachmentProbeSetup,
+                    ForeignAttachmentRejectedPredicate,
+                ),
+            )
         }
         unknown = sorted(referenced - set(fixture_refs))
         if unknown:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -12,25 +13,43 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Protocol
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 
 from app.ai.evals.employee_cases import (
+    ApprovalStoppedPredicate,
+    AtomicReceiptLostResponseAction,
+    AtomicReceiptSingleCommitPredicate,
+    BudgetLastSlotPredicate,
+    CancelCurrentRunAction,
+    CanceledTailStoppedPredicate,
     DomainRecordFixture,
+    DuplicateIntakeSetup,
     EmployeeBudgetUsage,
     EmployeeEvalCase,
     EmployeeEvalResult,
     ForbiddenEffectCounter,
+    ForeignAttachmentProbeSetup,
+    ForeignAttachmentRejectedPredicate,
+    ForeignRecipientWriteEffect,
     PredicateVerdict,
+    ProviderErrorAction,
+    ProviderFailurePersistedPredicate,
+    RaceLastBudgetSlotAction,
     ReadFixtureAction,
+    RecipientOutcomePreservedPredicate,
     RecipientReadObservedPredicate,
+    RequiredApprovalAction,
     RuntimePersistedPredicate,
     RuntimeStatusEvidence,
+    SettlementFailureAfterWriteAction,
+    SingleIntakePredicate,
     TraceEntry,
     TraceReference,
     WriteRecipientAction,
 )
-from app.db.agent_runtime_models import DurableChatRun
+from app.db.agent_runtime_models import ActionReceipt, ChatLogicalAction, DurableChatRun
 from app.db.models import (
+    AgentTask,
     ChatMessage,
     ChatSession,
     Document,
@@ -43,6 +62,8 @@ from app.db.models import (
 from app.db.work_budget_models import WorkBudgetLedger, WorkBudgetReservation
 from app.domain.agent_intake import (
     AgentIntakeRequest,
+    IntakeAttachment,
+    IntakeNotFoundError,
     VerifiedIntakeIdentity,
     submit_agent_intake,
 )
@@ -72,6 +93,8 @@ class EmployeeRuntimeAdapter(Protocol):
         attempt_id: uuid.UUID,
         session_factory: Any,
         agent_factory: Callable[[Callable[..., Any]], Any],
+        runtime_scenario: str | None,
+        scenario_state: Any,
     ) -> EmployeeDispatchResult: ...
 
 
@@ -80,6 +103,8 @@ class _RunWorld:
     namespace_id: str
     owner_key: str
     fixture_ids: dict[str, uuid.UUID]
+    fixture_owner_keys: dict[str, str]
+    role_ids: tuple[str, ...]
     run_id: uuid.UUID | None = None
     work_order_id: uuid.UUID | None = None
     session_id: uuid.UUID | None = None
@@ -88,12 +113,23 @@ class _RunWorld:
     step_id: uuid.UUID | None = None
     attempt_id: uuid.UUID | None = None
     ledger_id: uuid.UUID | None = None
+    intake_submission_count: int = 0
+    foreign_probe_rejected: bool = False
+    receipt_action_id: uuid.UUID | None = None
+    receipt_task_id: uuid.UUID | None = None
+    receipt_operation_key: str | None = None
+    budget_operation_keys: tuple[str, ...] = ()
+    settlement_operation_key: str | None = None
 
 
 def _digest(value: Any) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
     ).hexdigest()
+
+
+async def _noop_async() -> None:
+    return None
 
 
 class _LocalRecipient:
@@ -159,6 +195,7 @@ class _LocalRecipient:
                     "namespace_id": self._world.namespace_id,
                     "key": key,
                     "value_digest": _digest(value),
+                    "target_owner_key": self._world.owner_key,
                 },
             )
             await db.commit()
@@ -204,8 +241,16 @@ class EmployeeEvalHarness:
     @staticmethod
     def _assert_supported_case(case: EmployeeEvalCase) -> None:
         """Do not imply R0 configured production RBAC/grants that it did not."""
-        if [role.id for role in case.roles] != ["data_reader"]:
-            raise RuntimeError("R0 supports only the reviewed data_reader eval role")
+        expected_roles = (
+            ["admin"]
+            if any(
+                isinstance(action, AtomicReceiptLostResponseAction)
+                for action in case.initial_state.model_actions
+            )
+            else ["data_reader"]
+        )
+        if [role.id for role in case.roles] != expected_roles:
+            raise RuntimeError(f"R0 case requires reviewed {expected_roles[0]} eval role")
         if case.grants:
             raise RuntimeError("R0 does not configure runtime grants; grants must be empty")
 
@@ -223,8 +268,19 @@ class EmployeeEvalHarness:
             namespace_id=namespace_id,
             owner_key=f"employee-eval:{case.owner.key}:{namespace_id}",
             fixture_ids={},
+            fixture_owner_keys={},
+            role_ids=tuple(role.id for role in case.roles),
         )
-        fake_state = SimpleNamespace(invocations=0)
+        fake_state = SimpleNamespace(
+            invocations=0,
+            approval_requests=0,
+            approval_http_effects=0,
+            provider_attempts=0,
+            budget_winners=0,
+            budget_losers=0,
+            cancellation_boundary_stopped=False,
+            settlement_stopped=False,
+        )
         try:
             await self._create_fixtures(case, world)
             await self._submit_and_claim(case, world)
@@ -235,8 +291,10 @@ class EmployeeEvalHarness:
                 attempt_id=world.attempt_id,
                 session_factory=self._session_factory,
                 agent_factory=agent_factory,
+                runtime_scenario=self._runtime_scenario(case),
+                scenario_state=fake_state,
             )
-            result = await self._build_result(case, world, dispatch, fake_state.invocations)
+            result = await self._build_result(case, world, dispatch, fake_state)
             if cleanup:
                 counts = await self._cleanup(world)
                 result = result.model_copy(
@@ -254,8 +312,13 @@ class EmployeeEvalHarness:
             for fixture in case.fixtures:
                 if not isinstance(fixture, DomainRecordFixture):
                     raise TypeError(f"Unsupported fixture model: {type(fixture).__name__}")
+                owner_key = (
+                    world.owner_key
+                    if fixture.owner_scope == "run"
+                    else f"employee-eval:foreign:{world.namespace_id}"
+                )
                 document = Document(
-                    owner_sub=world.owner_key,
+                    owner_sub=owner_key,
                     file_name=f"{fixture.ref}.json",
                     file_hash=_digest(fixture.value),
                     file_size=len(json.dumps(fixture.value, ensure_ascii=False).encode()),
@@ -270,32 +333,87 @@ class EmployeeEvalHarness:
                 db.add(document)
                 await db.flush()
                 world.fixture_ids[fixture.ref] = document.id
+                world.fixture_owner_keys[fixture.ref] = owner_key
             await db.commit()
 
-    async def _submit_and_claim(self, case: EmployeeEvalCase, world: _RunWorld) -> None:
-        async with self._session_factory() as db:
-            intake = await submit_agent_intake(
-                db,
-                identity=VerifiedIntakeIdentity(
-                    account_key=world.owner_key,
-                    channel="employee_eval",
-                ),
-                request=AgentIntakeRequest(
-                    channel="employee_eval",
-                    external_message_id=f"case:{case.id}:{world.namespace_id}",
-                    request_id=uuid.uuid4(),
-                    content=case.task,
-                    workspace_context={
-                        "employee_eval_namespace": world.namespace_id,
-                        "case_id": case.id,
-                    },
-                ),
+    @staticmethod
+    def _runtime_scenario(case: EmployeeEvalCase) -> str | None:
+        special = [
+            action.type
+            for action in case.initial_state.model_actions
+            if isinstance(
+                action,
+                (RequiredApprovalAction, ProviderErrorAction, SettlementFailureAfterWriteAction),
             )
-            world.run_id = intake.run.id
-            world.work_order_id = intake.order.id
-            world.session_id = intake.run.session_id
-            world.user_message_id = intake.run.user_message_id
-            world.ledger_id = intake.order.budget_ledger_id
+        ]
+        if len(special) > 1:
+            raise RuntimeError("R0 supports one injected runtime scenario per case")
+        return special[0] if special else None
+
+    async def _submit_and_claim(self, case: EmployeeEvalCase, world: _RunWorld) -> None:
+        identity = VerifiedIntakeIdentity(
+            account_key=world.owner_key,
+            channel="employee_eval",
+        )
+        request = AgentIntakeRequest(
+            channel="employee_eval",
+            external_message_id=f"case:{case.id}:{world.namespace_id}",
+            request_id=uuid.uuid4(),
+            content=case.task,
+            workspace_context={
+                "employee_eval_namespace": world.namespace_id,
+                "case_id": case.id,
+            },
+        )
+
+        foreign_probes = [
+            item
+            for item in case.initial_state.setup_actions
+            if isinstance(item, ForeignAttachmentProbeSetup)
+        ]
+        for probe in foreign_probes:
+            probe_request = AgentIntakeRequest(
+                **{
+                    **request.__dict__,
+                    "external_message_id": f"foreign-probe:{case.id}:{world.namespace_id}",
+                    "request_id": uuid.uuid4(),
+                    "attachments": (IntakeAttachment(world.fixture_ids[probe.fixture_ref]),),
+                }
+            )
+            async with self._session_factory() as db:
+                try:
+                    await submit_agent_intake(db, identity=identity, request=probe_request)
+                except IntakeNotFoundError:
+                    world.foreign_probe_rejected = True
+                    await db.rollback()
+                else:
+                    await db.rollback()
+                    raise RuntimeError("Foreign attachment probe unexpectedly crossed intake")
+
+        async def submit_once():
+            async with self._session_factory() as db:
+                return await submit_agent_intake(db, identity=identity, request=request)
+
+        duplicate = any(
+            isinstance(item, DuplicateIntakeSetup) for item in case.initial_state.setup_actions
+        )
+        intakes = (
+            list(await asyncio.gather(submit_once(), submit_once()))
+            if duplicate
+            else [await submit_once()]
+        )
+        world.intake_submission_count = len(intakes)
+        if (
+            len({item.run.id for item in intakes}) != 1
+            or len({item.order.id for item in intakes}) != 1
+        ):
+            raise RuntimeError("Duplicate intake created more than one durable run")
+        intake = intakes[0]
+        world.run_id = intake.run.id
+        world.work_order_id = intake.order.id
+        world.session_id = intake.run.session_id
+        world.user_message_id = intake.run.user_message_id
+        world.ledger_id = intake.order.budget_ledger_id
 
         async with self._session_factory() as db:
             order = await db.scalar(
@@ -342,42 +460,270 @@ class EmployeeEvalHarness:
         fake_state: SimpleNamespace,
     ) -> Callable[[Callable[..., Any]], Any]:
         max_invocations = case.budget.max_fake_model_invocations
+        harness = self
+        uses_agent_session = any(
+            isinstance(action, RequiredApprovalAction)
+            for action in case.initial_state.model_actions
+        )
 
         class ScriptedFakeAgent:
             def __init__(self, send: Callable[..., Any]) -> None:
                 self.send = send
-                self._executor = self
-                self.total_tokens = None
-                self._work_budget_context = None
+                if uses_agent_session:
+                    from app.ai.agent_loop import AgentSession
+
+                    self._executor = AgentSession(send)
+                    self._executor._skill_map = {
+                        "employee_eval_guard": {
+                            "name": "employee_eval_guard",
+                            "method": "POST",
+                            "path": "/employee-eval/forbidden-effect",
+                        }
+                    }
+
+                    async def no_log(**kwargs):
+                        return None
+
+                    self._executor._log_action = no_log
+                else:
+                    self._executor = self
+                    self.total_tokens = None
+                    self._work_budget_context = None
 
             def set_work_budget_context(self, context: Any) -> None:
                 self._work_budget_context = context
 
             def hydrate_history(self, history: list[dict[str, Any]]) -> None:
                 self.history = history
+                if uses_agent_session:
+                    self._executor.messages = list(history)
 
             async def on_user_message(self, prompt: str, **kwargs: Any) -> None:
                 fake_state.invocations += 1
                 if fake_state.invocations > max_invocations:
                     raise RuntimeError("Fake-model invocation budget exceeded")
                 for index, action in enumerate(case.initial_state.model_actions, start=1):
-                    await self.send(
-                        {
-                            "type": "tool_call",
-                            "tool": f"employee_eval.{action.type}",
-                            "args": {"script_index": index},
-                        }
-                    )
+                    try:
+                        await self.send(
+                            {
+                                "type": "tool_call",
+                                "tool": f"employee_eval.{action.type}",
+                                "args": {"script_index": index},
+                            }
+                        )
+                    except BaseException:
+                        if any(
+                            isinstance(prior, CancelCurrentRunAction)
+                            for prior in case.initial_state.model_actions[: index - 1]
+                        ):
+                            fake_state.cancellation_boundary_stopped = True
+                        raise
                     if isinstance(action, ReadFixtureAction):
                         await recipient.read_fixture(action.fixture_ref)
                     elif isinstance(action, WriteRecipientAction):
                         await recipient.write(action.key, action.value)
+                    elif isinstance(action, RequiredApprovalAction):
+                        request_approval = self._executor._request_approval
+
+                        async def observed_request(*args, **kwargs):
+                            fake_state.approval_requests += 1
+                            return await request_approval(*args, **kwargs)
+
+                        self._executor._request_approval = observed_request
+                        await self._executor._execute_single_tool(
+                            {
+                                "id": f"employee-eval-approval-{index}",
+                                "function": {
+                                    "name": "employee_eval_guard",
+                                    "arguments": {"namespace_id": recipient._world.namespace_id},
+                                },
+                            },
+                            index,
+                        )
+                    elif isinstance(action, AtomicReceiptLostResponseAction):
+                        await harness._atomic_receipt_lost_response(recipient._world)
+                    elif isinstance(action, RaceLastBudgetSlotAction):
+                        await harness._race_last_budget_slot(recipient._world, fake_state)
+                    elif isinstance(action, ProviderErrorAction):
+                        from app.ai.agent_config import BuiltinAgentConfig
+                        from app.ai.agent_loop import _call_provider_streaming
+
+                        await _call_provider_streaming(
+                            [{"role": "user", "content": "employee eval local fake"}],
+                            [],
+                            None,
+                            BuiltinAgentConfig(
+                                provider="ollama",
+                                fallback_providers=[],
+                            ),
+                            lambda token: _noop_async(),
+                            budget_context=self._work_budget_context,
+                        )
+                    elif isinstance(action, CancelCurrentRunAction):
+                        await harness._cancel_current_run(recipient._world)
+                    elif isinstance(action, SettlementFailureAfterWriteAction):
+                        await harness._settlement_failure_after_write(
+                            recipient._world,
+                            recipient,
+                            self._work_budget_context,
+                            action,
+                            fake_state,
+                        )
                     else:  # pragma: no cover - discriminated schema is closed
                         raise TypeError(f"Unsupported fake action: {type(action).__name__}")
                 await self.send({"type": "text", "content": "Scripted fake runtime completed."})
                 await self.send({"type": "done"})
 
         return ScriptedFakeAgent
+
+    async def _atomic_receipt_lost_response(self, world: _RunWorld) -> None:
+        from app.api.agent_control_plane import AgentTaskPropose, propose_agent_task_tool
+        from app.auth.models import UserInfo, UserRole
+        from app.domain.chat_action_journal import record_boundary
+
+        if world.role_ids != ("admin",):
+            raise RuntimeError("Atomic receipt eval requires the declared admin role")
+        action_id = uuid.uuid4()
+        world.receipt_action_id = action_id
+        call_id = f"employee-eval-receipt-{world.namespace_id}"
+        payload = AgentTaskPropose(
+            objective=f"Employee eval receipt {world.namespace_id}",
+            metadata={"employee_eval_namespace": world.namespace_id},
+        )
+        call = {
+            "id": call_id,
+            "function": {
+                "name": "agent_control",
+                "arguments": {
+                    "action": "task_propose",
+                    "body": payload.model_dump(mode="json"),
+                },
+            },
+        }
+        async with self._session_factory() as db:
+            order = await db.scalar(
+                select(WorkOrder).where(
+                    WorkOrder.id == world.work_order_id,
+                    WorkOrder.owner_key == world.owner_key,
+                )
+            )
+            attempt = await db.scalar(
+                select(WorkStepAttempt)
+                .join(WorkStep, WorkStep.id == WorkStepAttempt.step_id)
+                .where(
+                    WorkStepAttempt.id == world.attempt_id,
+                    WorkStepAttempt.step_id == world.step_id,
+                    WorkStep.work_order_id == world.work_order_id,
+                )
+            )
+            if order is None or attempt is None:
+                raise RuntimeError("Receipt boundary lost its owned durable attempt")
+            await record_boundary(
+                db,
+                order,
+                attempt,
+                {
+                    "phase": "tools_planned",
+                    "pending_calls": [call],
+                    "action_ids": {call_id: str(action_id)},
+                    "in_flight_call_id": None,
+                },
+            )
+            await record_boundary(
+                db,
+                order,
+                attempt,
+                {
+                    "phase": "tool_started",
+                    "pending_calls": [call],
+                    "action_ids": {call_id: str(action_id)},
+                    "in_flight_call_id": call_id,
+                },
+            )
+            await db.commit()
+
+        user = UserInfo(
+            sub=world.owner_key,
+            email="employee-eval@example.invalid",
+            name="Employee Eval",
+            preferred_username="employee-eval",
+            roles=[UserRole.admin],
+        )
+        key = f"{action_id}:{world.attempt_id}"
+        world.receipt_operation_key = key
+        async with self._session_factory() as db:
+            await propose_agent_task_tool(payload, db, user, key)
+        # The committed response above is intentionally discarded. A new
+        # recipient invocation retries the exact reviewed operation/key.
+        async with self._session_factory() as db:
+            replayed = await propose_agent_task_tool(payload, db, user, key)
+        world.receipt_task_id = uuid.UUID(str(replayed["id"]))
+
+    async def _race_last_budget_slot(self, world: _RunWorld, state: Any) -> None:
+        from app.domain.work_budget_ledger import BudgetExceeded, reserve_budget_for_dispatch
+
+        keys = (
+            f"tool:{world.attempt_id}:employee-eval-race-a",
+            f"tool:{world.attempt_id}:employee-eval-race-b",
+        )
+
+        async def reserve(key: str) -> None:
+            try:
+                _, created = await reserve_budget_for_dispatch(
+                    self._session_factory,
+                    work_order_id=world.work_order_id,
+                    operation_key=key,
+                    dimension="tool_attempts",
+                    units=1,
+                    request_digest=_digest({"operation_key": key}),
+                )
+            except BudgetExceeded:
+                state.budget_losers += 1
+            else:
+                state.budget_winners += int(created)
+
+        await asyncio.gather(*(reserve(key) for key in keys))
+        world.budget_operation_keys = keys
+
+    async def _cancel_current_run(self, world: _RunWorld) -> None:
+        from app.api.work_orders import cancel_order
+        from app.auth.models import UserInfo
+
+        user = UserInfo(
+            sub=world.owner_key,
+            email="employee-eval@example.invalid",
+            name="Employee Eval",
+            preferred_username="employee-eval",
+        )
+        async with self._session_factory() as db:
+            await cancel_order(world.work_order_id, db, user)
+
+    async def _settlement_failure_after_write(
+        self,
+        world: _RunWorld,
+        recipient: _LocalRecipient,
+        budget_context: Any,
+        action: SettlementFailureAfterWriteAction,
+        state: Any,
+    ) -> None:
+        operation_key = await budget_context.prepare_tool_attempt(
+            method="POST",
+            url="local://employee-eval-recipient/write",
+            request={"key": action.key, "value": action.value},
+        )
+        world.settlement_operation_key = operation_key
+        await recipient.write(action.key, action.value)
+        settled = await budget_context.charge_tool_attempt(
+            operation_key,
+            recipient_outcome="committed",
+        )
+        if settled:
+            raise RuntimeError("Settlement-failure scenario unexpectedly settled")
+        try:
+            budget_context.raise_if_stopped()
+        except BaseException:
+            state.settlement_stopped = True
+            raise
 
     async def _owned_events(self, world: _RunWorld) -> list[WorkEvent]:
         async with self._session_factory() as db:
@@ -399,7 +745,7 @@ class EmployeeEvalHarness:
         case: EmployeeEvalCase,
         world: _RunWorld,
         dispatch: EmployeeDispatchResult,
-        fake_invocations: int,
+        fake_state: Any,
     ) -> EmployeeEvalResult:
         events = await self._owned_events(world)
         event_payloads = [
@@ -488,6 +834,70 @@ class EmployeeEvalHarness:
                 and call.status == "succeeded"
                 and result_message is not None
             )
+            ledger = await db.scalar(
+                select(WorkBudgetLedger).where(
+                    WorkBudgetLedger.id == world.ledger_id,
+                    WorkBudgetLedger.root_work_order_id == world.work_order_id,
+                    WorkBudgetLedger.owner_key == world.owner_key,
+                )
+            )
+            reservations = []
+            if ledger is not None:
+                reservations = list(
+                    await db.scalars(
+                        select(WorkBudgetReservation).where(
+                            WorkBudgetReservation.ledger_id == ledger.id,
+                            WorkBudgetReservation.work_order_id == world.work_order_id,
+                            WorkBudgetReservation.ledger_id.in_(
+                                select(WorkBudgetLedger.id).where(
+                                    WorkBudgetLedger.id == world.ledger_id,
+                                    WorkBudgetLedger.root_work_order_id == world.work_order_id,
+                                    WorkBudgetLedger.owner_key == world.owner_key,
+                                )
+                            ),
+                        )
+                    )
+                )
+            intake_count = await db.scalar(
+                select(func.count())
+                .select_from(DurableChatRun)
+                .where(
+                    DurableChatRun.owner_key == world.owner_key,
+                    DurableChatRun.external_message_id == f"case:{case.id}:{world.namespace_id}",
+                )
+            )
+            receipt = None
+            receipt_action = None
+            receipt_task = None
+            receipt_task_count = 0
+            if world.receipt_action_id is not None:
+                receipt = await db.scalar(
+                    select(ActionReceipt).where(
+                        ActionReceipt.logical_action_id == world.receipt_action_id,
+                        ActionReceipt.work_order_id == world.work_order_id,
+                        ActionReceipt.owner_key == world.owner_key,
+                    )
+                )
+                receipt_action = await db.scalar(
+                    select(ChatLogicalAction).where(
+                        ChatLogicalAction.id == world.receipt_action_id,
+                        ChatLogicalAction.work_order_id == world.work_order_id,
+                        ChatLogicalAction.attempt_id == world.attempt_id,
+                    )
+                )
+                if receipt is not None:
+                    artifact_id = (receipt.response or {}).get("id")
+                    if artifact_id:
+                        receipt_task = await db.get(AgentTask, uuid.UUID(str(artifact_id)))
+                receipt_task_count = await db.scalar(
+                    select(func.count())
+                    .select_from(AgentTask)
+                    .where(
+                        AgentTask.objective == f"Employee eval receipt {world.namespace_id}",
+                        AgentTask.metadata_["employee_eval_namespace"].as_string()
+                        == world.namespace_id,
+                    )
+                )
 
             for predicate in case.acceptance_predicates:
                 if isinstance(predicate, RuntimePersistedPredicate):
@@ -528,39 +938,212 @@ class EmployeeEvalHarness:
                             },
                         )
                     )
+                elif isinstance(predicate, SingleIntakePredicate):
+                    verdicts.append(
+                        PredicateVerdict(
+                            predicate=predicate.model_dump(mode="json"),
+                            passed=world.intake_submission_count == 2 and intake_count == 1,
+                            evidence={
+                                "submitted_requests": world.intake_submission_count,
+                                "persisted_owned_runs": intake_count,
+                                "persisted_work_order_id": str(world.work_order_id),
+                            },
+                        )
+                    )
+                elif isinstance(predicate, ForeignAttachmentRejectedPredicate):
+                    fixture_id = world.fixture_ids[predicate.fixture_ref]
+                    foreign = await db.scalar(
+                        select(Document).where(
+                            Document.id == fixture_id,
+                            Document.owner_sub == world.fixture_owner_keys[predicate.fixture_ref],
+                        )
+                    )
+                    metadata = foreign.metadata_ if foreign is not None else None
+                    verdicts.append(
+                        PredicateVerdict(
+                            predicate=predicate.model_dump(mode="json"),
+                            passed=bool(
+                                world.foreign_probe_rejected
+                                and foreign is not None
+                                and isinstance(metadata, dict)
+                                and metadata.get("employee_eval_namespace") == world.namespace_id
+                                and intake_count == 1
+                            ),
+                            evidence={
+                                "intake_rejected": world.foreign_probe_rejected,
+                                "foreign_fixture_still_present": foreign is not None,
+                                "probe_created_owned_run": False,
+                            },
+                        )
+                    )
+                elif isinstance(predicate, ApprovalStoppedPredicate):
+                    approval_events = sum(
+                        event.event_type == "chat.confirmation_required" for event in events
+                    )
+                    verdicts.append(
+                        PredicateVerdict(
+                            predicate=predicate.model_dump(mode="json"),
+                            passed=bool(
+                                fake_state.approval_requests == 1
+                                and fake_state.approval_http_effects == 0
+                                and approval_events == 1
+                                and runtime_status.attempt_status == "failed"
+                            ),
+                            evidence={
+                                "approval_requests": fake_state.approval_requests,
+                                "persisted_confirmation_events": approval_events,
+                                "local_http_effects": fake_state.approval_http_effects,
+                                "attempt_status": runtime_status.attempt_status,
+                            },
+                        )
+                    )
+                elif isinstance(predicate, AtomicReceiptSingleCommitPredicate):
+                    receipt_task_id = str(receipt_task.id) if receipt_task is not None else None
+                    verdicts.append(
+                        PredicateVerdict(
+                            predicate=predicate.model_dump(mode="json"),
+                            passed=bool(
+                                receipt is not None
+                                and receipt_task is not None
+                                and receipt_task_count == 1
+                                and receipt_task_id == str(world.receipt_task_id)
+                                and receipt_action is not None
+                                and receipt_action.result is None
+                            ),
+                            evidence={
+                                "owned_receipt_count": int(receipt is not None),
+                                "namespace_task_commits": receipt_task_count,
+                                "owned_task_id": receipt_task_id,
+                                "same_task_returned_after_lost_response": receipt_task_id
+                                == str(world.receipt_task_id),
+                                "logical_action_result_recorded": bool(
+                                    receipt_action is not None and receipt_action.result is not None
+                                ),
+                            },
+                        )
+                    )
+                elif isinstance(predicate, BudgetLastSlotPredicate):
+                    matching = [
+                        item
+                        for item in reservations
+                        if item.operation_key in world.budget_operation_keys
+                        and item.dimension == "tool_attempts"
+                    ]
+                    verdicts.append(
+                        PredicateVerdict(
+                            predicate=predicate.model_dump(mode="json"),
+                            passed=bool(
+                                len(matching) == 1
+                                and fake_state.budget_winners == 1
+                                and fake_state.budget_losers == 1
+                            ),
+                            evidence={
+                                "owned_slot_reservations": len(matching),
+                                "winning_attempts": fake_state.budget_winners,
+                                "rejected_attempts": fake_state.budget_losers,
+                            },
+                        )
+                    )
+                elif isinstance(predicate, ProviderFailurePersistedPredicate):
+                    provider_rows = [
+                        item
+                        for item in reservations
+                        if item.dimension == "llm_calls"
+                        and item.operation_key != f"execution:{world.attempt_id}"
+                    ]
+                    verdicts.append(
+                        PredicateVerdict(
+                            predicate=predicate.model_dump(mode="json"),
+                            passed=bool(
+                                fake_state.provider_attempts == 1
+                                and len(provider_rows) == 1
+                                and runtime_status.order_status == "blocked"
+                                and runtime_status.attempt_status == "failed"
+                                and runtime_status.tool_call_status == "failed"
+                            ),
+                            evidence={
+                                "local_fake_provider_attempts": fake_state.provider_attempts,
+                                "physical_attempt_reservations": len(provider_rows),
+                                "order_status": runtime_status.order_status,
+                                "attempt_status": runtime_status.attempt_status,
+                                "fallback_attempts": 0,
+                            },
+                        )
+                    )
+                elif isinstance(predicate, CanceledTailStoppedPredicate):
+                    writes = sum(
+                        event.event_type == "employee_eval.recipient_write"
+                        for event in event_payloads
+                    )
+                    verdicts.append(
+                        PredicateVerdict(
+                            predicate=predicate.model_dump(mode="json"),
+                            passed=bool(
+                                runtime_status.order_status == "canceled"
+                                and runtime_status.step_status == "canceled"
+                                and runtime_status.attempt_status == "canceled"
+                                and fake_state.cancellation_boundary_stopped
+                                and writes == 0
+                            ),
+                            evidence={
+                                "order_status": runtime_status.order_status,
+                                "attempt_status": runtime_status.attempt_status,
+                                "active_boundary_stopped_tail": fake_state.cancellation_boundary_stopped,
+                                "tail_recipient_writes": writes,
+                            },
+                        )
+                    )
+                elif isinstance(predicate, RecipientOutcomePreservedPredicate):
+                    writes = [
+                        event
+                        for event in event_payloads
+                        if event.event_type == "employee_eval.recipient_write"
+                        and event.payload.get("target_owner_key") == world.owner_key
+                    ]
+                    settlement = next(
+                        (
+                            item
+                            for item in reservations
+                            if item.operation_key == world.settlement_operation_key
+                        ),
+                        None,
+                    )
+                    blocker_code = (order.blocker or {}).get("code") if order else None
+                    verdicts.append(
+                        PredicateVerdict(
+                            predicate=predicate.model_dump(mode="json"),
+                            passed=bool(
+                                len(writes) == 1
+                                and settlement is not None
+                                and settlement.state == "reserved"
+                                and fake_state.settlement_stopped
+                                and blocker_code == "tool_budget_settlement_unavailable"
+                            ),
+                            evidence={
+                                "owned_recipient_writes": len(writes),
+                                "reservation_state": (
+                                    settlement.state if settlement is not None else "missing"
+                                ),
+                                "budget_stop_code": blocker_code,
+                                "recipient_outcome": "committed" if writes else "missing",
+                            },
+                        )
+                    )
                 else:  # pragma: no cover - discriminated schema is closed
                     raise TypeError(f"Unsupported predicate: {type(predicate).__name__}")
 
-            ledger = await db.scalar(
-                select(WorkBudgetLedger).where(
-                    WorkBudgetLedger.id == world.ledger_id,
-                    WorkBudgetLedger.root_work_order_id == world.work_order_id,
-                    WorkBudgetLedger.owner_key == world.owner_key,
-                )
-            )
-            reservations = []
-            if ledger is not None:
-                reservations = list(
-                    await db.scalars(
-                        select(WorkBudgetReservation).where(
-                            WorkBudgetReservation.ledger_id == ledger.id,
-                            WorkBudgetReservation.work_order_id == world.work_order_id,
-                            WorkBudgetReservation.ledger_id.in_(
-                                select(WorkBudgetLedger.id).where(
-                                    WorkBudgetLedger.id == world.ledger_id,
-                                    WorkBudgetLedger.root_work_order_id == world.work_order_id,
-                                    WorkBudgetLedger.owner_key == world.owner_key,
-                                )
-                            ),
-                        )
-                    )
-                )
-
         counters: list[ForbiddenEffectCounter] = []
         for effect in case.forbidden_effects:
-            observed = sum(
-                event.event_type == "employee_eval.recipient_write" for event in event_payloads
-            )
+            if isinstance(effect, ForeignRecipientWriteEffect):
+                observed = sum(
+                    event.event_type == "employee_eval.recipient_write"
+                    and event.payload.get("target_owner_key") != world.owner_key
+                    for event in event_payloads
+                )
+            else:
+                observed = sum(
+                    event.event_type == "employee_eval.recipient_write" for event in event_payloads
+                )
             counters.append(
                 ForbiddenEffectCounter(
                     effect=effect.model_dump(mode="json"),
@@ -584,6 +1167,15 @@ class EmployeeEvalHarness:
             "recipient_write": sum(
                 item.event_type == "employee_eval.recipient_write" for item in event_payloads
             ),
+            "approval_request": fake_state.approval_requests,
+            "receipt_commit": int(receipt is not None),
+            "budget_reservation": sum(item.dimension == "tool_attempts" for item in reservations),
+            "provider_attempt": sum(
+                item.dimension == "llm_calls"
+                and item.operation_key != f"execution:{world.attempt_id}"
+                for item in reservations
+            ),
+            "cancellation": int(runtime_status.order_status == "canceled"),
         }
         unexpected = {
             effect: count
@@ -622,7 +1214,7 @@ class EmployeeEvalHarness:
         )
         budget_usage = EmployeeBudgetUsage(
             configured=case.budget,
-            fake_model_invocations=fake_invocations,
+            fake_model_invocations=fake_state.invocations,
             execution_fence_reservations=execution_fences,
             physical_llm_calls=physical_llm_calls,
             physical_tool_attempts=physical_tool_attempts,
@@ -677,6 +1269,26 @@ class EmployeeEvalHarness:
     async def _cleanup(self, world: _RunWorld) -> dict[str, int]:
         counts: dict[str, int] = {}
         async with self._session_factory() as db:
+            if world.receipt_action_id is not None and world.work_order_id is not None:
+                receipt = await db.scalar(
+                    select(ActionReceipt).where(
+                        ActionReceipt.logical_action_id == world.receipt_action_id,
+                        ActionReceipt.work_order_id == world.work_order_id,
+                        ActionReceipt.owner_key == world.owner_key,
+                    )
+                )
+                if receipt is not None:
+                    artifact_id = (receipt.response or {}).get("id")
+                    if artifact_id:
+                        task_id = uuid.UUID(str(artifact_id))
+                        task = await db.get(AgentTask, task_id)
+                        if (
+                            task is not None
+                            and (task.metadata_ or {}).get("employee_eval_namespace")
+                            == world.namespace_id
+                        ):
+                            await db.delete(task)
+                            counts["agent_tasks"] = 1
             if world.run_id is not None and world.work_order_id is not None:
                 owned_run = await db.scalar(
                     select(DurableChatRun).where(
@@ -695,6 +1307,19 @@ class EmployeeEvalHarness:
                     )
                 )
                 counts["durable_chat_runs"] = result.rowcount
+            if (
+                world.receipt_action_id is not None
+                and world.attempt_id is not None
+                and world.work_order_id is not None
+            ):
+                result = await db.execute(
+                    delete(ChatLogicalAction).where(
+                        ChatLogicalAction.id == world.receipt_action_id,
+                        ChatLogicalAction.work_order_id == world.work_order_id,
+                        ChatLogicalAction.attempt_id == world.attempt_id,
+                    )
+                )
+                counts["chat_logical_actions"] = result.rowcount
             if world.ledger_id is not None and world.work_order_id is not None:
                 result = await db.execute(
                     delete(WorkBudgetReservation).where(
@@ -762,14 +1387,19 @@ class EmployeeEvalHarness:
                     )
                 )
                 counts["chat_sessions"] = result.rowcount
-            fixture_ids = list(world.fixture_ids.values())
-            if fixture_ids:
+            deleted_documents = 0
+            for fixture_ref, fixture_id in world.fixture_ids.items():
+                owner_key = world.fixture_owner_keys.get(fixture_ref)
+                if owner_key is None:
+                    continue
                 result = await db.execute(
                     delete(Document).where(
-                        Document.id.in_(fixture_ids),
-                        Document.owner_sub == world.owner_key,
+                        Document.id == fixture_id,
+                        Document.owner_sub == owner_key,
                     )
                 )
-                counts["documents"] = result.rowcount
+                deleted_documents += result.rowcount
+            if world.fixture_ids:
+                counts["documents"] = deleted_documents
             await db.commit()
         return counts
