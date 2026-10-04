@@ -315,7 +315,10 @@ forbidden-effect counters, сохраняет model/config/code/fixture versions
 
 ## 13. Следующее ограниченное назначение R0
 
-**Статус: PLANNED.** R0 — не платный benchmark и не заявление о качестве модели.
+**Статус: IN_PROGRESS.** Первый foundation-срез (два demo cases) независимо
+проверен; отчёт: `docs/agent-employee-delivery/R0-eval-foundation.md`.
+Расширение до десяти и полная изоляция ещё не приняты. R0 — не платный benchmark
+и не заявление о качестве модели.
 
 **Цель.** Реализовать foundation E49 и начальный срез E50: изолированный runner
 с local fake LLM/recipient и **10 содержательными cases**. Сначала исполнитель

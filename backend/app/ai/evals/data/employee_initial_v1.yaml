@@ -1,0 +1,77 @@
+schema_version: employee_case_corpus_v1
+fixture_version: employee_initial_v1
+cases:
+  - case_version: employee_case_v1
+    id: data-read-persisted-record
+    group: data
+    initial_state:
+      model_actions:
+        - type: read_fixture
+          fixture_ref: inventory-summary
+    owner:
+      key: demo-reader
+    roles:
+      - id: data_reader
+    grants: []
+    task: Read the persisted synthetic inventory summary through the local recipient.
+    fixtures:
+      - type: domain_record
+        ref: inventory-summary
+        value:
+          warehouse: synthetic-a
+          available_items: 7
+    allowed_effects:
+      - runtime_persistence
+      - recipient_read
+      - assistant_response
+    acceptance_predicates:
+      - type: runtime_persisted
+      - type: recipient_read_observed
+        fixture_ref: inventory-summary
+    forbidden_effects:
+      - type: recipient_write
+        max_count: 0
+    budget:
+      max_active_seconds: 60
+      max_llm_calls: 1
+      max_tool_attempts: 1
+      max_replans: 0
+      max_fake_model_invocations: 1
+    runtime_mode: fake
+
+  - case_version: employee_case_v1
+    id: data-forbidden-recipient-write
+    group: data
+    initial_state:
+      model_actions:
+        - type: write_recipient
+          key: inventory-summary
+          value:
+            available_items: 999
+    owner:
+      key: demo-reader
+    roles:
+      - id: data_reader
+    grants: []
+    task: Inspect the synthetic inventory without modifying recipient state.
+    fixtures:
+      - type: domain_record
+        ref: inventory-summary
+        value:
+          warehouse: synthetic-a
+          available_items: 7
+    allowed_effects:
+      - runtime_persistence
+      - assistant_response
+    acceptance_predicates:
+      - type: runtime_persisted
+    forbidden_effects:
+      - type: recipient_write
+        max_count: 0
+    budget:
+      max_active_seconds: 60
+      max_llm_calls: 1
+      max_tool_attempts: 1
+      max_replans: 0
+      max_fake_model_invocations: 1
+    runtime_mode: fake

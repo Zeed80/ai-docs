@@ -1473,7 +1473,9 @@ DocumentChunk, embeddings, documents/mail/artifacts и существующие 
 
 ### E49 — Схема приёмочных заданий и runner
 
-**Статус:** TODO. **После:** E48.
+**Статус:** IN_PROGRESS, ранний R0 foundation принят в ограниченном fake scope;
+отчёт `docs/agent-employee-delivery/R0-eval-foundation.md`.
+**После:** E48 в исторической очереди; ранний срез разрешён delivery roadmap.
 **Читать:** существующие `ai/evals/`; создать отдельный employee corpus, не смешивать
 его показатели с CAD pixel/geometry метриками или тестами роли.
 
