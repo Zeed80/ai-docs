@@ -31,8 +31,10 @@ The target implementation structure is:
 
 Актуальный агентский срез: `AGENT_EMPLOYEE_IMPLEMENTATION_PLAN.md`.
 Подробный план передачи реализации: `AGENT_EMPLOYEE_EXECUTION_PLAYBOOK.md`.
-При поручении продолжить по нему брать одну карточку E00–E52, проверять зависимости,
-неизменяемые ограничения и Definition of Done. Не считать существующий WIP проверенным.
+Порядок укрупнённых пакетов: `AGENT_EMPLOYEE_DELIVERY_ROADMAP.md`; следующий этап R0.
+При продолжении брать одно связное задание внутри пакета, допускающее несколько
+карточек E00–E52. Проверять DAG, неизменяемые ограничения и Definition of Done;
+security gates не отменяются. Не считать существующий WIP проверенным.
 Атомарная квитанция получателя (пилот task_propose): `python3 -m pytest backend/tests/test_action_receipts.py -q`.
 Read-only сверка AgentTask по квитанции (E00): тот же набор и `backend/tests/test_chat_action_journal.py`; отчёт в `docs/agent-employee-delivery/E00-receipt-verification.md`.
 Проверки границ и разрешений: `python3 -m pytest backend/tests/test_agent_execution_boundary.py backend/tests/test_agent_delegations.py -q`.
