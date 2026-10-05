@@ -706,12 +706,21 @@ async def test_execute_claimed_step_sets_acting_user_to_the_orders_owner(test_en
     while _execute_step_kind runs, and cleared afterwards — this worker
     process/event loop may go on to execute unrelated tasks next."""
     from app.ai.actor_context import get_acting_user
+    from app.domain.work_budget_ledger import initialize_budget_ledger
 
     factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
     async with factory() as db:
         order = await create_work_order(db, owner_key="local:alice", objective="x")
+        # E21: durable execution refuses work without an intake-time ledger.
+        await initialize_budget_ledger(db, order.id)
+        # Headless agent_turn is retired (E21.2b5); capability steps are the
+        # durable path that still authenticates as the order's owner.
         await create_single_step_plan(
-            db, order, kind="agent_turn", title="x", input_data={"prompt": "x"}
+            db,
+            order,
+            kind="capability",
+            title="x",
+            input_data={"capability": "documents", "action": "list", "arguments": {}},
         )
         order_id = order.id
         await db.commit()
