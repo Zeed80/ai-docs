@@ -645,6 +645,22 @@ def _normalize_pivot_expr(raw: str) -> str:
     return _PIVOT_COLUMN_ALIASES.get(norm, norm)
 
 
+def _pivot_message(
+    header: str, groups: int, total_lines: int, col_specs: list[tuple[Any, ...]]
+) -> str:
+    """Describe a pivot by its real columns.
+
+    "товары по «Поставщик»" made a correct invoices-by-supplier table with
+    sums read as a goods list, and the independent verifier rejected it on
+    that wording (live 2026-10-05).
+    """
+    columns = ", ".join(str(spec[0]) for spec in col_specs)
+    return (
+        f"Открыл сводную таблицу по «{header}»: {groups} групп "
+        f"(по {total_lines} строкам счетов); колонки: {columns}."
+    )
+
+
 def _resolve_pivot_columns(
     columns: list[dict[str, Any]] | None, dim_header: str
 ) -> list[tuple[str, str, Any, str]]:
@@ -804,10 +820,7 @@ async def publish_invoice_pivot_table(
         canvas_id=payload.canvas_id,
         total=len(rows),
         shown=len(rows),
-        message=(
-            f"Открыл таблицу: товары по «{header}» — {len(rows)} групп, "
-            f"{total_lines} строк товаров, колонок: {len(col_specs)}."
-        ),
+        message=_pivot_message(header, len(rows), total_lines, col_specs),
         filters={},
     )
 

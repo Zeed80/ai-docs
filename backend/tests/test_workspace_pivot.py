@@ -68,3 +68,13 @@ def test_pivot_tolerates_messy_model_keys():
     )
     assert [c[0] for c in cols] == ["Поставщик", "ИНН", "Товар", "Кол-во", "Цена"]
     assert cols[0][3] == "group"  # dimension guaranteed first
+
+
+def test_pivot_message_names_the_real_columns():
+    from app.api.workspace import _pivot_message, _resolve_pivot_columns
+
+    message = _pivot_message("Поставщик", 33, 391, _resolve_pivot_columns(None, "Поставщик"))
+    assert message == (
+        "Открыл сводную таблицу по «Поставщик»: 33 групп (по 391 строкам счетов); "
+        "колонки: Поставщик, Счетов, Товары, Сумма."
+    )
