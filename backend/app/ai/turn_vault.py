@@ -42,6 +42,24 @@ def _list_key(data: dict) -> str | None:
     return next((k for k in _LIST_KEYS if isinstance(data.get(k), list)), None)
 
 
+def _tool_envelope_data(result: object) -> dict | None:
+    """Inner ``data`` of a ToolResult v1 envelope, else None.
+
+    Tool results arrive as {"version": 1, "status", "data": {...}}. Reading
+    only the top level found no list, reported 0 records and dropped "data"
+    as a list key, so every large result reached the model as
+    "[0 записей…]" with no rows (live 2026-10-05).
+    """
+    if (
+        isinstance(result, dict)
+        and result.get("version") == 1
+        and "status" in result
+        and isinstance(result.get("data"), dict)
+    ):
+        return result["data"]
+    return None
+
+
 def should_vault(content_json: str) -> bool:
     """Return True when the serialised result exceeds VAULT_THRESHOLD."""
     return len(content_json) > VAULT_THRESHOLD
@@ -76,8 +94,16 @@ async def vault_get(ref: str, offset: int = 0, limit: int = 20) -> dict | None:
     if not isinstance(stored, dict) or stored.get("owner_key") != _owner():
         return None
     data = stored["data"]
+    inner = _tool_envelope_data(data)
+    if inner is not None:
+        page = _page(inner, offset, limit)
+        return {**{k: v for k, v in data.items() if k != "data"}, "data": page}
+    return _page(data, offset, limit)
+
+
+def _page(data, offset: int, limit: int):
     offset, limit = max(0, offset), max(1, min(limit, 100))
-    lk = _list_key(data)
+    lk = _list_key(data) if isinstance(data, dict) else None
     if lk:
         items: list = data[lk]
         page = items[offset : offset + limit]
@@ -99,16 +125,27 @@ def make_vault_envelope(result: dict, vault_ref: str) -> dict:
     Includes a schema-revealing preview (first 3 items) so the model knows
     the data shape without seeing the full payload.
     """
+    inner = _tool_envelope_data(result)
+    if inner is not None:
+        wrapper = {k: v for k, v in result.items() if k != "data"}
+        return {**wrapper, "data": make_vault_envelope(inner, vault_ref)}
     lk = _list_key(result)
-    total: int = result.get("total") or (len(result[lk]) if lk else 0)
+    declared = result.get("total")
+    total: int | None = (
+        declared
+        if isinstance(declared, int) and not isinstance(declared, bool)
+        else (len(result[lk]) if lk else None)
+    )
     # Copy all scalar/meta fields, drop the list payload
     envelope: dict = {k: v for k, v in result.items() if k not in _LIST_KEYS}
     envelope["vault_ref"] = vault_ref
-    envelope["total"] = total
+    if total is not None:
+        envelope["total"] = total
     if lk and result.get(lk):
         envelope[lk] = result[lk][:VAULT_PREVIEW_ITEMS]
+    count = f"{total} записей" if total is not None else "Полный результат сохранён"
     envelope["_vault_note"] = (
-        f"[{total} записей. Для отображения используй workspace.* (рекомендуется). "
+        f"[{count}. Для отображения используй workspace.* (рекомендуется). "
         f"Для постраничного чтения: vault action=get_page vault_ref='{vault_ref}'.]"
     )
     return envelope
