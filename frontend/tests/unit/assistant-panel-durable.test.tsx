@@ -9,7 +9,7 @@ vi.mock("@/lib/degraded-mode", () => ({useDegradedMode: () => ({isDegraded: fals
 vi.mock("@/lib/agent-name", () => ({useAgentName: () => "Света"}));
 vi.mock("@/components/gpu-status-bar", () => ({GpuStatusBar: () => null}));
 vi.mock("@/lib/native-bridge", () => ({isNative: () => false, speechAvailable: async () => false, scanDocument: vi.fn(), dictate: vi.fn()}));
-vi.mock("@/lib/auth", () => ({mutFetch: vi.fn()}));
+vi.mock("@/lib/auth", () => ({mutFetch: vi.fn(), redirectToLogin: vi.fn()}));
 vi.mock("@/lib/api", () => ({
   listChatSessions: vi.fn(async () => [{id: "session", title: "Новый чат", created_at: "2026-09-11T00:00:00Z"}]),
   getChatMessages: vi.fn(async () => []),
@@ -153,4 +153,34 @@ it("не начинает импорт без сохранённого ключ�
   fireEvent.click(screen.getByRole("button", {name: "Продолжить с выбранным контекстом"}));
   await waitFor(() => expect(importArchive).not.toHaveBeenCalled());
   storage.mockRestore();
+});
+
+it("карточка подтверждения показывает, что именно уйдёт, а аргументы прячет под раскрытие", async () => {
+  const gated = {...run, status: "blocked", blocker: {code: "step_failed", error: {message: "Human confirmation required; pending action not executed"}}};
+  fetcher.mockImplementation(async (path) => {
+    if (path === "/api/ai/agent-config") return response({});
+    if (path.includes("?session_id=")) return response({run: gated, legacy: false});
+    if (path.includes("/events?")) return response({items: [], next_cursor: 0});
+    if (path.endsWith("/checkpoint")) return response({
+      can_resume: true, attempt_id: "attempt", sha256: "a".repeat(64),
+      confirmation: {tool: "email", args: {action: "send", draft_id: "draft", expected_digest: "d"}},
+      preview: {
+        title: "Отправить письмо", subtitle: "Прайс", irreversible: true,
+        fields: [{label: "Кому", value: "buyer@example.test", emphasis: true}, {label: "Тема", value: "Прайс", emphasis: false}],
+        body_text: "<b>Добрый день!</b>", body_truncated: false,
+        warnings: ["Черновик изменился после запроса — отправка с этим разрешением будет отклонена."],
+      },
+    });
+    return response(gated);
+  });
+
+  render(<AssistantPanel />);
+  expect(await screen.findByText("Отправить письмо")).toBeInTheDocument();
+  expect(screen.getByText("buyer@example.test")).toBeInTheDocument();
+  expect(screen.getByText("необратимо")).toBeInTheDocument();
+  // Body is text, never HTML.
+  expect(screen.getByText("<b>Добрый день!</b>")).toBeInTheDocument();
+  expect(screen.getByRole("alert")).toHaveTextContent("Черновик изменился");
+  expect(screen.getByText("Точные аргументы").closest("details")).not.toHaveAttribute("open");
+  expect(screen.getByRole("button", {name: "Разрешить действие"})).toBeEnabled();
 });

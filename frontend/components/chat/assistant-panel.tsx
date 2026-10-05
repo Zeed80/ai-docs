@@ -1401,19 +1401,29 @@ export function AssistantPanel() {
         ) : durableConfirmation && !("intent" in durableConfirmation) && (
           <section aria-label="Подтверждение сохранённого действия" className="m-3 rounded border border-amber-600 p-3 text-sm text-slate-100">
             <p>Разрешить одно действие: <strong>{durableConfirmation.confirmation.tool}</strong>?</p>
-            {durableConfirmation.preview?.kind === "email" && (
-              <dl aria-label="Что будет отправлено" className="my-2 grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs">
-                <dt className="text-slate-400">Кому</dt><dd className="break-all">{durableConfirmation.preview.to.join(", ") || "—"}</dd>
-                {durableConfirmation.preview.cc.length > 0 && (<><dt className="text-slate-400">Копия</dt><dd className="break-all">{durableConfirmation.preview.cc.join(", ")}</dd></>)}
-                {durableConfirmation.preview.bcc.length > 0 && (<><dt className="text-slate-400">Скрытая</dt><dd className="break-all">{durableConfirmation.preview.bcc.join(", ")}</dd></>)}
-                <dt className="text-slate-400">Тема</dt><dd className="break-words">{durableConfirmation.preview.subject || "—"}</dd>
-                <dt className="text-slate-400">Текст</dt>
-                <dd className="max-h-40 overflow-auto whitespace-pre-wrap break-words">{durableConfirmation.preview.body_text}{durableConfirmation.preview.body_truncated ? "…" : ""}</dd>
-                {durableConfirmation.preview.attachment_count > 0 && (<><dt className="text-slate-400">Вложений</dt><dd>{durableConfirmation.preview.attachment_count}</dd></>)}
-              </dl>
-            )}
-            {durableConfirmation.preview?.kind === "email" && !durableConfirmation.preview.digest_matches && (
-              <p role="alert" className="mb-2 text-xs text-red-300">Черновик изменился после запроса — отправка с этим разрешением будет отклонена.</p>
+            {durableConfirmation.preview && (
+              <div aria-label="Что будет сделано" className="my-2 min-w-0 text-xs">
+                <p className="mb-1 font-semibold text-slate-100">
+                  {durableConfirmation.preview.title}
+                  {durableConfirmation.preview.irreversible && <span className="ml-2 text-amber-300">необратимо</span>}
+                </p>
+                <dl className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1">
+                  {durableConfirmation.preview.fields.map((f) => (
+                    <div key={f.label} className="contents">
+                      <dt className="text-slate-400">{f.label}</dt>
+                      <dd className={`break-words ${f.emphasis ? "font-semibold text-slate-100" : ""}`}>{f.value}</dd>
+                    </div>
+                  ))}
+                </dl>
+                {durableConfirmation.preview.body_text && (
+                  <p className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-900/60 p-2">
+                    {durableConfirmation.preview.body_text}{durableConfirmation.preview.body_truncated ? "…" : ""}
+                  </p>
+                )}
+                {durableConfirmation.preview.warnings.map((w) => (
+                  <p key={w} role="alert" className="mt-1 text-red-300">{w}</p>
+                ))}
+              </div>
             )}
             <details open={!durableConfirmation.preview} className="text-xs text-slate-400">
               <summary>Точные аргументы</summary>

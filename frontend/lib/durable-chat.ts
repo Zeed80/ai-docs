@@ -5,8 +5,9 @@ import { getActiveWorkspaceContext } from "@/lib/workspace-context";
 
 type Event = Record<string, unknown>;
 export type DurableConfirmationPreview = {
-  kind: "email"; to: string[]; cc: string[]; bcc: string[]; subject: string;
-  body_text: string; body_truncated: boolean; attachment_count: number; digest_matches: boolean;
+  title: string; subtitle: string | null;
+  fields: {label: string; value: string; emphasis: boolean}[];
+  body_text: string; body_truncated: boolean; warnings: string[]; irreversible: boolean;
 };
 export type DurableConfirmation = {
   attempt_id: string; sha256: string; confirmation: {tool: string; args: Record<string, unknown>};

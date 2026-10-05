@@ -1093,37 +1093,50 @@ _PREVIEW_BODY_CHARS = 2000
 
 
 async def _confirmation_preview(db, user, confirmation) -> dict | None:
-    """Human-readable view of what an approval would actually do.
+    """Human-readable card for the pending gated call.
 
-    The card showed only {"action": "send", "draft_id", "expected_digest"}:
-    the owner approved an email without seeing recipient, subject or text.
-    Read-only, behind the same draft access rule as GET /email/drafts/{id};
-    anything unexpected yields no preview rather than an error.
+    The durable card showed only the raw arguments — for email.send that is
+    {"action", "draft_id", "expected_digest"}, so the owner approved an email
+    without seeing recipient, subject or text. Reuses ``approval_preview``
+    (the legacy chat already had it). An email draft is shown only under the
+    same access rule as GET /email/drafts/{id}; HTML is never passed through.
+    Anything unexpected yields no preview rather than an error.
     """
     try:
+        tool = (confirmation or {}).get("tool")
         args = (confirmation or {}).get("args") or {}
-        if (confirmation or {}).get("tool") != "email" or args.get("action") != "send":
+        if not isinstance(tool, str) or not isinstance(args, dict):
             return None
-        from app.db.models import DraftAction
-        from app.domain.email_access import may_access_draft
+        from app.ai.approval_preview import build_preview
 
-        draft = await db.get(DraftAction, uuid.UUID(str(args.get("draft_id"))))
-        data = (draft.draft_data or {}) if draft is not None else None
-        if data is None or not await may_access_draft(db, user, data):
-            return None
-        body = str(data.get("body_text") or "")
-        expected = args.get("expected_digest")
+        digest_matches = None
+        if tool == "email" and args.get("action") == "send":
+            from app.db.models import DraftAction
+            from app.domain.email_access import may_access_draft
+
+            draft = await db.get(DraftAction, uuid.UUID(str(args.get("draft_id"))))
+            data = (draft.draft_data or {}) if draft is not None else None
+            if data is None or not await may_access_draft(db, user, data):
+                return None
+            expected = args.get("expected_digest")
+            digest_matches = bool(expected) and expected == data.get("content_digest")
+        card = await build_preview(tool, args, db)
+        warnings = list(card.warnings)
+        if digest_matches is False:
+            warnings.insert(
+                0, "Черновик изменился после запроса — отправка с этим разрешением будет отклонена."
+            )
+        body = card.body_text or ""
         return {
-            "kind": "email",
-            "to": list(data.get("to_addresses") or []),
-            "cc": list(data.get("cc_addresses") or []),
-            "bcc": list(data.get("bcc_addresses") or []),
-            "subject": str(data.get("subject") or ""),
+            "title": card.title,
+            "subtitle": card.subtitle,
+            "fields": [
+                {"label": f.label, "value": f.value, "emphasis": f.emphasis} for f in card.fields
+            ],
             "body_text": body[:_PREVIEW_BODY_CHARS],
             "body_truncated": len(body) > _PREVIEW_BODY_CHARS,
-            "attachment_count": len(data.get("attachment_ids") or []),
-            # Approval binds to this digest; a changed draft will be refused.
-            "digest_matches": bool(expected) and expected == data.get("content_digest"),
+            "warnings": warnings,
+            "irreversible": card.irreversible,
         }
     except (ValueError, TypeError, AttributeError):
         return None

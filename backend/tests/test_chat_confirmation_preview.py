@@ -48,12 +48,15 @@ async def test_owner_sees_recipient_subject_and_text(test_engine):
     async with factory() as db:
         preview = await _confirmation_preview(db, _user("alice"), _send(draft_id))
 
-    assert preview["to"] == ["buyer@example.test"]
-    assert preview["subject"] == "Прайс-лист"
+    fields = {f["label"]: f["value"] for f in preview["fields"]}
+    assert preview["title"] == "Отправить письмо"
+    assert fields["Кому"] == "buyer@example.test"
+    assert fields["Тема"] == "Прайс-лист"
     assert preview["body_text"].startswith("Добрый день!")
     assert len(preview["body_text"]) == 2000 and preview["body_truncated"] is True
-    assert preview["attachment_count"] == 1
-    assert preview["digest_matches"] is True
+    assert preview["warnings"] == []
+    assert preview["irreversible"] is True
+    assert "body_html" not in preview
 
 
 @pytest.mark.asyncio
@@ -62,17 +65,33 @@ async def test_changed_draft_is_flagged(test_engine):
     draft_id = await _draft(factory, created_by_sub="alice", subject="s", content_digest="d2")
     async with factory() as db:
         preview = await _confirmation_preview(db, _user("alice"), _send(draft_id, "d1"))
-    assert preview["digest_matches"] is False
+    assert preview["warnings"][0].startswith("Черновик изменился")
 
 
 @pytest.mark.asyncio
-async def test_other_users_draft_and_other_actions_give_no_preview(test_engine):
+async def test_html_only_body_is_shown_as_text(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    draft_id = await _draft(
+        factory,
+        created_by_sub="alice",
+        subject="s",
+        body_html="<p>Добрый день!</p>",
+        content_digest="d1",
+    )
+    async with factory() as db:
+        preview = await _confirmation_preview(db, _user("alice"), _send(draft_id))
+    assert preview["body_text"] == "Добрый день!"
+
+
+@pytest.mark.asyncio
+async def test_other_users_draft_gives_no_preview_other_tools_get_generic_card(test_engine):
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     draft_id = await _draft(factory, created_by_sub="alice", subject="secret")
     async with factory() as db:
         assert await _confirmation_preview(db, _user("mallory"), _send(draft_id)) is None
         assert await _confirmation_preview(db, _user("alice"), _send(uuid.uuid4())) is None
         assert await _confirmation_preview(db, _user("alice"), _send("not-a-uuid")) is None
-        other = {"tool": "invoices", "args": {"action": "approve", "invoice_id": "x"}}
-        assert await _confirmation_preview(db, _user("alice"), other) is None
+        other = {"tool": "agent_control", "args": {"action": "set", "key": "k"}}
+        generic = await _confirmation_preview(db, _user("alice"), other)
+        assert generic["fields"] == [{"label": "key", "value": "k", "emphasis": False}]
         assert await _confirmation_preview(db, _user("alice"), None) is None
