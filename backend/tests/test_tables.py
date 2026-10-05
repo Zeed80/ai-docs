@@ -295,3 +295,14 @@ async def test_saved_view_crud(client: AsyncClient):
     # Delete
     resp = await client.delete(f"/api/tables/views/{view_id}")
     assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_table_query_rejects_unsupported_arguments(client: AsyncClient):
+    """group_by/aggregate used to be dropped silently and plain rows returned."""
+    resp = await client.post(
+        "/api/tables/query",
+        json={"table": "invoices", "group_by": "supplier_name", "aggregate": "count"},
+    )
+    assert resp.status_code == 422
+    assert {err["loc"][-1] for err in resp.json()["detail"]} == {"group_by", "aggregate"}

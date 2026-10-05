@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # ── Table Query (table.query) ──────────────────────────────────────────────
 
@@ -28,6 +28,12 @@ class TableFilter(BaseModel):
 
 
 class TableQueryRequest(BaseModel):
+    # Unknown fields are rejected, not dropped: the agent asked for
+    # group_by/aggregate (unsupported here), silently got plain invoice rows
+    # and presented them as a grouped answer (live 2026-10-05). A 422 names
+    # the unsupported argument so the agent can choose another tool.
+    model_config = ConfigDict(extra="forbid")
+
     table: str = "invoices"  # invoices, documents
     columns: list[str] | None = None
     filters: list[TableFilter] = []
