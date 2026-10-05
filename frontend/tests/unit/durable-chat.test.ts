@@ -220,6 +220,15 @@ describe("долговечный транспорт чата", () => {
     expect(emit).toHaveBeenCalledWith({type: "status", content: "Действие не выполнено: подтверждения нет (отказ или истёк срок решения)."});
   });
 
+  it("фоновое действие в очереди не выдаётся за сбой", async () => {
+    const queued = {...run, status: "blocked", blocker: {code: "tool_result_partial", error_code: "job_queued"}};
+    fetcher.mockResolvedValueOnce(response({run: queued, legacy: false}))
+      .mockResolvedValueOnce(response(queued)).mockResolvedValueOnce(page())
+      .mockResolvedValueOnce(response({can_resume: false}));
+    await transport.watchSession("session"); await flush();
+    expect(emit).toHaveBeenCalledWith({type: "status", content: "Действие передано на выполнение в фоне; итог его исполнения — в «Журнале и сверке действий». Повтора не будет."});
+  });
+
   it("не дублирует уже загруженный из истории ответ", async () => {
     const completed = {...run, status: "completed", result_message_id: "answer"};
     fetcher.mockResolvedValueOnce(response({run: completed, legacy: false}))

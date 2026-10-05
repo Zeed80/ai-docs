@@ -64,6 +64,12 @@ function runOutcomeText(run: Run, checkpoint: DurableContinuation | null): strin
       ? "Ожидает вашего решения: разрешите или откажите в карточке выше."
       : "Действие не выполнено: подтверждения нет (отказ или истёк срок решения).";
   }
+  const blocker = run.blocker as {code?: unknown; error_code?: unknown} | null;
+  if (blocker?.code === "tool_result_partial" && blocker.error_code === "job_queued") {
+    // Honest, not alarming: the effect was handed to a background job and its
+    // outcome is not known when the turn ends; nothing will be retried.
+    return "Действие передано на выполнение в фоне; итог его исполнения — в «Журнале и сверке действий». Повтора не будет.";
+  }
   return `Задача: ${run.status}. ${run.blocker ? JSON.stringify(run.blocker) : ""}`;
 }
 const terminal = new Set(["completed", "blocked", "failed", "canceled"]);
