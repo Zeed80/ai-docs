@@ -313,6 +313,29 @@ def _max_replans_for(order: WorkOrder) -> int:
     return _DEFAULT_MAX_REPLANS_EXPLORATORY if is_exploratory(order) else _DEFAULT_MAX_REPLANS
 
 
+async def _replan_or_block(
+    db: AsyncSession, order: WorkOrder, *, actor: str, guarded: bool
+) -> None:
+    """Send a failed order to replanning, or block it when replans are spent.
+
+    Both limits apply: the per-order count (plan_revision) and the lineage-
+    wide ``replans`` dimension of the shared budget ledger, charged in this
+    same transaction. ``guarded`` callers skip an illegal transition instead
+    of raising; legality is checked before anything is charged.
+    """
+    from app.domain.work_budget_ledger import charge_replan_in_transaction
+
+    target = "replanning" if order.plan_revision <= _max_replans_for(order) else "blocked"
+    if guarded and target not in WORK_TRANSITIONS.get(order.status, frozenset()):
+        return
+    if target == "replanning" and not await charge_replan_in_transaction(db, order):
+        order.blocker = {"code": "replan_budget_exhausted", "cause": order.blocker}
+        target = "blocked"
+        if guarded and target not in WORK_TRANSITIONS.get(order.status, frozenset()):
+            return
+    await transition_work_order(db, order, target, actor=actor)
+
+
 def exploratory_acceptance_criteria() -> list[dict[str, Any]]:
     """Ф1.D: the honest-coverage acceptance-criteria pair for an exploratory
     WorkOrder — pass as create_work_order's ``acceptance_criteria`` instead of
@@ -950,10 +973,7 @@ async def reclaim_expired_leases(db: AsyncSession, *, actor: str = "scheduler") 
         else:
             await transition_step(db, step, "failed", actor=actor, payload={"error": error})
             order.blocker = {"code": "lease_expired", "step_id": str(step.id)}
-            max_replans = _max_replans_for(order)
-            target = "replanning" if order.plan_revision <= max_replans else "blocked"
-            if target in WORK_TRANSITIONS.get(order.status, frozenset()):
-                await transition_work_order(db, order, target, actor=actor)
+            await _replan_or_block(db, order, actor=actor, guarded=True)
     await db.flush()
     return len(steps)
 
@@ -1210,9 +1230,7 @@ async def fail_attempt(
     else:
         await transition_step(db, step, "failed", actor=actor, payload={"error": error})
         order.blocker = {"code": "step_failed", "step_id": str(step.id), "error": error}
-        max_replans = _max_replans_for(order)
-        target = "replanning" if order.plan_revision <= max_replans else "blocked"
-        await transition_work_order(db, order, target, actor=actor)
+        await _replan_or_block(db, order, actor=actor, guarded=False)
 
 
 async def stop_attempt_for_nonterminal_tool_result(
@@ -1454,9 +1472,7 @@ async def verify_nonempty_result(
         # directly) — the model already gets exactly this feedback on
         # replan, so this was purely a missing transition, not a missing
         # feedback channel.
-        max_replans = _max_replans_for(order)
-        target = "replanning" if order.plan_revision <= max_replans else "blocked"
-        await transition_work_order(db, order, target, actor=actor)
+        await _replan_or_block(db, order, actor=actor, guarded=False)
     return order.status == "completed"
 
 
@@ -1818,10 +1834,7 @@ async def record_verifier_verdict(
         # WORK_TRANSITIONS). Guarded rather than unconditional in case a
         # caller reaches this from some other status this doesn't cover —
         # silently doing nothing there is safer than raising mid-verdict.
-        max_replans = _max_replans_for(order)
-        target = "replanning" if order.plan_revision <= max_replans else "blocked"
-        if target in WORK_TRANSITIONS.get(order.status, frozenset()):
-            await transition_work_order(db, order, target, actor=actor)
+        await _replan_or_block(db, order, actor=actor, guarded=True)
         return False
     try:
         await assert_completion_allowed(db, order.id)

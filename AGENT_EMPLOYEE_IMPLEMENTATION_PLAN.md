@@ -64,8 +64,10 @@ E21.2b10 выпущен: durable AIRouter Ollama attempts пишут тот же
 E21.2b11 выпущен: streaming AgentSession на Ollama-пути пишет тот же receipt;
 не-Ollama и контексты без frozen owner — явный unknown. Отчёт:
 `docs/agent-employee-delivery/E21-agent-session-usage-receipts.md`.
-Следующий контракт P1.1 — доказанные pre-dispatch token bounds (сейчас любой
-конечный token/cost cap — fail-closed); остальные HTTP recipients — остаток.
+E21.3a выпущен: перепланирования на общем ledger линии. Pre-dispatch token bounds
+отложены: без токенизатора честной верхней границы до отправки нет, конечный cap
+по умолчанию не задаётся (fail-closed сохраняется). Следующее в P1.1: исполнимая
+декомпозиция (потомок на ledger родителя, durable шаг), active-time.
 Оставшиеся AIRouter/direct paths, entry adapters, legacy reconciliation,
 token/cost accounting и active/replan остаются E21.2b+/E21.3;
 вся E21 не завершена. Отчёт: `docs/agent-employee-delivery/E21-budget-ledger.md`.

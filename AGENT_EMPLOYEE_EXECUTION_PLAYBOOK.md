@@ -1109,6 +1109,13 @@ owner — legacy charge без receipt (unknown, без sticky stop). Нечис
 blocked verifier как итог в UI, подпись needs_review. Embedding/reranking теперь явно
 вне `llm_calls`. Разбор: `docs/agent-employee-delivery/E21-live-chat-recovery.md`.
 
+**E21.3a (TESTED / DEPLOYED):** перепланирования списываются с общего ledger линии
+(`replans`) в транзакции перехода, идемпотентно по ревизии; действуют и per-order,
+и общий лимит; исчерпание блокирует только заказ. Exploratory-корень — 30. Найдено:
+`decompose` создаёт потомков без ledger и с retired headless `agent_turn` — путь не
+исполним (в production не использовался). Отчёт:
+`docs/agent-employee-delivery/E21-shared-replan-budget.md`.
+
 1. Сначала точные единицы: tool attempts, LLM calls, tokens, cost, active time,
    replan count. Ожидание человека не смешивать с активным временем без ADR.
 2. Целевые defaults: 2 часа active, 200 tools, 50 LLM calls, 3 replans. Не включать

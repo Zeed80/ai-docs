@@ -287,6 +287,21 @@ def _reject_tighter_descendant_limits(
                 )
 
 
+def _root_budgets_with_mode_defaults(root: WorkOrder) -> dict[str, Any]:
+    """Root budgets plus the per-mode replan default the runtime already uses.
+
+    Exploratory work deliberately gets a generous replan allowance (see
+    work_orders._DEFAULT_MAX_REPLANS_EXPLORATORY); the generic ledger default
+    of 3 would silently cut it tenfold once replans are charged here.
+    """
+    from app.domain.work_orders import _DEFAULT_MAX_REPLANS_EXPLORATORY, is_exploratory
+
+    budgets = dict(root.budgets or {})
+    if "max_replans" not in budgets and is_exploratory(root):
+        budgets["max_replans"] = _DEFAULT_MAX_REPLANS_EXPLORATORY
+    return budgets
+
+
 async def initialize_budget_ledger(db, work_order_id: uuid.UUID) -> WorkBudgetLedger:
     """Create/bind a fresh lineage inside the caller's current transaction.
 
@@ -314,7 +329,7 @@ async def initialize_budget_ledger(db, work_order_id: uuid.UUID) -> WorkBudgetLe
         raise LegacyBudgetBaselineRequired(
             "Historic attempts, calls, or replans require an explicit baseline migration"
         )
-    limits = normalize_limits(root.budgets)
+    limits = normalize_limits(_root_budgets_with_mode_defaults(root))
     _reject_tighter_descendant_limits(root, orders, limits)
     if ledger is None:
         ledger = WorkBudgetLedger(
@@ -734,3 +749,67 @@ async def settle_llm_call_with_usage_receipt(
             db.add(event)
             await db.flush()
         return reservation, event
+
+
+async def charge_replan_in_transaction(db, order: WorkOrder) -> bool:
+    """Charge one replan to the order's shared ledger in the caller's transaction.
+
+    Replans used to be limited per WorkOrder only, so every child of a
+    decomposed task got its own full allowance. The charge is idempotent per
+    (order, plan revision) and rolls back with the caller's transition.
+    Returns False when the shared allowance is exhausted; that blocks only
+    this order and does not set a ledger-wide blocker. An order without a
+    ledger keeps the legacy per-order rule (durable execution refuses such
+    work anyway).
+    """
+    if order.budget_ledger_id is None:
+        return True
+    ledger = await db.get(WorkBudgetLedger, order.budget_ledger_id, with_for_update=True)
+    if ledger is None or ledger.owner_key != order.owner_key:
+        raise BudgetBindingConflict("WorkOrder budget binding is invalid")
+    operation_key = f"replan:{order.id}:from-r{order.plan_revision}"
+    existing = await db.scalar(
+        select(WorkBudgetReservation).where(
+            WorkBudgetReservation.ledger_id == ledger.id,
+            WorkBudgetReservation.operation_key == operation_key,
+        )
+    )
+    if existing is not None:
+        return True
+    current = await _usage(db, ledger.id, "replans")
+    if ledger.max_replans is not None and _exact_sum(current, Decimal(1)) > Decimal(
+        ledger.max_replans
+    ):
+        return False
+    units = Decimal(1)
+    request_digest = _digest(
+        {"work_order_id": str(order.id), "from_plan_revision": order.plan_revision}
+    )
+    db.add(
+        WorkBudgetReservation(
+            ledger_id=ledger.id,
+            work_order_id=order.id,
+            operation_key=operation_key,
+            dimension="replans",
+            reserved_units=units,
+            request_digest=request_digest,
+            binding_digest=_digest(
+                {
+                    "work_order_id": str(order.id),
+                    "operation_key": operation_key,
+                    "dimension": "replans",
+                    "reserved_units": _canonical_decimal(units),
+                    "request_digest": request_digest,
+                }
+            ),
+            state="charged",
+            actual_units=units,
+            actual_unknown=False,
+            settlement_digest=_digest(
+                {"unknown": False, "actual_units": _canonical_decimal(units)}
+            ),
+            settled_at=datetime.now(UTC),
+        )
+    )
+    await db.flush()
+    return True
