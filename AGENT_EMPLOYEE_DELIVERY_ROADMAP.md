@@ -47,8 +47,12 @@ parent-timeout/postflight и финальную publication fence. HTTP receipt 
 до sticky stop; generic capability SQL-table пока fail-closed. 277 tests passed,
 отдельный security review без findings. Отчёт:
 `docs/agent-employee-delivery/E21-http-recipient-attempts.md`.
-Следующий приоритет P1.1 — фактические token/cost receipts с явным unknown и
-доказанные bounds; остальные HTTP recipients остаются остатком.
+E21.2b9 проверен и выпущен: direct Ollama text helpers, SQL recipient и
+detached planner/verifier атомарно пишут usage receipt вместе с charge;
+unknown остаётся unknown, стоимость без тарифа не 0. 447 tests passed. Отчёт:
+`docs/agent-employee-delivery/E21-provider-usage-receipts.md`.
+Следующий контракт P1.1 — usage receipts для AIRouter/streaming AgentSession и
+доказанные pre-dispatch token/cost bounds; остальные HTTP recipients — остаток.
 Остаются как минимум:
 
 - остальные AIRouter/headless/provider paths;

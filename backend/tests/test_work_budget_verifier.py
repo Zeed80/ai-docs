@@ -262,7 +262,7 @@ async def test_settlement_failure_blocks_without_retry_or_verdict(test_engine, m
     async def broken_settle(*_args, **_kwargs):
         raise RuntimeError("settlement database unavailable")
 
-    monkeypatch.setattr(work_budget_context, "settle_budget", broken_settle)
+    monkeypatch.setattr(work_budget_context, "settle_llm_call_with_usage_receipt", broken_settle)
     assert not await work_orders.verify_semantic_criteria(order_id, session_factory=factory)
     assert len(calls) == 1
     physical = [row for row in await _reservations(factory, order_id) if row.reserved_units == 1]

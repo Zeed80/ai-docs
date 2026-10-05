@@ -223,7 +223,7 @@ async def test_settlement_failure_blocks_without_plan_or_fallback(test_engine, m
     async def broken_settle(*_args, **_kwargs):
         raise RuntimeError("settlement unavailable")
 
-    monkeypatch.setattr(planner_budget_context, "settle_budget", broken_settle)
+    monkeypatch.setattr(planner_budget_context, "settle_llm_call_with_usage_receipt", broken_settle)
     assert not await plan_work_order_detached(order_id, session_factory=factory)
     assert len(calls) == 1
     async with factory() as db:

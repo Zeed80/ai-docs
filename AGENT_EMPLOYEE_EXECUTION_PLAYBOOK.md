@@ -1081,6 +1081,15 @@ publication fence сериализует order/ledger/User, не инверти�
 evidence и ограничения: `docs/agent-employee-delivery/E21-http-recipient-attempts.md`.
 Full E21 и E24 не закрыты; actual token/cost receipts и bounds — следующий контракт.
 
+**E21.2b9 (TESTED / REVIEWED / DEPLOYED):** atomic settlement физической
+`llm_calls` reservation direct Ollama text helpers (включая SQL recipient и
+detached planner/verifier) пишет versioned `llm_usage_receipt.v1` в WorkEvent той
+же транзакцией. Missing/invalid counts — unknown, стоимость без тарифа — unknown,
+не 0; повтор с иными counts — conflict. Owner-bound aggregate различает known
+lower bound и полную сумму. 447 tests passed, review-цикл закрыт. Отчёт:
+`docs/agent-employee-delivery/E21-provider-usage-receipts.md`. AIRouter/streaming
+AgentSession пока без receipt (unknown); token/cost bounds и вся E21 не закрыты.
+
 1. Сначала точные единицы: tool attempts, LLM calls, tokens, cost, active time,
    replan count. Ожидание человека не смешивать с активным временем без ADR.
 2. Целевые defaults: 2 часа active, 200 tools, 50 LLM calls, 3 replans. Не включать

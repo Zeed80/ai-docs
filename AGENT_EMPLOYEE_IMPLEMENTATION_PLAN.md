@@ -54,8 +54,12 @@ Once-fence, parent timeout, final publication fence и receipt-before-stop
 проверены; generic capability SQL-table пока fail-closed. 277 tests passed,
 отдельный read-only security review без findings. Выпуск и границы:
 `docs/agent-employee-delivery/E21-http-recipient-attempts.md`.
-Следующий контракт P1.1 — фактические token/cost receipts с явным unknown и
-доказанные pre-dispatch bounds; остальные HTTP recipients ещё не мигрированы.
+E21.2b9 проверен и выпущен: direct Ollama text helpers, SQL recipient и
+detached planner/verifier атомарно пишут usage receipt вместе с charge;
+unknown остаётся unknown, стоимость без тарифа не 0. 447 tests passed. Отчёт:
+`docs/agent-employee-delivery/E21-provider-usage-receipts.md`.
+Следующий контракт P1.1 — usage receipts для AIRouter/streaming AgentSession и
+доказанные pre-dispatch token/cost bounds; остальные HTTP recipients — остаток.
 Оставшиеся AIRouter/direct paths, entry adapters, legacy reconciliation,
 token/cost accounting и active/replan остаются E21.2b+/E21.3;
 вся E21 не завершена. Отчёт: `docs/agent-employee-delivery/E21-budget-ledger.md`.

@@ -24,7 +24,9 @@ from app.domain.work_budget_ledger import (
     BudgetReservationConflict,
     reserve_budget_for_dispatch,
     settle_budget,
+    settle_llm_call_with_usage_receipt,
 )
+from app.domain.work_budget_usage import OllamaUsageEvidence
 from app.domain.work_orders import attempt_owns_lease
 
 
@@ -465,15 +467,29 @@ class WorkBudgetContext:
         await self._active_ledger()
         return operation_key
 
-    async def charge_provider_call(self, operation_key: str) -> None:
+    async def charge_provider_call(
+        self,
+        operation_key: str,
+        *,
+        usage_evidence: OllamaUsageEvidence | None = None,
+    ) -> None:
         """Charge one dispatched attempt, whether it returned or raised."""
         try:
-            await settle_budget(
-                self.session_factory,
-                work_order_id=self.work_order_id,
-                operation_key=operation_key,
-                actual_units=1,
-            )
+            if usage_evidence is None:
+                await settle_budget(
+                    self.session_factory,
+                    work_order_id=self.work_order_id,
+                    operation_key=operation_key,
+                    actual_units=1,
+                )
+            else:
+                await settle_llm_call_with_usage_receipt(
+                    self.session_factory,
+                    work_order_id=self.work_order_id,
+                    operation_key=operation_key,
+                    expected_owner_key=self.expected_owner_key or "",
+                    evidence=usage_evidence,
+                )
         except (BudgetBindingConflict, BudgetReservationConflict, BudgetLedgerError) as exc:
             raise await self._stop(
                 BudgetExecutionStopped(
@@ -961,14 +977,28 @@ class RecipientWorkBudgetContext:
         await self._active_ledger()
         return operation_key
 
-    async def charge_provider_call(self, operation_key: str) -> None:
+    async def charge_provider_call(
+        self,
+        operation_key: str,
+        *,
+        usage_evidence: OllamaUsageEvidence | None = None,
+    ) -> None:
         try:
-            await settle_budget(
-                self.session_factory,
-                work_order_id=self.work_order_id,
-                operation_key=operation_key,
-                actual_units=1,
-            )
+            if usage_evidence is None:
+                await settle_budget(
+                    self.session_factory,
+                    work_order_id=self.work_order_id,
+                    operation_key=operation_key,
+                    actual_units=1,
+                )
+            else:
+                await settle_llm_call_with_usage_receipt(
+                    self.session_factory,
+                    work_order_id=self.work_order_id,
+                    operation_key=operation_key,
+                    expected_owner_key=self.owner_key,
+                    evidence=usage_evidence,
+                )
         except Exception as exc:
             raise await self._stop(
                 BudgetExecutionStopped(
@@ -1267,14 +1297,28 @@ class DetachedVerifierBudgetContext:
         await self._assert_current()
         await self._assert_budget_bounds()
 
-    async def charge_provider_call(self, operation_key: str) -> None:
+    async def charge_provider_call(
+        self,
+        operation_key: str,
+        *,
+        usage_evidence: OllamaUsageEvidence | None = None,
+    ) -> None:
         try:
-            await settle_budget(
-                self.session_factory,
-                work_order_id=self.work_order_id,
-                operation_key=operation_key,
-                actual_units=1,
-            )
+            if usage_evidence is None:
+                await settle_budget(
+                    self.session_factory,
+                    work_order_id=self.work_order_id,
+                    operation_key=operation_key,
+                    actual_units=1,
+                )
+            else:
+                await settle_llm_call_with_usage_receipt(
+                    self.session_factory,
+                    work_order_id=self.work_order_id,
+                    operation_key=operation_key,
+                    expected_owner_key=self.owner_key,
+                    evidence=usage_evidence,
+                )
         except (BudgetBindingConflict, BudgetReservationConflict, BudgetLedgerError) as exc:
             raise await self._stop(
                 BudgetExecutionStopped(

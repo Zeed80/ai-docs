@@ -316,7 +316,7 @@ async def test_settlement_failure_stops_after_one_post_without_retry(test_engine
     async def broken_settle(*_args, **_kwargs):
         raise RuntimeError("settlement database unavailable")
 
-    monkeypatch.setattr(work_budget_context, "settle_budget", broken_settle)
+    monkeypatch.setattr(work_budget_context, "settle_llm_call_with_usage_receipt", broken_settle)
     with bind_airouter_budget_context(context):
         with pytest.raises(BudgetExecutionStopped) as stopped:
             await ollama_client.generate("one post", max_retries=1)

@@ -9,11 +9,17 @@ import json
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 
 import httpx
 import structlog
 
 from app.config import settings
+from app.domain.work_budget_usage import (
+    OllamaUsageEvidence,
+    ollama_usage_from_body,
+    unknown_ollama_usage,
+)
 
 logger = structlog.get_logger()
 
@@ -23,6 +29,21 @@ def _ambient_budget_context():
     from app.ai.work_budget_context import current_airouter_budget_context
 
     return current_airouter_budget_context()
+
+
+def _capture_budgeted_ollama_response(
+    response,
+) -> tuple[Any, OllamaUsageEvidence, Exception | None]:
+    """Capture status/body usage before client close without hiding its error."""
+    try:
+        response.raise_for_status()
+    except Exception as exc:
+        return None, unknown_ollama_usage("http_error"), exc
+    try:
+        body = response.json()
+    except Exception as exc:
+        return None, unknown_ollama_usage("response_body_invalid"), exc
+    return body, ollama_usage_from_body(body), None
 
 
 class AIBackend(str, Enum):
@@ -257,6 +278,9 @@ async def generate(
         try:
             operation_key = None
             dispatched = False
+            usage_evidence = unknown_ollama_usage("response_not_observed")
+            data = None
+            response_error = None
             if budget_context is not None:
                 operation_key = await budget_context.prepare_provider_call(
                     logical_call_no=logical_call_no,
@@ -276,13 +300,24 @@ async def generate(
                         json=payload,
                     )
                     elapsed_ms = int((time.time() - start) * 1000)
+                    if budget_context is not None:
+                        data, usage_evidence, response_error = _capture_budgeted_ollama_response(
+                            response
+                        )
             finally:
                 if operation_key is not None and dispatched:
-                    await budget_context.charge_provider_call(operation_key)
+                    await budget_context.charge_provider_call(
+                        operation_key,
+                        usage_evidence=usage_evidence,
+                    )
                     await budget_context.assert_direct_text_current()
 
-            response.raise_for_status()
-            data = response.json()
+            if budget_context is not None:
+                if response_error is not None:
+                    raise response_error
+            else:
+                response.raise_for_status()
+                data = response.json()
 
             breaker.record_success()
 
@@ -689,6 +724,9 @@ async def generate_json(
         try:
             operation_key = None
             dispatched = False
+            usage_evidence = unknown_ollama_usage("response_not_observed")
+            data = None
+            response_error = None
             if ambient_budget_context is not None:
                 operation_key = await ambient_budget_context.prepare_provider_call(
                     logical_call_no=logical_call_no,
@@ -713,15 +751,26 @@ async def generate_json(
                     dispatched = True
                     response = await client.post(url, json=payload)
                     elapsed_ms = int((time.time() - start) * 1000)
+                    if active_budget_context := budget_context or ambient_budget_context:
+                        data, usage_evidence, response_error = _capture_budgeted_ollama_response(
+                            response
+                        )
             finally:
                 if operation_key is not None and dispatched:
                     active_budget_context = budget_context or ambient_budget_context
-                    await active_budget_context.charge_provider_call(operation_key)
+                    await active_budget_context.charge_provider_call(
+                        operation_key,
+                        usage_evidence=usage_evidence,
+                    )
                     if ambient_budget_context is not None:
                         await ambient_budget_context.assert_direct_text_current()
 
-            response.raise_for_status()
-            data = response.json()
+            if budget_context is not None or ambient_budget_context is not None:
+                if response_error is not None:
+                    raise response_error
+            else:
+                response.raise_for_status()
+                data = response.json()
 
             if use_llamacpp:
                 raw = data.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -836,6 +885,9 @@ async def chat(
     try:
         operation_key = None
         dispatched = False
+        usage_evidence = unknown_ollama_usage("response_not_observed")
+        data = None
+        response_error = None
         if budget_context is not None:
             operation_key = await budget_context.prepare_provider_call(
                 logical_call_no=logical_call_no,
@@ -852,13 +904,24 @@ async def chat(
                     json=payload,
                 )
                 elapsed_ms = int((time.time() - start) * 1000)
+                if budget_context is not None:
+                    data, usage_evidence, response_error = _capture_budgeted_ollama_response(
+                        response
+                    )
         finally:
             if operation_key is not None and dispatched:
-                await budget_context.charge_provider_call(operation_key)
+                await budget_context.charge_provider_call(
+                    operation_key,
+                    usage_evidence=usage_evidence,
+                )
                 await budget_context.assert_direct_text_current()
 
-        response.raise_for_status()
-        data = response.json()
+        if budget_context is not None:
+            if response_error is not None:
+                raise response_error
+        else:
+            response.raise_for_status()
+            data = response.json()
         breaker.record_success()
 
         return OllamaResponse(

@@ -586,3 +586,151 @@ async def settle_budget(
             if blocker is not None:
                 ledger.blocker = blocker
         return reservation
+
+
+async def settle_llm_call_with_usage_receipt(
+    session_factory,
+    *,
+    work_order_id: uuid.UUID,
+    operation_key: str,
+    expected_owner_key: str,
+    evidence,
+) -> tuple[WorkBudgetReservation, WorkEvent]:
+    """Atomically settle one physical LLM call and append its usage receipt.
+
+    Lock order is WorkOrder -> ledger -> reservation -> event sequence.  This
+    deliberately differs from calling ``settle_budget`` followed by
+    ``append_event``: that split would permit a charged call with no receipt.
+    """
+    from app.domain.work_budget_usage import (
+        LLM_USAGE_ACTOR,
+        LLM_USAGE_EVENT_TYPE,
+        canonical_usage_payload,
+        usage_event_id,
+        valid_usage_receipt_payload,
+    )
+
+    actual = Decimal(1)
+    settlement_digest = _digest({"unknown": False, "actual_units": _canonical_decimal(actual)})
+    async with session_factory() as db:
+        async with db.begin():
+            order = await db.get(WorkOrder, work_order_id, with_for_update=True)
+            if (
+                order is None
+                or order.owner_key != expected_owner_key
+                or order.budget_ledger_id is None
+            ):
+                raise BudgetBindingConflict("WorkOrder has no initialized budget ledger")
+            ledger = await db.get(WorkBudgetLedger, order.budget_ledger_id, with_for_update=True)
+            if ledger is None or ledger.owner_key != expected_owner_key:
+                raise BudgetBindingConflict("WorkOrder budget binding is invalid")
+            reservation = await db.scalar(
+                select(WorkBudgetReservation)
+                .where(
+                    WorkBudgetReservation.ledger_id == ledger.id,
+                    WorkBudgetReservation.operation_key == operation_key,
+                )
+                .with_for_update()
+            )
+            if (
+                reservation is None
+                or reservation.work_order_id != order.id
+                or reservation.dimension != "llm_calls"
+                or Decimal(reservation.reserved_units) != 1
+            ):
+                raise BudgetReservationConflict(
+                    "Usage receipt requires the exact physical LLM reservation"
+                )
+            expected_binding = _digest(
+                {
+                    "work_order_id": str(order.id),
+                    "operation_key": reservation.operation_key,
+                    "dimension": reservation.dimension,
+                    "reserved_units": _canonical_decimal(Decimal(reservation.reserved_units)),
+                    "request_digest": _request_digest(reservation.request_digest),
+                }
+            )
+            if reservation.binding_digest != expected_binding:
+                raise BudgetReservationConflict("LLM reservation binding digest is invalid")
+
+            receipt_payload = canonical_usage_payload(
+                reservation, evidence, owner_key=expected_owner_key
+            )
+            receipt_id = usage_event_id(reservation.id)
+            existing_event = await db.get(WorkEvent, receipt_id)
+            if reservation.state == "charged":
+                if (
+                    reservation.settlement_digest != settlement_digest
+                    or reservation.actual_units is None
+                    or Decimal(reservation.actual_units) != 1
+                    or reservation.actual_unknown is not False
+                    or reservation.settled_at is None
+                    or existing_event is None
+                ):
+                    raise BudgetReservationConflict(
+                        "Charged LLM reservation has no matching atomic usage receipt"
+                    )
+                if (
+                    existing_event.work_order_id != order.id
+                    or existing_event.event_type != LLM_USAGE_EVENT_TYPE
+                    or existing_event.actor != LLM_USAGE_ACTOR
+                    or not valid_usage_receipt_payload(
+                        existing_event.payload,
+                        reservation,
+                        owner_key=expected_owner_key,
+                    )
+                    or existing_event.payload != receipt_payload
+                ):
+                    raise BudgetReservationConflict(
+                        "LLM usage receipt is already recorded with different evidence"
+                    )
+                return reservation, existing_event
+            if reservation.state != "reserved":
+                raise BudgetReservationConflict("Unknown LLM settlement cannot be reopened")
+            if existing_event is not None:
+                raise BudgetReservationConflict(
+                    "Reserved LLM call already has an inconsistent usage receipt"
+                )
+
+            reservation.state = "charged"
+            reservation.actual_units = actual
+            reservation.actual_unknown = False
+            reservation.settlement_digest = settlement_digest
+            reservation.settled_at = datetime.now(UTC)
+            current = await _usage(db, ledger.id, reservation.dimension)
+            actual_total = _exact_settlement_total(
+                current, Decimal(reservation.reserved_units), actual
+            )
+            limit = getattr(ledger, DIMENSION_LIMITS[reservation.dimension])
+            blocker = None
+            if limit is not None and actual_total > Decimal(limit):
+                blocker = {
+                    "code": "budget_charge_exceeded",
+                    "dimension": reservation.dimension,
+                    "limit": str(limit),
+                    "charged_or_reserved": str(actual_total),
+                }
+                ledger.blocker = blocker
+            reservation.blocker = blocker
+            sequence = (
+                int(
+                    await db.scalar(
+                        select(func.coalesce(func.max(WorkEvent.sequence), 0)).where(
+                            WorkEvent.work_order_id == order.id
+                        )
+                    )
+                    or 0
+                )
+                + 1
+            )
+            event = WorkEvent(
+                id=receipt_id,
+                work_order_id=order.id,
+                sequence=sequence,
+                event_type=LLM_USAGE_EVENT_TYPE,
+                actor=LLM_USAGE_ACTOR,
+                payload=receipt_payload,
+            )
+            db.add(event)
+            await db.flush()
+        return reservation, event
