@@ -135,34 +135,45 @@ def capture_ollama_usage() -> Iterator[OllamaUsageCapture]:
         _OLLAMA_USAGE_CAPTURE.reset(token)
 
 
+def _record_ollama_evidence(evidence: OllamaUsageEvidence) -> None:
+    capture = _OLLAMA_USAGE_CAPTURE.get()
+    if capture is None:
+        return
+    capture.observations += 1
+    # One reservation covers one POST; a second response cannot be attributed
+    # to it, so the receipt degrades to unknown for good.
+    capture.evidence = (
+        evidence if capture.observations == 1 else unknown_ollama_usage("response_not_observed")
+    )
+
+
+def record_ollama_http_error() -> None:
+    """Record that the provider answered with an HTTP error status."""
+    _record_ollama_evidence(unknown_ollama_usage("http_error"))
+
+
+def record_ollama_terminal_body(body: Any) -> None:
+    """Record strict counters from a full body or the final streaming chunk."""
+    _record_ollama_evidence(ollama_usage_from_body(body))
+
+
 def observe_ollama_response(response) -> Any:
     """Raise/parse an Ollama response, recording usage for an active capture.
 
     Counts come from the raw JSON body, never from the coerced ``AIUsage``
     model, so ``"3"``/``True`` stay unknown instead of becoming integers.
     """
-    capture = _OLLAMA_USAGE_CAPTURE.get()
-    if capture is None:
-        response.raise_for_status()
-        return response.json()
-    capture.observations += 1
-    if capture.observations > 1:
-        # One reservation covers one POST; a second response cannot be
-        # attributed to it, so the receipt degrades to unknown for good.
-        capture.evidence = unknown_ollama_usage("response_not_observed")
-        response.raise_for_status()
-        return response.json()
     try:
         response.raise_for_status()
     except Exception:
-        capture.evidence = unknown_ollama_usage("http_error")
+        record_ollama_http_error()
         raise
     try:
         body = response.json()
     except Exception:
-        capture.evidence = unknown_ollama_usage("response_body_invalid")
+        _record_ollama_evidence(unknown_ollama_usage("response_body_invalid"))
         raise
-    capture.evidence = ollama_usage_from_body(body)
+    record_ollama_terminal_body(body)
     return body
 
 

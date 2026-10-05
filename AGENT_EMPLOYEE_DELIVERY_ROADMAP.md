@@ -54,8 +54,11 @@ unknown остаётся unknown, стоимость без тарифа не 0.
 E21.2b10 выпущен: durable AIRouter Ollama attempts пишут тот же атомарный receipt
 со строгим evidence с HTTP-границы провайдера. 639 passed. Отчёт:
 `docs/agent-employee-delivery/E21-airouter-usage-receipts.md`.
-Следующий контракт P1.1 — usage receipts для streaming AgentSession и доказанные
-pre-dispatch token/cost bounds; остальные HTTP recipients — остаток.
+E21.2b11 выпущен: streaming AgentSession на Ollama-пути пишет тот же receipt;
+не-Ollama и контексты без frozen owner — явный unknown. Отчёт:
+`docs/agent-employee-delivery/E21-agent-session-usage-receipts.md`.
+Следующий контракт P1.1 — доказанные pre-dispatch token bounds (сейчас любой
+конечный token/cost cap — fail-closed); остальные HTTP recipients — остаток.
 Остаются как минимум:
 
 - остальные AIRouter/headless/provider paths;

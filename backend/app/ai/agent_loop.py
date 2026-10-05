@@ -24,6 +24,12 @@ from app.ai.streaming_scrubber import StreamingContextScrubber
 from app.ai.thinking_params import thinking_request_params as _thinking_request_params
 from app.ai.work_budget_context import BudgetExecutionStopped, WorkBudgetContext
 from app.config import settings as _settings
+from app.domain.work_budget_usage import (
+    capture_ollama_usage,
+    ollama_usage_from_body,
+    record_ollama_http_error,
+    record_ollama_terminal_body,
+)
 
 logger = structlog.get_logger()
 
@@ -1386,7 +1392,11 @@ async def _call_ollama_streaming(
 
     async with httpx.AsyncClient(timeout=float(config.llm_timeout_seconds)) as client:
         async with client.stream("POST", f"{ollama_url}/api/chat", json=payload) as resp:
-            resp.raise_for_status()
+            try:
+                resp.raise_for_status()
+            except Exception:
+                record_ollama_http_error()
+                raise
             async for line in resp.aiter_lines():
                 if not line:
                     continue
@@ -1407,6 +1417,7 @@ async def _call_ollama_streaming(
                     await on_token(visible)
 
                 if chunk.get("done"):
+                    record_ollama_terminal_body(chunk)
                     trailing = scrubber.flush()
                     if trailing:
                         full_content += trailing
@@ -1423,9 +1434,12 @@ async def _call_ollama_streaming(
                     # their own (differently-shaped) usage parsing, deferred —
                     # see AGENT_SYSTEM_REMEDIATION_PLAN.md Б15.
                     if "prompt_eval_count" in chunk or "eval_count" in chunk:
+                        # Strict counters: a malformed value is unknown (None),
+                        # never coerced and never a crash that drops the answer.
+                        evidence = ollama_usage_from_body(chunk)
                         final_message["_usage"] = {
-                            "input_tokens": int(chunk.get("prompt_eval_count") or 0),
-                            "output_tokens": int(chunk.get("eval_count") or 0),
+                            "input_tokens": evidence.input_tokens.units,
+                            "output_tokens": evidence.output_tokens.units,
                         }
                     break
 
@@ -2000,105 +2014,118 @@ async def _call_provider_streaming(
     for p in providers_to_try:
         attempts = 2 if p == "ollama" else 1
         for attempt in range(1, attempts + 1):
-            try:
-                operation_key = None
-                if budget_context is not None:
-                    operation_key = await budget_context.prepare_provider_call(
-                        logical_call_no=logical_call_no,
-                        provider=p,
-                        provider_attempt=attempt,
-                        request={
-                            "messages": messages,
-                            "tools": tools,
-                            "system_prompt": system_prompt,
-                            "provider": p,
-                            "provider_attempt": attempt,
-                            "model": model_override or config.worker_model,
-                            "disable_thinking": disable_thinking_override,
-                            "thinking_level": thinking_level_override,
-                            "max_output_tokens": max_tokens,
-                        },
-                    )
-                if p == "ollama":
-                    result = await _call_ollama_streaming(
-                        messages,
-                        tools,
-                        system_prompt,
-                        config,
-                        on_token,
-                        model_override=model_override,
-                        disable_thinking=disable_thinking_override,
-                        thinking_level=thinking_level_override,
-                        max_tokens=max_tokens,
-                    )
-                elif p in _OPENAI_COMPATIBLE_PROVIDERS:
-                    result = await _call_openai_streaming(
-                        messages,
-                        tools,
-                        system_prompt,
-                        config,
-                        on_token,
-                        provider=p,
-                        model_override=model_override,
-                        disable_thinking=disable_thinking_override,
-                        thinking_level=thinking_level_override,
-                        on_thinking=on_thinking,
-                        max_tokens=max_tokens,
-                    )
-                elif p == "anthropic":
-                    result = await _call_anthropic_streaming(
-                        messages,
-                        tools,
-                        system_prompt,
-                        config,
-                        on_token,
-                        max_tokens=max_tokens,
-                    )
-                else:
-                    logger.warning("unknown_provider_falling_back", provider=p)
-                    result = await _call_ollama_streaming(
-                        messages,
-                        tools,
-                        system_prompt,
-                        config,
-                        on_token,
-                        model_override=model_override,
-                        disable_thinking=disable_thinking_override,
-                        thinking_level=thinking_level_override,
-                        max_tokens=max_tokens,
-                    )
-                if operation_key is not None:
-                    await budget_context.charge_provider_call(operation_key)
-                return result
-            except BaseException as exc:
-                if isinstance(exc, BudgetExecutionStopped):
-                    raise
-                if operation_key is not None:
-                    await budget_context.charge_provider_call(operation_key)
-                if not isinstance(exc, Exception):
-                    raise
-                last_exc = exc
-                if isinstance(exc, transient_errors):
+            # Only the Ollama HTTP path (including the unknown-provider
+            # fallback) yields receipt v1 evidence; other providers keep a
+            # missing receipt, i.e. explicit unknown usage, never zero.
+            ollama_path = p == "ollama" or (
+                p not in _OPENAI_COMPATIBLE_PROVIDERS and p != "anthropic"
+            )
+            with capture_ollama_usage() as usage:
+                try:
+                    operation_key = None
+                    if budget_context is not None:
+                        operation_key = await budget_context.prepare_provider_call(
+                            logical_call_no=logical_call_no,
+                            provider=p,
+                            provider_attempt=attempt,
+                            request={
+                                "messages": messages,
+                                "tools": tools,
+                                "system_prompt": system_prompt,
+                                "provider": p,
+                                "provider_attempt": attempt,
+                                "model": model_override or config.worker_model,
+                                "disable_thinking": disable_thinking_override,
+                                "thinking_level": thinking_level_override,
+                                "max_output_tokens": max_tokens,
+                            },
+                        )
+                    if p == "ollama":
+                        result = await _call_ollama_streaming(
+                            messages,
+                            tools,
+                            system_prompt,
+                            config,
+                            on_token,
+                            model_override=model_override,
+                            disable_thinking=disable_thinking_override,
+                            thinking_level=thinking_level_override,
+                            max_tokens=max_tokens,
+                        )
+                    elif p in _OPENAI_COMPATIBLE_PROVIDERS:
+                        result = await _call_openai_streaming(
+                            messages,
+                            tools,
+                            system_prompt,
+                            config,
+                            on_token,
+                            provider=p,
+                            model_override=model_override,
+                            disable_thinking=disable_thinking_override,
+                            thinking_level=thinking_level_override,
+                            on_thinking=on_thinking,
+                            max_tokens=max_tokens,
+                        )
+                    elif p == "anthropic":
+                        result = await _call_anthropic_streaming(
+                            messages,
+                            tools,
+                            system_prompt,
+                            config,
+                            on_token,
+                            max_tokens=max_tokens,
+                        )
+                    else:
+                        logger.warning("unknown_provider_falling_back", provider=p)
+                        result = await _call_ollama_streaming(
+                            messages,
+                            tools,
+                            system_prompt,
+                            config,
+                            on_token,
+                            model_override=model_override,
+                            disable_thinking=disable_thinking_override,
+                            thinking_level=thinking_level_override,
+                            max_tokens=max_tokens,
+                        )
+                    if operation_key is not None:
+                        await budget_context.charge_provider_call(
+                            operation_key,
+                            usage_evidence=usage.evidence if ollama_path else None,
+                        )
+                    return result
+                except BaseException as exc:
+                    if isinstance(exc, BudgetExecutionStopped):
+                        raise
+                    if operation_key is not None:
+                        await budget_context.charge_provider_call(
+                            operation_key,
+                            usage_evidence=usage.evidence if ollama_path else None,
+                        )
+                    if not isinstance(exc, Exception):
+                        raise
+                    last_exc = exc
+                    if isinstance(exc, transient_errors):
+                        logger.warning(
+                            "provider_transient_error",
+                            provider=p,
+                            attempt=attempt,
+                            attempts=attempts,
+                            error=str(exc),
+                        )
+                        if attempt < attempts:
+                            await asyncio.sleep(0.75 * attempt)
+                            continue
+                        break
                     logger.warning(
-                        "provider_transient_error",
+                        "provider_call_error",
                         provider=p,
-                        attempt=attempt,
-                        attempts=attempts,
+                        model=model_override or config.worker_model,
+                        url=getattr(config, "ollama_url", None) if p == "ollama" else None,
+                        error_type=type(exc).__name__,
                         error=str(exc),
                     )
-                    if attempt < attempts:
-                        await asyncio.sleep(0.75 * attempt)
-                        continue
                     break
-                logger.warning(
-                    "provider_call_error",
-                    provider=p,
-                    model=model_override or config.worker_model,
-                    url=getattr(config, "ollama_url", None) if p == "ollama" else None,
-                    error_type=type(exc).__name__,
-                    error=str(exc),
-                )
-                break
         logger.warning(
             "provider_call_failed_trying_fallback",
             provider=p,

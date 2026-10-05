@@ -1097,6 +1097,13 @@ body на HTTP-границе `OllamaProvider` (task-local capture), не из �
 Отчёт: `docs/agent-employee-delivery/E21-airouter-usage-receipts.md`. Streaming
 AgentSession пока без receipt; token/cost bounds и вся E21 не закрыты.
 
+**E21.2b11 (TESTED / DEPLOYED):** streaming AgentSession (основной путь чата) на
+Ollama-пути пишет atomic usage receipt: HTTP status и финальный `done`-чанк потока,
+оборванный/отменённый поток — unknown. Не-Ollama провайдеры и контексты без frozen
+owner — legacy charge без receipt (unknown, без sticky stop). Нечисловой счётчик
+больше не роняет потоковый ответ. Отчёт:
+`docs/agent-employee-delivery/E21-agent-session-usage-receipts.md`.
+
 1. Сначала точные единицы: tool attempts, LLM calls, tokens, cost, active time,
    replan count. Ожидание человека не смешивать с активным временем без ADR.
 2. Целевые defaults: 2 часа active, 200 tools, 50 LLM calls, 3 replans. Не включать

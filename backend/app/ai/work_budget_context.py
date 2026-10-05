@@ -473,9 +473,13 @@ class WorkBudgetContext:
         *,
         usage_evidence: OllamaUsageEvidence | None = None,
     ) -> None:
-        """Charge one dispatched attempt, whether it returned or raised."""
+        """Charge one dispatched attempt, whether it returned or raised.
+
+        A receipt binds to a frozen owner; a context without one keeps the
+        legacy charge, so its usage stays a missing receipt (unknown).
+        """
         try:
-            if usage_evidence is None:
+            if usage_evidence is None or self.expected_owner_key is None:
                 await settle_budget(
                     self.session_factory,
                     work_order_id=self.work_order_id,
@@ -487,7 +491,7 @@ class WorkBudgetContext:
                     self.session_factory,
                     work_order_id=self.work_order_id,
                     operation_key=operation_key,
-                    expected_owner_key=self.expected_owner_key or "",
+                    expected_owner_key=self.expected_owner_key,
                     evidence=usage_evidence,
                 )
         except (BudgetBindingConflict, BudgetReservationConflict, BudgetLedgerError) as exc:
