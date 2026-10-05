@@ -33,6 +33,7 @@ prepare_runtime_user
 if [ "${SKIP_DB_MIGRATE:-}" != "1" ]; then
   echo "=== Running Alembic migrations ==="
   alembic upgrade heads
+  python -m scripts.check_schema_drift || echo "=== Schema drift detected; see message above ==="
 else
   echo "=== Skipping Alembic (SKIP_DB_MIGRATE=1) ==="
 fi
