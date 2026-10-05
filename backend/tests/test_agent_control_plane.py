@@ -197,6 +197,10 @@ async def test_control_plane_status_counts_review_queues(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_control_plane_status_does_not_count_rejected_tasks_as_open(client: AsyncClient):
+    # The test DB is shared with other modules, so assert the delta, not a total.
+    before = await client.get("/api/agent/control-plane/status")
+    assert before.status_code == 200
+    open_before = before.json()["tasks_open"]
     created = await client.post(
         "/api/agent/tasks",
         json={
@@ -222,7 +226,7 @@ async def test_control_plane_status_does_not_count_rejected_tasks_as_open(client
     resp = await client.get("/api/agent/control-plane/status")
 
     assert resp.status_code == 200
-    assert resp.json()["tasks_open"] == 1
+    assert resp.json()["tasks_open"] == open_before + 1
 
 
 @pytest.mark.asyncio
