@@ -355,7 +355,7 @@ async def test_budget_storage_failure_never_recovers_or_retries(
     monkeypatch.setattr(
         f"app.ai.work_budget_context.{failure_target}_budget_for_dispatch"
         if failure_target == "reserve"
-        else "app.ai.work_budget_context.settle_budget",
+        else "app.ai.work_budget_context.settle_llm_call_with_usage_receipt",
         unavailable,
     )
     with bind_airouter_budget_context(context):

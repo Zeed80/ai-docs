@@ -1090,6 +1090,13 @@ lower bound и полную сумму. 447 tests passed, review-цикл зак
 `docs/agent-employee-delivery/E21-provider-usage-receipts.md`. AIRouter/streaming
 AgentSession пока без receipt (unknown); token/cost bounds и вся E21 не закрыты.
 
+**E21.2b10 (TESTED / DEPLOYED):** durable AIRouter Ollama attempts списываются через
+атомарный settlement E21.2b9 с `llm_usage_receipt.v1`; evidence снимается с сырого
+body на HTTP-границе `OllamaProvider` (task-local capture), не из приводимого
+`AIUsage`. Нецелые счётчики больше не роняют валидный ответ. 639 passed, 1 skipped.
+Отчёт: `docs/agent-employee-delivery/E21-airouter-usage-receipts.md`. Streaming
+AgentSession пока без receipt; token/cost bounds и вся E21 не закрыты.
+
 1. Сначала точные единицы: tool attempts, LLM calls, tokens, cost, active time,
    replan count. Ожидание человека не смешивать с активным временем без ADR.
 2. Целевые defaults: 2 часа active, 200 tools, 50 LLM calls, 3 replans. Не включать

@@ -5,7 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from dataclasses import dataclass
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -104,6 +107,63 @@ def unknown_ollama_usage(reason: str) -> OllamaUsageEvidence:
         input_tokens=component,
         output_tokens=component,
     )
+
+
+@dataclass
+class OllamaUsageCapture:
+    """Task-local sink for the one HTTP response of one physical reservation."""
+
+    evidence: OllamaUsageEvidence = field(
+        default_factory=lambda: unknown_ollama_usage("response_not_observed")
+    )
+    observations: int = 0
+
+
+_OLLAMA_USAGE_CAPTURE: ContextVar[OllamaUsageCapture | None] = ContextVar(
+    "ollama_usage_capture", default=None
+)
+
+
+@contextmanager
+def capture_ollama_usage() -> Iterator[OllamaUsageCapture]:
+    """Collect strict raw-body evidence while one budgeted dispatch runs."""
+    capture = OllamaUsageCapture()
+    token = _OLLAMA_USAGE_CAPTURE.set(capture)
+    try:
+        yield capture
+    finally:
+        _OLLAMA_USAGE_CAPTURE.reset(token)
+
+
+def observe_ollama_response(response) -> Any:
+    """Raise/parse an Ollama response, recording usage for an active capture.
+
+    Counts come from the raw JSON body, never from the coerced ``AIUsage``
+    model, so ``"3"``/``True`` stay unknown instead of becoming integers.
+    """
+    capture = _OLLAMA_USAGE_CAPTURE.get()
+    if capture is None:
+        response.raise_for_status()
+        return response.json()
+    capture.observations += 1
+    if capture.observations > 1:
+        # One reservation covers one POST; a second response cannot be
+        # attributed to it, so the receipt degrades to unknown for good.
+        capture.evidence = unknown_ollama_usage("response_not_observed")
+        response.raise_for_status()
+        return response.json()
+    try:
+        response.raise_for_status()
+    except Exception:
+        capture.evidence = unknown_ollama_usage("http_error")
+        raise
+    try:
+        body = response.json()
+    except Exception:
+        capture.evidence = unknown_ollama_usage("response_body_invalid")
+        raise
+    capture.evidence = ollama_usage_from_body(body)
+    return body
 
 
 def _canonical_component(component: TokenComponentEvidence) -> dict[str, Any]:

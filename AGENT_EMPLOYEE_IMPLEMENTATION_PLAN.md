@@ -58,8 +58,11 @@ E21.2b9 проверен и выпущен: direct Ollama text helpers, SQL reci
 detached planner/verifier атомарно пишут usage receipt вместе с charge;
 unknown остаётся unknown, стоимость без тарифа не 0. 447 tests passed. Отчёт:
 `docs/agent-employee-delivery/E21-provider-usage-receipts.md`.
-Следующий контракт P1.1 — usage receipts для AIRouter/streaming AgentSession и
-доказанные pre-dispatch token/cost bounds; остальные HTTP recipients — остаток.
+E21.2b10 выпущен: durable AIRouter Ollama attempts пишут тот же атомарный receipt
+со строгим evidence с HTTP-границы провайдера. 639 passed. Отчёт:
+`docs/agent-employee-delivery/E21-airouter-usage-receipts.md`.
+Следующий контракт P1.1 — usage receipts для streaming AgentSession и доказанные
+pre-dispatch token/cost bounds; остальные HTTP recipients — остаток.
 Оставшиеся AIRouter/direct paths, entry adapters, legacy reconciliation,
 token/cost accounting и active/replan остаются E21.2b+/E21.3;
 вся E21 не завершена. Отчёт: `docs/agent-employee-delivery/E21-budget-ledger.md`.

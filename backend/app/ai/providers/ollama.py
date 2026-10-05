@@ -9,6 +9,7 @@ import structlog
 
 from app.ai.providers.base import AIProvider
 from app.ai.schemas import AIRequest, AIResponse, AIUsage, ProviderKind
+from app.domain.work_budget_usage import observe_ollama_response
 
 logger = structlog.get_logger(__name__)
 
@@ -181,8 +182,7 @@ class OllamaProvider(AIProvider):
                 f"{str(self.config.base_url).rstrip('/')}/api/chat",
                 json=payload,
             )
-            response.raise_for_status()
-            body = response.json()
+            body = observe_ollama_response(response)
         message = body.get("message") or {}
         text = _recovered_text(
             message.get("content"),
@@ -196,9 +196,12 @@ class OllamaProvider(AIProvider):
             model=model,
             text=text,
             usage=AIUsage(
-                input_tokens=body.get("prompt_eval_count"),
-                output_tokens=body.get("eval_count"),
-                total_tokens=_sum_optional(body.get("prompt_eval_count"), body.get("eval_count")),
+                input_tokens=_token_count(body.get("prompt_eval_count")),
+                output_tokens=_token_count(body.get("eval_count")),
+                total_tokens=_sum_optional(
+                    _token_count(body.get("prompt_eval_count")),
+                    _token_count(body.get("eval_count")),
+                ),
                 latency_ms=int((time.perf_counter() - started) * 1000),
             ),
             raw=body,
@@ -236,8 +239,7 @@ class OllamaProvider(AIProvider):
                 f"{str(self.config.base_url).rstrip('/')}/api/chat",
                 json=payload,
             )
-            response.raise_for_status()
-            body = response.json()
+            body = observe_ollama_response(response)
         message = body.get("message") or {}
         text = _recovered_text(
             message.get("content"),
@@ -251,9 +253,12 @@ class OllamaProvider(AIProvider):
             model=model,
             text=text,
             usage=AIUsage(
-                input_tokens=body.get("prompt_eval_count"),
-                output_tokens=body.get("eval_count"),
-                total_tokens=_sum_optional(body.get("prompt_eval_count"), body.get("eval_count")),
+                input_tokens=_token_count(body.get("prompt_eval_count")),
+                output_tokens=_token_count(body.get("eval_count")),
+                total_tokens=_sum_optional(
+                    _token_count(body.get("prompt_eval_count")),
+                    _token_count(body.get("eval_count")),
+                ),
                 latency_ms=int((time.perf_counter() - started) * 1000),
             ),
             raw=body,
@@ -372,9 +377,12 @@ class OllamaProvider(AIProvider):
             model=model,
             text=text,
             usage=AIUsage(
-                input_tokens=body.get("prompt_eval_count"),
-                output_tokens=body.get("eval_count"),
-                total_tokens=_sum_optional(body.get("prompt_eval_count"), body.get("eval_count")),
+                input_tokens=_token_count(body.get("prompt_eval_count")),
+                output_tokens=_token_count(body.get("eval_count")),
+                total_tokens=_sum_optional(
+                    _token_count(body.get("prompt_eval_count")),
+                    _token_count(body.get("eval_count")),
+                ),
                 latency_ms=int((time.perf_counter() - started) * 1000),
             ),
             raw=body,
@@ -633,6 +641,17 @@ def _cosine_to_score(a: list[float], b: list[float]) -> float:
     if norm_a == 0.0 or norm_b == 0.0:
         return 0.5
     return max(0.0, min(1.0, (dot / (norm_a * norm_b) + 1.0) / 2.0))
+
+
+def _token_count(value: Any) -> int | None:
+    """Accept only a real non-negative integer counter from the raw body.
+
+    A malformed counter must not crash an otherwise valid answer, nor be
+    coerced ("3" -> 3, True -> 1) into telemetry that looks measured.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
 
 
 def _sum_optional(left: int | None, right: int | None) -> int | None:

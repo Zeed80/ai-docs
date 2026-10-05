@@ -43,6 +43,7 @@ from app.ai.schemas import (
     ProviderConfig,
     ProviderKind,
 )
+from app.domain.work_budget_usage import capture_ollama_usage
 
 logger = structlog.get_logger()
 
@@ -736,16 +737,21 @@ class AIRouter:
                         "request": attempt_request.model_dump(mode="json"),
                     },
                 )
-                try:
-                    response = await self._dispatch(provider, attempt_request, model)
-                except BaseException:
-                    # Once provider dispatch was crossed, both an error and task
-                    # cancellation consume the reservation. Revalidate before a
-                    # format retry/fallback can be considered by the caller.
-                    await budget_context.charge_provider_call(operation_key)
-                    await budget_context.assert_airouter_current()
-                    raise
-                await budget_context.charge_provider_call(operation_key)
+                with capture_ollama_usage() as usage:
+                    try:
+                        response = await self._dispatch(provider, attempt_request, model)
+                    except BaseException:
+                        # Once provider dispatch was crossed, both an error and task
+                        # cancellation consume the reservation. Revalidate before a
+                        # format retry/fallback can be considered by the caller.
+                        await budget_context.charge_provider_call(
+                            operation_key, usage_evidence=usage.evidence
+                        )
+                        await budget_context.assert_airouter_current()
+                        raise
+                    await budget_context.charge_provider_call(
+                        operation_key, usage_evidence=usage.evidence
+                    )
                 await budget_context.assert_airouter_current()
                 return response
 
