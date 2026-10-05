@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DurableChatTransport } from "@/lib/durable-chat";
-import { mutFetch } from "@/lib/auth";
+import { mutFetch, redirectToLogin } from "@/lib/auth";
 
-vi.mock("@/lib/auth", () => ({ mutFetch: vi.fn() }));
+vi.mock("@/lib/auth", () => ({ mutFetch: vi.fn(), redirectToLogin: vi.fn() }));
 const fetcher = vi.mocked(mutFetch);
+const toLogin = vi.mocked(redirectToLogin);
 const run = {id: "run", session_id: "session", work_order_id: "order", request_id: "request",
   status: "running", result_message_id: null, blocker: null};
 const response = (body: unknown) => new Response(JSON.stringify(body), {status: 200});
@@ -13,7 +14,7 @@ const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve()
 let transport: DurableChatTransport;
 const emit = vi.fn<(event: Record<string, unknown>) => void>();
 
-beforeEach(() => { vi.useFakeTimers(); fetcher.mockReset(); emit.mockReset(); transport = new DurableChatTransport(emit); });
+beforeEach(() => { vi.useFakeTimers(); fetcher.mockReset(); toLogin.mockReset(); emit.mockReset(); transport = new DurableChatTransport(emit); });
 afterEach(() => { transport.close(); vi.useRealTimers(); });
 
 describe("долговечный транспорт чата", () => {
@@ -177,6 +178,26 @@ describe("долговечный транспорт чата", () => {
     await transport.watchSession("session"); await flush();
     expect(emit).toHaveBeenCalledWith({type: "status", content: 'Задача: blocked. {"code":"step_failed"}'});
     expect(emit).toHaveBeenCalledWith({type: "done"});
+  });
+
+  it("истёкшая сессия при восстановлении ведёт на вход без бесконечных повторов", async () => {
+    fetcher.mockResolvedValue(new Response("expired", {status: 401}));
+    await transport.watchSession("session"); await flush();
+    await vi.advanceTimersByTimeAsync(10000); await flush();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(toLogin).toHaveBeenCalledTimes(1);
+    const statuses = emit.mock.calls.map(([e]) => e).filter((e) => e.type === "status");
+    expect(statuses).toEqual([{type: "status", content: "Сессия истекла — войдите снова. Задача продолжает работу на сервере."}]);
+  });
+
+  it("истёкшая сессия во время опроса останавливает опрос", async () => {
+    fetcher.mockResolvedValueOnce(response({run, legacy: false}))
+      .mockResolvedValue(new Response("expired", {status: 401}));
+    await transport.watchSession("session"); await flush();
+    await vi.advanceTimersByTimeAsync(10000); await flush();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(toLogin).toHaveBeenCalledTimes(1);
+    expect(emit).not.toHaveBeenCalledWith(expect.objectContaining({content: expect.stringContaining("Переподключаюсь")}));
   });
 
   it("не дублирует уже загруженный из истории ответ", async () => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { mutFetch } from "@/lib/auth";
+import { mutFetch, redirectToLogin } from "@/lib/auth";
 import { getActiveWorkspaceContext } from "@/lib/workspace-context";
 
 type Event = Record<string, unknown>;
@@ -46,6 +46,7 @@ type Run = {
   id: string; session_id: string; work_order_id: string; request_id: string;
   status: string; result_message_id: string | null; blocker: unknown;
 };
+class SessionExpired extends Error {}
 const terminal = new Set(["completed", "blocked", "failed", "canceled"]);
 // The deterministic verifier parks a finished turn as "blocked" until the
 // independent semantic verifier decides; that is a wait, not an outcome.
@@ -90,6 +91,15 @@ export class DurableChatTransport {
 
   constructor(private emit: (event: Event) => void) {}
 
+  /** A 401 never heals by retrying: stop polling and send the user to login. */
+  private stopOnSessionExpired(error: unknown): boolean {
+    if (!(error instanceof SessionExpired)) return false;
+    clearTimeout(this.timer);
+    this.emit({type: "status", content: "Сессия истекла — войдите снова. Задача продолжает работу на сервере."});
+    redirectToLogin();
+    return true;
+  }
+
   get isOpen(): boolean {
     return this.readyState === 1;
   }
@@ -98,6 +108,7 @@ export class DurableChatTransport {
     const response = await mutFetch(path, body ? {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     } : { method: "GET", cache: "no-store" });
+    if (response.status === 401) throw new SessionExpired();
     if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
     return response.json();
   }
@@ -137,7 +148,8 @@ export class DurableChatTransport {
         this.emit({type: "durable_state", active: this.busy});
         void this.poll(generation, 0, savedMessageIds);
       }
-    } catch {
+    } catch (error) {
+      if (generation === this.generation && this.stopOnSessionExpired(error)) return;
       if (generation === this.generation) {
         this.session = null;
         this.emit({type: "status", content: "Не удалось восстановить состояние задачи. Повторяю подключение…"});
@@ -313,8 +325,9 @@ export class DurableChatTransport {
       this.confirmation = null;
       this.emit({type: "durable_confirmation", checkpoint: null});
       this.emit({type: "durable_state", active: true});
-    } catch {
+    } catch (error) {
       if (generation !== this.generation) return;
+      if (this.stopOnSessionExpired(error)) return;
       this.emit({type: "status", content: "Связь с задачей прервана; worker продолжает работу. Переподключаюсь…"});
     }
     if (generation === this.generation) this.timer = setTimeout(() => void this.poll(generation, cursor, saved), 1500);

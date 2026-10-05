@@ -136,13 +136,13 @@ export async function apiFetch(
     },
   });
 
-  if (
-    res.status === 401 &&
-    typeof window !== "undefined" &&
-    !window.location.pathname.startsWith("/auth/")
-  ) {
-    window.location.href = `/auth/login?next=${encodeURIComponent(window.location.pathname)}`;
-  }
+  if (res.status === 401) redirectToLogin();
 
   return res;
+}
+
+/** Send the browser to the login page, keeping the current path as `next`. */
+export function redirectToLogin(): void {
+  if (typeof window === "undefined" || window.location.pathname.startsWith("/auth/")) return;
+  window.location.href = `/auth/login?next=${encodeURIComponent(window.location.pathname)}`;
 }
