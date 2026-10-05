@@ -2871,6 +2871,8 @@ class AgentSession:
         if isinstance(result, dict) and result.get("error"):
             return False  # never answer with a wrong count on error — let the LLM try
         total = extract_list_count(result)
+        if total is None:
+            return False  # unreadable/failed result — let the LLM handle it
         if intent.capability == "warehouse":
             answer = f"{intent.entity_label[:1].upper()}{intent.entity_label[1:]}: {total}."
         else:
@@ -4039,20 +4041,32 @@ class AgentSession:
         self._trim_history()
 
 
-def extract_list_count(payload: Any) -> int:
+def extract_list_count(payload: Any) -> int | None:
+    """Total of a list result, or None when it cannot be read.
+
+    Tool results now arrive in the ToolResult v1 envelope
+    ({"version": 1, "status", "data": {...}}); reading only the top level
+    returned 0 for every list, and the count fast path answered
+    "Всего поставщиков: 0." with 39 in the result (live 2026-10-05). An
+    unreadable or failed result is None — never a confident zero.
+    """
+    if isinstance(payload, dict) and payload.get("version") == 1 and "status" in payload:
+        if payload.get("status") != "succeeded":
+            return None
+        return extract_list_count(payload.get("data"))
     if isinstance(payload, dict):
         for key in ("total", "count", "items_total", "results_count"):
             value = payload.get(key)
-            if isinstance(value, int):
+            if isinstance(value, int) and not isinstance(value, bool):
                 return value
         for list_key in ("items", "results", "data", "rows"):
             value = payload.get(list_key)
             if isinstance(value, list):
                 return len(value)
-        return 0
+        return None
     if isinstance(payload, list):
         return len(payload)
-    return 0
+    return None
 
 
 def _parse_markdown_table(

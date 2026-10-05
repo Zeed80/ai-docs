@@ -1007,6 +1007,8 @@ class AgentOrchestrator:
             if isinstance(result, dict) and result.get("error"):
                 return False  # never answer with a wrong count on error — defer to LLM
             total = extract_list_count(result)
+            if total is None:
+                return False  # unreadable/failed result — never answer a wrong count
             if intent.capability == "warehouse":
                 answer = f"{intent.entity_label[:1].upper()}{intent.entity_label[1:]}: {total}."
             else:
