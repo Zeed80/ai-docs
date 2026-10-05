@@ -153,6 +153,32 @@ describe("долговечный транспорт чата", () => {
     expect(emit).toHaveBeenCalledWith({type: "durable_state", active: true});
   });
 
+  it("ждёт независимую проверку, а не показывает её как блокировку", async () => {
+    const parked = {...run, status: "blocked", blocker: {code: "independent_verification_required"}};
+    fetcher.mockResolvedValueOnce(response({run: parked, legacy: false}))
+      .mockResolvedValueOnce(response(parked)).mockResolvedValueOnce(page([event(1, "done")]))
+      .mockResolvedValueOnce(response(parked)).mockResolvedValueOnce(page())
+      .mockResolvedValueOnce(response({...run, status: "completed"})).mockResolvedValueOnce(page());
+    await transport.watchSession("session"); await flush();
+    expect(emit).not.toHaveBeenCalledWith({type: "done"});
+    expect(emit).toHaveBeenCalledWith({type: "durable_state", active: true});
+    await vi.advanceTimersByTimeAsync(1500); await flush();
+    await vi.advanceTimersByTimeAsync(1500); await flush();
+    const statuses = emit.mock.calls.map(([e]) => e).filter((e) => e.type === "status");
+    expect(statuses).toEqual([{type: "status", content: "Проверяю результат…"}]);
+    expect(emit).toHaveBeenCalledWith({type: "done"});
+  });
+
+  it("настоящая блокировка по-прежнему завершает ход с причиной", async () => {
+    const stopped = {...run, status: "blocked", blocker: {code: "step_failed"}};
+    fetcher.mockResolvedValueOnce(response({run: stopped, legacy: false}))
+      .mockResolvedValueOnce(response(stopped)).mockResolvedValueOnce(page())
+      .mockResolvedValueOnce(new Response("no checkpoint", {status: 409}));
+    await transport.watchSession("session"); await flush();
+    expect(emit).toHaveBeenCalledWith({type: "status", content: 'Задача: blocked. {"code":"step_failed"}'});
+    expect(emit).toHaveBeenCalledWith({type: "done"});
+  });
+
   it("не дублирует уже загруженный из истории ответ", async () => {
     const completed = {...run, status: "completed", result_message_id: "answer"};
     fetcher.mockResolvedValueOnce(response({run: completed, legacy: false}))

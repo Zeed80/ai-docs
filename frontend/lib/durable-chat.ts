@@ -47,6 +47,11 @@ type Run = {
   status: string; result_message_id: string | null; blocker: unknown;
 };
 const terminal = new Set(["completed", "blocked", "failed", "canceled"]);
+// The deterministic verifier parks a finished turn as "blocked" until the
+// independent semantic verifier decides; that is a wait, not an outcome.
+const awaitingVerification = (run: Run) =>
+  run.status === "blocked"
+  && (run.blocker as {code?: unknown} | null)?.code === "independent_verification_required";
 
 export function buildDurableUserCommand(
   content: string,
@@ -79,6 +84,7 @@ export class DurableChatTransport {
   private busy = false;
   private pendingCancel = false;
   private cursor = 0;
+  private verifyingNotified = false;
   private confirmation: DurableContinuation | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -111,6 +117,7 @@ export class DurableChatTransport {
     this.run = null;
     this.emit({type: "durable_run", run_id: null});
     this.cursor = 0;
+    this.verifyingNotified = false;
     this.confirmation = null;
     this.emit({type: "durable_confirmation", checkpoint: null});
     this.emit({type: "durable_decision_pending", pending: false});
@@ -160,6 +167,7 @@ export class DurableChatTransport {
     this.emit({type: "durable_run", run_id: null});
     this.pendingCancel = false;
     this.cursor = 0;
+    this.verifyingNotified = false;
     this.confirmation = null;
     this.emit({type: "durable_confirmation", checkpoint: null});
     const generation = ++this.generation;
@@ -278,7 +286,12 @@ export class DurableChatTransport {
         cursor = item.sequence;
       }
       this.cursor = cursor;
-      if (terminal.has(run.status) && page.items.length < 100) {
+      if (awaitingVerification(run)) {
+        if (!this.verifyingNotified) {
+          this.verifyingNotified = true;
+          this.emit({type: "status", content: "Проверяю результат…"});
+        }
+      } else if (terminal.has(run.status) && page.items.length < 100) {
         let checkpoint: DurableContinuation | null = null;
         if (run.status === "blocked") {
           try {
