@@ -1104,6 +1104,11 @@ owner — legacy charge без receipt (unknown, без sticky stop). Нечис
 больше не роняет потоковый ответ. Отчёт:
 `docs/agent-employee-delivery/E21-agent-session-usage-receipts.md`.
 
+**Живой чат (5 октября):** первые production ledger'ы. Durable chat не работал с 29.09:
+частичная миграция 0003, sticky stop AIRouter на embedding (E21.2b6), промежуточный
+blocked verifier как итог в UI, подпись needs_review. Embedding/reranking теперь явно
+вне `llm_calls`. Разбор: `docs/agent-employee-delivery/E21-live-chat-recovery.md`.
+
 1. Сначала точные единицы: tool attempts, LLM calls, tokens, cost, active time,
    replan count. Ожидание человека не смешивать с активным временем без ADR.
 2. Целевые defaults: 2 часа active, 200 tools, 50 LLM calls, 3 replans. Не включать
