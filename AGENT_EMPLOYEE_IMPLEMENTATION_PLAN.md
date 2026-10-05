@@ -1,6 +1,6 @@
 # Универсальный цифровой сотрудник: реализация и остаток работ
 
-Актуализировано: 4 октября 2026 года. Этот документ уточняет агентскую часть
+Актуализировано: 5 октября 2026 года. Этот документ уточняет агентскую часть
 `CLAUDE.md`, `PLAN.md` и `DEVPLAN.md`. Roadmap в `docs/archive/` — история,
 а не подтверждение готовности нового агента.
 
@@ -35,7 +35,15 @@ common durable intake; повтор/concurrent POST не создаёт втор
 Non-durable `agent_turn` закрыт до dispatch с сохранением historic call markers.
 Это намеренная недоступность неперенесённых входов, не полная миграция.
 Отчёт: `docs/agent-employee-delivery/E21-headless-retirement.md`.
-AIRouter, оставшиеся entry adapters, legacy reconciliation,
+E21.2b6 независимо проверен и выпущен 5 октября: Ollama text/structured AIRouter attempts
+долговечного оркестратора используют общий ledger; format retries учитываются
+отдельно, frozen owner/plan/revision/ledger и postflight блокируют stale ответ.
+Прочие provider/task/image paths внутри durable context пока fail-closed.
+Независимо: 266 passed, Ruff clean. Выпуск и точные ограничения:
+`docs/agent-employee-delivery/E21-airouter-attempts.md`.
+Следующий контракт P1.1 — инвентаризация оставшихся direct/provider paths и
+доказанные token/cost bounds перед расширением supported routes.
+Оставшиеся AIRouter/direct paths, entry adapters, legacy reconciliation,
 token/cost accounting и active/replan остаются E21.2b+/E21.3;
 вся E21 не завершена. Отчёт: `docs/agent-employee-delivery/E21-budget-ledger.md`.
 

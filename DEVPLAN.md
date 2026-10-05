@@ -9,8 +9,13 @@
 R0 fake runner/10 cases и scoped isolation приняты (180 совместных tests);
 следующее задание — P1.1. E21, полный E49/E50 и live quality остаются незавершёнными.
 5 октября принят E21.2b5: atomic AgentTask durable intake и retirement bare
-headless; non-durable `agent_turn` намеренно блокируется. Следующий ограниченный
-контракт P1.1 — AIRouter physical attempts. Отчёт: `docs/agent-employee-delivery/E21-headless-retirement.md`.
+headless; non-durable `agent_turn` намеренно блокируется.
+E21.2b6 независимо проверен и выпущен: AIRouter Ollama text/structured physical attempts
+долговечного оркестратора связаны с общим ledger, включая format retries и stale
+postflight; остальные bound provider/task/image paths пока fail-closed.
+266 tests passed; выпуск: `docs/agent-employee-delivery/E21-airouter-attempts.md`.
+Следующий P1.1 контракт — оставшиеся direct/provider paths и доказанные token/cost
+bounds перед расширением supported routes. Full E21 остаётся IN_PROGRESS.
 
 Пилот `/api/agent/chat-runs` сохраняет запросы и события в БД и исполняется worker.
 

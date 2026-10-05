@@ -29,7 +29,14 @@ planner direct Ollama для API/scheduler, свежий ledger для ново�
 durable intake, bare headless executor удалён, non-durable `agent_turn` закрыт
 до dispatch. Неперенесённые входы недоступны; это не полная миграция каналов.
 Отчёт: `docs/agent-employee-delivery/E21-headless-retirement.md`.
-Следующий приоритет — physical AIRouter attempts внутри durable Orchestrator.
+5 октября независимо проверен и выпущен E21.2b6: Ollama text/structured AIRouter attempts
+внутри durable Orchestrator связаны с общим ledger; format retries резервируются
+отдельно, frozen owner/plan/revision/ledger и postflight исключают stale ответ.
+Прочие provider/task/image paths внутри durable context пока fail-closed.
+266 независимых tests passed; production-статус и ограничения в отчёте
+`docs/agent-employee-delivery/E21-airouter-attempts.md`.
+Следующий приоритет P1.1 — оставшиеся direct/provider paths и доказанные
+token/cost bounds перед расширением supported routes.
 Остаются как минимум:
 
 - остальные AIRouter/headless/provider paths;

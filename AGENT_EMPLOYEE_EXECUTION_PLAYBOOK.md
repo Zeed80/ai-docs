@@ -1049,8 +1049,16 @@ Budget stop не создаёт fallback и не запускает executor. AP
 duplicate/concurrent POST не повторяет executor. Non-durable `agent_turn`
 fail-closed до dispatch; historic call markers/unknown evidence сохраняются.
 Неперенесённые API/planner/decompose/email входы намеренно недоступны.
-AIRouter physical attempts ещё не подключены; full E21 остаётся IN_PROGRESS.
+Этот срез не подключал AIRouter physical attempts; full E21 остаётся IN_PROGRESS.
 Приёмка и выпуск: `docs/agent-employee-delivery/E21-headless-retirement.md`.
+
+**E21.2b6 (TESTED / REVIEWED / DEPLOYED):** durable Orchestrator AIRouter Ollama text/structured
+attempts используют общий WorkBudgetContext с AgentSession. Каждый format retry
+резервируется отдельно; frozen owner/plan/revision/ledger и postflight не дают
+применить stale ответ. Остальные provider/task/image paths в bound durable scope
+fail-closed; finite token/cost caps без доказанного bound по-прежнему запрещены.
+Независимо 266 passed, Ruff clean; production-статус и команды:
+`docs/agent-employee-delivery/E21-airouter-attempts.md`. Это не закрывает E21.
 
 1. Сначала точные единицы: tool attempts, LLM calls, tokens, cost, active time,
    replan count. Ожидание человека не смешивать с активным временем без ADR.

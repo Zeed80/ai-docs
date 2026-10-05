@@ -41,8 +41,13 @@ isProject: false
 Восемь пакетов пользовательского результата, ранний eval runner R0 и реальные
 зависимости вместо сплошной цепочки E00–E52; обязательные security gates сохранены.
 E21.2b5 принят 5 октября: AgentTask durable intake и headless retirement;
-неперенесённые non-durable входы намеренно недоступны. Следующий P1.1 контракт:
-physical AIRouter attempts; full E21 не завершён.
+неперенесённые non-durable входы намеренно недоступны.
+E21.2b6 независимо проверен и выпущен: AIRouter Ollama text/structured attempts долговечного
+оркестратора используют общий ledger, включая format retries и stale postflight.
+Прочие bound provider/task/image paths пока fail-closed; 266 tests passed.
+Выпуск: `docs/agent-employee-delivery/E21-airouter-attempts.md`.
+Следующий P1.1 контракт — оставшиеся direct/provider paths и доказанные token/cost
+bounds перед расширением supported routes; full E21 не завершён.
 R0 fake runner/10 cases принят, следующий этап P1.1 (остаток E21); полный corpus
 и качество живой модели ещё не приняты.
 

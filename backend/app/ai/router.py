@@ -317,8 +317,10 @@ class AIRouter:
         tighten the configured policy, never loosen it.
         """
         from app.ai.task_routing import get_routing_for
+        from app.ai.work_budget_context import current_airouter_budget_context
 
         routing = get_routing_for(request.task)
+        budget_context = current_airouter_budget_context()
         # Работаем ТОЛЬКО на модели, которую выбрал оператор. Автоматического
         # запаса нет — решение принято по итогам разбора, и оно снимает целый
         # класс дефектов сразу.
@@ -471,6 +473,16 @@ class AIRouter:
                     eff_level = model_levels[0]  # clamp: defensive against stale overrides
             if request.thinking_level != eff_level:
                 request = request.model_copy(update={"thinking_level": eff_level})
+            logical_call_no = None
+            if budget_context is not None:
+                # This check deliberately precedes server startup/client creation.
+                # The bound durable slice supports only the proven single-POST
+                # Ollama chat/structured paths used by the orchestrator.
+                logical_call_no = await budget_context.begin_airouter_call(
+                    provider=model.provider.value,
+                    task=request.task.value,
+                    has_images=bool(request.images),
+                )
             # Container-bound servers (vLLM/llama.cpp) are started on demand and
             # auto-stopped when idle; bring the target up before dispatching.
             try:
@@ -488,6 +500,8 @@ class AIRouter:
                     model,
                     per_call_timeout=per_call_timeout,
                     deadline=deadline,
+                    budget_context=budget_context,
+                    logical_call_no=logical_call_no,
                 )
                 response.proposed_tool_calls = self._filter_tool_calls(request, response)
                 # Reranking providers deliberately return scores=[] instead of
@@ -668,6 +682,8 @@ class AIRouter:
         *,
         per_call_timeout: float | None,
         deadline: float | None,
+        budget_context: Any | None = None,
+        logical_call_no: int | None = None,
     ) -> AIResponse:
         """Одна модель, но несколько попыток получить от неё нужный формат.
 
@@ -699,17 +715,48 @@ class AIRouter:
             )
         max_reasks = self._max_reasks(request)
         reasks = 0
+        provider_attempt = 0
 
         while True:
             started = _time.perf_counter()
+            provider_attempt += 1
+
+            async def dispatch_once() -> AIResponse:
+                if budget_context is None:
+                    return await self._dispatch(provider, attempt_request, model)
+                operation_key = await budget_context.prepare_provider_call(
+                    logical_call_no=logical_call_no,
+                    provider=model.provider.value,
+                    provider_attempt=provider_attempt,
+                    request={
+                        "task": request.task.value,
+                        "model": model.name,
+                        "provider_model": model.provider_model,
+                        "provider_attempt": provider_attempt,
+                        "request": attempt_request.model_dump(mode="json"),
+                    },
+                )
+                try:
+                    response = await self._dispatch(provider, attempt_request, model)
+                except BaseException:
+                    # Once provider dispatch was crossed, both an error and task
+                    # cancellation consume the reservation. Revalidate before a
+                    # format retry/fallback can be considered by the caller.
+                    await budget_context.charge_provider_call(operation_key)
+                    await budget_context.assert_airouter_current()
+                    raise
+                await budget_context.charge_provider_call(operation_key)
+                await budget_context.assert_airouter_current()
+                return response
+
             try:
                 response = await (
                     _asyncio.wait_for(
-                        self._dispatch(provider, attempt_request, model),
+                        dispatch_once(),
                         timeout=per_call_timeout,
                     )
                     if per_call_timeout is not None
-                    else self._dispatch(provider, attempt_request, model)
+                    else dispatch_once()
                 )
             except Exception as exc:
                 if contract is not None and fmt.classify_wire_rejection(exc):

@@ -29,7 +29,9 @@ The target implementation structure is:
 
 ### Проверки
 
-Headless retirement и AgentTask atomic intake (E21.2b5): `python3 -m pytest backend/tests/test_work_budget_headless.py backend/tests/test_agent_control_plane.py backend/tests/test_agent_cron_dispatch.py -q` в изолированной testcontainers БД. Non-durable `agent_turn` намеренно недоступен; AIRouter accounting ещё не завершён.
+AIRouter durable Ollama attempts (E21.2b6): `python3 -m pytest backend/tests/test_work_budget_airouter.py backend/tests/test_work_budget_provider.py backend/tests/test_durable_chat.py -q` в изолированной testcontainers БД. Другие bound provider/task/image paths пока fail-closed; token/cost и полная E21 не завершены.
+
+Headless retirement и AgentTask atomic intake (E21.2b5): `python3 -m pytest backend/tests/test_work_budget_headless.py backend/tests/test_agent_control_plane.py backend/tests/test_agent_cron_dispatch.py -q` в изолированной testcontainers БД. Non-durable `agent_turn` намеренно недоступен.
 
 Актуальный агентский срез: `AGENT_EMPLOYEE_IMPLEMENTATION_PLAN.md`.
 Подробный план передачи реализации: `AGENT_EMPLOYEE_EXECUTION_PLAYBOOK.md`.

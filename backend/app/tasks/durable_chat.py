@@ -13,7 +13,7 @@ from app.ai.chat_checkpoint import (
     pack_checkpoint,
     unpack_checkpoint,
 )
-from app.ai.work_budget_context import WorkBudgetContext
+from app.ai.work_budget_context import WorkBudgetContext, bind_airouter_budget_context
 from app.chat.store import append_chat_message
 from app.db.agent_runtime_models import (
     AgentChannelIdentity,
@@ -436,6 +436,19 @@ async def _run_durable_chat(
         )
         restored = [{"role": m.role, "content": m.content or ""} for m in reversed(history)]
         step = await db.get(WorkStep, step_id)
+        plan = await db.get(WorkPlan, step.plan_id) if step is not None else None
+        if (
+            step is None
+            or plan is None
+            or plan.work_order_id != order.id
+            or plan.status != "active"
+            or plan.revision != order.plan_revision
+        ):
+            raise ChatRunStopped("Durable AIRouter plan binding is missing or stale")
+        budget_owner_key = order.owner_key
+        budget_plan_id = plan.id
+        budget_plan_revision = plan.revision
+        budget_ledger_id = order.budget_ledger_id
         prompt = await _archive_prompt(
             db,
             import_id=(step.input_ or {}).get("archive_import_id"),
@@ -528,6 +541,10 @@ async def _run_durable_chat(
         step_id=uuid.UUID(str(step_id)),
         attempt_id=uuid.UUID(str(attempt_id)),
         session_factory=factory,
+        expected_owner_key=budget_owner_key,
+        expected_plan_id=budget_plan_id,
+        expected_plan_revision=budget_plan_revision,
+        expected_ledger_id=budget_ledger_id,
     )
     await budget_context.assert_ready()
     agent = (agent_factory or AgentOrchestrator)(collect)
@@ -630,13 +647,19 @@ async def _run_durable_chat(
                 await active(db)
 
     resume_payload = verified_commit_payload or continuation_payload
-    execution = asyncio.create_task(
-        agent._executor.resume_checkpoint(resume_payload)
-        if resume_payload is not None
-        else agent.on_user_message(
-            prompt, reasoning_mode=reasoning_mode, workspace_context=workspace_context
-        )
-    )
+
+    async def execute_with_airouter_budget():
+        with bind_airouter_budget_context(budget_context):
+            if resume_payload is not None:
+                await agent._executor.resume_checkpoint(resume_payload)
+            else:
+                await agent.on_user_message(
+                    prompt,
+                    reasoning_mode=reasoning_mode,
+                    workspace_context=workspace_context,
+                )
+
+    execution = asyncio.create_task(execute_with_airouter_budget())
     watcher = asyncio.create_task(watch())
     try:
         done, _ = await asyncio.wait(

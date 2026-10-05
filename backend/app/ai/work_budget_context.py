@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hashlib
 import json
 import uuid
 from collections.abc import Awaitable, Callable
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import case, func, select
 
-from app.db.models import WorkOrder, WorkStep, WorkStepAttempt
+from app.db.models import WorkOrder, WorkPlan, WorkStep, WorkStepAttempt
 from app.db.work_budget_models import WorkBudgetLedger, WorkBudgetReservation
 from app.domain.work_budget_ledger import (
     BudgetBindingConflict,
@@ -67,6 +69,10 @@ class WorkBudgetContext:
     step_id: uuid.UUID
     attempt_id: uuid.UUID
     session_factory: Any = field(repr=False, compare=False)
+    expected_owner_key: str | None = None
+    expected_plan_id: uuid.UUID | None = None
+    expected_plan_revision: int | None = None
+    expected_ledger_id: uuid.UUID | None = None
     _state: _ExecutionState = field(default_factory=_ExecutionState, repr=False, compare=False)
 
     async def _stop(self, error: BudgetExecutionStopped) -> BudgetExecutionStopped:
@@ -101,6 +107,22 @@ class WorkBudgetContext:
                             "Durable work budget binding is missing or does not match its owner",
                         )
                     )
+                plan = await db.get(WorkPlan, step.plan_id) if step is not None else None
+                frozen_binding_valid = self.expected_owner_key is None or (
+                    order.owner_key == self.expected_owner_key
+                    and order.budget_ledger_id == self.expected_ledger_id
+                    and ledger.id == self.expected_ledger_id
+                    and self.expected_plan_id is not None
+                    and self.expected_plan_revision is not None
+                    and step is not None
+                    and step.plan_id == self.expected_plan_id
+                    and plan is not None
+                    and plan.id == self.expected_plan_id
+                    and plan.work_order_id == order.id
+                    and plan.status == "active"
+                    and plan.revision == self.expected_plan_revision
+                    and order.plan_revision == self.expected_plan_revision
+                )
                 if (
                     order.status != "running"
                     or step is None
@@ -108,6 +130,7 @@ class WorkBudgetContext:
                     or attempt is None
                     or attempt.step_id != step.id
                     or not attempt_owns_lease(step, attempt)
+                    or not frozen_binding_valid
                 ):
                     raise await self._stop(
                         BudgetExecutionStopped(
@@ -185,6 +208,94 @@ class WorkBudgetContext:
                 raise self._state.stopped
             self._state.logical_call_no += 1
             return self._state.logical_call_no
+
+    async def begin_airouter_call(
+        self, *, provider: str, task: str, has_images: bool = False
+    ) -> int:
+        """Validate the narrow durable AIRouter slice before provider preparation."""
+        self.raise_if_stopped()
+        if (
+            self.expected_owner_key is None
+            or self.expected_plan_id is None
+            or self.expected_plan_revision is None
+            or self.expected_ledger_id is None
+        ):
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "airouter_budget_context_invalid",
+                    "AIRouter durable execution lacks a frozen owner/plan binding",
+                )
+            )
+        supported_tasks = {
+            "orchestrator_planning",
+            "classification",
+            "email_drafting",
+            "code_generation",
+        }
+        if provider != "ollama" or task not in supported_tasks or has_images:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "airouter_provider_path_unsupported",
+                    "This durable AIRouter provider path has no proven physical-attempt boundary",
+                    details={"provider": provider, "task": task, "has_images": has_images},
+                )
+            )
+        ledger = await self._active_ledger()
+        if ledger.max_tokens is not None:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "token_budget_enforcement_unavailable",
+                    "A finite token budget cannot be proven before this AIRouter call",
+                    details={"dimension": "tokens", "limit": str(ledger.max_tokens)},
+                )
+            )
+        if ledger.max_cost_usd is not None:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "cost_budget_enforcement_unavailable",
+                    "A finite cost budget cannot be proven before this AIRouter call",
+                    details={"dimension": "cost_usd", "limit": str(ledger.max_cost_usd)},
+                )
+            )
+        try:
+            async with self.session_factory() as db:
+                amount = case(
+                    (
+                        WorkBudgetReservation.state == "charged",
+                        WorkBudgetReservation.actual_units,
+                    ),
+                    else_=WorkBudgetReservation.reserved_units,
+                )
+                used = Decimal(
+                    await db.scalar(
+                        select(func.coalesce(func.sum(amount), 0)).where(
+                            WorkBudgetReservation.ledger_id == ledger.id,
+                            WorkBudgetReservation.dimension == "llm_calls",
+                        )
+                    )
+                    or 0
+                )
+        except Exception as exc:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "llm_budget_state_unavailable",
+                    "AIRouter budget state could not be checked; provider preparation is forbidden",
+                    details={"budget_error": str(exc)},
+                )
+            ) from exc
+        if used >= Decimal(ledger.max_llm_calls):
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "llm_call_budget_exceeded",
+                    "LLM call budget is exhausted",
+                    details={"used_or_reserved": str(used)},
+                )
+            )
+        return await self.begin_logical_call()
+
+    async def assert_airouter_current(self) -> None:
+        """Postflight fence before an AIRouter response or retry can be applied."""
+        await self._active_ledger()
 
     async def prepare_provider_call(
         self,
@@ -432,6 +543,29 @@ class WorkBudgetContext:
                 )
             )
             return False
+
+
+_airouter_budget_context: contextvars.ContextVar[WorkBudgetContext | None] = contextvars.ContextVar(
+    "airouter_budget_context", default=None
+)
+
+
+def current_airouter_budget_context() -> WorkBudgetContext | None:
+    """Return the server-owned durable context for the current asyncio task."""
+    return _airouter_budget_context.get()
+
+
+@contextmanager
+def bind_airouter_budget_context(context: WorkBudgetContext):
+    """Bind one durable context without accepting request/metadata overrides."""
+    current = _airouter_budget_context.get()
+    if current is not None and current is not context:
+        raise RuntimeError("AIRouter budget context is already bound")
+    token = _airouter_budget_context.set(context)
+    try:
+        yield
+    finally:
+        _airouter_budget_context.reset(token)
 
 
 @dataclass(frozen=True)
