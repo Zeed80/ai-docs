@@ -260,6 +260,15 @@ def build_router_user(content: str, *, has_open_spec_table: bool, history_summar
     return "\n\n".join(parts)
 
 
+def _router_schema() -> dict:
+    from app.ai.output_format import inline_schema_defs, strictify_schema
+
+    return strictify_schema(inline_schema_defs(TurnDecision.model_json_schema()))
+
+
+_ROUTER_SCHEMA = _router_schema()
+
+
 def _looks_defaulted(d: TurnDecision | None) -> bool:
     """True when a decision is the all-defaults shell produced by validating {}.
 
@@ -398,6 +407,13 @@ async def route_turn(
                         ChatMessage(role="user", content=user),
                     ],
                     response_schema=TurnDecision,
+                    # Every field required: a Pydantic schema leaves defaulted
+                    # fields optional, and a grammar-constrained local model
+                    # then stops after intent/role. Live 2026-10-05 every turn
+                    # came back with confidence 0.0, no recommended tools and a
+                    # near-random role; "specialist" turns read as an
+                    # unavailable model. Validation still accepts defaults.
+                    metadata={"json_schema": _ROUTER_SCHEMA},
                     confidential=False,
                     # Роутер хода по умолчанию локальный, но модель для него
                     # выбирает оператор в слоте «Быстрая». Если он выбрал
