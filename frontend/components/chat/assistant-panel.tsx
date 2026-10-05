@@ -1401,7 +1401,24 @@ export function AssistantPanel() {
         ) : durableConfirmation && !("intent" in durableConfirmation) && (
           <section aria-label="Подтверждение сохранённого действия" className="m-3 rounded border border-amber-600 p-3 text-sm text-slate-100">
             <p>Разрешить одно действие: <strong>{durableConfirmation.confirmation.tool}</strong>?</p>
-            <pre className="my-2 max-h-48 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(durableConfirmation.confirmation.args, null, 2)}</pre>
+            {durableConfirmation.preview?.kind === "email" && (
+              <dl aria-label="Что будет отправлено" className="my-2 grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs">
+                <dt className="text-slate-400">Кому</dt><dd className="break-all">{durableConfirmation.preview.to.join(", ") || "—"}</dd>
+                {durableConfirmation.preview.cc.length > 0 && (<><dt className="text-slate-400">Копия</dt><dd className="break-all">{durableConfirmation.preview.cc.join(", ")}</dd></>)}
+                {durableConfirmation.preview.bcc.length > 0 && (<><dt className="text-slate-400">Скрытая</dt><dd className="break-all">{durableConfirmation.preview.bcc.join(", ")}</dd></>)}
+                <dt className="text-slate-400">Тема</dt><dd className="break-words">{durableConfirmation.preview.subject || "—"}</dd>
+                <dt className="text-slate-400">Текст</dt>
+                <dd className="max-h-40 overflow-auto whitespace-pre-wrap break-words">{durableConfirmation.preview.body_text}{durableConfirmation.preview.body_truncated ? "…" : ""}</dd>
+                {durableConfirmation.preview.attachment_count > 0 && (<><dt className="text-slate-400">Вложений</dt><dd>{durableConfirmation.preview.attachment_count}</dd></>)}
+              </dl>
+            )}
+            {durableConfirmation.preview?.kind === "email" && !durableConfirmation.preview.digest_matches && (
+              <p role="alert" className="mb-2 text-xs text-red-300">Черновик изменился после запроса — отправка с этим разрешением будет отклонена.</p>
+            )}
+            <details open={!durableConfirmation.preview} className="text-xs text-slate-400">
+              <summary>Точные аргументы</summary>
+              <pre className="my-2 max-h-48 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(durableConfirmation.confirmation.args, null, 2)}</pre>
+            </details>
             <p className="mb-2 text-xs text-slate-300">Будут использованы именно эти аргументы. Разрешение действует 30 минут. Отказ окончателен для этого снимка.</p>
             <div className="flex flex-wrap gap-2">
               <button type="button" disabled={decisionPending || isStreaming} onClick={() => transportRef.current?.send(JSON.stringify({type: "resume", approved: true}))} className="rounded bg-amber-700 px-3 py-1 disabled:opacity-50">Разрешить действие</button>

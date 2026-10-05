@@ -4,8 +4,13 @@ import { mutFetch, redirectToLogin } from "@/lib/auth";
 import { getActiveWorkspaceContext } from "@/lib/workspace-context";
 
 type Event = Record<string, unknown>;
+export type DurableConfirmationPreview = {
+  kind: "email"; to: string[]; cc: string[]; bcc: string[]; subject: string;
+  body_text: string; body_truncated: boolean; attachment_count: number; digest_matches: boolean;
+};
 export type DurableConfirmation = {
   attempt_id: string; sha256: string; confirmation: {tool: string; args: Record<string, unknown>};
+  preview?: DurableConfirmationPreview | null;
 };
 /**
  * A separate, server-issued continuation boundary for an action whose recipient
@@ -47,6 +52,19 @@ type Run = {
   status: string; result_message_id: string | null; blocker: unknown;
 };
 class SessionExpired extends Error {}
+// A stop at an approval gate is a normal outcome, not a failure dump.
+const awaitingConfirmation = (run: Run) => {
+  const error = (run.blocker as {error?: {message?: unknown}} | null)?.error;
+  return typeof error?.message === "string" && error.message.startsWith("Human confirmation required");
+};
+function runOutcomeText(run: Run, checkpoint: DurableContinuation | null): string {
+  if (awaitingConfirmation(run)) {
+    return checkpoint
+      ? "Ожидает вашего решения: разрешите или откажите в карточке выше."
+      : "Действие не выполнено: подтверждения нет (отказ или истёк срок решения).";
+  }
+  return `Задача: ${run.status}. ${run.blocker ? JSON.stringify(run.blocker) : ""}`;
+}
 const terminal = new Set(["completed", "blocked", "failed", "canceled"]);
 // The deterministic verifier parks a finished turn as "blocked" until the
 // independent semantic verifier decides; that is a wait, not an outcome.
@@ -317,7 +335,7 @@ export class DurableChatTransport {
         this.confirmation = checkpoint;
         this.emit({type: "durable_confirmation", checkpoint});
         this.busy = false;
-        if (run.status !== "completed") this.emit({type: "status", content: `Задача: ${run.status}. ${run.blocker ? JSON.stringify(run.blocker) : ""}`});
+        if (run.status !== "completed") this.emit({type: "status", content: runOutcomeText(run, checkpoint)});
         this.emit({type: "done"});
         return;
       }

@@ -200,6 +200,26 @@ describe("долговечный транспорт чата", () => {
     expect(emit).not.toHaveBeenCalledWith(expect.objectContaining({content: expect.stringContaining("Переподключаюсь")}));
   });
 
+  it("остановку у подтверждения описывает словами, а не JSON-сбоем", async () => {
+    const gated = {...run, status: "blocked", blocker: {code: "step_failed", error: {code: "execution_error",
+      message: "Human confirmation required; pending action not executed"}}};
+    fetcher.mockResolvedValueOnce(response({run: gated, legacy: false}))
+      .mockResolvedValueOnce(response(gated)).mockResolvedValueOnce(page())
+      .mockResolvedValueOnce(response(checkpoint));
+    await transport.watchSession("session"); await flush();
+    expect(emit).toHaveBeenCalledWith({type: "status", content: "Ожидает вашего решения: разрешите или откажите в карточке выше."});
+  });
+
+  it("после отказа сообщает, что действие не выполнено", async () => {
+    const gated = {...run, status: "blocked", blocker: {code: "step_failed", error: {code: "execution_error",
+      message: "Human confirmation required; pending action not executed"}}};
+    fetcher.mockResolvedValueOnce(response({run: gated, legacy: false}))
+      .mockResolvedValueOnce(response(gated)).mockResolvedValueOnce(page())
+      .mockResolvedValueOnce(response({can_resume: false}));
+    await transport.watchSession("session"); await flush();
+    expect(emit).toHaveBeenCalledWith({type: "status", content: "Действие не выполнено: подтверждения нет (отказ или истёк срок решения)."});
+  });
+
   it("не дублирует уже загруженный из истории ответ", async () => {
     const completed = {...run, status: "completed", result_message_id: "answer"};
     fetcher.mockResolvedValueOnce(response({run: completed, legacy: false}))

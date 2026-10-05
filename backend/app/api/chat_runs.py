@@ -1082,9 +1082,51 @@ async def get_chat_checkpoint(
         "in_flight": bool(payload.get("in_flight_call_id")),
         "sha256": record["snapshot"]["sha256"],
     }
+    if can_resume:
+        summary["preview"] = await _confirmation_preview(db, user, summary["confirmation"])
     if verified_commit is not None:
         summary.update(verified_commit)
     return summary
+
+
+_PREVIEW_BODY_CHARS = 2000
+
+
+async def _confirmation_preview(db, user, confirmation) -> dict | None:
+    """Human-readable view of what an approval would actually do.
+
+    The card showed only {"action": "send", "draft_id", "expected_digest"}:
+    the owner approved an email without seeing recipient, subject or text.
+    Read-only, behind the same draft access rule as GET /email/drafts/{id};
+    anything unexpected yields no preview rather than an error.
+    """
+    try:
+        args = (confirmation or {}).get("args") or {}
+        if (confirmation or {}).get("tool") != "email" or args.get("action") != "send":
+            return None
+        from app.db.models import DraftAction
+        from app.domain.email_access import may_access_draft
+
+        draft = await db.get(DraftAction, uuid.UUID(str(args.get("draft_id"))))
+        data = (draft.draft_data or {}) if draft is not None else None
+        if data is None or not await may_access_draft(db, user, data):
+            return None
+        body = str(data.get("body_text") or "")
+        expected = args.get("expected_digest")
+        return {
+            "kind": "email",
+            "to": list(data.get("to_addresses") or []),
+            "cc": list(data.get("cc_addresses") or []),
+            "bcc": list(data.get("bcc_addresses") or []),
+            "subject": str(data.get("subject") or ""),
+            "body_text": body[:_PREVIEW_BODY_CHARS],
+            "body_truncated": len(body) > _PREVIEW_BODY_CHARS,
+            "attachment_count": len(data.get("attachment_ids") or []),
+            # Approval binds to this digest; a changed draft will be refused.
+            "digest_matches": bool(expected) and expected == data.get("content_digest"),
+        }
+    except (ValueError, TypeError, AttributeError):
+        return None
 
 
 async def _verified_commit_checkpoint_offer(
