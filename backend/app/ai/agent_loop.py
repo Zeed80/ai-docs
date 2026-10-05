@@ -905,7 +905,15 @@ async def execute_skill(
             body_args[k] = v
 
     url = base_url + path
+    sql_http_recipient = (
+        skill.get("name") == "workspace.sql_table"
+        and method == "POST"
+        and path == "/api/workspace/agent/generated/sql-table"
+    )
     safe_to_retry = retry_safe(skill, args)
+    if sql_http_recipient:
+        # The recipient publishes a block. A missing response is not replayable.
+        safe_to_retry = False
     max_retries = (
         1
         if async_job is not None
@@ -946,6 +954,19 @@ async def execute_skill(
                             "idempotency_key": idempotency_key,
                         },
                     )
+                    if sql_http_recipient:
+                        from app.ai.actor_context import get_acting_user
+                        from app.auth.work_budget_handoff import WORK_BUDGET_HANDOFF_HEADER
+
+                        _hdrs[
+                            WORK_BUDGET_HANDOFF_HEADER
+                        ] = await budget_context.create_http_recipient_handoff(
+                            method=method,
+                            path=path,
+                            body=body_args,
+                            tool_operation_key=tool_operation_key,
+                            actor=get_acting_user() or "",
+                        )
                 dispatch_attempted = True
                 try:
                     if method == "GET":
@@ -971,6 +992,31 @@ async def execute_skill(
                             tool_operation_key,
                             recipient_outcome="responded",
                         )
+
+            if sql_http_recipient and budget_context is not None:
+                from app.ai.tool_result import ToolResult
+
+                if 200 <= resp.status_code < 300:
+                    try:
+                        result = ToolResult.model_validate(resp.json())
+                    except Exception:
+                        return ToolResult(
+                            status="outcome_unknown",
+                            error_code="workspace_sql_table_response_unrecognized",
+                            evidence={"publication_state": "unknown"},
+                        ).model_dump(mode="json")
+                    payload = result.model_dump(mode="json")
+                    if result.evidence.get("budget_stop") is True:
+                        await budget_context.record_http_recipient_stop(payload)
+                    return payload
+                payload = ToolResult(
+                    status="failed" if 400 <= resp.status_code < 500 else "outcome_unknown",
+                    error_code=f"workspace_sql_table_http_{resp.status_code}",
+                    evidence={"status_code": resp.status_code, "publication_state": "unknown"},
+                ).model_dump(mode="json")
+                if payload["status"] == "failed":
+                    await budget_context.record_http_recipient_stop(payload)
+                return payload
 
             if 200 <= resp.status_code < 300 or (
                 not mcp_tool_search

@@ -40,9 +40,15 @@ E21.2b7 независимо проверен: direct generate/reasoning_generat
 postflight после закрытия клиента и sticky explicit/ambient collision stop.
 276 tests passed; caller inventory и выпуск:
 `docs/agent-employee-delivery/E21-direct-text-attempts.md`.
-HTTP workspace.sql_table и standalone email/CAD/VLM не мигрированы.
-Следующий приоритет P1.1 — owner-bound учёт recipient-side model calls через HTTP
-и доказанные token/cost bounds перед расширением supported routes.
+Срез b7 сам по себе не мигрировал HTTP workspace.sql_table и standalone email/CAD/VLM.
+E21.2b8 проверен: direct catalog workspace.sql_table/Ollama использует signed
+owner-bound handoff, общий ledger для recipient SQL/title, once-fence,
+parent-timeout/postflight и финальную publication fence. HTTP receipt сохраняется
+до sticky stop; generic capability SQL-table пока fail-closed. 277 tests passed,
+отдельный security review без findings. Отчёт:
+`docs/agent-employee-delivery/E21-http-recipient-attempts.md`.
+Следующий приоритет P1.1 — фактические token/cost receipts с явным unknown и
+доказанные bounds; остальные HTTP recipients остаются остатком.
 Остаются как минимум:
 
 - остальные AIRouter/headless/provider paths;

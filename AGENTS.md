@@ -29,6 +29,8 @@ The target implementation structure is:
 
 ### Проверки
 
+SQL-table HTTP recipient budget handoff (E21.2b8): `python3 -m pytest backend/tests/test_work_budget_http_recipient.py backend/tests/test_work_budget_tools.py backend/tests/test_chat_checkpoints.py backend/tests/test_work_budget_work_orders.py -q` в изолированной testcontainers БД. Пилот поддерживает только direct catalog POST SQL-table и Ollama; generic capability SQL-table пока fail-closed. Подпись/service key/actor проверяются даже при AUTH_ENABLED=false. Отчёт: `docs/agent-employee-delivery/E21-http-recipient-attempts.md`.
+
 Direct durable Ollama text helpers (E21.2b7): `python3 -m pytest backend/tests/test_work_budget_direct_text.py backend/tests/test_work_budget_airouter.py backend/tests/test_work_budget_provider.py backend/tests/test_durable_chat.py -q` в изолированной testcontainers БД. Planner/verifier профили ниже запускать отдельно. HTTP recipient и standalone callers этим не мигрированы; finite token/cost caps без bounds остаются fail-closed.
 
 AIRouter durable Ollama attempts (E21.2b6): `python3 -m pytest backend/tests/test_work_budget_airouter.py backend/tests/test_work_budget_provider.py backend/tests/test_durable_chat.py -q` в изолированной testcontainers БД. Другие bound provider/task/image paths пока fail-closed; token/cost и полная E21 не завершены.

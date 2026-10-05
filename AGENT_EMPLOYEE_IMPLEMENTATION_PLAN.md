@@ -48,8 +48,14 @@ generate_json/chat внутри bound durable execution учитывают physi
 Независимо 276 passed, Ruff clean; выпуск и caller inventory:
 `docs/agent-employee-delivery/E21-direct-text-attempts.md`.
 HTTP workspace.sql_table, standalone email/CAD/VLM этим не мигрированы.
-Следующий контракт P1.1 — owner-bound учёт recipient-side model calls через HTTP
-и доказанные token/cost bounds перед расширением supported routes.
+E21.2b8 проверен: direct catalog workspace.sql_table передаёт подписанный
+owner-bound handoff; recipient SQL/title Ollama attempts используют общий ledger.
+Once-fence, parent timeout, final publication fence и receipt-before-stop
+проверены; generic capability SQL-table пока fail-closed. 277 tests passed,
+отдельный read-only security review без findings. Выпуск и границы:
+`docs/agent-employee-delivery/E21-http-recipient-attempts.md`.
+Следующий контракт P1.1 — фактические token/cost receipts с явным unknown и
+доказанные pre-dispatch bounds; остальные HTTP recipients ещё не мигрированы.
 Оставшиеся AIRouter/direct paths, entry adapters, legacy reconciliation,
 token/cost accounting и active/replan остаются E21.2b+/E21.3;
 вся E21 не завершена. Отчёт: `docs/agent-employee-delivery/E21-budget-ledger.md`.

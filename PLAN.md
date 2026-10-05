@@ -50,9 +50,14 @@ E21.2b7 независимо проверен: direct Ollama text helpers в bou
 учитывают POST/retries, stale postflight после закрытия клиента и sticky
 explicit/ambient collision. 276 tests passed; caller inventory и выпуск:
 `docs/agent-employee-delivery/E21-direct-text-attempts.md`.
-HTTP workspace.sql_table и standalone email/CAD/VLM не мигрированы.
-Следующий P1.1 контракт — owner-bound recipient-side model calls через HTTP и
-доказанные token/cost bounds; full E21 не завершён.
+Срез b7 сам по себе не мигрировал HTTP workspace.sql_table и standalone email/CAD/VLM.
+E21.2b8 проверен: direct SQL-table/Ollama recipient получает owner-bound signed
+handoff и общий ledger; once-fence, parent timeout, publication fence и
+receipt-before-stop покрыты. Generic capability SQL-table пока fail-closed.
+277 tests passed, отдельный security review без findings; выпуск:
+`docs/agent-employee-delivery/E21-http-recipient-attempts.md`.
+Следующий P1.1 контракт — actual token/cost receipts с явным unknown и доказанные
+bounds; full E21 не завершён, остальные HTTP/standalone callers остаются остатком.
 R0 fake runner/10 cases принят, следующий этап P1.1 (остаток E21); полный corpus
 и качество живой модели ещё не приняты.
 

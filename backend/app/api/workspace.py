@@ -7,7 +7,8 @@ from collections import defaultdict
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1027,6 +1028,64 @@ async def compare_table_data(
 @router.post("/agent/generated/sql-table", response_model=WorkspaceToolResponse)
 async def publish_sql_table(
     payload: WorkspaceSqlTableRequest,
+    request: Request,
+) -> WorkspaceToolResponse:
+    from app.ai.actor_context import get_acting_user, set_acting_user
+    from app.ai.tool_result import ToolResult
+    from app.ai.work_budget_context import (
+        BudgetExecutionStopped,
+        bind_http_recipient_budget_context,
+    )
+    from app.auth.work_budget_handoff import resolve_sql_recipient_context
+
+    context = await resolve_sql_recipient_context(request)
+    if context is None:
+        return await _publish_sql_table(payload)
+    previous_actor = get_acting_user()
+    published = False
+    try:
+        set_acting_user(context.owner_key)
+        with bind_http_recipient_budget_context(context):
+            await context.assert_ready()
+            response = await _publish_sql_table(payload, context=context)
+            published = response.status == "published"
+        result = ToolResult(
+            status="succeeded" if published else "failed",
+            data=response.model_dump(mode="json"),
+            error_code=None if published else "workspace_sql_table_failed",
+            evidence={
+                "operation": "workspace.sql_table",
+                "publication_state": "published" if published else "not_published",
+            },
+        )
+    except BudgetExecutionStopped as exc:
+        result = ToolResult(
+            status="failed",
+            error_code=exc.code,
+            evidence={
+                "operation": "workspace.sql_table",
+                "budget_stop": True,
+                "message": str(exc),
+                "publication_state": (
+                    "not_published" if context.recipient_claimed else "prior_outcome_unknown"
+                ),
+                **exc.details,
+            },
+        )
+    except Exception:
+        # A synchronous store write or its notification may have happened.
+        result = ToolResult(
+            status="outcome_unknown",
+            error_code="workspace_sql_table_recipient_unknown",
+            evidence={"operation": "workspace.sql_table", "publication_state": "unknown"},
+        )
+    finally:
+        set_acting_user(previous_actor)
+    return JSONResponse(result.model_dump(mode="json"))
+
+
+async def _publish_sql_table(
+    payload: WorkspaceSqlTableRequest, *, context=None
 ) -> WorkspaceToolResponse:
     """Skill: workspace.sql_table — Build and publish a table using SQL-first pipeline.
 
@@ -1068,7 +1127,12 @@ async def publish_sql_table(
     canvas_block = block.get("data", block)
     canvas_id = payload.canvas_id
     canvas_block["id"] = canvas_id
-    stored = upsert_workspace_block(canvas_id, canvas_block)
+    if context is None:
+        stored = upsert_workspace_block(canvas_id, canvas_block)
+    else:
+        async with context.publication_fence():
+            # No await between the validated fence and synchronous store effect.
+            stored = upsert_workspace_block(canvas_id, canvas_block)
     await chat_bus.publish(
         {
             "type": "workspace.updated",

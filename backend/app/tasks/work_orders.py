@@ -276,6 +276,15 @@ async def _execute_capability(
     from app.ai.orchestrator import _agent_headers
 
     arguments = dict(input_data)
+    if capability == "workspace" and action == "sql_table":
+        # The generic capability proxy has no recipient-bound handoff. Its
+        # WorkToolCall was already committed by execute_claimed_step, preserving
+        # historic evidence, but it must not cross the SQL recipient's LLM edge.
+        raise BudgetExecutionStopped(
+            "workspace_sql_table_recipient_handoff_required",
+            "Generic workspace.sql_table execution is disabled until it can issue "
+            "the verified direct HTTP recipient handoff",
+        )
     approval = arguments.pop("approval", None)
     headers = _agent_headers()
     if idempotency_key:

@@ -8,7 +8,7 @@ import hashlib
 import json
 import uuid
 from collections.abc import Awaitable, Callable
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
@@ -54,6 +54,24 @@ class _ExecutionState:
     physical_tool_attempt_no: int = 0
     execution_claimed: bool = False
     stopped: BudgetExecutionStopped | None = None
+
+
+@dataclass
+class _RecipientExecutionState:
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    logical_call_no: int = 0
+    physical_call_no: int = 0
+    recipient_claimed: bool = False
+    stopped: BudgetExecutionStopped | None = None
+
+
+@asynccontextmanager
+async def _recipient_validation_session(factory, existing=None):
+    if existing is not None:
+        yield existing
+    else:
+        async with factory() as db:
+            yield db
 
 
 @dataclass(frozen=True)
@@ -598,13 +616,412 @@ class WorkBudgetContext:
             )
             return False
 
+    async def create_http_recipient_handoff(
+        self,
+        *,
+        method: str,
+        path: str,
+        body: dict[str, Any],
+        tool_operation_key: str,
+        actor: str,
+    ) -> str:
+        """Sign the one supported HTTP recipient after its tool reserve exists."""
+        from datetime import UTC, datetime, timedelta
 
-_airouter_budget_context: contextvars.ContextVar[WorkBudgetContext | None] = contextvars.ContextVar(
-    "airouter_budget_context", default=None
-)
+        from app.auth.work_budget_handoff import (
+            WORKSPACE_SQL_TABLE_PATH,
+            WorkBudgetHandoff,
+            canonical_body_digest,
+            sign_work_budget_handoff,
+        )
+
+        self.raise_if_stopped()
+        if (
+            method != "POST"
+            or path != WORKSPACE_SQL_TABLE_PATH
+            or not actor
+            or actor != self.expected_owner_key
+            or self.expected_ledger_id is None
+            or self.expected_plan_id is None
+            or self.expected_plan_revision is None
+        ):
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "http_recipient_handoff_unsupported",
+                    "This durable HTTP recipient lacks a frozen supported handoff binding",
+                )
+            )
+        await self._active_ledger()
+        try:
+            async with self.session_factory() as db:
+                reservation = await db.scalar(
+                    select(WorkBudgetReservation).where(
+                        WorkBudgetReservation.ledger_id == self.expected_ledger_id,
+                        WorkBudgetReservation.work_order_id == self.work_order_id,
+                        WorkBudgetReservation.operation_key == tool_operation_key,
+                    )
+                )
+                if (
+                    reservation is None
+                    or reservation.dimension != "tool_attempts"
+                    or reservation.state != "reserved"
+                ):
+                    raise ValueError("parent tool reservation is not dispatchable")
+        except Exception as exc:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "http_recipient_handoff_state_invalid",
+                    "The parent tool reservation cannot authorize this recipient",
+                    details={"budget_error": str(exc)},
+                )
+            ) from exc
+        handoff = WorkBudgetHandoff(
+            body_digest=canonical_body_digest(body),
+            actor=actor,
+            work_order_id=self.work_order_id,
+            step_id=self.step_id,
+            attempt_id=self.attempt_id,
+            ledger_id=self.expected_ledger_id,
+            plan_id=self.expected_plan_id,
+            plan_revision=self.expected_plan_revision,
+            tool_operation_key=tool_operation_key,
+            tool_request_digest=reservation.request_digest,
+            tool_binding_digest=reservation.binding_digest,
+            expires_at=int((datetime.now(UTC) + timedelta(seconds=60)).timestamp()),
+        )
+        return sign_work_budget_handoff(handoff)
+
+    async def record_http_recipient_stop(self, payload: dict[str, Any]) -> None:
+        """Defer a recipient stop until its HTTP result can be checkpointed."""
+        code = str(payload.get("error_code") or "http_recipient_budget_stopped")
+        evidence = payload.get("evidence") if isinstance(payload.get("evidence"), dict) else {}
+        await self._stop(
+            BudgetExecutionStopped(
+                code,
+                str(evidence.get("message") or "HTTP recipient execution stopped"),
+                details={"recipient_evidence": evidence},
+            )
+        )
 
 
-def current_airouter_budget_context() -> WorkBudgetContext | None:
+@dataclass(frozen=True)
+class RecipientWorkBudgetContext:
+    """Recipient-owned physical LLM boundary for one signed SQL tool dispatch."""
+
+    work_order_id: uuid.UUID
+    step_id: uuid.UUID
+    attempt_id: uuid.UUID
+    owner_key: str
+    ledger_id: uuid.UUID
+    plan_id: uuid.UUID
+    plan_revision: int
+    tool_operation_key: str
+    tool_request_digest: str
+    tool_binding_digest: str
+    body_digest: str
+    session_factory: Any = field(repr=False, compare=False)
+    _state: _RecipientExecutionState = field(
+        default_factory=_RecipientExecutionState, repr=False, compare=False
+    )
+
+    async def _stop(self, error: BudgetExecutionStopped) -> BudgetExecutionStopped:
+        async with self._state.lock:
+            if self._state.stopped is None:
+                self._state.stopped = error
+            return self._state.stopped
+
+    def raise_if_stopped(self) -> None:
+        if self._state.stopped is not None:
+            raise self._state.stopped
+
+    @property
+    def recipient_claimed(self) -> bool:
+        return self._state.recipient_claimed
+
+    @property
+    def _scope_digest(self) -> str:
+        return hashlib.sha256(self.tool_operation_key.encode()).hexdigest()[:24]
+
+    async def _active_ledger(self, *, db=None) -> WorkBudgetLedger:
+        self.raise_if_stopped()
+        try:
+            from app.db.models import User
+
+            async with _recipient_validation_session(self.session_factory, db) as db:
+                order = await db.get(WorkOrder, self.work_order_id)
+                step = await db.get(WorkStep, self.step_id)
+                attempt = await db.get(WorkStepAttempt, self.attempt_id)
+                ledger = await db.get(WorkBudgetLedger, self.ledger_id)
+                plan = await db.get(WorkPlan, self.plan_id)
+                actor = await db.scalar(
+                    select(User).where(User.sub == self.owner_key, User.is_active.is_(True))
+                )
+                parent_marker = await db.scalar(
+                    select(WorkBudgetReservation).where(
+                        WorkBudgetReservation.ledger_id == self.ledger_id,
+                        WorkBudgetReservation.work_order_id == self.work_order_id,
+                        WorkBudgetReservation.operation_key == f"execution:{self.attempt_id}",
+                        WorkBudgetReservation.dimension == "llm_calls",
+                        WorkBudgetReservation.reserved_units == 0,
+                    )
+                )
+                tool_reservation = await db.scalar(
+                    select(WorkBudgetReservation).where(
+                        WorkBudgetReservation.ledger_id == self.ledger_id,
+                        WorkBudgetReservation.work_order_id == self.work_order_id,
+                        WorkBudgetReservation.operation_key == self.tool_operation_key,
+                    )
+                )
+                valid = (
+                    order is not None
+                    and order.owner_key == self.owner_key
+                    and order.status == "running"
+                    and order.budget_ledger_id == self.ledger_id
+                    and order.plan_revision == self.plan_revision
+                    and ledger is not None
+                    and ledger.owner_key == self.owner_key
+                    and step is not None
+                    and step.work_order_id == order.id
+                    and step.plan_id == self.plan_id
+                    and plan is not None
+                    and plan.work_order_id == order.id
+                    and plan.status == "active"
+                    and plan.revision == self.plan_revision
+                    and attempt is not None
+                    and attempt.step_id == step.id
+                    and attempt_owns_lease(step, attempt)
+                    and actor is not None
+                    and parent_marker is not None
+                    and tool_reservation is not None
+                    and tool_reservation.dimension == "tool_attempts"
+                    and tool_reservation.state == "reserved"
+                    and tool_reservation.request_digest == self.tool_request_digest
+                    and tool_reservation.binding_digest == self.tool_binding_digest
+                )
+                if not valid:
+                    raise ValueError("recipient binding, actor, lease, or reservation is stale")
+                return ledger
+        except BudgetExecutionStopped:
+            raise
+        except Exception as exc:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "http_recipient_execution_inactive",
+                    "HTTP recipient binding is stale; model dispatch or publication is forbidden",
+                    details={"budget_error": str(exc)},
+                )
+            ) from exc
+
+    async def assert_ready(self) -> None:
+        await self._active_ledger()
+        async with self._state.lock:
+            if self._state.stopped is not None:
+                raise self._state.stopped
+            if self._state.recipient_claimed:
+                return
+            operation_key = f"recipient:{self.attempt_id}:{self._scope_digest}:once"
+            request_digest = hashlib.sha256(
+                json.dumps(
+                    {
+                        "work_order_id": str(self.work_order_id),
+                        "step_id": str(self.step_id),
+                        "attempt_id": str(self.attempt_id),
+                        "tool_operation_key": self.tool_operation_key,
+                        "body_digest": self.body_digest,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
+            try:
+                _, created = await reserve_budget_for_dispatch(
+                    self.session_factory,
+                    work_order_id=self.work_order_id,
+                    operation_key=operation_key,
+                    dimension="llm_calls",
+                    units=0,
+                    request_digest=request_digest,
+                )
+            except Exception as exc:
+                self._state.stopped = BudgetExecutionStopped(
+                    "http_recipient_fence_failed",
+                    "HTTP recipient once-fence could not be committed",
+                    details={"budget_error": str(exc)},
+                )
+                raise self._state.stopped from exc
+            if not created:
+                self._state.stopped = BudgetExecutionStopped(
+                    "http_recipient_already_started",
+                    "This recipient dispatch already crossed its once-fence",
+                    details={
+                        "operation_key": operation_key,
+                        "publication_state": "prior_outcome_unknown",
+                        "dispatch_state": "not_dispatched_by_this_request",
+                    },
+                )
+                raise self._state.stopped
+            self._state.recipient_claimed = True
+        await self._active_ledger()
+
+    async def preflight_direct_text_call(self, provider: str | None) -> None:
+        self.raise_if_stopped()
+        if provider != "ollama":
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "http_recipient_provider_unsupported",
+                    "The SQL recipient supports only the proven Ollama physical boundary",
+                    details={"provider": str(provider or "")},
+                )
+            )
+        ledger = await self._active_ledger()
+        await WorkBudgetContext._assert_llm_budget_bounds(self, ledger, path_name="HTTP recipient")
+        await self.assert_ready()
+
+    async def begin_direct_text_call(self, *, provider: str | None) -> int:
+        await self.preflight_direct_text_call(provider)
+        async with self._state.lock:
+            self._state.logical_call_no += 1
+            return self._state.logical_call_no
+
+    async def prepare_provider_call(
+        self,
+        *,
+        logical_call_no: int,
+        provider: str,
+        provider_attempt: int,
+        request: dict[str, Any],
+    ) -> str:
+        if provider != "ollama":
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "http_recipient_provider_unsupported",
+                    "The SQL recipient supports only Ollama",
+                )
+            )
+        await self.preflight_direct_text_call(provider)
+        async with self._state.lock:
+            if self._state.stopped is not None:
+                raise self._state.stopped
+            self._state.physical_call_no += 1
+            physical_call_no = self._state.physical_call_no
+        operation_key = (
+            f"recipient-llm:{self.attempt_id}:{self._scope_digest}:"
+            f"l{logical_call_no}:p{physical_call_no}:r{provider_attempt}"
+        )
+        request_digest = hashlib.sha256(
+            json.dumps(
+                request,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                default=str,
+            ).encode()
+        ).hexdigest()
+        try:
+            _, created = await reserve_budget_for_dispatch(
+                self.session_factory,
+                work_order_id=self.work_order_id,
+                operation_key=operation_key,
+                dimension="llm_calls",
+                units=1,
+                request_digest=request_digest,
+            )
+        except BudgetExceeded as exc:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "llm_call_budget_exceeded",
+                    "Shared LLM call budget is exhausted in the HTTP recipient",
+                    details={"budget_error": str(exc)},
+                )
+            ) from exc
+        except (BudgetBindingConflict, BudgetReservationConflict, BudgetLedgerError) as exc:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "http_recipient_llm_reservation_failed",
+                    "Recipient LLM reservation failed",
+                    details={"budget_error": str(exc)},
+                )
+            ) from exc
+        except Exception as exc:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "http_recipient_llm_reservation_unavailable",
+                    "Recipient LLM reservation could not be committed",
+                    details={"budget_error": str(exc)},
+                )
+            ) from exc
+        if not created:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "http_recipient_llm_operation_recorded",
+                    "This recipient physical LLM operation was already recorded",
+                    details={"operation_key": operation_key},
+                )
+            )
+        await self._active_ledger()
+        return operation_key
+
+    async def charge_provider_call(self, operation_key: str) -> None:
+        try:
+            await settle_budget(
+                self.session_factory,
+                work_order_id=self.work_order_id,
+                operation_key=operation_key,
+                actual_units=1,
+            )
+        except Exception as exc:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "http_recipient_llm_settlement_failed",
+                    "Recipient LLM call was dispatched but could not be settled",
+                    details={"budget_error": str(exc), "operation_key": operation_key},
+                )
+            ) from exc
+
+    async def assert_direct_text_current(self) -> None:
+        await self._active_ledger()
+
+    async def assert_publish_current(self) -> None:
+        await self._active_ledger()
+
+    @asynccontextmanager
+    async def publication_fence(self):
+        """Keep cancellation and parent settlement behind the synchronous write."""
+        from app.db.models import User
+
+        async with self.session_factory() as db:
+            async with db.begin():
+                await db.get(WorkOrder, self.work_order_id, with_for_update=True)
+                await db.get(WorkBudgetLedger, self.ledger_id, with_for_update=True)
+                # Heartbeat/claim paths lock step first and later update order.
+                # Do not introduce order->step or order->attempt inversion here.
+                await db.scalar(select(User).where(User.sub == self.owner_key).with_for_update())
+                await self._active_ledger(db=db)
+                yield
+
+    async def begin_airouter_call(self, **_kwargs) -> int:
+        raise await self._stop(
+            BudgetExecutionStopped(
+                "http_recipient_airouter_unsupported",
+                "AIRouter is outside the direct SQL recipient contract",
+            )
+        )
+
+    async def reject_explicit_budget_context(self) -> None:
+        raise await self._stop(
+            BudgetExecutionStopped(
+                "budget_context_collision",
+                "Explicit detached and HTTP recipient budget contexts cannot be combined",
+            )
+        )
+
+
+_airouter_budget_context: contextvars.ContextVar[
+    WorkBudgetContext | RecipientWorkBudgetContext | None
+] = contextvars.ContextVar("airouter_budget_context", default=None)
+
+
+def current_airouter_budget_context() -> WorkBudgetContext | RecipientWorkBudgetContext | None:
     """Return the server-owned durable context for the current asyncio task."""
     return _airouter_budget_context.get()
 
@@ -615,6 +1032,16 @@ def bind_airouter_budget_context(context: WorkBudgetContext):
     current = _airouter_budget_context.get()
     if current is not None and current is not context:
         raise RuntimeError("AIRouter budget context is already bound")
+    token = _airouter_budget_context.set(context)
+    try:
+        yield
+    finally:
+        _airouter_budget_context.reset(token)
+
+
+@contextmanager
+def bind_http_recipient_budget_context(context: RecipientWorkBudgetContext):
+    """Replace task-local caller state only at the authenticated HTTP boundary."""
     token = _airouter_budget_context.set(context)
     try:
         yield

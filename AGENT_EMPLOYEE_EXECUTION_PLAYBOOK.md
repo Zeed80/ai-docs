@@ -1069,6 +1069,18 @@ bounds по-прежнему fail-closed. 276 независимых tests passe
 выпуск и ограничения: `docs/agent-employee-delivery/E21-direct-text-attempts.md`.
 HTTP workspace.sql_table, standalone email/CAD/VLM не считаются migrated.
 
+**E21.2b8 (TESTED / REVIEWED / DEPLOYED):** direct catalog workspace.sql_table/Ollama
+переносит подписанный owner-bound handoff на фиксированный SQL-table endpoint.
+Service key и signed actor проверяются независимо от AUTH_ENABLED; recipient
+сверяет БД, parent tool reserve и lease. Physical SQL/title model calls используют
+общий ledger, отдельные keys и once-fence. Parent timeout блокирует postflight;
+publication fence сериализует order/ledger/User, не инвертируя heartbeat locks.
+Наблюдаемый HTTP receipt сохраняется перед sticky stop. Повтор не утверждает
+отсутствие прошлого эффекта. Generic capability SQL-table пока fail-closed.
+277 tests passed, отдельный read-only security review без findings; production
+evidence и ограничения: `docs/agent-employee-delivery/E21-http-recipient-attempts.md`.
+Full E21 и E24 не закрыты; actual token/cost receipts и bounds — следующий контракт.
+
 1. Сначала точные единицы: tool attempts, LLM calls, tokens, cost, active time,
    replan count. Ожидание человека не смешивать с активным временем без ADR.
 2. Целевые defaults: 2 часа active, 200 tools, 50 LLM calls, 3 replans. Не включать
