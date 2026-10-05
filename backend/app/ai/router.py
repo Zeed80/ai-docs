@@ -47,6 +47,9 @@ from app.domain.work_budget_usage import capture_ollama_usage
 
 logger = structlog.get_logger()
 
+# Tasks a bound durable budget context deliberately does not account for.
+_UNBUDGETED_RETRIEVAL_TASKS = frozenset({AITask.EMBEDDING, AITask.RERANKING})
+
 # Per-dispatch deadline for cheap vector tasks, and a budget for the whole
 # fallback chain. Conversational tasks keep the provider's own timeout: a
 # reasoning model legitimately takes minutes, an embedding never does.
@@ -322,6 +325,13 @@ class AIRouter:
 
         routing = get_routing_for(request.task)
         budget_context = current_airouter_budget_context()
+        if request.task in _UNBUDGETED_RETRIEVAL_TASKS:
+            # Embedding/reranking are retrieval infrastructure, not generation:
+            # they are outside the llm_calls dimension. Failing them closed
+            # stopped every durable chat turn at its first memory/recipe lookup
+            # (live, 2026-10-05); counting them would exhaust the shared call
+            # budget on lookups. Explicitly unaccounted, not silently.
+            budget_context = None
         # Работаем ТОЛЬКО на модели, которую выбрал оператор. Автоматического
         # запаса нет — решение принято по итогам разбора, и оно снимает целый
         # класс дефектов сразу.

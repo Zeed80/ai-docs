@@ -67,6 +67,9 @@ class SequencedProvider(AIProvider):
     async def embedding(self, request: AIRequest, model: str) -> AIResponse:
         return await self.chat(request, model)
 
+    async def rerank(self, request: AIRequest, model: str) -> AIResponse:
+        return await self.chat(request, model)
+
 
 def _request() -> ChatRunCreate:
     return ChatRunCreate(request_id=uuid.uuid4(), content="AIRouter budget test")
@@ -226,7 +229,11 @@ async def test_real_ollama_posts_match_reservations_on_format_retry(test_engine,
         ({"max_tokens": Decimal(100)}, {}, "token_budget_enforcement_unavailable"),
         ({"max_cost_usd": Decimal("1.00")}, {}, "cost_budget_enforcement_unavailable"),
         ({}, {"images": ["data:image/png;base64,ZmFrZQ=="]}, "airouter_provider_path_unsupported"),
-        ({}, {"task": AITask.EMBEDDING}, "airouter_provider_path_unsupported"),
+        (
+            {},
+            {"task": AITask.LONG_CONTEXT_SUMMARIZATION},
+            "airouter_provider_path_unsupported",
+        ),
     ],
 )
 async def test_unproven_paths_and_bounds_stop_before_server_or_provider(
@@ -248,6 +255,25 @@ async def test_unproven_paths_and_bounds_stop_before_server_or_provider(
     assert stopped.value.code == expected_code
     assert server_starts == []
     assert provider.calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("task", [AITask.EMBEDDING, AITask.RERANKING])
+async def test_retrieval_tasks_are_explicitly_unbudgeted_not_stopped(
+    test_engine, monkeypatch, task
+):
+    """A memory/recipe lookup must not stop the durable turn (live 2026-10-05)."""
+    factory, run, context = await _claimed_context(test_engine)
+    provider = SequencedProvider(['{"ok": true}'])
+    router = _router(monkeypatch, provider)
+    monkeypatch.setattr("app.ai.server_lifecycle.ensure_running", lambda _kind: _async_none())
+
+    with bind_airouter_budget_context(context):
+        await router.run(_decision_request(task=task, response_schema=None))
+        context.raise_if_stopped()
+
+    assert provider.calls == 1
+    assert await _physical(factory, run["work_order_id"]) == []
 
 
 @pytest.mark.asyncio
