@@ -1060,6 +1060,15 @@ fail-closed; finite token/cost caps без доказанного bound по-п�
 Независимо 266 passed, Ruff clean; production-статус и команды:
 `docs/agent-employee-delivery/E21-airouter-attempts.md`. Это не закрывает E21.
 
+**E21.2b7 (TESTED / REVIEWED / DEPLOYED):** direct generate/reasoning_generate/generate_json/chat
+в server-owned bound durable execution резервируют каждый physical Ollama POST,
+включая transport/JSON retries. Postflight после закрытия HTTP-клиента запрещает
+stale response; explicit detached/ambient collision — sticky stop. Legacy Claude
+fallback внутри bound execution закрыт. Finite token/cost caps без доказанных
+bounds по-прежнему fail-closed. 276 независимых tests passed; caller inventory,
+выпуск и ограничения: `docs/agent-employee-delivery/E21-direct-text-attempts.md`.
+HTTP workspace.sql_table, standalone email/CAD/VLM не считаются migrated.
+
 1. Сначала точные единицы: tool attempts, LLM calls, tokens, cost, active time,
    replan count. Ожидание человека не смешивать с активным временем без ADR.
 2. Целевые defaults: 2 часа active, 200 tools, 50 LLM calls, 3 replans. Не включать

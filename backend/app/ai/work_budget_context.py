@@ -209,6 +209,109 @@ class WorkBudgetContext:
             self._state.logical_call_no += 1
             return self._state.logical_call_no
 
+    async def _assert_llm_budget_bounds(
+        self,
+        ledger: WorkBudgetLedger,
+        *,
+        path_name: str,
+    ) -> None:
+        """Reject unprovable totals and exhausted shared call slots."""
+        if ledger.max_tokens is not None:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "token_budget_enforcement_unavailable",
+                    f"A finite token budget cannot be proven before this {path_name} call",
+                    details={"dimension": "tokens", "limit": str(ledger.max_tokens)},
+                )
+            )
+        if ledger.max_cost_usd is not None:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "cost_budget_enforcement_unavailable",
+                    f"A finite cost budget cannot be proven before this {path_name} call",
+                    details={"dimension": "cost_usd", "limit": str(ledger.max_cost_usd)},
+                )
+            )
+        try:
+            async with self.session_factory() as db:
+                amount = case(
+                    (
+                        WorkBudgetReservation.state == "charged",
+                        WorkBudgetReservation.actual_units,
+                    ),
+                    else_=WorkBudgetReservation.reserved_units,
+                )
+                used = Decimal(
+                    await db.scalar(
+                        select(func.coalesce(func.sum(amount), 0)).where(
+                            WorkBudgetReservation.ledger_id == ledger.id,
+                            WorkBudgetReservation.dimension == "llm_calls",
+                        )
+                    )
+                    or 0
+                )
+        except Exception as exc:
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "llm_budget_state_unavailable",
+                    f"{path_name.capitalize()} budget state could not be checked; "
+                    "provider preparation is forbidden",
+                    details={"budget_error": str(exc)},
+                )
+            ) from exc
+        if used >= Decimal(ledger.max_llm_calls):
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "llm_call_budget_exceeded",
+                    "LLM call budget is exhausted",
+                    details={"used_or_reserved": str(used)},
+                )
+            )
+
+    async def preflight_direct_text_call(self, provider: str | None) -> None:
+        """Validate a direct text helper before GPU or client preparation."""
+        self.raise_if_stopped()
+        if (
+            self.expected_owner_key is None
+            or self.expected_plan_id is None
+            or self.expected_plan_revision is None
+            or self.expected_ledger_id is None
+        ):
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "direct_text_budget_context_invalid",
+                    "Direct text execution lacks a frozen owner/plan binding",
+                )
+            )
+        if provider != "ollama":
+            raise await self._stop(
+                BudgetExecutionStopped(
+                    "direct_text_provider_unsupported",
+                    "This durable direct text provider has no proven physical-attempt boundary",
+                    details={"provider": str(provider or "")},
+                )
+            )
+        ledger = await self._active_ledger()
+        await self._assert_llm_budget_bounds(ledger, path_name="direct text")
+
+    async def begin_direct_text_call(self, *, provider: str | None) -> int:
+        """Start one logical direct-helper call on the durable execution."""
+        await self.preflight_direct_text_call(provider)
+        return await self.begin_logical_call()
+
+    async def assert_direct_text_current(self) -> None:
+        """Postflight fence before a direct response or retry can be applied."""
+        await self._active_ledger()
+
+    async def reject_explicit_budget_context(self) -> None:
+        """Make an explicit/ambient context collision a sticky execution stop."""
+        raise await self._stop(
+            BudgetExecutionStopped(
+                "budget_context_collision",
+                "Explicit detached and ambient durable budget contexts cannot be combined",
+            )
+        )
+
     async def begin_airouter_call(
         self, *, provider: str, task: str, has_images: bool = False
     ) -> int:
@@ -241,56 +344,7 @@ class WorkBudgetContext:
                 )
             )
         ledger = await self._active_ledger()
-        if ledger.max_tokens is not None:
-            raise await self._stop(
-                BudgetExecutionStopped(
-                    "token_budget_enforcement_unavailable",
-                    "A finite token budget cannot be proven before this AIRouter call",
-                    details={"dimension": "tokens", "limit": str(ledger.max_tokens)},
-                )
-            )
-        if ledger.max_cost_usd is not None:
-            raise await self._stop(
-                BudgetExecutionStopped(
-                    "cost_budget_enforcement_unavailable",
-                    "A finite cost budget cannot be proven before this AIRouter call",
-                    details={"dimension": "cost_usd", "limit": str(ledger.max_cost_usd)},
-                )
-            )
-        try:
-            async with self.session_factory() as db:
-                amount = case(
-                    (
-                        WorkBudgetReservation.state == "charged",
-                        WorkBudgetReservation.actual_units,
-                    ),
-                    else_=WorkBudgetReservation.reserved_units,
-                )
-                used = Decimal(
-                    await db.scalar(
-                        select(func.coalesce(func.sum(amount), 0)).where(
-                            WorkBudgetReservation.ledger_id == ledger.id,
-                            WorkBudgetReservation.dimension == "llm_calls",
-                        )
-                    )
-                    or 0
-                )
-        except Exception as exc:
-            raise await self._stop(
-                BudgetExecutionStopped(
-                    "llm_budget_state_unavailable",
-                    "AIRouter budget state could not be checked; provider preparation is forbidden",
-                    details={"budget_error": str(exc)},
-                )
-            ) from exc
-        if used >= Decimal(ledger.max_llm_calls):
-            raise await self._stop(
-                BudgetExecutionStopped(
-                    "llm_call_budget_exceeded",
-                    "LLM call budget is exhausted",
-                    details={"used_or_reserved": str(used)},
-                )
-            )
+        await self._assert_llm_budget_bounds(ledger, path_name="AIRouter")
         return await self.begin_logical_call()
 
     async def assert_airouter_current(self) -> None:

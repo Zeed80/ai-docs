@@ -35,8 +35,14 @@ durable intake, bare headless executor удалён, non-durable `agent_turn` з
 Прочие provider/task/image paths внутри durable context пока fail-closed.
 266 независимых tests passed; production-статус и ограничения в отчёте
 `docs/agent-employee-delivery/E21-airouter-attempts.md`.
-Следующий приоритет P1.1 — оставшиеся direct/provider paths и доказанные
-token/cost bounds перед расширением supported routes.
+E21.2b7 независимо проверен: direct generate/reasoning_generate/generate_json/chat
+в bound durable execution используют тот же ledger для Ollama POST/retries,
+postflight после закрытия клиента и sticky explicit/ambient collision stop.
+276 tests passed; caller inventory и выпуск:
+`docs/agent-employee-delivery/E21-direct-text-attempts.md`.
+HTTP workspace.sql_table и standalone email/CAD/VLM не мигрированы.
+Следующий приоритет P1.1 — owner-bound учёт recipient-side model calls через HTTP
+и доказанные token/cost bounds перед расширением supported routes.
 Остаются как минимум:
 
 - остальные AIRouter/headless/provider paths;

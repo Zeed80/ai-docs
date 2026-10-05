@@ -46,8 +46,13 @@ E21.2b6 независимо проверен и выпущен: AIRouter Ollama
 оркестратора используют общий ledger, включая format retries и stale postflight.
 Прочие bound provider/task/image paths пока fail-closed; 266 tests passed.
 Выпуск: `docs/agent-employee-delivery/E21-airouter-attempts.md`.
-Следующий P1.1 контракт — оставшиеся direct/provider paths и доказанные token/cost
-bounds перед расширением supported routes; full E21 не завершён.
+E21.2b7 независимо проверен: direct Ollama text helpers в bound durable execution
+учитывают POST/retries, stale postflight после закрытия клиента и sticky
+explicit/ambient collision. 276 tests passed; caller inventory и выпуск:
+`docs/agent-employee-delivery/E21-direct-text-attempts.md`.
+HTTP workspace.sql_table и standalone email/CAD/VLM не мигрированы.
+Следующий P1.1 контракт — owner-bound recipient-side model calls через HTTP и
+доказанные token/cost bounds; full E21 не завершён.
 R0 fake runner/10 cases принят, следующий этап P1.1 (остаток E21); полный corpus
 и качество живой модели ещё не приняты.
 

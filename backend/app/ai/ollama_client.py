@@ -18,6 +18,13 @@ from app.config import settings
 logger = structlog.get_logger()
 
 
+def _ambient_budget_context():
+    """Read the server-owned task-local durable context, if one is bound."""
+    from app.ai.work_budget_context import current_airouter_budget_context
+
+    return current_airouter_budget_context()
+
+
 class AIBackend(str, Enum):
     OLLAMA = "ollama"
     CLAUDE = "claude"
@@ -215,6 +222,10 @@ async def generate(
         max_retries: Number of retries
         format_json: Request JSON output format
     """
+    budget_context = _ambient_budget_context()
+    logical_call_no = None
+    if budget_context is not None:
+        logical_call_no = await budget_context.begin_direct_text_call(provider="ollama")
     _ensure_gpu_free()
     model = model or settings.ollama_model_ocr
     breaker = _get_breaker(model)
@@ -244,13 +255,31 @@ async def generate(
 
     for attempt in range(max_retries + 1):
         try:
-            async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-                start = time.time()
-                response = await client.post(
-                    f"{settings.ollama_url}/api/chat",
-                    json=payload,
+            operation_key = None
+            dispatched = False
+            if budget_context is not None:
+                operation_key = await budget_context.prepare_provider_call(
+                    logical_call_no=logical_call_no,
+                    provider="ollama",
+                    provider_attempt=attempt + 1,
+                    request={
+                        "url": f"{settings.ollama_url}/api/chat",
+                        "payload": payload,
+                    },
                 )
-                elapsed_ms = int((time.time() - start) * 1000)
+            try:
+                async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+                    start = time.time()
+                    dispatched = True
+                    response = await client.post(
+                        f"{settings.ollama_url}/api/chat",
+                        json=payload,
+                    )
+                    elapsed_ms = int((time.time() - start) * 1000)
+            finally:
+                if operation_key is not None and dispatched:
+                    await budget_context.charge_provider_call(operation_key)
+                    await budget_context.assert_direct_text_current()
 
             response.raise_for_status()
             data = response.json()
@@ -535,18 +564,26 @@ async def generate_json(
 
     Falls back to regex JSON extraction if the model wraps output in markdown.
     """
+    ambient_budget_context = _ambient_budget_context()
+    if budget_context is not None and ambient_budget_context is not None:
+        await ambient_budget_context.reject_explicit_budget_context()
+
     # Existing callers keep the original eager GPU guard.  A budgeted verifier
     # must resolve and validate its provider first so an unsupported route or a
     # zero/legacy budget cannot cause even this provider-side preparation.
-    if budget_context is None:
+    if budget_context is None and ambient_budget_context is None:
         _ensure_gpu_free()
     if model is None or provider is None:
         _model, _provider = _runtime_ocr_model_and_provider()
         model = model or _model
         provider = provider or _provider
+    logical_call_no = None
     if budget_context is not None:
         await budget_context.assert_supported_provider(provider)
         await budget_context.preflight_provider_call(provider)
+    elif ambient_budget_context is not None:
+        logical_call_no = await ambient_budget_context.begin_direct_text_call(provider=provider)
+        _ensure_gpu_free()
 
     breaker = _get_breaker(model)
     if not breaker.is_available:
@@ -651,27 +688,37 @@ async def generate_json(
     for attempt in range(3):
         try:
             operation_key = None
-            if budget_context is not None:
-                _ensure_gpu_free()
-            async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            dispatched = False
+            if ambient_budget_context is not None:
+                operation_key = await ambient_budget_context.prepare_provider_call(
+                    logical_call_no=logical_call_no,
+                    provider=provider,
+                    provider_attempt=attempt + 1,
+                    request={"url": url, "payload": payload},
+                )
+            try:
                 if budget_context is not None:
-                    operation_key = await budget_context.prepare_provider_call(
-                        provider=provider,
-                        provider_attempt=attempt + 1,
-                        request={"url": url, "payload": payload},
-                    )
-                start = time.time()
-                dispatched = False
-                try:
+                    _ensure_gpu_free()
+                async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+                    if budget_context is not None:
+                        operation_key = await budget_context.prepare_provider_call(
+                            provider=provider,
+                            provider_attempt=attempt + 1,
+                            request={"url": url, "payload": payload},
+                        )
+                    start = time.time()
                     # Treat cancellation/crash after entering this await as a
                     # consumed physical attempt; its committed reservation is
                     # never reopened for automatic replay.
                     dispatched = True
                     response = await client.post(url, json=payload)
-                finally:
-                    if operation_key is not None and dispatched:
-                        await budget_context.charge_provider_call(operation_key)
-                elapsed_ms = int((time.time() - start) * 1000)
+                    elapsed_ms = int((time.time() - start) * 1000)
+            finally:
+                if operation_key is not None and dispatched:
+                    active_budget_context = budget_context or ambient_budget_context
+                    await active_budget_context.charge_provider_call(operation_key)
+                    if ambient_budget_context is not None:
+                        await ambient_budget_context.assert_direct_text_current()
 
             response.raise_for_status()
             data = response.json()
@@ -763,6 +810,10 @@ async def chat(
     format_json: bool = False,
 ) -> OllamaResponse:
     """Chat-style generation using Ollama /api/chat."""
+    budget_context = _ambient_budget_context()
+    logical_call_no = None
+    if budget_context is not None:
+        logical_call_no = await budget_context.begin_direct_text_call(provider="ollama")
     _ensure_gpu_free()
     model = model or settings.ollama_model_reasoning
     breaker = _get_breaker(model)
@@ -783,13 +834,28 @@ async def chat(
         payload["format"] = "json"
 
     try:
-        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-            start = time.time()
-            response = await client.post(
-                f"{settings.ollama_url}/api/chat",
-                json=payload,
+        operation_key = None
+        dispatched = False
+        if budget_context is not None:
+            operation_key = await budget_context.prepare_provider_call(
+                logical_call_no=logical_call_no,
+                provider="ollama",
+                provider_attempt=1,
+                request={"url": f"{settings.ollama_url}/api/chat", "payload": payload},
             )
-            elapsed_ms = int((time.time() - start) * 1000)
+        try:
+            async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+                start = time.time()
+                dispatched = True
+                response = await client.post(
+                    f"{settings.ollama_url}/api/chat",
+                    json=payload,
+                )
+                elapsed_ms = int((time.time() - start) * 1000)
+        finally:
+            if operation_key is not None and dispatched:
+                await budget_context.charge_provider_call(operation_key)
+                await budget_context.assert_direct_text_current()
 
         response.raise_for_status()
         data = response.json()
@@ -835,6 +901,9 @@ async def reasoning_generate(
     cfg = get_reasoning_model(confidential=confidential)
     model_name = cfg.model
     provider = cfg.provider
+    budget_context = _ambient_budget_context()
+    if budget_context is not None:
+        await budget_context.preflight_direct_text_call(provider)
 
     # ── Cloud providers ───────────────────────────────────────────────────────
     if not confidential and provider == "anthropic" and settings.anthropic_api_key:
@@ -912,7 +981,8 @@ async def reasoning_generate(
 
     # ── Legacy fallback: check old ai_reasoning_backend setting ───────────────
     if (
-        not confidential
+        budget_context is None
+        and not confidential
         and settings.ai_reasoning_backend == "claude"
         and settings.anthropic_api_key
     ):

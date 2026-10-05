@@ -41,8 +41,15 @@ E21.2b6 независимо проверен и выпущен 5 октября
 Прочие provider/task/image paths внутри durable context пока fail-closed.
 Независимо: 266 passed, Ruff clean. Выпуск и точные ограничения:
 `docs/agent-employee-delivery/E21-airouter-attempts.md`.
-Следующий контракт P1.1 — инвентаризация оставшихся direct/provider paths и
-доказанные token/cost bounds перед расширением supported routes.
+E21.2b7 независимо проверен: direct text helpers generate/reasoning_generate/
+generate_json/chat внутри bound durable execution учитывают physical Ollama POST
+и retries в том же ledger. Postflight после закрытия клиента исключает stale
+ответ; explicit/ambient collision — sticky stop; legacy Claude fallback запрещён.
+Независимо 276 passed, Ruff clean; выпуск и caller inventory:
+`docs/agent-employee-delivery/E21-direct-text-attempts.md`.
+HTTP workspace.sql_table, standalone email/CAD/VLM этим не мигрированы.
+Следующий контракт P1.1 — owner-bound учёт recipient-side model calls через HTTP
+и доказанные token/cost bounds перед расширением supported routes.
 Оставшиеся AIRouter/direct paths, entry adapters, legacy reconciliation,
 token/cost accounting и active/replan остаются E21.2b+/E21.3;
 вся E21 не завершена. Отчёт: `docs/agent-employee-delivery/E21-budget-ledger.md`.

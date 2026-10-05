@@ -14,8 +14,13 @@ E21.2b6 независимо проверен и выпущен: AIRouter Ollama
 долговечного оркестратора связаны с общим ledger, включая format retries и stale
 postflight; остальные bound provider/task/image paths пока fail-closed.
 266 tests passed; выпуск: `docs/agent-employee-delivery/E21-airouter-attempts.md`.
-Следующий P1.1 контракт — оставшиеся direct/provider paths и доказанные token/cost
-bounds перед расширением supported routes. Full E21 остаётся IN_PROGRESS.
+E21.2b7 независимо проверен: direct Ollama text helpers в bound durable execution
+учитывают POST/retries и блокируют stale ответ после закрытия клиента;
+explicit/ambient collision — sticky stop. Независимо 276 passed; выпуск:
+`docs/agent-employee-delivery/E21-direct-text-attempts.md`.
+HTTP workspace.sql_table и standalone email/CAD/VLM не мигрированы.
+Следующий P1.1 контракт — owner-bound recipient-side model calls через HTTP и
+доказанные token/cost bounds. Full E21 остаётся IN_PROGRESS.
 
 Пилот `/api/agent/chat-runs` сохраняет запросы и события в БД и исполняется worker.
 
