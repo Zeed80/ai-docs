@@ -1094,91 +1094,218 @@ async def run_agent_task(
     db: AsyncSession = Depends(get_db),
     _user: UserInfo = Depends(require_human_role(UserRole.admin)),
 ) -> AgentTask:
-    """Run an approved task through the durable WorkOrder runtime."""
-    task = await db.get(AgentTask, task_id)
+    """Bind a fresh approved task to the common durable intake and run it once."""
+    task = await db.get(AgentTask, task_id, with_for_update=True)
     if not task:
         raise HTTPException(status_code=404, detail="Agent task not found")
-    if task.status != "created":
+    if task.status not in {"created", "running"}:
         raise HTTPException(status_code=409, detail=f"Task is not runnable (status={task.status})")
 
     started_at = datetime.now(UTC)
-    metadata = dict(task.metadata_ or {})
-    metadata.update(
-        {
-            "run_status": "running",
-            "run_started_at": started_at.isoformat(),
-        }
-    )
-    task.metadata_ = metadata
-    task.status = "running"
-    await db.commit()
-    await db.refresh(task)
-
-    from app.db.models import WorkOrder
-    from app.domain.work_orders import create_single_step_plan, create_work_order
+    from app.db.agent_runtime_models import DurableChatRun
+    from app.db.models import ChatMessage, ChatSession, User, WorkOrder
 
     prompt = task.objective + (
         f"\n\nКонтекст задачи:\n{task.description}" if task.description else ""
     )
     work_order = (
-        await db.execute(select(WorkOrder).where(WorkOrder.legacy_agent_task_id == task.id))
+        await db.execute(
+            select(WorkOrder).where(WorkOrder.legacy_agent_task_id == task.id).with_for_update()
+        )
     ).scalar_one_or_none()
-    if work_order is None:
-        work_order = await create_work_order(
-            db,
-            owner_key=_user.sub,
-            objective=task.objective,
-            description=task.description,
-            source="legacy_agent_task",
-            legacy_agent_task_id=task.id,
-            metadata={"role": task.role, "team_id": str(task.team_id) if task.team_id else None},
-        )
-        await create_single_step_plan(
-            db,
-            work_order,
-            kind="agent_turn",
-            title="Выполнить совместимое AgentTask-поручение",
-            input_data={"prompt": prompt},
-            timeout_seconds=600,
-        )
-        metadata = dict(task.metadata_ or {})
-        metadata["work_order_id"] = str(work_order.id)
-        task.metadata_ = metadata
-        await db.commit()
-    try:
-        from app.config import settings
-        from app.tasks.work_orders import execute_work_order_now
+    durable_run = None
+    should_execute = False
+    if work_order is not None:
+        from app.db.work_budget_models import WorkBudgetLedger
 
-        execution_factory = (
-            async_sessionmaker(bind=db.bind, expire_on_commit=False)
-            if settings.app_env == "test"
+        durable_run = await db.scalar(
+            select(DurableChatRun).where(DurableChatRun.work_order_id == work_order.id)
+        )
+        durable_session = (
+            await db.get(ChatSession, durable_run.session_id) if durable_run is not None else None
+        )
+        user_message = (
+            await db.get(ChatMessage, durable_run.user_message_id)
+            if durable_run is not None
             else None
         )
-        await execute_work_order_now(work_order.id, session_factory=execution_factory)
-    except Exception as exc:
-        logger.exception("durable_agent_task_execution_failed", task_id=str(task.id))
-        output = f"Task execution failed: {exc}"
-    else:
-        await db.refresh(work_order)
-        output = work_order.result_summary or (
-            str((work_order.blocker or {}).get("reason") or work_order.blocker or "")
+        ledger = (
+            await db.get(WorkBudgetLedger, work_order.budget_ledger_id)
+            if work_order.budget_ledger_id is not None
+            else None
         )
-    ok = work_order.status == "completed"
+        active_owner = await db.scalar(select(User.is_active).where(User.sub == _user.sub))
+        expected_external_id = f"agent-task:{task.id}"
+        expected_request_id = uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"agent-task:{task.id}:owner:{_user.sub}",
+        )
+        task_metadata = dict(task.metadata_ or {})
+        binding_valid = (
+            work_order.owner_key == _user.sub
+            and work_order.source == "durable_chat"
+            and work_order.objective == prompt
+            and durable_run is not None
+            and durable_run.owner_key == _user.sub
+            and durable_run.intake_channel == "http"
+            and durable_run.external_message_id == expected_external_id
+            and durable_run.request_id == expected_request_id
+            and durable_session is not None
+            and durable_session.user_key == _user.sub
+            and user_message is not None
+            and user_message.session_id == durable_session.id
+            and user_message.role == "user"
+            and user_message.content == prompt
+            and ledger is not None
+            and ledger.owner_key == _user.sub
+            and ledger.root_work_order_id == work_order.id
+            and (work_order.metadata_ or {}).get("chat_session_id") == str(durable_session.id)
+            and task_metadata.get("work_order_id") == str(work_order.id)
+            and task_metadata.get("durable_chat_run_id") == str(durable_run.id)
+            and task_metadata.get("chat_session_id") == str(durable_session.id)
+        )
+        if active_owner is False or not binding_valid:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "agent_task_durable_migration_required",
+                    "message": (
+                        "Existing AgentTask work is not a current owner-bound durable intake; "
+                        "automatic migration or replay is disabled"
+                    ),
+                },
+            )
+        # Idempotent retry after the atomic intake commit never starts another
+        # executor. The durable scheduler owns any still-ready work, while an
+        # already-running/unknown attempt keeps its existing fence and ledger.
+    elif task.status == "running":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "agent_task_durable_binding_missing",
+                "message": "Running AgentTask has no durable WorkOrder binding",
+            },
+        )
+    else:
+        from app.domain.agent_intake import (
+            AgentIntakeError,
+            AgentIntakeRequest,
+            VerifiedIntakeIdentity,
+            submit_agent_intake,
+        )
 
-    finished_at = datetime.now(UTC)
+        external_message_id = f"agent-task:{task.id}"
+        try:
+            intake = await submit_agent_intake(
+                db,
+                identity=VerifiedIntakeIdentity(account_key=_user.sub, channel="http"),
+                request=AgentIntakeRequest(
+                    channel="http",
+                    external_message_id=external_message_id,
+                    request_id=uuid.uuid5(
+                        uuid.NAMESPACE_URL,
+                        f"agent-task:{task.id}:owner:{_user.sub}",
+                    ),
+                    content=prompt,
+                ),
+                commit=False,
+            )
+        except AgentIntakeError as exc:
+            # Intake validation is normally completed before the first write,
+            # but the whole adapter boundary is atomic even if a future intake
+            # validator rejects after staging the session/run/order graph.
+            # Never leave those staged rows available to a later commit on the
+            # request session.
+            await db.rollback()
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        if not intake.created:
+            # A previously committed intake without the unique AgentTask link
+            # is not safe to adopt: it may have already dispatched under a
+            # different lifecycle. Do not manufacture the missing provenance.
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "agent_task_durable_binding_missing",
+                    "message": "Existing durable intake is not bound to this AgentTask",
+                },
+            )
+        work_order = intake.order
+        durable_run = intake.run
+        work_order.legacy_agent_task_id = task.id
+        work_order.metadata_ = {
+            **dict(work_order.metadata_ or {}),
+            "legacy_agent_task_role": task.role,
+            "legacy_agent_team_id": str(task.team_id) if task.team_id else None,
+        }
+        metadata = dict(task.metadata_ or {})
+        metadata.update(
+            {
+                "run_status": "running",
+                "run_started_at": started_at.isoformat(),
+                "run_dispatch_claimed_at": started_at.isoformat(),
+                "work_order_id": str(work_order.id),
+                "durable_chat_run_id": str(durable_run.id),
+                "chat_session_id": str(durable_run.session_id),
+            }
+        )
+        task.metadata_ = metadata
+        task.status = "running"
+        # Task state, owner-bound run, WorkOrder, plan and fresh ledger become
+        # visible atomically. No `running` AgentTask is committed before intake
+        # validation succeeds.
+        await db.commit()
+        should_execute = True
+
+    execution_error: str | None = None
+    if should_execute:
+        try:
+            from app.config import settings
+            from app.tasks.work_orders import execute_work_order_now
+
+            execution_factory = (
+                async_sessionmaker(bind=db.bind, expire_on_commit=False)
+                if settings.app_env == "test"
+                else None
+            )
+            await execute_work_order_now(work_order.id, session_factory=execution_factory)
+        except Exception as exc:
+            logger.exception("durable_agent_task_execution_failed", task_id=str(task.id))
+            execution_error = str(exc)
+
+    await db.refresh(work_order)
+    await db.refresh(task)
     metadata = dict(task.metadata_ or {})
     metadata.update(
         {
-            "run_status": "completed" if ok else "failed",
+            "run_status": "completed" if work_order.status == "completed" else work_order.status,
             "work_order_id": str(work_order.id),
             "work_order_status": work_order.status,
-            "run_finished_at": finished_at.isoformat(),
-            "run_duration_ms": int((finished_at - started_at).total_seconds() * 1000),
+            "durable_chat_run_id": str(durable_run.id),
         }
     )
+    if execution_error:
+        metadata["run_error"] = execution_error[:1000]
+    if work_order.status == "completed":
+        finished_at = datetime.now(UTC)
+        task.status = "completed"
+        task.output = work_order.result_summary or None
+        metadata.update(
+            {
+                "run_finished_at": finished_at.isoformat(),
+                "run_duration_ms": int((finished_at - started_at).total_seconds() * 1000),
+            }
+        )
+    elif work_order.status in {"failed", "canceled"}:
+        task.status = "failed"
+        task.output = (
+            str((work_order.blocker or {}).get("reason") or work_order.blocker or "") or None
+        )
+    else:
+        # waiting_approval, blocked partial/outcome_unknown, and other durable
+        # nonterminal/intervention states are not ordinary AgentTask failure and
+        # must never authorize a fresh run on the next POST.
+        task.status = "running"
     task.metadata_ = metadata
-    task.status = "completed" if ok else "failed"
-    task.output = output or None
     await db.commit()
     await db.refresh(task)
     return task

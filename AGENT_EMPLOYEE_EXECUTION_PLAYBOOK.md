@@ -1045,6 +1045,13 @@ LLM reserve вне caller TX; postflight перед применением пл�
 Budget stop не создаёт fallback и не запускает executor. API создаёт ledger
 только для свежего order; historic baseline не подменяется нулём.
 
+**E21.2b5 (REVIEWED / DEPLOYED):** fresh human-owned AgentTask → atomic common intake;
+duplicate/concurrent POST не повторяет executor. Non-durable `agent_turn`
+fail-closed до dispatch; historic call markers/unknown evidence сохраняются.
+Неперенесённые API/planner/decompose/email входы намеренно недоступны.
+AIRouter physical attempts ещё не подключены; full E21 остаётся IN_PROGRESS.
+Приёмка и выпуск: `docs/agent-employee-delivery/E21-headless-retirement.md`.
+
 1. Сначала точные единицы: tool attempts, LLM calls, tokens, cost, active time,
    replan count. Ожидание человека не смешивать с активным временем без ADR.
 2. Целевые defaults: 2 часа active, 200 tools, 50 LLM calls, 3 replans. Не включать

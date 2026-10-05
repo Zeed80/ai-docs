@@ -8,7 +8,6 @@ the same occurrence safely, while tomorrow's identical schedule remains new.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import logging
 import uuid
@@ -18,9 +17,6 @@ from app.tasks.async_runner import run_async
 from app.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
-
-_MAX_OUTPUT_CHARS = 8000
-_TURN_TIMEOUT_S = 600.0
 
 # ── Minimal 5-field cron matcher ───────────────────────────────────────────────
 # Supports: "*", "*/n", "a", "a-b", "a,b,c" (and combinations via commas).
@@ -82,41 +78,6 @@ def _is_due(schedule: str, last_run_at: datetime | None, now: datetime) -> bool:
     last = last_run_at if last_run_at.tzinfo else last_run_at.replace(tzinfo=UTC)
     # Already ran within the current minute → not due again.
     return last.replace(second=0, microsecond=0) < now.replace(second=0, microsecond=0)
-
-
-async def run_headless_agent_turn(prompt: str) -> tuple[bool, str, dict[str, int]]:
-    """Compatibility executor for legacy AgentTask work orders.
-
-    Cron never calls this function: scheduled work enters the durable-chat
-    runtime through ``submit_agent_intake`` below.  Keeping this public seam
-    avoids changing the existing AgentTask API's execution contract.
-    """
-    from app.ai.agent_loop import AgentSession
-
-    chunks: list[str] = []
-    errors: list[str] = []
-
-    async def collect(event: dict) -> None:
-        event_type = str(event.get("type") or "")
-        if event_type == "text":
-            chunks.append(str(event.get("content") or ""))
-        elif event_type == "error":
-            errors.append(str(event.get("content") or ""))
-
-    session = AgentSession(collect)
-    try:
-        await asyncio.wait_for(session.on_user_message(prompt), timeout=_TURN_TIMEOUT_S)
-    except TimeoutError:
-        errors.append("turn timed out")
-    text = "".join(chunks).strip()[:_MAX_OUTPUT_CHARS]
-    if errors:
-        text = (text + "\n\n[errors] " + "; ".join(errors))[:_MAX_OUTPUT_CHARS]
-    return bool(text) and not errors, text, session.total_tokens
-
-
-async def _run_headless_turn(prompt: str) -> tuple[bool, str, dict[str, int]]:
-    """Compatibility seam for old WorkOrder rows; cron does not select it."""
-    return await run_headless_agent_turn(prompt)
 
 
 def _due_minute(moment: datetime) -> datetime:

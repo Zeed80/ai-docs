@@ -8,6 +8,9 @@
 версий артефактов, UI и наблюдаемости по DAG. E-контракты и security gates сохранены.
 R0 fake runner/10 cases и scoped isolation приняты (180 совместных tests);
 следующее задание — P1.1. E21, полный E49/E50 и live quality остаются незавершёнными.
+5 октября принят E21.2b5: atomic AgentTask durable intake и retirement bare
+headless; non-durable `agent_turn` намеренно блокируется. Следующий ограниченный
+контракт P1.1 — AIRouter physical attempts. Отчёт: `docs/agent-employee-delivery/E21-headless-retirement.md`.
 
 Пилот `/api/agent/chat-runs` сохраняет запросы и события в БД и исполняется worker.
 

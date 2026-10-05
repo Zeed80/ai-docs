@@ -30,7 +30,12 @@ E21.2b3 принят для semantic verifier direct Ollama: detached snapshot/o
 physical LLM attempts и stale/cancel guards. Другие providers verifier пока
 fail-closed. E21.2b4 принят для API/scheduler planner direct Ollama: detached
 snapshot/fence и postflight, fresh API ledger, budget stop без fallback.
-AIRouter/headless, legacy reconciliation,
+E21.2b5 принят 5 октября: свежий human-owned AgentTask атомарно входит через
+common durable intake; повтор/concurrent POST не создаёт второе исполнение.
+Non-durable `agent_turn` закрыт до dispatch с сохранением historic call markers.
+Это намеренная недоступность неперенесённых входов, не полная миграция.
+Отчёт: `docs/agent-employee-delivery/E21-headless-retirement.md`.
+AIRouter, оставшиеся entry adapters, legacy reconciliation,
 token/cost accounting и active/replan остаются E21.2b+/E21.3;
 вся E21 не завершена. Отчёт: `docs/agent-employee-delivery/E21-budget-ledger.md`.
 

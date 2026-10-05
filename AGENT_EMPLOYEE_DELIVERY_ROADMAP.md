@@ -25,6 +25,11 @@ E21 остаётся `IN_PROGRESS`. Приняты и выпущены толь�
 E21.2a, E21.2b1, E21.2b2, E21.2b3 и E21.2b4. Последний из них дал detached
 planner direct Ollama для API/scheduler, свежий ledger для новой API-работы и
 остановку по budget без fallback и без запуска executor. Это не закрывает E21.
+5 октября принят ограниченный E21.2b5: fresh AgentTask перенесён на atomic
+durable intake, bare headless executor удалён, non-durable `agent_turn` закрыт
+до dispatch. Неперенесённые входы недоступны; это не полная миграция каналов.
+Отчёт: `docs/agent-employee-delivery/E21-headless-retirement.md`.
+Следующий приоритет — physical AIRouter attempts внутри durable Orchestrator.
 Остаются как минимум:
 
 - остальные AIRouter/headless/provider paths;

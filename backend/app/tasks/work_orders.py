@@ -264,19 +264,6 @@ async def _heartbeat_step(
             await db.commit()
 
 
-async def _execute_agent_turn(input_data: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
-    from app.tasks.agent_cron import _run_headless_turn, run_headless_agent_turn
-
-    prompt = str(input_data.get("prompt") or "").strip()
-    if not prompt:
-        raise ValueError("agent_turn step requires a non-empty prompt")
-    runner = _run_headless_turn if input_data.get("runner") == "cron" else run_headless_agent_turn
-    ok, text, tokens_used = await asyncio.wait_for(runner(prompt), timeout=max(1, timeout_seconds))
-    if not ok:
-        raise RuntimeError(text or "Headless agent turn failed")
-    return {"text": text, "executor": "agent_turn", "tokens_used": tokens_used}
-
-
 async def _execute_capability(
     capability: str,
     action: str,
@@ -505,7 +492,11 @@ async def _execute_step_kind(
     budget_context: Any | None = None,
 ) -> dict:
     if kind == "agent_turn":
-        return await _execute_agent_turn(input_data, timeout_seconds)
+        # Production durable chat is dispatched before this helper. Any other
+        # agent_turn used to instantiate a bare AgentSession without the
+        # WorkOrder ledger or recipient checkpoint. Keep direct/internal calls
+        # fail-closed as defense in depth.
+        raise RuntimeError("headless_agent_turn_requires_durable_intake")
     if kind == "capability":
         if not capability or not action:
             raise ValueError("capability step requires capability and action")
@@ -1009,7 +1000,47 @@ async def execute_claimed_step(
         )
         if existing_call is not None:
             # A prepared/running/terminal call proves that this attempt already
-            # crossed its dispatch boundary. It never authorizes replay.
+            # crossed its dispatch boundary. It never authorizes replay, and a
+            # newly introduced guard must not rewrite its unknown/recorded state.
+            return False
+        if kind == "agent_turn" and not durable_chat:
+            # E21 headless safety retirement: this path could make provider
+            # and nested tool calls outside the shared ledger and without a
+            # recipient checkpoint. Stop under the authoritative order and
+            # attempt locks, before creating a WorkToolCall marker or crossing
+            # any model/tool dispatch boundary. Replanning the same unsupported
+            # kind would only repeat the bypass under a new attempt.
+            error = {
+                "code": "headless_agent_turn_requires_durable_intake",
+                "message": (
+                    "Non-durable agent_turn execution is disabled; submit work "
+                    "through the durable common intake"
+                ),
+                "type": "HeadlessAgentTurnDisabled",
+            }
+            now = utcnow()
+            attempt.status = "failed"
+            attempt.error = error
+            attempt.finished_at = now
+            attempt.heartbeat_at = now
+            step.last_error = error
+            step.next_attempt_at = None
+            await transition_step(
+                db,
+                step,
+                "failed",
+                actor=str(attempt.worker_id),
+                payload={"error": error},
+            )
+            order.blocker = {**error, "step_id": str(step.id)}
+            await transition_work_order(
+                db,
+                order,
+                "blocked",
+                actor=str(attempt.worker_id),
+                payload={"reason": error["code"], "step_id": str(step.id)},
+            )
+            await db.commit()
             return False
         try:
             input_data, resolved_from = await resolve_step_input(db, step)

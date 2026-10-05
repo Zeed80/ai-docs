@@ -8,11 +8,12 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.agent_runtime_models import DelegationGrant, DurableChatRun
-from app.db.models import AgentCron, AgentTask, ChatSession, User, WorkOrder
+from app.db.models import AgentCron, AgentTask, ChatMessage, ChatSession, User, WorkOrder
+from app.db.work_budget_models import WorkBudgetLedger, WorkBudgetReservation
 from app.tasks import agent_cron
 
 
@@ -38,36 +39,84 @@ def test_is_due_runs_once_per_minute():
     )
 
 
+async def _cron_row_snapshot(factory) -> dict[str, set]:
+    async with factory() as db:
+        return {
+            "crons": set((await db.scalars(select(AgentCron.id))).all()),
+            "tasks": set((await db.scalars(select(AgentTask.id))).all()),
+            "runs": set((await db.scalars(select(DurableChatRun.id))).all()),
+            "orders": set((await db.scalars(select(WorkOrder.id))).all()),
+            "ledgers": set((await db.scalars(select(WorkBudgetLedger.id))).all()),
+            "sessions": set((await db.scalars(select(ChatSession.id))).all()),
+            "messages": set((await db.scalars(select(ChatMessage.id))).all()),
+            "grants": set((await db.scalars(select(DelegationGrant.id))).all()),
+            "users": set((await db.scalars(select(User.id))).all()),
+        }
+
+
+async def _cleanup_new_cron_rows(factory, prior: dict[str, set]) -> None:
+    """Delete only rows committed by one cron test, respecting ledger FKs."""
+    current = await _cron_row_snapshot(factory)
+    new = {key: current[key] - prior[key] for key in prior}
+    async with factory() as db:
+        if new["runs"]:
+            await db.execute(delete(DurableChatRun).where(DurableChatRun.id.in_(new["runs"])))
+        if new["orders"]:
+            await db.execute(
+                delete(WorkBudgetReservation).where(
+                    WorkBudgetReservation.work_order_id.in_(new["orders"])
+                )
+            )
+            await db.execute(
+                update(WorkOrder)
+                .where(WorkOrder.id.in_(new["orders"]))
+                .values(budget_ledger_id=None)
+            )
+        owned_ledger_ids = set()
+        if new["ledgers"] and new["orders"]:
+            owned_ledger_ids = set(
+                (
+                    await db.scalars(
+                        select(WorkBudgetLedger.id).where(
+                            WorkBudgetLedger.id.in_(new["ledgers"]),
+                            WorkBudgetLedger.root_work_order_id.in_(new["orders"]),
+                        )
+                    )
+                ).all()
+            )
+        if owned_ledger_ids:
+            await db.execute(
+                delete(WorkBudgetReservation).where(
+                    WorkBudgetReservation.ledger_id.in_(owned_ledger_ids)
+                )
+            )
+            await db.execute(
+                delete(WorkBudgetLedger).where(WorkBudgetLedger.id.in_(owned_ledger_ids))
+            )
+        if new["orders"]:
+            await db.execute(delete(WorkOrder).where(WorkOrder.id.in_(new["orders"])))
+        if new["tasks"]:
+            await db.execute(delete(AgentTask).where(AgentTask.id.in_(new["tasks"])))
+        if new["messages"]:
+            await db.execute(delete(ChatMessage).where(ChatMessage.id.in_(new["messages"])))
+        if new["sessions"]:
+            await db.execute(delete(ChatSession).where(ChatSession.id.in_(new["sessions"])))
+        if new["crons"]:
+            await db.execute(delete(AgentCron).where(AgentCron.id.in_(new["crons"])))
+        if new["grants"]:
+            await db.execute(delete(DelegationGrant).where(DelegationGrant.id.in_(new["grants"])))
+        if new["users"]:
+            await db.execute(delete(User).where(User.id.in_(new["users"])))
+        await db.commit()
+
+
 @pytest_asyncio.fixture
 async def cron_db(test_engine, monkeypatch):
     factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
     monkeypatch.setattr("app.db.session._get_session_factory", lambda: factory)
-    async with factory() as db:
-        prior_cron_ids = set((await db.scalars(select(AgentCron.id))).all())
+    prior = await _cron_row_snapshot(factory)
     yield factory
-    async with factory() as db:
-        cron_ids = set((await db.scalars(select(AgentCron.id))).all()) - prior_cron_ids
-        await db.execute(
-            delete(DurableChatRun).where(DurableChatRun.owner_key.like("cron-owner-%"))
-        )
-        await db.execute(delete(WorkOrder).where(WorkOrder.owner_key.like("cron-owner-%")))
-        sessions = (
-            await db.scalars(select(ChatSession).where(ChatSession.user_key.like("cron-owner-%")))
-        ).all()
-        for session in sessions:
-            await db.delete(session)
-        tasks = (await db.scalars(select(AgentTask))).all()
-        for task in tasks:
-            cron_id = (task.metadata_ or {}).get("agent_cron_id")
-            if cron_id and cron_id in {str(item) for item in cron_ids}:
-                await db.delete(task)
-        if cron_ids:
-            await db.execute(delete(AgentCron).where(AgentCron.id.in_(cron_ids)))
-        await db.execute(
-            delete(DelegationGrant).where(DelegationGrant.owner_key.like("cron-owner-%"))
-        )
-        await db.execute(delete(User).where(User.sub.like("cron-owner-%")))
-        await db.commit()
+    await _cleanup_new_cron_rows(factory, prior)
 
 
 async def _add_active_owner(db, sub="cron-owner-active"):
@@ -381,6 +430,55 @@ async def test_malformed_legacy_grant_constraints_fail_closed_without_stopping_b
         await db.commit()
 
     assert await agent_cron._dispatch(datetime.now(UTC)) == 1
+
+
+@pytest.mark.asyncio
+async def test_cron_cleanup_preserves_preexisting_foreign_prefix_graph(test_engine, monkeypatch):
+    factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr("app.db.session._get_session_factory", lambda: factory)
+    baseline = await _cron_row_snapshot(factory)
+    now = datetime(2026, 6, 12, 10, 30, tzinfo=UTC)
+    try:
+        async with factory() as db:
+            await _add_active_owner(db, "cron-owner-foreign-sentinel")
+            grant = await _add_grant(db, "cron-owner-foreign-sentinel")
+            grant.max_actions = 1
+            db.add(
+                AgentCron(
+                    schedule="* * * * *",
+                    prompt="дай сводку дня",
+                    owner_key="cron-owner-foreign-sentinel",
+                    delegation_grant_id=grant.id,
+                )
+            )
+            await db.commit()
+        assert await agent_cron._dispatch(now) == 1
+        foreign = await _cron_row_snapshot(factory)
+
+        async with factory() as db:
+            await _add_active_owner(db, "cron-owner-cleanup-target")
+            grant = await _add_grant(db, "cron-owner-cleanup-target")
+            grant.max_actions = 1
+            db.add(
+                AgentCron(
+                    schedule="* * * * *",
+                    prompt="дай сводку дня",
+                    owner_key="cron-owner-cleanup-target",
+                    delegation_grant_id=grant.id,
+                )
+            )
+            await db.commit()
+        assert await agent_cron._dispatch(now + timedelta(minutes=1)) == 1
+        with_target = await _cron_row_snapshot(factory)
+
+        await _cleanup_new_cron_rows(factory, foreign)
+
+        after = await _cron_row_snapshot(factory)
+        for table, foreign_ids in foreign.items():
+            assert foreign_ids <= after[table]
+            assert not ((with_target[table] - foreign_ids) & after[table])
+    finally:
+        await _cleanup_new_cron_rows(factory, baseline)
 
 
 def test_beat_schedule_contains_dispatcher():
