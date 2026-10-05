@@ -263,7 +263,7 @@ fast_paths:
       markers: ["ожида", "на утверждени", "на согласовани", "на рассмотрени", "на проверк", "не утвержд", "не рассмотр", "ждут утвержд", "ждущ утвержд", "needs_review"]
       capability: invoices
       status: needs_review
-      label: "счетов на утверждении"
+      label: "счетов на проверке (ждут утверждения)"
     - entity: "счет"
       markers: ["утвержден", "утверждён", "одобрен", "approved"]
       capability: invoices

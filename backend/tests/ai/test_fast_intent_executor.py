@@ -48,7 +48,9 @@ async def test_fast_intent_counts_invoices_without_llm(monkeypatch):
 
     executed: list[dict] = []
 
-    async def fake_execute_skill(skill, args, config, *, approval_granted=False):
+    async def fake_execute_skill(
+        skill, args, config, *, approval_granted=False, budget_context=None
+    ):
         executed.append({"name": skill["name"], "args": args})
         return {"total": 152, "items": [{"id": 1}]}
 
@@ -78,7 +80,9 @@ async def test_fast_intent_defers_on_skill_error(monkeypatch):
         "invoices": {"name": "invoices", "method": "POST", "path": "/api/agent/cap/invoices"}
     }
 
-    async def fake_execute_skill(skill, args, config, *, approval_granted=False):
+    async def fake_execute_skill(
+        skill, args, config, *, approval_granted=False, budget_context=None
+    ):
         return {"error": "HTTP 500"}
 
     monkeypatch.setattr(agent_loop, "execute_skill", fake_execute_skill)
