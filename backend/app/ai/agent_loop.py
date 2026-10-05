@@ -911,11 +911,28 @@ async def execute_skill(
             body_args[k] = v
 
     url = base_url + path
-    sql_http_recipient = (
+    from app.auth.work_budget_handoff import WORKSPACE_SQL_TABLE_PATH
+
+    direct_sql_recipient = (
         skill.get("name") == "workspace.sql_table"
         and method == "POST"
-        and path == "/api/workspace/agent/generated/sql-table"
+        and path == WORKSPACE_SQL_TABLE_PATH
     )
+    # The same recipient reached through the capability gateway: the handoff
+    # must be signed for the recipient's path and the body the gateway will
+    # forward, and the gateway relays it (capability_router._relayed_handoff).
+    gateway_sql_recipient = (
+        method == "POST"
+        and path == "/api/agent/cap/workspace"
+        and str(args.get("action") or "") == "sql_table"
+    )
+    sql_http_recipient = direct_sql_recipient or gateway_sql_recipient
+    if gateway_sql_recipient:
+        from app.domain.capability_payload import capability_proxy_body
+
+        recipient_path, recipient_body = WORKSPACE_SQL_TABLE_PATH, capability_proxy_body(body_args)
+    else:
+        recipient_path, recipient_body = path, body_args
     safe_to_retry = retry_safe(skill, args)
     if sql_http_recipient:
         # The recipient publishes a block. A missing response is not replayable.
@@ -968,8 +985,8 @@ async def execute_skill(
                             WORK_BUDGET_HANDOFF_HEADER
                         ] = await budget_context.create_http_recipient_handoff(
                             method=method,
-                            path=path,
-                            body=body_args,
+                            path=recipient_path,
+                            body=recipient_body,
                             tool_operation_key=tool_operation_key,
                             actor=get_acting_user() or "",
                         )

@@ -230,6 +230,7 @@ async def _proxy(
     base_url: str,
     acting_user: str | None = None,
     idempotency_key: str | None = None,
+    extra_headers: dict[str, str] | None = None,
 ) -> dict:
     """Interpolate path params, split remaining args into query/body, proxy request."""
     query: dict = {}
@@ -248,6 +249,7 @@ async def _proxy(
     headers = _service_headers(acting_user)
     if idempotency_key:
         headers["Idempotency-Key"] = idempotency_key
+    headers.update(extra_headers or {})
     # Web research/browse read many live pages (+ PDF OCR) and legitimately take
     # minutes — the default 30s would time out and trigger wasteful retries that
     # re-run the whole search. Give these paths a generous budget.
@@ -616,10 +618,9 @@ async def dispatch_capability(capability_name: str, request: Request) -> JSONRes
         reason = str(reason)
 
     # Flatten nested 'filters' and 'body' into top-level args for proxying
-    if "filters" in body and isinstance(body["filters"], dict):
-        body.update(body.pop("filters"))
-    if "body" in body and isinstance(body["body"], dict):
-        body.update(body.pop("body"))
+    from app.domain.capability_payload import flatten_capability_body
+
+    flatten_capability_body(body)
 
     # A grant never bypasses role, mode or tool policy. Validate these first,
     # then atomically reserve standing authority before any downstream effect.
@@ -653,8 +654,26 @@ async def dispatch_capability(capability_name: str, request: Request) -> JSONRes
         base_url,
         acting_user=_acting_user(request),
         idempotency_key=request.headers.get("X-Agent-Idempotency-Key"),
+        extra_headers=_relayed_handoff(capability_name, action, request),
     )
     return JSONResponse(content=result)
+
+
+def _relayed_handoff(capability_name: str, action: str, request: Request) -> dict[str, str]:
+    """Pass a signed work-budget handoff through to its one recipient.
+
+    Without it every chat call of workspace.sql_table reached the recipient
+    with internal headers and no handoff and was refused with 403 (live
+    2026-10-05). The token stays bound to method, path, exact body and actor
+    and is verified, fenced and single-use at the recipient; the gateway only
+    relays it, after its own policy checks, for this one action.
+    """
+    from app.auth.work_budget_handoff import WORK_BUDGET_HANDOFF_HEADER
+
+    token = request.headers.get(WORK_BUDGET_HANDOFF_HEADER)
+    if capability_name == "workspace" and action == "sql_table" and token:
+        return {WORK_BUDGET_HANDOFF_HEADER: token}
+    return {}
 
 
 async def _audit_tool_call(
