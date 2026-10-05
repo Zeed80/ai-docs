@@ -43,3 +43,20 @@ async def test_markdown_table_always_publishes():
     table = "| Поставщик | Сумма |\n|---|---|\n| Ромашка | 100 |\n| Берёзка | 200 |"
     await s._deliver_final_content(table)
     s._publish_canvas.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_chat_decision_beats_the_keyword_gate():
+    """'без таблицы' contains 'таблиц'; the router's chat decision must win."""
+    s = _session_with_user("Назови в чате трёх поставщиков, без таблицы")
+    s.set_workspace_expected(False)
+    await s._deliver_final_content("Больше всего счетов у: Ромашка, Берёзка, Ёлочка. " * 6)
+    s._publish_canvas.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_keyword_fallback_only_without_a_decision():
+    s = _session_with_user("выведи таблицу затрат")
+    assert s._workspace_expected is None
+    await s._deliver_final_content("Январь — 100; Февраль — 200; Март — 300. " * 8)
+    s._publish_canvas.assert_awaited_once()

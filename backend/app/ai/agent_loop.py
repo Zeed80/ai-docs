@@ -2201,7 +2201,8 @@ class AgentSession:
         self._recommended_capabilities: set[str] = set()
         # Orchestrator routed this turn to the desktop — reliable auto-publish
         # fallback in _deliver_final_content (by intent, not keyword). Reset each turn.
-        self._workspace_expected: bool = False
+        # None: no orchestrator decision this turn (keyword fallback applies).
+        self._workspace_expected: bool | None = None
         self._work_budget_context: WorkBudgetContext | None = None
 
         self._config = get_builtin_agent_config()
@@ -3162,7 +3163,15 @@ class AgentSession:
         # (by intent), a substantial non-table result is still published there —
         # no dependency on keyword markers in the user's phrasing. The legacy
         # keyword gate remains for turns the orchestrator didn't classify.
-        publish_to_desktop = self._workspace_expected or _is_workspace_output_request(latest_user)
+        # The orchestrator's channel decision wins when there is one: the keyword
+        # gate read "в чате, без таблицы" as a table request ("таблиц") and
+        # moved the answer to the desktop (live 2026-10-05). Keywords remain
+        # only for turns nobody classified.
+        publish_to_desktop = (
+            self._workspace_expected
+            if self._workspace_expected is not None
+            else _is_workspace_output_request(latest_user)
+        )
         if publish_to_desktop and len(text) > 200:
             await self._publish_canvas(
                 {"type": "markdown", "title": "Результат", "content": text},
