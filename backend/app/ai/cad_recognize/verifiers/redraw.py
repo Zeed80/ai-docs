@@ -264,7 +264,9 @@ def patch_disputed(
     from PIL import Image
 
     if verify is None:
-        from app.ai.cad_recognize.verifiers.stage import verify_spec_against_sheet as verify
+        from app.ai.cad_recognize.verifiers.stage import verify_spec_against_sheet
+
+        verify = verify_spec_against_sheet
 
     items = [
         item
