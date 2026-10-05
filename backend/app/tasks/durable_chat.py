@@ -4,6 +4,7 @@ import asyncio
 import json
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import select, update
 
@@ -362,6 +363,24 @@ async def _consume_verified_commit(db, *, order, run, step, attempt, decision_id
     return restored
 
 
+_VERIFIER_EVIDENCE_EVENTS = frozenset({"tool_result", "workspace.publish_verified", "canvas"})
+_VERIFIER_EVIDENCE_MAX_ITEMS = 8
+_VERIFIER_EVIDENCE_MAX_CHARS = 2000
+
+
+def _verifier_evidence_entry(kind: str, event: dict[str, Any]) -> dict[str, Any]:
+    """Bounded, JSON-safe view of one tool/workspace result for the verifier."""
+    body = {key: value for key, value in event.items() if key != "type"}
+    text = json.dumps(body, ensure_ascii=False, default=str)
+    truncated = len(text) > _VERIFIER_EVIDENCE_MAX_CHARS
+    return {
+        "event": kind,
+        "tool": event.get("tool"),
+        "content": text[:_VERIFIER_EVIDENCE_MAX_CHARS],
+        "truncated": truncated,
+    }
+
+
 async def run_durable_chat(
     work_order_id, step_id, attempt_id, *, session_factory, agent_factory=None
 ):
@@ -507,6 +526,7 @@ async def _run_durable_chat(
             if continuation_payload["pending_calls"][0]["id"] != decision["call_id"]:
                 raise ChatRunStopped("Authorized call changed")
     chunks, errors = [], []
+    tool_evidence: list[dict[str, Any]] = []
 
     async def collect(event):
         try:
@@ -533,6 +553,9 @@ async def _run_durable_chat(
             await db.commit()
         if kind == "text":
             chunks.append(str(event.get("content") or ""))
+        if kind in _VERIFIER_EVIDENCE_EVENTS:
+            tool_evidence.append(_verifier_evidence_entry(kind, event))
+            del tool_evidence[:-_VERIFIER_EVIDENCE_MAX_ITEMS]
         if kind == "error":
             errors.append(str(event.get("error_code") or "agent_error"))
 
@@ -735,4 +758,12 @@ async def _run_durable_chat(
                     ),
                 )
         await db.commit()
-    return {"text": result, "executor": "durable_chat", "tokens_used": agent._executor.total_tokens}
+    return {
+        "text": result,
+        "executor": "durable_chat",
+        "tokens_used": agent._executor.total_tokens,
+        # The final chat text often only points at the desktop ("Открыл
+        # результат на Рабочем столе"); the independent verifier judges from
+        # step outputs alone, so it needs what the tools actually returned.
+        "verification_evidence": tool_evidence,
+    }

@@ -1320,3 +1320,62 @@ async def test_owned_attachment_uses_server_metadata(client, db_session):
         select(WorkStep).where(WorkStep.work_order_id == run.work_order_id)
     )
     assert step.input_["workspace_context"]["active_tabular_surface"]["id"] == "surface"
+
+
+@pytest.mark.asyncio
+async def test_step_output_carries_bounded_tool_evidence_for_the_verifier(test_engine):
+    """The chat text may only point at the desktop; the verifier needs results."""
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    run, step, attempt = await claimed_run(factory)
+
+    class Agent(FakeAgent):
+        async def on_user_message(self, prompt, **kwargs):
+            await self.send(
+                {"type": "tool_result", "tool": "documents", "result": {"summary": "Пересказ"}}
+            )
+            for index in range(10):
+                await self.send(
+                    {
+                        "type": "tool_result",
+                        "tool": "search",
+                        "result": {"n": index, "x": "y" * 3000},
+                    }
+                )
+            await self.send({"type": "text", "content": "Открыл результат на Рабочем столе."})
+            await self.send({"type": "done"})
+
+    output = await run_durable_chat(
+        run["work_order_id"], step, attempt, session_factory=factory, agent_factory=Agent
+    )
+
+    evidence = output["verification_evidence"]
+    assert output["text"] == "Открыл результат на Рабочем столе."
+    assert len(evidence) == 8  # newest results kept, oldest dropped
+    assert [entry["tool"] for entry in evidence] == ["search"] * 8
+    assert all(len(entry["content"]) <= 2000 and entry["truncated"] for entry in evidence)
+    assert '"n": 9' in evidence[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_short_tool_result_is_kept_whole(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    run, step, attempt = await claimed_run(factory)
+
+    class Agent(FakeAgent):
+        async def on_user_message(self, prompt, **kwargs):
+            await self.send(
+                {"type": "tool_result", "tool": "documents", "result": {"summary": "Пересказ"}}
+            )
+            await self.send({"type": "text", "content": "Готово"})
+            await self.send({"type": "done"})
+
+    output = await run_durable_chat(
+        run["work_order_id"], step, attempt, session_factory=factory, agent_factory=Agent
+    )
+    [entry] = output["verification_evidence"]
+    assert entry == {
+        "event": "tool_result",
+        "tool": "documents",
+        "content": '{"tool": "documents", "result": {"summary": "Пересказ"}}',
+        "truncated": False,
+    }
