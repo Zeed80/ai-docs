@@ -66,6 +66,11 @@ Ruff check/format и `git diff --check` чисты. Отдельного нез�
 security review нет: автор и приёмка — один агент; review-граница — тот же
 атомарный settlement E21.2b9, новая поверхность — task-local capture.
 
+Выпуск из commit `ffcbec17`: `make prod-build` exit 0, backend/celery healthy,
+`https://localhost/health` → `{"status":"ok"}`; SHA-256 `work_budget_usage.py`,
+`router.py`, `providers/ollama.py` в `infra-backend-1` и `infra-celery-worker-1`
+совпадают с HEAD. Health не доказывает живой расход токенов.
+
 ## Остаток
 
 Streaming AgentSession (`agent_loop.py`, `_call_*_streaming`) списывает попытки
