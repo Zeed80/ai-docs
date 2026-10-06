@@ -14,6 +14,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 import { csrfHeaders } from "@/lib/auth";
 import { useToast } from "@/components/ui/primitives/Toast";
 import { CloudConnectSheet } from "@/components/models/infra/CloudConnectSheet";
+import { StrataPanel } from "@/components/models/infra/StrataPanel";
 import {
   btn,
   card,
@@ -1233,6 +1234,9 @@ export function InfraPanel({
 
   return (
     <div className="space-y-6">
+      {/* GPU switch: Ollama ⇄ Strata, Strata quantization */}
+      <StrataPanel />
+
       {/* Provider keys & nodes */}
       <ProvidersConfigPanel />
 

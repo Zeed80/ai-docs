@@ -15,6 +15,7 @@ const PROVIDER_DISPLAY: Record<string, string> = {
   vllm: "vLLM",
   openai_compatible: "OpenAI-совм.",
   lmstudio: "LM Studio",
+  strata: "Strata",
   comfyui: "ComfyUI",
   anthropic: "Anthropic",
   openrouter: "OpenRouter",
@@ -78,6 +79,7 @@ export const LOCAL_PROVIDER_KINDS = [
   "vllm",
   "openai_compatible",
   "lmstudio",
+  "strata",
 ] as const;
 
 export const isLocalProvider = (kind: string): boolean =>
@@ -92,6 +94,7 @@ export const PROVIDER_BAR_COLOR: Record<string, string> = {
   ollama: "bg-blue-500",
   llamacpp: "bg-emerald-500",
   vllm: "bg-purple-500",
+  strata: "bg-amber-500",
 };
 
 export const providerBarColor = (kind: string): string =>
@@ -122,6 +125,7 @@ export const THINKING_DISABLE_SUPPORTED_PROVIDERS = [
   "ollama",
   "llamacpp",
   "vllm",
+  "strata",
   "openrouter",
   "ollama_cloud",
   "openai",

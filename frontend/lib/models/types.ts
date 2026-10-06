@@ -212,11 +212,7 @@ export interface AllStatus {
 
 /** Вкладки раздела «Модели». */
 export type ModelsTab =
-  | "assignment"
-  | "overview"
-  | "library"
-  | "parameters"
-  | "gpu";
+  "assignment" | "overview" | "library" | "parameters" | "gpu";
 
 // ── Библиотека моделей ───────────────────────────────────────────────────────
 
@@ -251,4 +247,72 @@ export interface ModelItem {
   gated?: boolean;
   source?: string;
   vram_gb_estimate?: number;
+}
+
+// ── Strata (GPU-рантайм, переключаемый против GPU-Ollama) ───────────────────
+
+export type GpuOwner = "ollama" | "strata";
+
+export type StrataPhase =
+  "not_created" | "stopped" | "installing" | "loading" | "ready" | "unloaded";
+
+export interface StrataQuant {
+  model: string;
+  label: string;
+  download_gb: number;
+  disk_need_gb: number;
+  experts_gb: number;
+  ram_gb: number;
+  installed: boolean;
+  size_on_disk_gb: number | null;
+  low_ram_mode: boolean;
+}
+
+export interface StrataStatus {
+  owner: GpuOwner | null;
+  container: string | null;
+  docker_error: string | null;
+  phase: StrataPhase;
+  health: {
+    model?: string;
+    images?: boolean;
+    loaded?: boolean;
+    max_context?: number;
+  } | null;
+  desired: {
+    model: string;
+    context: number;
+    vision: boolean;
+    reinstall_pending: boolean;
+    install_only: boolean;
+  };
+  down_while_owner: boolean;
+  installed: string[];
+  quants: StrataQuant[];
+  contexts: number[];
+  disk_free_gb: number | null;
+  ram_total_gb: number | null;
+  log_tail: string[];
+  switch_revision: string | null;
+  runtime: {
+    idle_unload_s: number;
+    free_comfyui: boolean;
+    min_free_vram_mib: number;
+  };
+  idle_choices: number[];
+  external_url: string | null;
+}
+
+export interface StrataAccess {
+  url: string | null;
+  openai_base_url: string | null;
+  api_key: string | null;
+}
+
+export interface StrataSlotPlanItem {
+  slot: string;
+  label: string;
+  current_model: string | null;
+  move: boolean;
+  reason: string;
 }

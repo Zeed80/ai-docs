@@ -83,6 +83,7 @@ from app.api import (
     search,
     sheets,
     spec_tables,
+    strata_api,
     suppliers,
     tables,
     technology,
@@ -260,10 +261,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Warm the pinned orchestrator model so the agent has an instant first
     # response; other models load on demand and free VRAM when idle.
+    # Strata running ⇔ the GPU is Strata's; the container state is the truth
+    # after a restart, and pinned Ollama models must then NOT be warmed.
+    gpu_owner = None
+    try:
+        from app.ai.providers.strata_manager import reconcile_owner
+
+        gpu_owner = await reconcile_owner()
+    except Exception as exc:
+        logger.warning("gpu_runtime_reconcile_failed", error=str(exc))
     try:
         from app.ai.model_lifecycle import warm_pinned
 
-        warmed = await warm_pinned()
+        warmed = [] if gpu_owner == "strata" else await warm_pinned()
         if warmed:
             logger.info("pinned_models_warmed", models=warmed)
     except Exception as exc:
@@ -473,6 +483,12 @@ def create_app() -> FastAPI:
         dependencies=_auth,
     )
     app.include_router(ai_settings.router, prefix="/api/ai", tags=["ai"], dependencies=_auth)
+    app.include_router(
+        strata_api.router,
+        prefix="/api/local-models/strata",
+        tags=["local-models"],
+        dependencies=_auth,
+    )
     app.include_router(
         local_models_api.router,
         prefix="/api/local-models",

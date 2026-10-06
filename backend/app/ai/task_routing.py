@@ -226,7 +226,7 @@ def known_model_keys() -> set[str]:
         return set()
 
 
-_LOCAL_PROVIDER_KINDS = {"ollama", "llamacpp", "vllm", "openai_compatible", "lmstudio"}
+_LOCAL_PROVIDER_KINDS = {"ollama", "llamacpp", "vllm", "openai_compatible", "lmstudio", "strata"}
 
 
 def _is_local_key(key: str) -> bool:
@@ -478,7 +478,7 @@ def migrate_from_ai_config() -> dict[str, Any]:
         if not key:
             skipped.append(f"{field}={model_name}({provider})")
             continue
-        is_cloud = provider not in ("ollama", "llamacpp", "vllm", "lmstudio", "openai_compatible")
+        is_cloud = provider not in _LOCAL_PROVIDER_KINDS
         for task in tasks:
             base = defaults.get(task.value) or TaskRouting(task=task.value)
             # Put the legacy model first; keep YAML fallbacks after it.

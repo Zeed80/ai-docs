@@ -846,6 +846,10 @@ def _ollama_vision_ocr(images_b64: list[str], ollama_model: str, prompt: str) ->
 
     import httpx
 
+    from app.ai.ollama_client import _ensure_ollama_gpu_allowed
+
+    _ensure_ollama_gpu_allowed()
+
     def _call() -> str:
         resp = httpx.post(
             f"{str(settings.ollama_url).rstrip('/')}/api/chat",
@@ -890,6 +894,47 @@ def _ollama_vision_ocr(images_b64: list[str], ollama_model: str, prompt: str) ->
         logger.warning("ollama_vision_ocr_failed", model=ollama_model, error=str(last_err))
     else:
         logger.warning("ollama_vision_ocr_empty", model=ollama_model)
+    return ""
+
+
+def _strata_vision_ocr(images_b64: list[str], prompt: str) -> str:
+    """Send images to Strata (OpenAI-compatible /v1/chat/completions).
+
+    Without this branch a Strata OCR assignment fell into the Ollama branch
+    with Strata's model name. Reasoning is switched off so the text lands in
+    `content`; the node's address and key come from the provider registry.
+    """
+    import httpx
+
+    from app.ai.provider_registry import select_instance
+    from app.ai.schemas import ProviderKind
+
+    node = select_instance(ProviderKind.STRATA)
+    base = node.base_url.rstrip("/").removesuffix("/v1")
+    headers = {"Authorization": f"Bearer {node.api_key}"} if node.api_key else {}
+    content: list[dict] = [{"type": "text", "text": prompt}]
+    for img in images_b64:
+        content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}"}})
+    try:
+        resp = httpx.post(
+            f"{base}/v1/chat/completions",
+            headers=headers,
+            json={
+                "model": "strata",
+                "messages": [{"role": "user", "content": content}],
+                "temperature": 0.0,
+                "reasoning_effort": "none",
+                "stream": False,
+            },
+            # A model unloaded by idle time loads again first (~30-60 s).
+            timeout=600.0,
+        )
+        resp.raise_for_status()
+        choices = resp.json().get("choices") or []
+        if choices:
+            return (choices[0].get("message") or {}).get("content") or ""
+    except Exception as e:
+        logger.warning("strata_vision_ocr_failed", error=str(e)[:300])
     return ""
 
 
@@ -1057,6 +1102,8 @@ def _ocr_image_with_chain(image_bytes: bytes, chain: list[tuple[str, str]]) -> s
     for model, provider in chain:
         if provider == "llamacpp":
             text = _llamacpp_vision_ocr([encoded], _OCR_PROMPT)
+        elif provider == "strata":
+            text = _strata_vision_ocr([encoded], _OCR_PROMPT)
         else:
             text = _ollama_vision_ocr([encoded], model, _OCR_PROMPT)
         if text.strip():
@@ -1188,6 +1235,8 @@ def _vision_extract_invoice(content: bytes) -> dict | None:
         for model, provider in chain:
             if provider == "llamacpp":
                 raw = _llamacpp_vision_ocr([page_b64], EXTRACT_INVOICE_VISION_PROMPT)
+            elif provider == "strata":
+                raw = _strata_vision_ocr([page_b64], EXTRACT_INVOICE_VISION_PROMPT)
             else:
                 raw = _ollama_vision_ocr([page_b64], model, EXTRACT_INVOICE_VISION_PROMPT)
 
@@ -1520,7 +1569,7 @@ def _cr_fallback(
 
     # Only proceed if a local CR model is configured.
     # Cloud providers are explicitly forbidden for invoice docs (security policy).
-    if not cr_model or cr_provider not in ("ollama", "llamacpp"):
+    if not cr_model or cr_provider not in ("ollama", "llamacpp", "strata"):
         logger.info(
             "cr_fallback_skipped",
             document_id=document_id,

@@ -65,7 +65,8 @@ class DetachedPlannerBudgetContext:
 
     async def assert_supported_provider(self, provider: str | None) -> None:
         self.raise_if_stopped()
-        if provider != "ollama":
+        # Strata goes through generate_json's reserved/charged loop like Ollama.
+        if provider not in ("ollama", "strata"):
             raise await self._stop(
                 BudgetExecutionStopped(
                     "planning_provider_unsupported",

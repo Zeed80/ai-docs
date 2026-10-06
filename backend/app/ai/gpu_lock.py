@@ -167,6 +167,40 @@ def unload_ollama() -> int:
     return n
 
 
+def unload_strata() -> bool:
+    """Ask a loaded Strata to unload now (its own POST /v1/unload).
+
+    The container stays up and loads again on the next request, like an
+    Ollama model with keep_alive=0. 409 = a request is running: it is left
+    alone (cutting an answer off is worse than a slower diffusion run).
+    Best-effort; False when nothing was unloaded.
+    """
+    if not settings.strata_url:
+        return False
+    base = settings.strata_url.rstrip("/").removesuffix("/v1")
+    headers = {"Content-Type": "application/json"}
+    if settings.strata_api_key:
+        headers["Authorization"] = f"Bearer {settings.strata_api_key}"
+    try:
+        health = json.loads(urllib.request.urlopen(f"{base}/health", timeout=3).read())
+        if not health.get("loaded"):
+            return False
+        req = urllib.request.Request(f"{base}/v1/unload", data=b"{}", headers=headers)
+        urllib.request.urlopen(req, timeout=30).read()
+        logger.info("gpu_unloaded_strata")
+        return True
+    except Exception as exc:  # noqa: BLE001 — not running, busy (409) or unreachable
+        logger.info("gpu_strata_unload_skipped", reason=str(exc)[:120])
+        return False
+
+
+def unload_llm_servers() -> None:
+    """Evict the LLM servers' weights (Ollama models, Strata) before a
+    ComfyUI run: they reload on the next inference request."""
+    unload_ollama()
+    unload_strata()
+
+
 def unload_comfyui() -> None:
     """Ask ComfyUI to free its model memory (/free). Used before LoRA
     training; NOT before a ComfyUI run (we are about to use it)."""
@@ -184,7 +218,7 @@ def unload_comfyui() -> None:
 
 
 def unload_gpu_consumers() -> None:
-    """Evict BOTH Ollama and ComfyUI weights from VRAM (before LoRA training,
-    which needs the whole card)."""
-    unload_ollama()
+    """Evict Ollama, Strata and ComfyUI weights from VRAM (before LoRA
+    training, which needs the whole card)."""
+    unload_llm_servers()
     unload_comfyui()

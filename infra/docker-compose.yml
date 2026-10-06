@@ -117,6 +117,11 @@ x-backend-env: &backend-env
   GPU_TOTAL_VRAM_GB: ${GPU_TOTAL_VRAM_GB:-24.0}
   LMSTUDIO_URL: ${LMSTUDIO_URL:-}
   OPENAI_COMPATIBLE_URL: ${OPENAI_COMPATIBLE_URL:-}
+  # Strata (profile "strata"): switched against GPU-Ollama from /settings/models.
+  STRATA_URL: ${STRATA_URL:-http://strata:8080}
+  STRATA_API_KEY: ${STRATA_API_KEY:-}
+  STRATA_SERVICE_NAME: strata
+  STRATA_PUBLIC_URL: ${STRATA_PUBLIC_URL:-}
 
 x-authentik-env: &authentik-env
   AUTHENTIK_REDIS__HOST: redis
@@ -723,6 +728,72 @@ services:
       - app
 
   # === Backend API ===
+  # Strata — Qwen3.8-Flash-Next (125B MoE) split across the GPU and RAM
+  # (https://github.com/Niko1221/Strata), OpenAI-compatible on :8080.
+  # It takes the whole GPU and 30-50 GB of RAM, so it is never run beside
+  # GPU-Ollama: the backend starts/stops this container from the GPU switch on
+  # /settings/models. Create it once: docker compose ... --profile strata up -d strata
+  # The quantization/context/images come from /data/aiw.env, written by the
+  # backend (strata_manager); a quant not on the volume yet is downloaded by
+  # the first start (66-84 GB). The image is built from a pinned commit for the
+  # RTX 3090 (sm_86); other cards: STRATA_CUDA_ARCHITECTURES.
+  strata:
+    image: ${STRATA_IMAGE:-ai-workspace/strata:1735d64}
+    build:
+      context: https://github.com/Niko1221/Strata.git#1735d6471df29b42c26170efaac1f1446a58640f
+      args:
+        CUDA_ARCHITECTURES: ${STRATA_CUDA_ARCHITECTURES:-86}
+        BUILD_VISION: "1"
+    runtime: nvidia
+    profiles:
+      - strata
+    # No automatic restart: the backend starts/stops it from the GPU switch,
+    # and after a host reboot the GPU goes back to Ollama (startup reconcile).
+    restart: "no"
+    ulimits:
+      memlock: -1
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      FAMILY: qwen
+      MODEL: IQ3_S
+      CONTEXT: "65536"
+      VISION: "yes"
+      HOST: 0.0.0.0
+      PORT: "8080"
+      API_KEY: ${STRATA_API_KEY:-}
+      # setup.py reads the host's RAM; below a quant's need it picks the
+      # low-RAM mode itself (the GPU holds the hot experts, the rest in RAM).
+      LOW_RAM: auto
+    volumes:
+      - strata_data:/data
+    # LAN access for other machines (OpenAI API at http://<server>:8090/v1).
+    # API_KEY is required: without it Strata would answer anyone who reaches
+    # the port. Narrow with STRATA_BIND=192.168.x.y, close with STRATA_BIND=127.0.0.1.
+    ports:
+      - "${STRATA_BIND:-0.0.0.0}:${STRATA_HOST_PORT:-8090}:8080"
+    # before_load asks ComfyUI on the host to free its VRAM (POST /free).
+    extra_hosts:
+      - "host-gateway:host-gateway"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -a
+        [ -f /data/aiw.env ] && . /data/aiw.env
+        set +a
+        # REINSTALL is one-shot: drop it so the next restart just serves.
+        [ -f /data/aiw.env ] && sed -i '/^REINSTALL=/d' /data/aiw.env
+        if [ "$${INSTALL_ONLY:-0}" = "1" ]; then
+          # Download/setup only, then exit: Strata's entrypoint minus its
+          # final "start the server" line. The GPU stays with Ollama meanwhile.
+          sed 's|^exec .venv/bin/python setup.py "\$$@"$$|exit 0|' docker-entrypoint.sh > /tmp/install-only.sh
+          grep -q '^exit 0$$' /tmp/install-only.sh || { echo "install-only: entrypoint changed"; exit 1; }
+          exec sh /tmp/install-only.sh
+        fi
+        exec ./docker-entrypoint.sh
+    networks:
+      - app
+
   backend:
     build:
       context: ../backend
@@ -738,6 +809,9 @@ services:
       - ../docs:/app/docs:ro
       - llamacpp_models:/llamacpp-models
       - vllm_models:/vllm-models
+      # Strata's volume: the backend writes aiw.env (quant/context/images) and
+      # reads which quants are installed.
+      - strata_data:/strata-data
       # LoRA uploads/datasets shared with worker+trainer (upload API writes here);
       # the ComfyUI node's loras dir — checkpoint deploys run in THIS container
       # (POST /api/lora/runs/{id}/deploy), not in a worker.
@@ -1175,6 +1249,7 @@ volumes:
   llamacpp_models:
   vllm_models:
   vllm_hf_cache:
+  strata_data:
   comfyui_models:
   comfyui_output:
   vl_embedding_models:

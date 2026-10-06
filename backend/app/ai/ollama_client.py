@@ -220,6 +220,19 @@ def _ensure_gpu_free() -> None:
         pass
 
 
+def _ensure_ollama_gpu_allowed() -> None:
+    """Refuse a GPU-Ollama call while the card is switched to Strata.
+
+    The router and the agent loop check this themselves; these direct helpers
+    did not, and the work-order verifier loaded a 35B model into Ollama beside
+    a running Strata (live, 2026-10-06) — Ollama spills it into the RAM that
+    Strata's experts occupy.
+    """
+    from app.ai import gpu_runtime
+
+    gpu_runtime.check_call("ollama", settings.ollama_url)
+
+
 async def generate(
     prompt: str,
     *,
@@ -248,6 +261,7 @@ async def generate(
     if budget_context is not None:
         logical_call_no = await budget_context.begin_direct_text_call(provider="ollama")
     _ensure_gpu_free()
+    _ensure_ollama_gpu_allowed()
     model = model or settings.ollama_model_ocr
     breaker = _get_breaker(model)
 
@@ -688,8 +702,30 @@ async def generate_json(
     messages.append({"role": "user", "content": prompt})
 
     use_llamacpp = provider == "llamacpp"
+    # Strata goes through this loop, not the cloud helper above: here every
+    # physical POST is reserved and charged on a durable budget, like Ollama's.
+    use_strata = provider == "strata"
+    headers: dict[str, str] = {}
 
-    if use_llamacpp:
+    if use_strata:
+        from app.ai.provider_registry import select_instance
+        from app.ai.schemas import ProviderKind
+
+        node = select_instance(ProviderKind.STRATA)
+        url = f"{node.base_url.rstrip('/').removesuffix('/v1')}/v1/chat/completions"
+        if node.api_key:
+            headers["Authorization"] = f"Bearer {node.api_key}"
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": False,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "response_format": {"type": "json_object"},
+            # Strata's hard off for reasoning: the JSON lands in `content`.
+            "reasoning_effort": "none",
+        }
+    elif use_llamacpp:
         url = f"{settings.llamacpp_url.rstrip('/v1')}/v1/chat/completions"
         payload: dict = {
             "model": model,
@@ -705,6 +741,7 @@ async def generate_json(
         }
     else:
         # Default: Ollama
+        _ensure_ollama_gpu_allowed()
         url = f"{settings.ollama_url}/api/chat"
         payload = {
             "model": model,
@@ -749,7 +786,7 @@ async def generate_json(
                     # consumed physical attempt; its committed reservation is
                     # never reopened for automatic replay.
                     dispatched = True
-                    response = await client.post(url, json=payload)
+                    response = await client.post(url, json=payload, headers=headers)
                     elapsed_ms = int((time.time() - start) * 1000)
                     if active_budget_context := budget_context or ambient_budget_context:
                         data, usage_evidence, response_error = _capture_budgeted_ollama_response(
@@ -772,7 +809,7 @@ async def generate_json(
                 response.raise_for_status()
                 data = response.json()
 
-            if use_llamacpp:
+            if use_llamacpp or use_strata:
                 raw = data.get("choices", [{}])[0].get("message", {}).get("content", "")
             else:
                 raw = data.get("message", {}).get("content", "")
@@ -864,6 +901,7 @@ async def chat(
     if budget_context is not None:
         logical_call_no = await budget_context.begin_direct_text_call(provider="ollama")
     _ensure_gpu_free()
+    _ensure_ollama_gpu_allowed()
     model = model or settings.ollama_model_reasoning
     breaker = _get_breaker(model)
 
@@ -978,7 +1016,7 @@ async def reasoning_generate(
             max_tokens=max_tokens,
         )
 
-    if not confidential and provider in (
+    cloud_compat = provider in (
         "openrouter",
         "openai",
         "deepseek",
@@ -993,7 +1031,21 @@ async def reasoning_generate(
         "minimax",
         "kimi",
         "qwen",
-    ):
+    )
+    if provider == "strata":
+        # Local, so confidential content may go there. One POST, reserved and
+        # charged on a durable budget when there is one (usage: explicit unknown).
+        return await _strata_reasoning_text(
+            prompt,
+            model=model_name,
+            system=system,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            format_json=format_json,
+            budget_context=budget_context,
+        )
+
+    if cloud_compat and not confidential:
         from app.ai.model_resolver import _provider_api_key, _provider_base_url
 
         base_url = _provider_base_url(provider)
@@ -1069,6 +1121,61 @@ async def reasoning_generate(
     return response.text
 
 
+async def _strata_reasoning_text(
+    prompt: str,
+    *,
+    model: str,
+    system: str | None,
+    temperature: float,
+    max_tokens: int,
+    format_json: bool,
+    budget_context: Any | None,
+) -> str:
+    from app.ai.provider_registry import select_instance
+    from app.ai.schemas import ProviderKind
+
+    node = select_instance(ProviderKind.STRATA)
+    url = f"{node.base_url.rstrip('/').removesuffix('/v1')}/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {node.api_key}"} if node.api_key else {}
+    messages: list[dict] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    payload: dict = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": False,
+        "reasoning_effort": "none",
+    }
+    if format_json:
+        payload["response_format"] = {"type": "json_object"}
+    operation_key = None
+    if budget_context is not None:
+        logical_call_no = await budget_context.begin_direct_text_call(provider="strata")
+        operation_key = await budget_context.prepare_provider_call(
+            logical_call_no=logical_call_no,
+            provider="strata",
+            provider_attempt=1,
+            request={"url": url, "payload": payload},
+        )
+    usage_evidence = unknown_ollama_usage("response_not_observed")
+    data = None
+    response_error: Exception | None = None
+    try:
+        async with httpx.AsyncClient(timeout=float(max_tokens * 0.1 + 120)) as client:
+            response = await client.post(url, headers=headers, json=payload)
+            data, usage_evidence, response_error = _capture_budgeted_ollama_response(response)
+    finally:
+        if operation_key is not None:
+            await budget_context.charge_provider_call(operation_key, usage_evidence=usage_evidence)
+            await budget_context.assert_direct_text_current()
+    if response_error is not None:
+        raise response_error
+    return (data or {}).get("choices", [{}])[0].get("message", {}).get("content") or ""
+
+
 async def _claude_generate(
     prompt: str,
     *,
@@ -1132,6 +1239,7 @@ async def chat_with_images(
         format_json: Request JSON structured output
     """
     _ensure_gpu_free()
+    _ensure_ollama_gpu_allowed()
     import base64
 
     effective_model = model or getattr(settings, "ollama_model_vlm", settings.ollama_model_ocr)

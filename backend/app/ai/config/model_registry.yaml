@@ -16,6 +16,14 @@ providers:
     base_url: "http://localhost:8080"
     timeout_seconds: 180
     is_local: true
+  strata:
+    base_url: "http://strata:8080"
+    api_key_env: "STRATA_API_KEY"
+    # One request at a time by default: a queued call waits for the one
+    # before it, and a 125B MoE reading a long document takes minutes.
+    timeout_seconds: 600
+    is_local: true
+    notes: "Strata — Qwen3.8-Flash-Next (125B MoE) split across GPU+RAM, OpenAI-compatible. Owns the GPU while active: switched against GPU-Ollama on /settings/models → Провайдеры. Start once: docker compose --profile strata up -d strata"
   comfyui:
     base_url: "http://comfyui:8188"
     timeout_seconds: 300
@@ -137,6 +145,25 @@ providers:
     is_local: true
 
 models:
+  strata_qwen3_8_flash_next:
+    provider: "strata"
+    # Strata serves one model name whatever the quantization; the quant
+    # (Q2_0 / IQ2_XS / IQ3_XXS / IQ3_S) is a server setting, chosen in the UI.
+    provider_model: "qwen3.8-flash-next"
+    status: "production"
+    modalities: ["text", "vision", "tool_calling"]
+    max_context_tokens: 65536
+    supports_structured_output: true
+    supports_tool_calling: true
+    thinking_supported: true
+    thinking_enabled: false
+    local_only: true
+    # Dense weights + KV + the image encoder; the GPU's free rest is filled
+    # with an expert cache, so in practice Strata takes the whole card.
+    vram_gb_estimate: 22.0
+    quality_score: 0.95
+    speed_score: 0.55
+    notes: "Qwen3.8-Flash-Next 125B MoE via Strata (GPU expert cache + experts in RAM). Vision through the server's image encoder when it is installed with images. Exclusive with GPU-Ollama."
   gemma4_e2b_ollama:
     provider: "ollama"
     provider_model: "gemma4:e2b"

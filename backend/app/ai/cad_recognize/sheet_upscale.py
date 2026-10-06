@@ -435,7 +435,7 @@ def upscale_sheet(
                 if free is not None and free < _VRAM_NEEDED:
                     # Как перед каждым запуском диффузии в Студии: карта одна,
                     # модель ридера занимает её почти целиком (OOM 2026-07-05).
-                    gpu_lock.unload_ollama()
+                    gpu_lock.unload_llm_servers()
                 return run_comfy_upscale(comfy, buffer.getvalue(), scale, timeout_s=timeout_s)
             except Exception as exc:  # noqa: BLE001 — апскейл не должен ронять оцифровку
                 failures.append(str(exc))

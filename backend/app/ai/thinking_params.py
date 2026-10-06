@@ -45,6 +45,9 @@ REASONING_EFFORT_PROVIDERS = frozenset(
         # проверены живым вызовом 2026-09-28; до этого рассуждение не
         # передавалось вовсе.
         "gemini",
+        # Strata: reasoning_effort none/low/medium/high (serve/server.py,
+        # SHARED_KEYS) — "none" is its hard off.
+        "strata",
     }
 )
 

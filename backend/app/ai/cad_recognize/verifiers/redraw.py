@@ -295,7 +295,7 @@ def patch_disputed(
     if own:
         from app.ai import gpu_lock
 
-        gpu_lock.unload_ollama()
+        gpu_lock.unload_llm_servers()
 
         def redraw(crop: Any, seed: int) -> Any:
             return run_redraw(comfy, crop, seed, timeout_s=timeout_s)

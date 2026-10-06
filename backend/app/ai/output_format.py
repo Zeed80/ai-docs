@@ -53,7 +53,7 @@ class FormatMechanism(StrEnum):
 
 
 # Виды провайдеров, где схема уходит параметром движка.
-_LOCAL_KINDS = frozenset({"ollama", "llamacpp", "vllm", "lmstudio", "openai_compatible"})
+_LOCAL_KINDS = frozenset({"ollama", "llamacpp", "vllm", "lmstudio", "openai_compatible", "strata"})
 _OPENAI_KINDS = frozenset(
     {
         "openai_compatible",

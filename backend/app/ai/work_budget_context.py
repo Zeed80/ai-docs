@@ -29,6 +29,8 @@ from app.domain.work_budget_ledger import (
 from app.domain.work_budget_usage import OllamaUsageEvidence
 from app.domain.work_orders import attempt_owns_lease
 
+_AIROUTER_PROVEN_PROVIDERS = frozenset({"ollama", "strata"})
+
 
 class BudgetExecutionStopped(BaseException):
     """Terminal, non-retryable durable execution boundary.
@@ -303,7 +305,9 @@ class WorkBudgetContext:
                     "Direct text execution lacks a frozen owner/plan binding",
                 )
             )
-        if provider != "ollama":
+        # generate_json reserves and charges each Strata POST in the same loop
+        # as Ollama's (usage stays an explicit unknown: no receipt fields).
+        if provider not in _AIROUTER_PROVEN_PROVIDERS:
             raise await self._stop(
                 BudgetExecutionStopped(
                     "direct_text_provider_unsupported",
@@ -355,7 +359,12 @@ class WorkBudgetContext:
             "email_drafting",
             "code_generation",
         }
-        if provider != "ollama" or task not in supported_tasks or has_images:
+        # Proven single-POST providers: Ollama's /api/chat and Strata's
+        # OpenAI-compatible /v1/chat/completions (OpenAICompatibleProvider.chat
+        # posts exactly once, no internal retry; format re-asks come back
+        # through prepare_provider_call). Strata has no usage receipt: its
+        # charge stays an explicit unknown, never zero.
+        if provider not in _AIROUTER_PROVEN_PROVIDERS or task not in supported_tasks or has_images:
             raise await self._stop(
                 BudgetExecutionStopped(
                     "airouter_provider_path_unsupported",
@@ -1107,7 +1116,7 @@ class DetachedVerifierBudgetContext:
 
     async def assert_supported_provider(self, provider: str | None) -> None:
         self.raise_if_stopped()
-        if provider != "ollama":
+        if provider not in _AIROUTER_PROVEN_PROVIDERS:
             raise await self._stop(
                 BudgetExecutionStopped(
                     "verification_provider_unsupported",

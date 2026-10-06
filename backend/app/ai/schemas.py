@@ -13,6 +13,9 @@ class ProviderKind(str, Enum):
     VLLM = "vllm"
     OPENAI_COMPATIBLE = "openai_compatible"
     LMSTUDIO = "lmstudio"
+    # Strata: one large MoE model (Qwen3.8-Flash-Next) split across GPU+RAM,
+    # OpenAI-compatible; owns the whole GPU while active (see gpu_runtime.py).
+    STRATA = "strata"
     COMFYUI = "comfyui"  # Image generation/editing server (not an LLM chat provider)
     # Cloud — native integrations
     CLOUD_PROVIDER = "cloud_provider"

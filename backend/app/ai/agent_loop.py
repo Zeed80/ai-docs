@@ -1516,6 +1516,14 @@ def _openai_compatible_provider_config(
     if provider in {**mapping, **local_mapping}:
         base_url, env_key, extra = {**mapping, **local_mapping}[provider]
         return base_url, os.environ.get(env_key, ""), extra
+    if provider == "strata":
+        # Strata serves its OpenAI surface under /v1; the node URL (DB → env)
+        # is the bare server address, like llama.cpp's.
+        from app.ai.provider_registry import select_instance
+        from app.ai.schemas import ProviderKind
+
+        resolved = select_instance(ProviderKind.STRATA)
+        return resolved.base_url.rstrip("/").removesuffix("/v1") + "/v1", resolved.api_key, {}
     # Any other provider kind registered in model_registry.yaml — resolve its
     # endpoint and (DB-stored or env) API key through the provider registry.
     try:
@@ -1969,6 +1977,7 @@ _OPENAI_COMPATIBLE_PROVIDERS = frozenset(
         "lmstudio",
         "openai_compatible",
         "llamacpp",
+        "strata",
         # cloud OpenAI-compatible gateways (must match ProviderKind values)
         "openrouter",
         "deepseek",
@@ -2029,6 +2038,15 @@ async def _call_provider_streaming(
         httpx.PoolTimeout,
     )
     for p in providers_to_try:
+        if p in ("ollama", "strata"):
+            from app.ai import gpu_runtime
+
+            try:
+                gpu_runtime.check_call(p, config.ollama_url if p == "ollama" else None)
+            except gpu_runtime.GpuRuntimeUnavailable as exc:
+                logger.warning("provider_gpu_runtime_unavailable", provider=p, error=str(exc))
+                last_exc = exc
+                continue
         attempts = 2 if p == "ollama" else 1
         for attempt in range(1, attempts + 1):
             # Only the Ollama HTTP path (including the unknown-provider

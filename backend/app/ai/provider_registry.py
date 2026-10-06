@@ -36,6 +36,7 @@ _ENV_URL_OVERRIDE = {
     ProviderKind.OLLAMA: "OLLAMA_URL",
     ProviderKind.VLLM: "VLLM_URL",
     ProviderKind.LLAMACPP: "LLAMACPP_URL",
+    ProviderKind.STRATA: "STRATA_URL",
     ProviderKind.COMFYUI: "COMFYUI_URL",
 }
 
@@ -43,6 +44,7 @@ _ENV_URL_OVERRIDE = {
 _YAML_DEFAULT_URL = {
     ProviderKind.OLLAMA: lambda: settings.ollama_url,
     ProviderKind.LLAMACPP: lambda: settings.llamacpp_url,
+    ProviderKind.STRATA: lambda: settings.strata_url,
     ProviderKind.VLLM: lambda: os.environ.get("VLLM_URL", "http://localhost:8000"),
     ProviderKind.COMFYUI: lambda: settings.comfyui_url,
     ProviderKind.OPENAI_COMPATIBLE: lambda: "http://localhost:8080",
@@ -57,6 +59,7 @@ _API_KEY_ENV = {
     ProviderKind.OPENROUTER: "OPENROUTER_API_KEY",
     ProviderKind.DEEPSEEK: "DEEPSEEK_API_KEY",
     ProviderKind.GEMINI: "GOOGLE_API_KEY",
+    ProviderKind.STRATA: "STRATA_API_KEY",
 }
 
 _LOCAL_KINDS = {
@@ -66,6 +69,7 @@ _LOCAL_KINDS = {
     ProviderKind.OPENAI_COMPATIBLE,
     ProviderKind.LMSTUDIO,
     ProviderKind.COMFYUI,
+    ProviderKind.STRATA,
 }
 
 # Lazily-loaded provider defaults from the YAML registry (base_url + api_key_env).
@@ -313,6 +317,19 @@ def catalog_availability(models: dict) -> dict[str, Availability]:
     return out
 
 
+def _gpu_node_last_while_strata_owns(
+    instances: list[ResolvedProvider],
+) -> list[ResolvedProvider]:
+    try:
+        from app.ai import gpu_runtime
+
+        if gpu_runtime.current_owner() != gpu_runtime.STRATA:
+            return instances
+        return sorted(instances, key=lambda inst: gpu_runtime.is_gpu_ollama(inst.base_url))
+    except Exception:  # noqa: BLE001 — node order is an optimisation, never a failure
+        return instances
+
+
 def select_instance(
     kind: ProviderKind,
     provider_model: str | None = None,
@@ -336,6 +353,13 @@ def select_instance(
 
     if kind not in _LOCAL_KINDS or len(instances) == 1 or not provider_model:
         return instances[0]
+
+    # While the GPU is switched to Strata the GPU-Ollama node refuses calls
+    # (gpu_runtime); the SAME model on another Ollama node (the CPU node for
+    # embeddings) is still fine, so that node is tried first. Not a model
+    # substitution — only the order of nodes changes.
+    if kind == ProviderKind.OLLAMA:
+        instances = _gpu_node_last_while_strata_owns(instances)
 
     # Multiple local nodes: prefer one that hosts the model. If at least one
     # node answered with a non-empty model list and none host it, this is a

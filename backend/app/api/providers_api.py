@@ -48,6 +48,7 @@ _LOCAL_KINDS = {
     ProviderKind.OPENAI_COMPATIBLE,
     ProviderKind.LMSTUDIO,
     ProviderKind.COMFYUI,
+    ProviderKind.STRATA,
 }
 
 _admin = [Depends(require_role(UserRole.admin))]
@@ -969,7 +970,10 @@ async def _node_loaded_models(resolved) -> list[tuple[str, float | None]]:
                     out.append((m.get("name", ""), round(size / 1e9, 1) if size else None))
             else:
                 url = base if base.endswith("/v1") else f"{base}/v1"
-                r = await client.get(f"{url}/models")
+                headers = (
+                    {"Authorization": f"Bearer {resolved.api_key}"} if resolved.api_key else {}
+                )
+                r = await client.get(f"{url}/models", headers=headers)
                 r.raise_for_status()
                 for m in r.json().get("data", []):
                     out.append((m.get("id", ""), None))
@@ -1664,6 +1668,7 @@ _SLOT_THINKING_LEVEL_AGENT_FIELDS: dict[str, list[str]] = {
 _THINKING_DISABLE_SUPPORTED_PROVIDERS = {
     "ollama",
     "llamacpp",
+    "strata",
     "vllm",
     "openrouter",
     "ollama_cloud",
@@ -2642,14 +2647,20 @@ async def _persist_slot_durable(db: AsyncSession, slot: str) -> None:
     """Mirror a just-applied slot's effective state into Postgres (durable).
 
     task_routing and agent_config are otherwise Redis-only and reset on a flush.
-    (ocr_large maps only to ai_config — a separate store, out of scope here.)
     """
     from app.ai.agent_config import get_builtin_agent_config
     from app.ai.schemas import AITask
     from app.ai.task_routing import get_routing_for
 
+    affected = _slot_affected(slot)
+    if slot == "ocr_large":
+        # ocr_large IS the 2nd element of the invoice_ocr chain; its affected
+        # label "invoice_ocr (запасная)" is not a task value, so the chain was
+        # never written to Postgres and the hydrate right after the apply put
+        # the old fallback back — the assignment silently reverted.
+        affected = [AITask.INVOICE_OCR.value]
     agent_done = False
-    for item in _slot_affected(slot):
+    for item in affected:
         if item.startswith("agent_config."):
             if not agent_done:
                 await model_runtime_store.persist_agent_config(

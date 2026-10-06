@@ -632,7 +632,7 @@ async def _run(generation_id: str, task_id: str | None) -> dict:
         try:
             from app.ai import gpu_lock
 
-            gpu_lock.unload_ollama()
+            gpu_lock.unload_llm_servers()
         except Exception:  # noqa: BLE001
             pass
 

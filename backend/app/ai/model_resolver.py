@@ -22,7 +22,7 @@ from app.config import settings
 
 logger = structlog.get_logger()
 
-_LOCAL_PROVIDERS = ("ollama", "llamacpp", "vllm", "lmstudio", "openai_compatible")
+_LOCAL_PROVIDERS = ("ollama", "llamacpp", "vllm", "lmstudio", "openai_compatible", "strata")
 
 
 @dataclass
@@ -39,7 +39,7 @@ class ModelConfig:
 
     @property
     def is_local(self) -> bool:
-        return self.provider in ("ollama", "llamacpp", "vllm", "lmstudio", "openai_compatible")
+        return self.provider in _LOCAL_PROVIDERS
 
     @property
     def is_cloud(self) -> bool:

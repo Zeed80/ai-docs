@@ -160,6 +160,19 @@ class Settings(BaseSettings):
     llamacpp_ctx_size: int = 16384  # 16 384 / parallel(2) = 8 192 tokens per slot
     llamacpp_kv_cache_type: str = "q8_0"
 
+    # Strata (Qwen3.8-Flash-Next split across GPU+RAM, OpenAI-compatible).
+    # Optional compose service `strata` (profile "strata"); it owns the whole GPU
+    # while running, so it is switched against GPU-Ollama, never run beside it.
+    strata_url: str = "http://strata:8080"
+    strata_api_key: str = ""
+    strata_service_name: str = "strata"
+    # The strata_data volume, mounted into the backend: install configs, model
+    # files and the env file the container reads its quantization from.
+    strata_data_dir: str = "/strata-data"
+    # Address other machines on the LAN use (the published port), shown in
+    # the UI next to the API key. Empty: not published.
+    strata_public_url: str = ""
+
     # ComfyUI (image generation / editing — drawings studio). On-prem only.
     # Default targets the optional compose service; override: COMFYUI_URL=http://host:8188
     comfyui_url: str = "http://comfyui:8188"

@@ -431,6 +431,14 @@ class AIRouter:
             try:
                 model = self.registry.get_model(model_name)
                 provider, resolved = self._resolve_provider(model)
+                if model.provider not in getattr(self, "_injected_kinds", ()):
+                    # GPU-Ollama and Strata never share the card: the one that
+                    # does not own it right now is refused with the reason.
+                    from app.ai import gpu_runtime
+
+                    gpu_runtime.check_call(
+                        model.provider.value, getattr(resolved, "base_url", None)
+                    )
             except (KeyError, ValueError, RuntimeError) as exc:
                 # RuntimeError сюда добавлен по живому разбору: «модель не
                 # обслуживается ни одним узлом» приходит именно им, и раньше

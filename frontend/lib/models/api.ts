@@ -19,6 +19,9 @@ import type {
   ModelCandidate,
   Slot,
   SlotSmokeResult,
+  StrataAccess,
+  StrataSlotPlanItem,
+  StrataStatus,
   ThinkingLevel,
 } from "./types";
 
@@ -244,3 +247,57 @@ export const verifyModel = (modelKey: string) =>
     checked_at: string;
     details: Record<string, string>;
   }>(`/api/providers/models/${modelKey}/verify`, { method: "POST" });
+
+// ── Strata ───────────────────────────────────────────────────────────────────
+
+export const strataStatus = () =>
+  request<StrataStatus>("/api/local-models/strata/status");
+
+export const strataSlotPlan = () =>
+  request<StrataSlotPlanItem[]>("/api/local-models/strata/slot-plan");
+
+export const strataSwitch = (body: {
+  target: "strata" | "ollama";
+  move_slots?: string[] | null;
+  restore_slots?: boolean;
+}) =>
+  request<{
+    ok: boolean;
+    moved: string[];
+    restored: string[];
+    ollama_unloaded: string[];
+    status: StrataStatus;
+  }>("/api/local-models/strata/switch", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const strataConfig = (body: {
+  model: string;
+  context: number;
+  vision: boolean;
+}) =>
+  request<{ ok: boolean; restarted: boolean; status: StrataStatus }>(
+    "/api/local-models/strata/config",
+    { method: "PUT", body: JSON.stringify(body) },
+  );
+
+export const strataInstall = () =>
+  request<{ ok: boolean; status: StrataStatus }>(
+    "/api/local-models/strata/install",
+    {
+      method: "POST",
+    },
+  );
+
+export const strataRuntime = (body: {
+  idle_unload_s: number;
+  free_comfyui: boolean;
+}) =>
+  request<{ ok: boolean; restarted: boolean; status: StrataStatus }>(
+    "/api/local-models/strata/runtime",
+    { method: "PUT", body: JSON.stringify(body) },
+  );
+
+export const strataAccess = () =>
+  request<StrataAccess>("/api/local-models/strata/access");

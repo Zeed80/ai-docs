@@ -97,6 +97,7 @@ def _effective_provider_base_url(kind: ProviderKind, fallback: str) -> str:
         ProviderKind.OPENAI_COMPATIBLE,
         ProviderKind.LMSTUDIO,
         ProviderKind.COMFYUI,
+        ProviderKind.STRATA,
     }:
         try:
             nodes = provider_registry.list_instances(kind)

@@ -185,7 +185,7 @@ def _response_format(request: AIRequest) -> dict[str, Any]:
 # принимают как расширение, а строгий облачный шлюз отвечает на них 400 —
 # то есть параметр, отправленный «на всякий случай», стоит целого кандидата.
 _EXTRA_SAMPLING_KINDS = frozenset(
-    {"vllm", "llamacpp", "openai_compatible", "lmstudio", "openrouter"}
+    {"vllm", "llamacpp", "openai_compatible", "lmstudio", "openrouter", "strata"}
 )
 
 

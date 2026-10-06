@@ -580,3 +580,59 @@ async def _load_attempt_id(factory, order_id):
             .join(WorkStep, WorkStepAttempt.step_id == WorkStep.id)
             .where(WorkStep.work_order_id == order_id)
         )
+
+
+@pytest.mark.asyncio
+async def test_strata_posts_match_reservations_on_format_retry(test_engine, monkeypatch):
+    """Strata (OpenAI-compatible) is a proven single-POST path like Ollama.
+
+    Live: with the GPU switched to Strata the chat turn was blocked with
+    airouter_provider_path_unsupported(provider=strata, orchestrator_planning).
+    """
+    from app.ai.providers import openai_compatible
+    from app.ai.providers.openai_compatible import OpenAICompatibleProvider
+
+    factory, run, context = await _claimed_context(test_engine)
+    provider = OpenAICompatibleProvider(
+        ProviderConfig(kind=ProviderKind.STRATA, base_url="http://provider.test")
+    )
+    provider.kind = ProviderKind.STRATA
+    router = _router(monkeypatch, provider)
+    bodies = [
+        {"choices": [{"message": {"content": "not-json"}}]},
+        {"choices": [{"message": {"content": '{"ok": true}'}}]},
+    ]
+    posts = []
+
+    class Response:
+        def __init__(self, body):
+            self.body = body
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.body
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, **kwargs):
+            posts.append((url, kwargs))
+            return Response(bodies.pop(0))
+
+    monkeypatch.setattr(openai_compatible.httpx, "AsyncClient", lambda **_kwargs: Client())
+    monkeypatch.setattr("app.ai.server_lifecycle.ensure_running", lambda _kind: _async_none())
+
+    with bind_airouter_budget_context(context):
+        response = await router.run(_decision_request())
+
+    assert response.data == Decision(ok=True)
+    reservations = await _physical(factory, run["work_order_id"])
+    assert len(posts) == len(reservations) == 2
+    assert {url for url, _ in posts} == {"http://provider.test/v1/chat/completions"}
+    assert {row.state for row in reservations} == {"charged"}

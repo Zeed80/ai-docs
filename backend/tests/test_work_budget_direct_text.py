@@ -497,3 +497,53 @@ async def test_explicit_detached_and_ambient_collision_is_sticky(test_engine, mo
     assert gpu_checks == []
     assert clients == []
     assert posts == []
+
+
+class _OpenAIResponse(_Response):
+    def json(self):
+        return {"choices": [{"message": {"content": self.content}}]}
+
+
+@pytest.mark.asyncio
+async def test_strata_generate_json_charges_each_post_on_the_ledger(test_engine, monkeypatch):
+    """With the GPU on Strata the verifier/planner/synthesize JSON went there.
+
+    Live it was blocked as unsupported; Strata now runs through the same
+    reserved-and-charged loop as Ollama, one reservation per physical POST.
+    """
+    factory, run, context = await _claimed_context(test_engine)
+    _install_local_runtime(monkeypatch, provider="strata")
+    posts, _ = _install_http(
+        monkeypatch, [_OpenAIResponse("not-json"), _OpenAIResponse('{"ok": true}')]
+    )
+
+    async def no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    with bind_airouter_budget_context(context):
+        result = await ollama_client.generate_json(
+            "json", model="qwen3.8-flash-next", provider="strata"
+        )
+
+    assert result == {"ok": True}
+    physical = await _physical(factory, run["work_order_id"])
+    assert len(posts) == len(physical) == 2
+    assert {row.state for row in physical} == {"charged"}
+    assert all(url.endswith("/v1/chat/completions") for url, _ in posts)
+    assert all(kw["json"]["reasoning_effort"] == "none" for _, kw in posts)
+
+
+@pytest.mark.asyncio
+async def test_strata_reasoning_leaf_charges_one_post(test_engine, monkeypatch):
+    factory, run, context = await _claimed_context(test_engine)
+    _install_local_runtime(monkeypatch, provider="strata")
+    posts, _ = _install_http(monkeypatch, [_OpenAIResponse("reasoned")])
+
+    with bind_airouter_budget_context(context):
+        result = await ollama_client.reasoning_generate("reason", confidential=True)
+
+    assert result == "reasoned"
+    physical = await _physical(factory, run["work_order_id"])
+    assert len(posts) == len(physical) == 1
+    assert physical[0].state == "charged"
