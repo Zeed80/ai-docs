@@ -765,6 +765,12 @@ async def _execute_decompose(work_order_id: uuid.UUID, input_data: dict[str, Any
             if (row.metadata_ or {}).get("decompose_spec_digest") == spec_digest
         ]
         if existing:
+            # Same order as the first run: the spec order of objectives.
+            position = {
+                str(spec.get("objective") or "").strip(): index
+                for index, spec in enumerate(children_spec)
+            }
+            existing.sort(key=lambda row: (position.get(row.objective, len(position)), str(row.id)))
             return {
                 "text": f"Создано дочерних поручений: {len(existing)}",
                 "executor": "decompose",

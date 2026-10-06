@@ -267,8 +267,9 @@ async def test_reclaim_expired_leases_still_blocks_order_when_it_already_left_ru
     assert order_b.status == "running"
 
     # step A succeeds; promote_ready_dependents (invoked the same way
-    # verify_completed_step invokes it) frees the dependent step and flips
-    # the order back to "ready" while B is still running.
+    # verify_completed_step invokes it) frees the dependent step. The order
+    # stays "running" while B is still executing (it used to flip to "ready"
+    # and break B's budget fence; the dependent step is claimable either way).
     await complete_attempt(
         db_session,
         order=order_a,
@@ -279,9 +280,9 @@ async def test_reclaim_expired_leases_still_blocks_order_when_it_already_left_ru
     )
     await promote_ready_dependents(db_session, order=order_a, plan_id=plan.id, actor="scheduler")
     await db_session.flush()
-    assert order_a.status == "ready"
+    assert order_a.status == "running"
 
-    # step B's worker vanishes; its lease expires while the order sits at "ready".
+    # step B's worker vanishes; its lease expires.
     claimed_step_b.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
     await db_session.flush()
 

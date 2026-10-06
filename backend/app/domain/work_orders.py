@@ -1061,7 +1061,13 @@ async def promote_ready_dependents(
         ):
             await transition_step(db, step, "ready", actor=actor)
     unfinished = any(step.state != "succeeded" for step in steps)
-    if unfinished and order.status == "running":
+    # An order with a step still executing stays "running": the periodic
+    # re-verification of an earlier succeeded step used to flip it to "ready"
+    # mid-execution, and the executing step's budget fence then saw an
+    # inactive order and failed (live 2026-10-06: every synthesize step).
+    # claim_ready_step claims from "running" orders as well.
+    in_flight = any(step.state in {"running", "waiting_approval"} for step in steps)
+    if unfinished and not in_flight and order.status == "running":
         await transition_work_order(db, order, "ready", actor=actor)
     return unfinished
 

@@ -109,3 +109,22 @@ async def test_a_reserved_dispatch_still_blocks_conservatively(test_engine, monk
         order = await db.get(WorkOrder, order_id)
         assert order.status == "blocked"
         assert order.blocker["code"] == "budget_execution_inactive"
+
+
+@pytest.mark.asyncio
+async def test_reverifying_a_done_step_keeps_a_running_sibling_alive(test_engine):
+    """Periodic re-verification must not flip the order to ready mid-step."""
+    from app.domain.work_orders import promote_ready_dependents
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    order_id, (_o1, done, _a1), (_o2, running, _a2) = await _two_parallel_steps(factory)
+    async with factory() as db:
+        step = await db.get(WorkStep, done.id)
+        step.state = "succeeded"
+        await db.commit()
+    async with factory() as db:
+        order = await db.get(WorkOrder, order_id, with_for_update=True)
+        assert order.status == "running"
+        assert await promote_ready_dependents(db, order=order, plan_id=done.plan_id)
+        await db.commit()
+        assert order.status == "running"  # the other step is still executing
