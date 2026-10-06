@@ -67,7 +67,9 @@ QUANTS: dict[str, dict] = {
         "ram_gb": 62,
     },
 }
-DEFAULT_QUANT = "IQ3_S"
+# IQ2_XS: measured 2026-10-06 on the RTX 3090 + 59 GB, ~1.5x IQ3_S's decode
+# speed with the same results on known-answer tasks, half the disk (66 GB).
+DEFAULT_QUANT = "IQ2_XS"
 CONTEXTS = (32768, 65536, 131072)
 DEFAULT_CONTEXT = 65536
 # The MTP draft layer (~6 GB) and, with images, the encoder (~1 GB) come on

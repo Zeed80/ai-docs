@@ -56,7 +56,7 @@ def test_guard_error_is_a_runtime_error_the_router_skips():
 def test_desired_settings_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setenv("STRATA_DATA_DIR", str(tmp_path))
     assert strata_manager.read_desired() == {
-        "model": "IQ3_S",
+        "model": "IQ2_XS",
         "context": 65536,
         "vision": True,
         "reinstall_pending": False,

@@ -756,7 +756,7 @@ services:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       FAMILY: qwen
-      MODEL: IQ3_S
+      MODEL: IQ2_XS
       CONTEXT: "65536"
       VISION: "yes"
       HOST: 0.0.0.0
@@ -790,6 +790,17 @@ services:
           grep -q '^exit 0$$' /tmp/install-only.sh || { echo "install-only: entrypoint changed"; exit 1; }
           exec sh /tmp/install-only.sh
         fi
+        # Several quants installed: setup.py starts "the newest strata-*.json"
+        # and, with more than one in /opt/strata, ASKS which — no TTY, so the
+        # start failed (live, after IQ2_XS joined IQ3_S). Keep only the chosen
+        # quant's link; the canonical copies live in /data/config.
+        case "$${FAMILY:-qwen}" in qwen) prefix="" ;; *) prefix="$${FAMILY}-" ;; esac
+        tag="$${prefix}$$(printf '%s' "$${MODEL:-IQ2_XS}" | tr 'A-Z' 'a-z')"
+        for f in /opt/strata/strata-*.json; do
+          [ -e "$$f" ] || [ -L "$$f" ] || continue
+          [ "$$(basename "$$f")" = "strata-$$tag.json" ] && continue
+          rm -f "$$f"
+        done
         exec ./docker-entrypoint.sh
     networks:
       - app
