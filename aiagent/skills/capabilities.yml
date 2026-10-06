@@ -248,7 +248,7 @@ capabilities:
           description: "ID счёта (для get, validate, approve, reject, compare_prices, export, update, delete)"
         filters:
           type: object
-          description: "Фильтры для list: supplier_id, status, date_from, date_to, amount_min, amount_max, limit, offset"
+          description: "Фильтры для list: supplier_id, status, date_from, date_to, amount_min, amount_max, limit (не больше 200), offset"
         body:
           type: object
           description: "Данные подтверждения (для approve, reject: reason, comment; для bulk_approve/bulk_reject: ids)"
@@ -273,10 +273,10 @@ capabilities:
           description: "ID поставщика (для get, price_history, trust_score, alerts, update, check_requisites)"
         query:
           type: string
-          description: "Поисковый запрос (для search, list)"
+          description: "Поисковый запрос (для search)"
         filters:
           type: object
-          description: "Фильтры: name, inn, status, trust_min, limit"
+          description: "Фильтры для list: role (supplier | buyer), limit (не больше 200), offset, sort_by (name | trust_score | total_invoices | total_amount; числа — по убыванию: «у кого больше всего счетов» = sort_by=total_invoices, limit=1). Других фильтров у list нет: поиск по имени или ИНН — action=search"
         body:
           type: object
           description: "Данные для update"
