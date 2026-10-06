@@ -201,3 +201,26 @@ async def test_list_suppliers(client: AsyncClient, supplier):
     resp = await client.get("/api/suppliers")
     assert resp.status_code == 200
     assert len(resp.json()) >= 1
+
+
+@pytest.mark.asyncio
+async def test_list_sorts_before_paging(client: AsyncClient, db_session):
+    """sort_by=total_invoices&limit=1 used to return the alphabetically first."""
+    first = Party(name="ААА Первый по алфавиту", inn="7700000101", role=PartyRole.supplier)
+    leader = Party(name="ЯЯЯ Лидер по счетам", inn="7700000102", role=PartyRole.supplier)
+    db_session.add_all([first, leader])
+    await db_session.flush()
+    db_session.add_all(
+        [
+            SupplierProfile(party_id=first.id, total_invoices=1, total_amount=1.0),
+            SupplierProfile(party_id=leader.id, total_invoices=10_000, total_amount=1.0),
+        ]
+    )
+    await db_session.flush()
+
+    resp = await client.get("/api/suppliers", params={"sort_by": "total_invoices", "limit": 1})
+    assert resp.status_code == 200
+    assert resp.json()["items"][0]["name"] == "ЯЯЯ Лидер по счетам"
+
+    bad = await client.get("/api/suppliers", params={"sort_by": "inn"})
+    assert bad.status_code == 422

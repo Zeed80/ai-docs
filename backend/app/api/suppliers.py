@@ -5,6 +5,7 @@ import re
 import uuid
 from collections import defaultdict
 from datetime import UTC
+from typing import Literal
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -309,7 +310,7 @@ async def list_suppliers_endpoint(
     role: str | None = Query(None, description="Filter by role: supplier, buyer"),
     limit: int = Query(50, le=200),
     offset: int = 0,
-    sort_by: str = Query(
+    sort_by: Literal["name", "trust_score", "total_invoices", "total_amount"] = Query(
         "name", description="Sort field: name, trust_score, total_invoices, total_amount"
     ),
     db: AsyncSession = Depends(get_db),
@@ -325,7 +326,21 @@ async def list_suppliers_endpoint(
         select(Party).where(Party.role == PartyRole(role) if role else True).subquery()
     )
     total = (await db.execute(count_q)).scalar() or 0
-    query = query.order_by(Party.name).offset(offset).limit(limit)
+    # Sort in SQL before paging: sorting the page afterwards made
+    # sort_by=total_invoices&limit=1 return the alphabetically first supplier
+    # (live 2026-10-06: "most invoices — 1").
+    sort_column = {
+        "trust_score": SupplierProfile.trust_score,
+        "total_invoices": SupplierProfile.total_invoices,
+        "total_amount": SupplierProfile.total_amount,
+    }.get(sort_by)
+    if sort_column is not None:
+        query = query.outerjoin(SupplierProfile, SupplierProfile.party_id == Party.id).order_by(
+            sort_column.desc().nulls_last(), Party.name
+        )
+    else:
+        query = query.order_by(Party.name)
+    query = query.offset(offset).limit(limit)
     result = await db.execute(query)
     parties = result.scalars().all()
     items = []
@@ -343,12 +358,6 @@ async def list_suppliers_endpoint(
                 total_amount=profile.total_amount if profile else 0.0,
             )
         )
-    if sort_by == "trust_score":
-        items.sort(key=lambda x: x.trust_score or 0.0, reverse=True)
-    elif sort_by == "total_invoices":
-        items.sort(key=lambda x: x.total_invoices, reverse=True)
-    elif sort_by == "total_amount":
-        items.sort(key=lambda x: x.total_amount, reverse=True)
     return SupplierListResponse(items=items, total=total)
 
 
