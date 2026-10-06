@@ -985,7 +985,7 @@ WorkOrder/email executor paths перечислены в отчёте и не о
 
 ### E21 — Единый budget ledger
 
-**Статус:** IN_PROGRESS. **После:** E20.
+**Статус:** SCOPED COMPLETE / DEPLOYED (2026-10-06): все измерения ledger учитываются; pre-dispatch token/cost bounds отложены осознанно. **После:** E20.
 Отчёт: `docs/agent-employee-delivery/E21-budget-ledger.md`.
 **Файлы:** WorkOrder budgets, `tasks/work_orders.py`, executor/provider adapters.
 
@@ -1161,7 +1161,7 @@ blocked verifier как итог в UI, подпись needs_review. Embedding/r
 
 ### E22 — Pause на безопасной границе
 
-**Статус:** TODO. **После:** E21.
+**Статус:** PARTIAL / DEPLOYED (2026-10-06): пауза на границе между шагами (`docs/agent-employee-delivery/E22-pause.md`); остаток — пауза внутри хода агента. **После:** E21.
 **Файлы:** WorkOrder state machine/API, durable worker/checkpoint, UI works.
 
 1. Задать отдельный intent pause_requested и persisted safe-boundary acknowledgement.
@@ -1175,7 +1175,7 @@ blocked verifier как итог в UI, подпись needs_review. Embedding/r
 
 ### E23 — Replan без повтора завершённых эффектов
 
-**Статус:** TODO. **После:** E22.
+**Статус:** PARTIAL / DEPLOYED (2026-10-06): E23a — несверенный эффект блокирует перепланирование (`docs/agent-employee-delivery/E23-unknown-frontier.md`); остаток — п. 3–4 (устаревшие вердикты/решения, изменённая цель). **После:** E22.
 **Файлы:** `domain/work_orders.py`, `tasks/work_orders.py`,
 `test_work_order_replanning.py`, `test_work_order_decompose.py`.
 
