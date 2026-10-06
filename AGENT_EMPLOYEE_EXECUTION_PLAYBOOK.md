@@ -1131,6 +1131,11 @@ blocked verifier как итог в UI, подпись needs_review. Embedding/r
 пересчитываются из счетов, каталог и сортировка `/api/suppliers` исправлены.
 Отчёт: `docs/agent-employee-delivery/E21-executable-decomposition.md`.
 
+**E21.3d (TESTED / DEPLOYED):** активное время шага списывается с ledger
+(`active_seconds`): резерв `min(потолок шага ≤700 с, остаток)` до исполнения,
+факт после; исчерпанный бюджет блокирует до запуска, перерасход останавливает
+следующие шаги. Отчёт: `docs/agent-employee-delivery/E21-active-time.md`.
+
 1. Сначала точные единицы: tool attempts, LLM calls, tokens, cost, active time,
    replan count. Ожидание человека не смешивать с активным временем без ADR.
 2. Целевые defaults: 2 часа active, 200 tools, 50 LLM calls, 3 replans. Не включать

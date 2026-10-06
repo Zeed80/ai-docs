@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import socket
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
@@ -555,6 +556,8 @@ async def _attempt_reserved_dispatch(db: Any, work_order_id: uuid.UUID, attempt_
 
 
 _SYNTHESIS_MAX_INPUT_CHARS = 12_000
+# execute_work_step's Celery time_limit: no step outlives it.
+_STEP_HARD_LIMIT_SECONDS = 700
 _VERIFIER_EVIDENCE_CHARS = 24_000
 _SYNTHESIS_ROW_CHARS = 300
 _LIST_KEYS = ("items", "rows", "results", "data")
@@ -1186,6 +1189,120 @@ evidence is missing, contradictory, or does not demonstrate the objective. JSON 
 
 
 async def execute_claimed_step(
+    step_id: uuid.UUID,
+    attempt_id: uuid.UUID,
+    *,
+    schedule_verification: bool = True,
+    session_factory: Any | None = None,
+) -> bool:
+    """Execute an already-claimed step, charging its active time to the ledger.
+
+    The step's timeout is reserved before execution (a step cannot outlive
+    it, so this is a proven upper bound) and settled with the measured
+    seconds afterwards. A crash leaves the full reservation charged. Time
+    spent waiting for a human is outside: a gated step stops quickly.
+    """
+    from app.db.session import _get_session_factory
+
+    factory = session_factory or _get_session_factory()
+    reservation = await _reserve_active_time(factory, step_id, attempt_id)
+    if reservation is False:
+        return False
+    started = time.monotonic()
+    try:
+        return await _execute_claimed_step(
+            step_id,
+            attempt_id,
+            schedule_verification=schedule_verification,
+            session_factory=factory,
+        )
+    finally:
+        if reservation is not None:
+            await _settle_active_time(factory, reservation, time.monotonic() - started)
+
+
+async def _reserve_active_time(factory: Any, step_id: uuid.UUID, attempt_id: uuid.UUID):
+    """Reserve the step timeout; None = nothing to settle, False = stopped."""
+    from decimal import Decimal
+
+    from app.db.models import WorkOrder, WorkStep, WorkStepAttempt
+    from app.db.work_budget_models import WorkBudgetLedger
+    from app.domain.work_budget_ledger import BudgetExceeded, _usage, reserve_budget_for_dispatch
+    from app.domain.work_orders import attempt_owns_lease, transition_step, transition_work_order
+
+    operation_key = f"active:{attempt_id}"
+    async with factory() as db:
+        step = await db.get(WorkStep, step_id)
+        order = await db.get(WorkOrder, step.work_order_id) if step is not None else None
+        if step is None or order is None or order.budget_ledger_id is None:
+            return None  # the executor itself refuses or handles these
+        work_order_id = order.id
+        # The Celery task hard-limits a step to _STEP_HARD_LIMIT_SECONDS.
+        cap = Decimal(min(max(1, int(step.timeout_seconds or 600)), _STEP_HARD_LIMIT_SECONDS))
+        ledger = await db.get(WorkBudgetLedger, order.budget_ledger_id)
+        remaining = None
+        if ledger is not None and ledger.max_active_seconds is not None:
+            remaining = Decimal(ledger.max_active_seconds) - await _usage(
+                db, ledger.id, "active_seconds"
+            )
+    units = cap if remaining is None else min(cap, remaining)
+    try:
+        if units <= 0:
+            raise BudgetExceeded(json.dumps({"dimension": "active_seconds", "remaining": "0"}))
+        _reservation, created = await reserve_budget_for_dispatch(
+            factory,
+            work_order_id=work_order_id,
+            operation_key=operation_key,
+            dimension="active_seconds",
+            units=units,
+            request_digest=hashlib.sha256(operation_key.encode()).hexdigest(),
+        )
+    except BudgetExceeded as exc:
+        error = {
+            "code": "active_time_budget_exceeded",
+            "message": "The shared active-time budget cannot cover this step's timeout",
+            "budget_error": str(exc)[:500],
+        }
+        async with factory() as db:
+            order = await db.get(WorkOrder, work_order_id, with_for_update=True)
+            step_row = await db.get(WorkStep, step_id, with_for_update=True)
+            attempt = await db.get(WorkStepAttempt, attempt_id, with_for_update=True)
+            if order and step_row and attempt and attempt_owns_lease(step_row, attempt):
+                now = utcnow()
+                attempt.status, attempt.error, attempt.finished_at = "failed", error, now
+                step_row.last_error = error
+                step_row.lease_owner = step_row.lease_expires_at = None
+                await transition_step(
+                    db, step_row, "failed", actor="budget", payload={"error": error}
+                )
+                order.blocker = error
+                await transition_work_order(
+                    db, order, "blocked", actor="budget", payload={"budget_error": error}
+                )
+                await db.commit()
+        return False
+    # A duplicate delivery shares the first reservation; only its creator settles.
+    return (work_order_id, operation_key) if created else None
+
+
+async def _settle_active_time(factory: Any, reservation: tuple, elapsed: float) -> None:
+    from decimal import Decimal
+
+    from app.domain.work_budget_ledger import settle_budget
+
+    work_order_id, operation_key = reservation
+    # The real time is charged even above the reservation: the ledger records
+    # the overrun and no further step can reserve once the budget is spent.
+    actual = Decimal(str(round(max(0.0, elapsed), 3)))
+    try:
+        await settle_budget(
+            factory, work_order_id=work_order_id, operation_key=operation_key, actual_units=actual
+        )
+    except Exception:  # noqa: BLE001 - an unsettled reservation stays fully charged
+        logger.warning("active_time_settlement_failed", operation_key=operation_key)
+
+
+async def _execute_claimed_step(
     step_id: uuid.UUID,
     attempt_id: uuid.UUID,
     *,
@@ -2170,7 +2287,7 @@ def dispatch_ready_work() -> None:
     max_retries=0,
     ignore_result=True,
     soft_time_limit=650,
-    time_limit=700,
+    time_limit=_STEP_HARD_LIMIT_SECONDS,
 )
 def execute_work_step(step_id: str, attempt_id: str) -> None:
     run_async(execute_claimed_step(uuid.UUID(step_id), uuid.UUID(attempt_id)))

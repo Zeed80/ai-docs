@@ -74,7 +74,10 @@ E21.3b выпущен: декомпозиция и fallback планировщи
 не-чатовой работы; затем active-time.
 E21.3c выпущен: шаг синтеза и семь живых дефектов цикла не-чатовой работы
 (перепланирование, гонка статуса, усечение данных, счётчики поставщиков).
-Следующее в P1.1 — учёт active-time (лимит 2 часа объявлен, но не списывается).
+E21.3d выпущен: активное время шагов списывается с общего ledger. Все объявленные
+измерения ledger (tool_attempts, llm_calls, replans, active_seconds) теперь
+учитываются; tokens/cost — receipts без pre-dispatch bounds (отложено осознанно).
+Следующее по roadmap — P1.2 (E22: persisted pause_requested).
 Оставшиеся AIRouter/direct paths, entry adapters, legacy reconciliation,
 token/cost accounting и active/replan остаются E21.2b+/E21.3;
 вся E21 не завершена. Отчёт: `docs/agent-employee-delivery/E21-budget-ledger.md`.

@@ -159,14 +159,28 @@ async def test_non_durable_agent_turn_blocks_before_every_dispatch(
             )
             == 0
         )
+        # No tool/model dispatch was reserved. Active time is accounted for
+        # every executed attempt and is settled (near zero) for this refusal.
         assert (
             await db.scalar(
                 select(func.count())
                 .select_from(WorkBudgetReservation)
-                .where(WorkBudgetReservation.work_order_id == order_id)
+                .where(
+                    WorkBudgetReservation.work_order_id == order_id,
+                    WorkBudgetReservation.dimension != "active_seconds",
+                )
             )
             == 0
         )
+        active = list(
+            await db.scalars(
+                select(WorkBudgetReservation).where(
+                    WorkBudgetReservation.work_order_id == order_id,
+                    WorkBudgetReservation.dimension == "active_seconds",
+                )
+            )
+        )
+        assert all(row.state == "charged" for row in active)
 
     # A repeated delivery cannot reset the blocked state or open a new attempt.
     assert not await work_orders.execute_claimed_step(
