@@ -340,12 +340,13 @@ async def test_find_active_plan_succeeded_steps_excludes_superseded_plans(db_ses
             },
         ],
     )
-    old_done = next(s for s in old_steps if s.step_key == "old_done")
 
     claimed_old = await claim_ready_step(db_session, worker_id="w1", work_order_id=order.id)
     assert claimed_old is not None
     order_ref, claimed_old_step, old_attempt = claimed_old
-    assert claimed_old_step.id == old_done.id
+    # Both root steps share created_at (one transaction), so either may be
+    # claimed first; whichever it is plays "done", the other stays "ready".
+    assert claimed_old_step.id in {step.id for step in old_steps}
     await complete_attempt(
         db_session,
         order=order_ref,

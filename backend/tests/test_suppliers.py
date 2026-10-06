@@ -224,3 +224,24 @@ async def test_list_sorts_before_paging(client: AsyncClient, db_session):
 
     bad = await client.get("/api/suppliers", params={"sort_by": "inn"})
     assert bad.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_list_counts_suppliers_without_our_buyer_entities(client: AsyncClient, db_session):
+    """Without a role the total also counted buyers: 39 suppliers instead of 35."""
+    db_session.add_all(
+        [
+            Party(name="Поставщик для подсчёта", inn="7700000201", role=PartyRole.supplier),
+            Party(name="Наше юрлицо", inn="7700000202", role=PartyRole.buyer),
+        ]
+    )
+    await db_session.flush()
+
+    default = (await client.get("/api/suppliers", params={"limit": 200})).json()
+    everyone = (await client.get("/api/suppliers", params={"role": "all", "limit": 200})).json()
+
+    assert {item["role"] for item in default["items"]} == {"supplier"}
+    assert default["total"] == everyone["total"] - sum(
+        1 for item in everyone["items"] if item["role"] != "supplier"
+    )
+    assert "Наше юрлицо" in {item["name"] for item in everyone["items"]}

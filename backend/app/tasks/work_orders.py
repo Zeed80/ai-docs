@@ -530,14 +530,18 @@ async def _execute_step_kind(
     raise ValueError(f"Unsupported durable work-step kind: {kind}")
 
 
-async def _attempt_reserved_dispatch(db: Any, work_order_id: uuid.UUID, attempt_id: Any) -> bool:
-    """True when this attempt reserved any tool or model dispatch.
+async def _attempt_reserved_tool_dispatch(
+    db: Any, work_order_id: uuid.UUID, attempt_id: Any
+) -> bool:
+    """True when this attempt reserved a tool dispatch.
 
-    A reservation precedes every physical tool/model call, so its absence
-    proves the attempt never crossed a dispatch boundary. A reservation
-    without a confirmed call still counts as dispatched (conservative).
+    A reservation precedes every physical tool call, so its absence proves
+    the attempt never crossed a boundary with an external effect. A
+    reservation without a confirmed call still counts (conservative). Model
+    calls (``llm:``) are left out: their output is discarded with the
+    attempt, and what they cost is already on the ledger with its receipt.
     """
-    from sqlalchemy import or_, select
+    from sqlalchemy import select
 
     from app.db.work_budget_models import WorkBudgetReservation
 
@@ -546,10 +550,7 @@ async def _attempt_reserved_dispatch(db: Any, work_order_id: uuid.UUID, attempt_
         .where(
             WorkBudgetReservation.work_order_id == work_order_id,
             WorkBudgetReservation.reserved_units > 0,
-            or_(
-                WorkBudgetReservation.operation_key.like(f"tool:{attempt_id}%"),
-                WorkBudgetReservation.operation_key.like(f"llm:{attempt_id}%"),
-            ),
+            WorkBudgetReservation.operation_key.like(f"tool:{attempt_id}%"),
         )
         .limit(1)
     )
@@ -2093,7 +2094,7 @@ async def _execute_claimed_step(
                     exc.code == "budget_execution_inactive"
                     and order.status != "running"
                     and recipient_output is None
-                    and not await _attempt_reserved_dispatch(db, order.id, attempt_id)
+                    and not await _attempt_reserved_tool_dispatch(db, order.id, attempt_id)
                 )
                 if not preempted:
                     order.blocker = error
@@ -2106,9 +2107,11 @@ async def _execute_claimed_step(
                     )
                 # A preempted sibling (the order already left "running", e.g. a
                 # parallel step failed and sent it to replanning) never reached
-                # dispatch: fail only this step. Blocking here turned every
-                # sibling failure into a dead order instead of a replan (live
-                # 2026-10-06).
+                # a tool dispatch: fail only this step. Blocking here turned
+                # every sibling failure into a dead order instead of a replan
+                # (live 2026-10-06), and an owner instruction during a
+                # synthesize step whose model call had returned did the same
+                # (E23b live run).
                 if call_row is not None:
                     call_row.status = (
                         "failed" if recipient_confirmed is not False else "outcome_unknown"

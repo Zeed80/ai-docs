@@ -128,3 +128,40 @@ async def test_reverifying_a_done_step_keeps_a_running_sibling_alive(test_engine
         assert await promote_ready_dependents(db, order=order, plan_id=done.plan_id)
         await db.commit()
         assert order.status == "running"  # the other step is still executing
+
+
+@pytest.mark.asyncio
+async def test_a_model_call_alone_does_not_block_a_preempted_step(test_engine, monkeypatch):
+    """E23b live run: an owner instruction arrived after a synthesize step's
+    model call returned; the order was blocked instead of replanned. A model
+    call has no external effect to reconcile."""
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    monkeypatch.setattr("app.db.session._get_session_factory", lambda: factory)
+    order_id, _first, (_o, step, attempt) = await _two_parallel_steps(factory)
+    async with factory() as db:
+        order = await db.get(WorkOrder, order_id)
+        db.add(
+            WorkBudgetReservation(
+                ledger_id=order.budget_ledger_id,
+                work_order_id=order_id,
+                operation_key=f"llm:{attempt.id}:synthesize:abc",
+                dimension="llm_calls",
+                reserved_units=1,
+                request_digest="0" * 64,
+                binding_digest="0" * 64,
+                state="reserved",
+            )
+        )
+        await db.commit()
+    _sibling_fails_mid_execution(monkeypatch, factory, order_id)
+
+    await execute_claimed_step(
+        step.id, attempt.id, schedule_verification=False, session_factory=factory
+    )
+
+    async with factory() as db:
+        order = await db.get(WorkOrder, order_id)
+        row = await db.get(WorkStep, step.id)
+        assert order.status == "replanning"
+        assert order.blocker is None
+        assert row.state == "failed"

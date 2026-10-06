@@ -276,7 +276,7 @@ capabilities:
           description: "Поисковый запрос (для search)"
         filters:
           type: object
-          description: "Фильтры для list: role (supplier | buyer), limit (не больше 200), offset, sort_by (name | trust_score | total_invoices | total_amount; числа — по убыванию: «у кого больше всего счетов» = sort_by=total_invoices, limit=1). Других фильтров у list нет: поиск по имени или ИНН — action=search"
+          description: "Фильтры для list: role (supplier — по умолчанию, только поставщики | buyer — наши юрлица | all — все контрагенты), limit (не больше 200), offset, sort_by (name | trust_score | total_invoices | total_amount; числа — по убыванию: «у кого больше всего счетов» = sort_by=total_invoices, limit=1). Других фильтров у list нет: поиск по имени или ИНН — action=search"
         body:
           type: object
           description: "Данные для update"

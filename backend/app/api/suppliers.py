@@ -307,7 +307,12 @@ async def get_supplier(
     summary="Skill: supplier.list — List suppliers with trust score and invoice stats.",
 )
 async def list_suppliers_endpoint(
-    role: str | None = Query(None, description="Filter by role: supplier, buyer"),
+    # Suppliers by default: without a role the list (and its total) also
+    # counted our own buyer entities, so "how many suppliers" came out as 39
+    # instead of 35 (live 2026-10-06). "all" lists every party.
+    role: Literal["supplier", "buyer", "all"] = Query(
+        "supplier", description="Filter by role: supplier (default), buyer, all"
+    ),
     limit: int = Query(50, le=200),
     offset: int = 0,
     sort_by: Literal["name", "trust_score", "total_invoices", "total_amount"] = Query(
@@ -317,14 +322,9 @@ async def list_suppliers_endpoint(
 ):
     """Skill: supplier.list — List suppliers/parties with trust score and invoice aggregates."""
     query = select(Party).options(selectinload(Party.profile))
-    if role:
-        try:
-            query = query.where(Party.role == PartyRole(role))
-        except ValueError:
-            pass
-    count_q = select(func.count()).select_from(
-        select(Party).where(Party.role == PartyRole(role) if role else True).subquery()
-    )
+    role_filter = Party.role == PartyRole(role) if role != "all" else True
+    query = query.where(role_filter)
+    count_q = select(func.count()).select_from(select(Party).where(role_filter).subquery())
     total = (await db.execute(count_q)).scalar() or 0
     # Sort in SQL before paging: sorting the page afterwards made
     # sort_by=total_invoices&limit=1 return the alphabetically first supplier
