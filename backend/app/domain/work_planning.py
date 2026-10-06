@@ -169,12 +169,28 @@ def _action_names(capability: CapabilityDefinition) -> set[str]:
     }
 
 
-def validate_capability_plan(plan: PlannedWork) -> PlannedWork:
+def validate_capability_plan(
+    plan: PlannedWork, *, satisfied_keys: frozenset[str] | set[str] = frozenset()
+) -> PlannedWork:
+    """Validate a planned DAG against the live manifest.
+
+    ``satisfied_keys`` are steps that already succeeded in earlier revisions:
+    a replan must not repeat them, so a dependency on one is already met and
+    is dropped. Rejecting it made every replan with a final synthesize step
+    invalid, and keeping it would leave the step pending forever (live
+    2026-10-06).
+    """
     manifest = load_capability_manifest()
     capabilities = manifest.by_name
     keys = {step.step_key for step in plan.steps}
     if len(keys) != len(plan.steps):
         raise ValueError("planner returned duplicate step keys")
+    for step in plan.steps:
+        step.depends_on = [
+            dependency
+            for dependency in step.depends_on
+            if dependency in keys or dependency not in satisfied_keys
+        ]
     for step in plan.steps:
         unknown = set(step.depends_on) - keys
         if unknown or step.step_key in step.depends_on:
@@ -334,7 +350,14 @@ not_found entry's "attempts" lists what was actually tried and how each attempt 
         budget_context=budget_context,
     )
     try:
-        return validate_capability_plan(PlannedWork.model_validate(raw))
+        return validate_capability_plan(
+            PlannedWork.model_validate(raw),
+            satisfied_keys={
+                str(item.get("step_key"))
+                for item in completed_context or []
+                if isinstance(item, dict) and item.get("step_key")
+            },
+        )
     except (ValidationError, ValueError) as exc:
         raise ValueError(f"planner produced an invalid capability DAG: {exc}") from exc
 

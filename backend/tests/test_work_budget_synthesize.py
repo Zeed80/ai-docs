@@ -174,3 +174,37 @@ def test_small_outputs_are_unchanged_and_large_text_is_marked():
     assert _compact_for_synthesis(chat, 24_000) == chat
     big = _compact_for_synthesis({"text": "я" * 5000}, 1000)
     assert big["truncated"] is True and big["full_length"] > 1000
+
+
+def test_replan_may_depend_on_steps_that_already_succeeded():
+    from app.domain.work_planning import PlannedWork, validate_capability_plan
+
+    def plan(depends_on):
+        return PlannedWork(
+            assumptions=[],
+            steps=[
+                PlannedStep(
+                    step_key="get_suppliers",
+                    title="s",
+                    kind="capability",
+                    capability="suppliers",
+                    action="list",
+                    input={},
+                ),
+                PlannedStep(
+                    step_key="answer",
+                    title="a",
+                    kind="synthesize",
+                    input={},
+                    depends_on=depends_on,
+                ),
+            ],
+            verification_plan={},
+        )
+
+    checked = validate_capability_plan(
+        plan(["get_suppliers", "get_invoices"]), satisfied_keys={"get_invoices"}
+    )
+    assert checked.steps[1].depends_on == ["get_suppliers"]
+    with pytest.raises(ValueError, match="invalid dependencies"):
+        validate_capability_plan(plan(["never_ran"]), satisfied_keys={"get_invoices"})
