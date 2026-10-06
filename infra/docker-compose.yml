@@ -783,24 +783,49 @@ services:
         set +a
         # REINSTALL is one-shot: drop it so the next restart just serves.
         [ -f /data/aiw.env ] && sed -i '/^REINSTALL=/d' /data/aiw.env
+        case "$${FAMILY:-qwen}" in qwen) prefix="" ;; *) prefix="$${FAMILY}-" ;; esac
+        tag="$${prefix}$$(printf '%s' "$${MODEL:-IQ2_XS}" | tr 'A-Z' 'a-z')"
+        # Setup only: Strata's entrypoint minus its final "start the server" line.
+        sed 's|^exec .venv/bin/python setup.py "\$$@"$$|exit 0|' docker-entrypoint.sh > /tmp/install-only.sh
+        grep -q '^exit 0$$' /tmp/install-only.sh || { echo "install-only: entrypoint changed"; exit 1; }
         if [ "$${INSTALL_ONLY:-0}" = "1" ]; then
-          # Download/setup only, then exit: Strata's entrypoint minus its
-          # final "start the server" line. The GPU stays with Ollama meanwhile.
-          sed 's|^exec .venv/bin/python setup.py "\$$@"$$|exit 0|' docker-entrypoint.sh > /tmp/install-only.sh
-          grep -q '^exit 0$$' /tmp/install-only.sh || { echo "install-only: entrypoint changed"; exit 1; }
+          # Download/setup only, then exit. The GPU stays with Ollama meanwhile.
           exec sh /tmp/install-only.sh
         fi
+        # A setup pass (new quant, or REINSTALL after a context/images change)
+        # rewrites the run config, so it runs first and on its own: the
+        # residency keys below must land in the config it writes, or Strata
+        # stops unloading when idle after a context change.
+        if [ "$${REINSTALL:-0}" = "1" ] || [ ! -f "/data/config/strata-$$tag.json" ]; then
+          sh /tmp/install-only.sh || exit 1
+        fi
+        export REINSTALL=0
         # Several quants installed: setup.py starts "the newest strata-*.json"
         # and, with more than one in /opt/strata, ASKS which — no TTY, so the
         # start failed (live, after IQ2_XS joined IQ3_S). Keep only the chosen
         # quant's link; the canonical copies live in /data/config.
-        case "$${FAMILY:-qwen}" in qwen) prefix="" ;; *) prefix="$${FAMILY}-" ;; esac
-        tag="$${prefix}$$(printf '%s' "$${MODEL:-IQ2_XS}" | tr 'A-Z' 'a-z')"
         for f in /opt/strata/strata-*.json; do
           [ -e "$$f" ] || [ -L "$$f" ] || continue
           [ "$$(basename "$$f")" = "strata-$$tag.json" ] && continue
           rm -f "$$f"
         done
+        # Residency keys (idle unload, ComfyUI hand-off) from the backend's
+        # /data/aiw-runtime.json "config_keys": null removes a key.
+        .venv/bin/python - "$$tag" <<'PY'
+        import json, pathlib, sys
+        cfg = pathlib.Path(f"/data/config/strata-{sys.argv[1]}.json")
+        rt = pathlib.Path("/data/aiw-runtime.json")
+        if cfg.exists() and rt.exists():
+            keys = json.loads(rt.read_text()).get("config_keys") or {}
+            c = json.loads(cfg.read_text())
+            for k, v in keys.items():
+                if v is None:
+                    c.pop(k, None)
+                else:
+                    c[k] = v
+            cfg.write_text(json.dumps(c, indent=1))
+            print(f"[aiw] residency keys applied to {cfg.name}: {sorted(keys)}")
+        PY
         exec ./docker-entrypoint.sh
     networks:
       - app

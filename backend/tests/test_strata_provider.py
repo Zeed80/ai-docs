@@ -426,3 +426,23 @@ def test_delete_quant_removes_only_its_own_files(tmp_path, monkeypatch):
 
     with pytest.raises(strata_manager.StrataError, match="не скачана"):
         asyncio.run(strata_manager.delete_quant("IQ3_S"))
+
+
+def test_runtime_file_carries_ready_config_keys_for_the_container(tmp_path, monkeypatch):
+    """A context change re-runs Strata's setup, which rewrites the run config.
+
+    The container merges these keys back at every start; without them the
+    model would stop unloading when idle after such a change.
+    """
+    monkeypatch.setenv("STRATA_DATA_DIR", str(tmp_path))
+    strata_manager.write_runtime(idle_unload_s=600, free_comfyui=True)
+    body = json.loads((tmp_path / "aiw-runtime.json").read_text())
+    keys = body["config_keys"]
+    assert keys["idle_unload_s"] == 600
+    assert keys["min_free_vram_mib"] == 12000
+    assert keys["before_load"][-1].endswith("/free")
+
+    strata_manager.write_runtime(idle_unload_s=0, free_comfyui=True)
+    keys = json.loads((tmp_path / "aiw-runtime.json").read_text())["config_keys"]
+    assert keys == {"idle_unload_s": None, "min_free_vram_mib": None, "before_load": None}
+    assert strata_manager.read_runtime()["idle_unload_s"] == 0

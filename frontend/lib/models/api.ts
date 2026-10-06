@@ -9,7 +9,7 @@
  */
 
 import { getApiBaseUrl } from "@/lib/api-base";
-import { csrfHeaders } from "@/lib/auth";
+import { csrfHeaders, redirectToLogin } from "@/lib/auth";
 import type {
   AssignmentDraft,
   CatalogModel,
@@ -51,6 +51,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...init?.headers,
     },
   });
+
+  if (res.status === 401) {
+    // Сессия истекла (токен Authentik живёт час). Как в общем apiFetch — на
+    // вход; иначе истёкшая сессия выглядела как «Не удалось сохранить
+    // настройки» и тому подобные ошибки конкретной кнопки.
+    redirectToLogin();
+  }
 
   if (!res.ok) {
     // detail сервера бывает и строкой, и объектом — до сих пор его показывали

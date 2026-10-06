@@ -176,13 +176,35 @@ def write_runtime(*, idle_unload_s: int, free_comfyui: bool) -> dict:
     if idle_unload_s not in IDLE_CHOICES:
         raise StrataError(f"Простой должен быть одним из {', '.join(map(str, IDLE_CHOICES))} с")
     runtime = {**read_runtime(), "idle_unload_s": idle_unload_s, "free_comfyui": free_comfyui}
+    _save_runtime(runtime)
+    return runtime
+
+
+def _save_runtime(runtime: dict) -> None:
+    """Persist the settings plus the ready-made config keys.
+
+    The container merges ``config_keys`` into the run config on every start
+    (see the strata service command), including right after a setup pass that
+    rewrote the config — a context change would otherwise drop them.
+    """
     path = data_dir() / RUNTIME_FILE_NAME
     if not path.parent.is_dir():
         raise StrataError(f"Том Strata не подключён к бэкенду ({path.parent}).")
+    body = {k: runtime[k] for k in DEFAULT_RUNTIME}
+    body["config_keys"] = _config_keys(body)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(runtime, indent=1), encoding="utf-8")
+    tmp.write_text(json.dumps(body, indent=1), encoding="utf-8")
     tmp.replace(path)
-    return runtime
+
+
+def _config_keys(runtime: dict) -> dict:
+    """Run-config keys for these settings; None means "remove the key"."""
+    idle = int(runtime["idle_unload_s"])
+    return {
+        "idle_unload_s": idle or None,
+        "min_free_vram_mib": int(runtime["min_free_vram_mib"]) if idle else None,
+        "before_load": _comfyui_free_command() if idle and runtime["free_comfyui"] else None,
+    }
 
 
 def _comfyui_free_command() -> list[str]:
@@ -202,6 +224,11 @@ def apply_runtime_keys() -> list[str]:
     restart. Returns the quants whose config changed.
     """
     runtime = read_runtime()
+    keys = _config_keys(runtime)
+    try:
+        _save_runtime(runtime)  # the container re-applies these at every start
+    except StrataError as exc:
+        logger.warning("strata_runtime_file_unwritable", error=str(exc)[:200])
     changed: list[str] = []
     for model in installed_quants():
         path = data_dir() / "config" / f"strata-{_tag(model)}.json"
@@ -211,17 +238,11 @@ def apply_runtime_keys() -> list[str]:
             logger.warning("strata_config_unreadable", path=str(path), error=str(exc)[:200])
             continue
         new = dict(cfg)
-        idle = int(runtime["idle_unload_s"])
-        if idle:
-            new["idle_unload_s"] = idle
-            new["min_free_vram_mib"] = int(runtime["min_free_vram_mib"])
-        else:
-            new.pop("idle_unload_s", None)
-            new.pop("min_free_vram_mib", None)
-        if idle and runtime["free_comfyui"]:
-            new["before_load"] = _comfyui_free_command()
-        else:
-            new.pop("before_load", None)
+        for key, value in keys.items():
+            if value is None:
+                new.pop(key, None)
+            else:
+                new[key] = value
         if new != cfg:
             tmp = path.with_suffix(".tmp")
             tmp.write_text(json.dumps(new, indent=1), encoding="utf-8")
