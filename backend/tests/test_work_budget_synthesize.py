@@ -151,3 +151,26 @@ async def test_exploratory_synthesis_keeps_the_coverage_report(test_engine, monk
 def test_planner_accepts_a_synthesize_step():
     step = PlannedStep(step_key="answer", title="Итог", kind="synthesize", input={})
     assert step.kind == "synthesize"
+
+
+def test_compaction_keeps_the_true_total_and_says_what_was_left_out():
+    from app.tasks.work_orders import _compact_for_synthesis
+
+    rows = [{"name": f"Поставщик {i}", "note": "x" * 200} for i in range(39)]
+    capability_output = {
+        "executor": "capability",
+        "result": {"version": 1, "status": "succeeded", "data": {"items": rows, "total": 39}},
+    }
+    view = _compact_for_synthesis(capability_output, 1500)
+    assert view["total"] == 39
+    assert 0 < len(view["items_shown"]) < 39
+    assert view["items_omitted"] == 39 - len(view["items_shown"])
+
+
+def test_small_outputs_are_unchanged_and_large_text_is_marked():
+    from app.tasks.work_orders import _compact_for_synthesis
+
+    chat = {"text": "Готово", "executor": "durable_chat", "verification_evidence": []}
+    assert _compact_for_synthesis(chat, 24_000) == chat
+    big = _compact_for_synthesis({"text": "я" * 5000}, 1000)
+    assert big["truncated"] is True and big["full_length"] > 1000

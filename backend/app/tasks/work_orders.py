@@ -555,6 +555,63 @@ async def _attempt_reserved_dispatch(db: Any, work_order_id: uuid.UUID, attempt_
 
 
 _SYNTHESIS_MAX_INPUT_CHARS = 12_000
+_VERIFIER_EVIDENCE_CHARS = 24_000
+_SYNTHESIS_ROW_CHARS = 300
+_LIST_KEYS = ("items", "rows", "results", "data")
+
+
+def _compact_for_synthesis(output: Any, budget: int) -> Any:
+    """Bounded view of a step output that never hides how much was left out.
+
+    Plain truncation fed the model the first 1500 characters of a 25 KB
+    supplier list and a 728 KB invoice list; it counted 7 suppliers instead
+    of 39 and invented a per-supplier invoice count (live 2026-10-06). Lists
+    keep their true total, a few compact rows and an explicit omitted count.
+    """
+    value = output
+    for _ in range(3):  # unwrap {"result": ...} and the ToolResult v1 envelope
+        if (
+            isinstance(value, dict)
+            and set(value) & {"result", "data"}
+            and not any(isinstance(value.get(k), list) for k in _LIST_KEYS)
+        ):
+            inner = value.get("result", value.get("data"))
+            if isinstance(inner, dict):
+                value = inner
+                continue
+        break
+    if isinstance(value, dict):
+        list_key = next((k for k in _LIST_KEYS if isinstance(value.get(k), list)), None)
+        if list_key is not None:
+            rows = value[list_key]
+            declared = value.get("total")
+            total = (
+                declared
+                if isinstance(declared, int) and not isinstance(declared, bool)
+                else len(rows)
+            )
+            shown: list[str] = []
+            used = 0
+            for row in rows:
+                text = json.dumps(row, ensure_ascii=False, default=str)[:_SYNTHESIS_ROW_CHARS]
+                if used + len(text) > budget:
+                    break
+                shown.append(text)
+                used += len(text)
+            return {
+                "total": total,
+                "items_shown": shown,
+                "items_omitted": max(0, total - len(shown)),
+                **{
+                    k: v
+                    for k, v in value.items()
+                    if k != list_key and isinstance(v, (str, int, float, bool))
+                },
+            }
+    text = json.dumps(value, ensure_ascii=False, default=str)
+    if len(text) <= budget:
+        return value
+    return {"truncated_text": text[:budget], "truncated": True, "full_length": len(text)}
 
 
 async def _execute_synthesize(
@@ -575,7 +632,6 @@ async def _execute_synthesize(
     from app.db.models import WorkOrder, WorkStep
     from app.db.session import _get_session_factory
     from app.domain.work_orders import is_exploratory
-    from app.domain.work_planning import _summarize_step_output
 
     if budget_context is None:
         raise RuntimeError("synthesize_requires_budget_context")
@@ -596,13 +652,16 @@ async def _execute_synthesize(
         )
         objective = order.objective
         exploratory = is_exploratory(order)
+        per_step = max(1500, _SYNTHESIS_MAX_INPUT_CHARS // max(1, len(steps)))
         results = [
-            {"step_key": s.step_key, "title": s.title, "output": _summarize_step_output(s)}
+            {
+                "step_key": s.step_key,
+                "title": s.title,
+                "output": _compact_for_synthesis(s.output, per_step),
+            }
             for s in steps
         ]
     results_json = json.dumps(results, ensure_ascii=False, default=str)
-    if len(results_json) > _SYNTHESIS_MAX_INPUT_CHARS:
-        results_json = results_json[:_SYNTHESIS_MAX_INPUT_CHARS] + " …[усечено]"
     shape = (
         '{"text": <ответ>, "coverage": {"covered": [...], "partial": [...], '
         '"not_found": [{"item": ..., "reason": ..., "attempts": [...]}]}}'
@@ -612,7 +671,11 @@ async def _execute_synthesize(
     system = (
         "Ты пишешь итоговый ответ по завершённой задаче на русском языке. Используй "
         "только переданные результаты шагов; ничего не выдумывай, недостающее назови "
-        f"прямо. Верни только JSON вида {shape}."
+        "прямо. Списки могут быть показаны частично: «total» — полное число записей, "
+        "«items_omitted» — сколько строк не показано. Никогда не считай записи по "
+        "показанным строкам, если items_omitted > 0: бери total. Если для ответа нужны "
+        "все строки (например, подсчёт или сравнение по полю), а они показаны не все, "
+        f"прямо скажи, что данных для этого недостаточно. Верни только JSON вида {shape}."
     )
     prompt = json.dumps(
         {
@@ -940,7 +1003,18 @@ async def _read_verifier_snapshot(
             }
             for row in criteria
         ],
-        "outputs": [{"step": row.step_key, "output": row.output} for row in steps],
+        # Full outputs reached hundreds of KB (a 728 KB invoice list) and the
+        # local model judged whatever fit its window; a wrong count passed.
+        # Same bounded, omission-explicit view the synthesize step uses.
+        "outputs": [
+            {
+                "step": row.step_key,
+                "output": _compact_for_synthesis(
+                    row.output, max(2000, _VERIFIER_EVIDENCE_CHARS // max(1, len(steps)))
+                ),
+            }
+            for row in steps
+        ],
     }
     identity = {
         "work_order_id": str(order.id),
