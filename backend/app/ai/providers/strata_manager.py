@@ -70,7 +70,9 @@ QUANTS: dict[str, dict] = {
 # IQ2_XS: measured 2026-10-06 on the RTX 3090 + 59 GB, ~1.5x IQ3_S's decode
 # speed with the same results on known-answer tasks, half the disk (66 GB).
 DEFAULT_QUANT = "IQ2_XS"
-CONTEXTS = (32768, 65536, 131072)
+# 262144 is the model's trained length (no rope scaling); its KV cache takes
+# ~3.6 GB more than 128K, which comes out of the GPU's expert cache.
+CONTEXTS = (32768, 65536, 131072, 262144)
 DEFAULT_CONTEXT = 65536
 # The MTP draft layer (~6 GB) and, with images, the encoder (~1 GB) come on
 # top of the model download on the first start.
