@@ -405,19 +405,12 @@ async def approve_invoice(
             )
             db.add(entry)
 
-    # Update supplier profile stats
+    # Update supplier profile stats: a recount, never += 1 (approved-document
+    # processing counted the same invoice again; see domain.supplier_stats).
     if invoice.supplier_id:
-        from app.db.models import SupplierProfile
+        from app.domain.supplier_stats import recompute_supplier_profile
 
-        profile_result = await db.execute(
-            select(SupplierProfile).where(SupplierProfile.party_id == invoice.supplier_id)
-        )
-        profile = profile_result.scalar_one_or_none()
-        if profile:
-            profile.total_invoices += 1
-            if invoice.total_amount:
-                profile.total_amount += invoice.total_amount
-            profile.last_invoice_date = invoice.invoice_date or invoice.created_at
+        await recompute_supplier_profile(db, invoice.supplier_id)
 
     await log_action(
         db,

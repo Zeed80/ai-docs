@@ -598,10 +598,19 @@ def _compact_for_synthesis(output: Any, budget: int) -> Any:
                     break
                 shown.append(text)
                 used += len(text)
+            omitted = max(0, total - len(shown))
             return {
                 "total": total,
                 "items_shown": shown,
-                "items_omitted": max(0, total - len(shown)),
+                "items_omitted": omitted,
+                **(
+                    {
+                        "note": "Показаны не все строки: максимум, минимум, сумму или "
+                        "подсчёт по полю по ним определить нельзя."
+                    }
+                    if omitted
+                    else {}
+                ),
                 **{
                     k: v
                     for k, v in value.items()

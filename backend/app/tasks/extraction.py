@@ -2057,23 +2057,11 @@ def process_approved_document(self, document_id: str) -> dict:
                     )
                     db.add(profile)
                 db.flush()
-                profile.total_invoices = (profile.total_invoices or 0) + 1
-                if invoice.total_amount:
-                    profile.total_amount = (profile.total_amount or 0.0) + float(
-                        invoice.total_amount
-                    )
-                if invoice.invoice_date:
-                    # Compare tz-safely: a stored date read back without tzinfo (e.g.
-                    # from a backend that drops it) must not raise against the
-                    # tz-aware parsed invoice_date.
-                    _inv_dt = invoice.invoice_date
-                    _last_dt = profile.last_invoice_date
-                    if _inv_dt.tzinfo is None:
-                        _inv_dt = _inv_dt.replace(tzinfo=UTC)
-                    if _last_dt is not None and _last_dt.tzinfo is None:
-                        _last_dt = _last_dt.replace(tzinfo=UTC)
-                    if _last_dt is None or _inv_dt > _last_dt:
-                        profile.last_invoice_date = invoice.invoice_date
+                # Recount from invoices instead of += 1: approval and this
+                # processing both incremented, and reprocessing added more.
+                from app.domain.supplier_stats import recompute_supplier_profile_sync
+
+                recompute_supplier_profile_sync(db, supplier_party_id)
 
         # memory_graph and embedding run for all approved docs (even without extraction)
 
