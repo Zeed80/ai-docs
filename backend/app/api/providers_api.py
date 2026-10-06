@@ -893,6 +893,15 @@ async def _ollama_show_capabilities(
 # call must be bit-for-bit reproducible so a difference between levels is
 # only ever attributable to the level itself, never sampling noise.
 _LEVEL_PROBE_PROMPT = "Explain briefly why the sky is blue."
+# Sentinel: the server answered, and its chat template refused the level.
+_LEVEL_REJECTED = "\x00level-rejected"
+
+
+def _template_rejects_level(body: str) -> bool:
+    text = (body or "").lower()
+    return "reasoning effort" in text or "raise_exception" in text or "think value" in text
+
+
 _LEVEL_PROBE_OPTIONS = {"temperature": 0, "seed": 42, "num_predict": 200}
 
 
@@ -940,6 +949,8 @@ async def _ollama_probe_thinking_levels(base_url: str, provider_model: str) -> b
                         "options": _LEVEL_PROBE_OPTIONS,
                     },
                 )
+                if resp.status_code >= 400 and _template_rejects_level(resp.text):
+                    return _LEVEL_REJECTED
                 resp.raise_for_status()
                 return (resp.json().get("message") or {}).get("thinking") or ""
         except Exception:
@@ -948,12 +959,81 @@ async def _ollama_probe_thinking_levels(base_url: str, provider_model: str) -> b
     low = await _call("low")
     if low is None:
         return None  # infra failure — retry later, don't cache a verdict
+    if low is _LEVEL_REJECTED:
+        return False
     high = await _call("high")
     if high is None:
         return None
+    if high is _LEVEL_REJECTED:
+        # The chat template itself refuses the level ("Unexpected reasoning
+        # effort ..."): a deterministic answer, not an outage. Treated as an
+        # outage it was never cached, and every open of the Assignment tab
+        # re-ran two 27B generations per node — 130 s (live, 2026-10-06).
+        return False
     if not low and not high:
         return False  # thinking didn't engage at all — nothing to differentiate
     return low != high
+
+
+# The level probe costs two real generations (a cold 27B load included), so it
+# never runs inside a page request: live-models only schedules it. One probe per
+# model at a time; a failed one waits out a cooldown instead of re-running on
+# every poll; none runs on the GPU node while the GPU belongs to Strata.
+_LEVEL_PROBE_TASKS: dict[str, asyncio.Task] = {}
+_LEVEL_PROBE_COOLDOWN_S = 6 * 3600
+_LEVEL_PROBE_COOLDOWN_KEY = "thinking_level_probe:cooldown:{}"
+
+
+def _level_probe_cooling_down(key: str) -> bool:
+    try:
+        from app.utils.redis_client import get_sync_redis
+
+        return bool(get_sync_redis().exists(_LEVEL_PROBE_COOLDOWN_KEY.format(key)))
+    except Exception:  # noqa: BLE001 — unknown: do not hammer the GPU
+        return True
+
+
+async def _run_level_probe(key: str, base_url: str, provider_model: str) -> None:
+    from app.ai.model_registry import set_thinking_override
+    from app.db.session import _get_session_factory
+
+    try:
+        result = await _ollama_probe_thinking_levels(base_url, provider_model)
+        if result is None:
+            from app.utils.redis_client import get_sync_redis
+
+            get_sync_redis().set(
+                _LEVEL_PROBE_COOLDOWN_KEY.format(key), "1", ex=_LEVEL_PROBE_COOLDOWN_S
+            )
+            logger.info("thinking_level_probe_deferred", model=key)
+            return
+        levels = ["low", "medium", "high"] if result else []
+        set_thinking_override(key, levels=levels)
+        async with _get_session_factory()() as db:
+            await model_runtime_store.persist_model_override(
+                db, model_key=key, thinking_levels=levels
+            )
+            await db.commit()
+            await model_runtime_store.hydrate_runtime_cache(db)
+        logger.info("thinking_level_probe_done", model=key, levels=levels)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("thinking_level_probe_failed", model=key, error=str(exc)[:200])
+    finally:
+        _LEVEL_PROBE_TASKS.pop(key, None)
+
+
+def _schedule_level_probe(key: str, base_url: str, provider_model: str) -> bool:
+    from app.ai import gpu_runtime
+
+    task = _LEVEL_PROBE_TASKS.get(key)
+    if task is not None and not task.done():
+        return False
+    if _level_probe_cooling_down(key):
+        return False
+    if gpu_runtime.current_owner() == gpu_runtime.STRATA and gpu_runtime.is_gpu_ollama(base_url):
+        return False
+    _LEVEL_PROBE_TASKS[key] = asyncio.create_task(_run_level_probe(key, base_url, provider_model))
+    return True
 
 
 async def _node_loaded_models(resolved) -> list[tuple[str, float | None]]:
@@ -1012,12 +1092,8 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
     # Discovered models to persist once after the scan (race-safe upsert, single
     # commit) — never write/commit per-iteration inside this GET.
     discovered_to_persist: list[dict] = []
-    # Live-probed thinking-level determinations to persist once after the
-    # scan, via the thinking-override path (the only one that can attach a
-    # level result to a model_registry.yaml-defined entry — see
-    # _ollama_probe_thinking_levels and the unified post-`if hit:` check
-    # below, which covers BOTH curated and newly-discovered models).
-    level_overrides_to_persist: list[dict] = []
+    # key → nodes that serve it, for the background thinking-level probe.
+    probe_nodes: dict[str, list[tuple[str, str]]] = {}
 
     # 1) Live local nodes.
     local_kinds = [
@@ -1146,23 +1222,9 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
                     # catalog overlay uses setdefault, so YAML always
                     # wins there and a plain overlay write would be
                     # silently ignored for an already-YAML-defined key).
-                    probe_result = await _ollama_probe_thinking_levels(
-                        inst.base_url, cap.provider_model
-                    )
-                    if probe_result is not None:
-                        levels = ["low", "medium", "high"] if probe_result else []
-                        from app.ai.model_registry import set_thinking_override
-
-                        set_thinking_override(key, levels=levels)
-                        level_overrides_to_persist.append(
-                            {"model_key": key, "thinking_levels": levels}
-                        )
-                        cap = cap.model_copy(
-                            update={"thinking_levels": levels, "thinking_levels_probed": True}
-                        )
-                        registry.models[key] = cap
-                        by_pm[(kind.value, pm)] = (key, cap)
-                    # else: infra hiccup — leave unprobed, retry next poll.
+                    # Collected, not awaited: the probe runs in the background
+                    # after the scan (see _schedule_level_probe).
+                    probe_nodes.setdefault(key, []).append((inst.base_url, cap.provider_model))
                 out[key] = LiveModelOut(
                     key=key,
                     provider=kind.value,
@@ -1267,6 +1329,15 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
             **_capability_facts(cap),
         )
 
+    # One background probe per model, on the GPU node when it has the model
+    # (an 18 GB load on the CPU node's RAM is the expensive way to ask).
+    from app.ai import gpu_runtime
+
+    for key, nodes in probe_nodes.items():
+        gpu_nodes = [n for n in nodes if gpu_runtime.is_gpu_ollama(n[0])]
+        base_url, provider_model = (gpu_nodes or nodes)[0]
+        _schedule_level_probe(key, base_url, provider_model)
+
     # Persist newly-discovered models once (race-safe upsert + single commit).
     # Best-effort: a GET must still return the list even if the write fails.
     if discovered_to_persist:
@@ -1278,19 +1349,6 @@ async def live_models(db: AsyncSession = Depends(get_db)) -> list[LiveModelOut]:
         except Exception as exc:  # noqa: BLE001
             await db.rollback()
             logger.warning("live_models_discovery_persist_failed", error=str(exc))
-
-    # Persist live-probed thinking-level determinations once (covers curated
-    # model_registry.yaml entries too — see the unified probe point above).
-    # Best-effort, same as the catalog persist above.
-    if level_overrides_to_persist:
-        try:
-            for entry in level_overrides_to_persist:
-                await model_runtime_store.persist_model_override(db, **entry)
-            await db.commit()
-            await model_runtime_store.hydrate_runtime_cache(db)
-        except Exception as exc:  # noqa: BLE001
-            await db.rollback()
-            logger.warning("live_models_level_probe_persist_failed", error=str(exc))
 
     return list(out.values())
 
