@@ -156,7 +156,12 @@ models:
     supports_structured_output: true
     supports_tool_calling: true
     thinking_supported: true
-    thinking_enabled: false
+    # Low reasoning by default: measured 2026-10-06, with reasoning off the
+    # model answered a two-step arithmetic question wrong (1332 instead of
+    # 431) in 0.7 s; "low" got it right in 6.8 s. Slots with an explicit
+    # off keep it off.
+    thinking_enabled: true
+    thinking_level_default: "low"
     local_only: true
     # Dense weights + KV + the image encoder; the GPU's free rest is filled
     # with an expert cache, so in practice Strata takes the whole card.
