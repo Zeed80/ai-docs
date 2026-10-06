@@ -78,7 +78,7 @@ class PlannedChildSpec(BaseModel):
 class PlannedStep(BaseModel):
     step_key: str = Field(pattern=r"^[a-zA-Z0-9_-]+$", max_length=120)
     title: str = Field(min_length=1, max_length=500)
-    kind: str = Field(pattern="^(capability|agent_turn|decompose)$")
+    kind: str = Field(pattern="^(capability|agent_turn|decompose|synthesize)$")
     capability: str | None = None
     action: str | None = None
     input: dict[str, Any] = Field(default_factory=dict)
@@ -184,7 +184,7 @@ def validate_capability_plan(plan: PlannedWork) -> PlannedWork:
             # can only fail. Reject the plan so the model sees why and replans.
             raise ValueError(
                 f"step {step.step_key}: agent_turn is not executable in durable work; "
-                "use capability steps (or decompose)"
+                "use capability, decompose or synthesize steps"
             )
         if step.kind != "capability":
             continue
@@ -258,8 +258,10 @@ async def generate_capability_plan(
     )
     system = """You are a durable task planner. Return JSON only.
 Build the smallest executable DAG using only listed capability/action pairs. Each external
-operation is one capability step. Step kinds are "capability" and "decompose" only; there is
-no free-form agent_turn step. Pass data between steps with exact references like
+operation is one capability step. Step kinds are "capability", "decompose" and "synthesize";
+there is no free-form agent_turn step. When the objective needs a written answer, end with one
+"synthesize" step (input {"instruction": what to write}, depends_on the steps it summarizes):
+it writes the final text from completed step results, without tools. Pass data between steps with exact references like
 ${steps.lookup.output.result.items}. Never repeat completed work during replanning.
 Schema: {assumptions:[string], steps:[{step_key,title,kind,capability?,action?,input,
 depends_on,success_predicate,risk_level,max_attempts,timeout_seconds}],
@@ -275,8 +277,9 @@ verification_plan:{mode,checks}}. Gated actions must be high risk."""
 Your previous plan JSON for this order was REJECTED: {planner_error_context[:300]}
 You MUST return a JSON object matching exactly the Schema above — never a bare {{"text": ...}}
 or {{"result": ...}} conversational reply, even if the objective feels finished or you only
-have a short answer to give. Use only "capability" or "decompose" steps — never a top-level
-free-form object instead of {{assumptions, steps, verification_plan}}."""
+have a short answer to give. If nothing more needs doing, plan a single "synthesize" step
+with the final answer as its instruction — never a top-level free-form object instead of
+{{assumptions, steps, verification_plan}}."""
     if is_exploratory(order):
         # Ф1.A (AGENT_AUTONOMY_ROADMAP.md): constraints.mode="exploratory" is
         # already visible to the model inside the prompt JSON above — this
@@ -316,8 +319,8 @@ the correct response is usually to retry with an adjusted approach, not to conce
 item. Only report an item as not_found after multiple, genuinely different attempts have
 failed — an independent verifier checks that each not_found entry reflects real varied
 effort, not a first-attempt bailout, and will reject the report otherwise. The plan's final
-step (of the whole objective, once every unit is covered or genuinely exhausted) must
-produce output shaped exactly {"text": <human summary>, "coverage": {"covered": [...],
+step (of the whole objective, once every unit is covered or genuinely exhausted) is a
+"synthesize" step and must produce output shaped exactly {"text": <human summary>, "coverage": {"covered": [...],
 "partial": [...], "not_found": [{"item":..., "reason":..., "attempts":[...]}, ...]}} — each
 not_found entry's "attempts" lists what was actually tried and how each attempt failed."""
     raw = await generate_json(

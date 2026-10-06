@@ -506,6 +506,10 @@ async def _execute_step_kind(
         # WorkOrder ledger or recipient checkpoint. Keep direct/internal calls
         # fail-closed as defense in depth.
         raise RuntimeError("headless_agent_turn_requires_durable_intake")
+    if kind == "synthesize":
+        if work_order_id is None:
+            raise ValueError("synthesize step requires its work order")
+        return await _execute_synthesize(work_order_id, input_data, budget_context=budget_context)
     if kind == "capability":
         if not capability or not action:
             raise ValueError("capability step requires capability and action")
@@ -522,6 +526,96 @@ async def _execute_step_kind(
             raise ValueError("decompose step requires work_order_id")
         return await _execute_decompose(work_order_id, input_data)
     raise ValueError(f"Unsupported durable work-step kind: {kind}")
+
+
+_SYNTHESIS_MAX_INPUT_CHARS = 12_000
+
+
+async def _execute_synthesize(
+    work_order_id: uuid.UUID, input_data: dict[str, Any], *, budget_context: Any | None
+) -> dict:
+    """E21.3c: write the final answer of a work order from its step results.
+
+    One local model call without tools, through the direct-text budget
+    boundary of the claimed attempt (shared ledger, usage receipt, fail-closed
+    for non-local providers). Only completed step results are supplied, each
+    already bounded by ``_summarize_step_output``.
+    """
+    from sqlalchemy import select
+
+    from app.ai import ollama_client
+    from app.ai.model_resolver import get_reasoning_model
+    from app.ai.work_budget_context import bind_airouter_budget_context
+    from app.db.models import WorkOrder, WorkStep
+    from app.db.session import _get_session_factory
+    from app.domain.work_orders import is_exploratory
+    from app.domain.work_planning import _summarize_step_output
+
+    if budget_context is None:
+        raise RuntimeError("synthesize_requires_budget_context")
+    async with _get_session_factory()() as db:
+        order = await db.get(WorkOrder, work_order_id)
+        if order is None:
+            raise ValueError(f"work order {work_order_id} not found")
+        steps = list(
+            await db.scalars(
+                select(WorkStep)
+                .where(
+                    WorkStep.work_order_id == work_order_id,
+                    WorkStep.state == "succeeded",
+                    WorkStep.kind != "synthesize",
+                )
+                .order_by(WorkStep.finished_at, WorkStep.id)
+            )
+        )
+        objective = order.objective
+        exploratory = is_exploratory(order)
+        results = [
+            {"step_key": s.step_key, "title": s.title, "output": _summarize_step_output(s)}
+            for s in steps
+        ]
+    results_json = json.dumps(results, ensure_ascii=False, default=str)
+    if len(results_json) > _SYNTHESIS_MAX_INPUT_CHARS:
+        results_json = results_json[:_SYNTHESIS_MAX_INPUT_CHARS] + " …[усечено]"
+    shape = (
+        '{"text": <ответ>, "coverage": {"covered": [...], "partial": [...], '
+        '"not_found": [{"item": ..., "reason": ..., "attempts": [...]}]}}'
+        if exploratory
+        else '{"text": <ответ>}'
+    )
+    system = (
+        "Ты пишешь итоговый ответ по завершённой задаче на русском языке. Используй "
+        "только переданные результаты шагов; ничего не выдумывай, недостающее назови "
+        f"прямо. Верни только JSON вида {shape}."
+    )
+    prompt = json.dumps(
+        {
+            "objective": objective,
+            "instruction": str(input_data.get("instruction") or "Сформулируй итог"),
+            "step_results": results_json,
+        },
+        ensure_ascii=False,
+    )
+    model = get_reasoning_model(confidential=True)
+    with bind_airouter_budget_context(budget_context):
+        raw = await ollama_client.generate_json(
+            prompt,
+            model=model.model,
+            provider=model.provider,
+            system=system,
+            temperature=0.1,
+            max_tokens=4096,
+            timeout_seconds=300,
+        )
+    budget_context.raise_if_stopped()
+    text = raw.get("text") if isinstance(raw, dict) else None
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("synthesis returned no text")
+    output: dict[str, Any] = {"text": text.strip(), "executor": "synthesize"}
+    coverage = raw.get("coverage")
+    if exploratory and isinstance(coverage, dict):
+        output["coverage"] = coverage
+    return output
 
 
 def _split_child_budgets(
@@ -1119,6 +1213,9 @@ async def execute_claimed_step(
         timeout_seconds = step.timeout_seconds
         work_order_id = step.work_order_id
         owner_key = order.owner_key
+        frozen_plan_id = step.plan_id
+        frozen_plan_revision = order.plan_revision
+        frozen_ledger_id = order.budget_ledger_id
         capability = step.capability
         action = step.action
         step_idempotency_key = step.idempotency_key
@@ -1206,6 +1303,19 @@ async def execute_claimed_step(
             session_factory=factory,
         )
         if kind == "capability"
+        else WorkBudgetContext(
+            # A synthesis model call uses the proven direct-text boundary,
+            # which requires a frozen owner/plan/ledger binding.
+            work_order_id=work_order_id,
+            step_id=step_id,
+            attempt_id=attempt_id,
+            session_factory=factory,
+            expected_owner_key=owner_key,
+            expected_plan_id=frozen_plan_id,
+            expected_plan_revision=frozen_plan_revision,
+            expected_ledger_id=frozen_ledger_id,
+        )
+        if kind == "synthesize"
         else None
     )
     try:
