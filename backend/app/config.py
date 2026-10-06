@@ -127,6 +127,9 @@ class Settings(BaseSettings):
     authentik_slug: str = "ai-workspace"
     oauth_client_id: str = ""
     oauth_client_secret: str = ""
+    # Lifetime of the httpOnly refresh-token cookie; matches the Authentik
+    # provider's refresh_token_validity (days=30).
+    oauth_refresh_cookie_days: int = 30
     # Service-account token for Authentik REST API (user provisioning)
     authentik_api_token: str = ""
 

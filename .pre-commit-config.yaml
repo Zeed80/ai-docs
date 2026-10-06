@@ -18,6 +18,13 @@ repos:
       - id: end-of-file-fixer
         exclude: "\\.(json|yml|yaml)$"
       - id: check-yaml
+        exclude: ^infra/authentik/blueprints/
+      # Authentik blueprints use custom tags (!Find, !Env, !Format): syntax
+      # only — the plain loader cannot construct them and rejected every edit.
+      - id: check-yaml
+        name: check yaml (Authentik blueprints, syntax only)
+        args: [--unsafe]
+        files: ^infra/authentik/blueprints/
       - id: check-json
       - id: check-merge-conflict
       - id: detect-private-key

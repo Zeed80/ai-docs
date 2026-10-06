@@ -127,22 +127,60 @@ export async function apiFetch(
   const method = (init?.method ?? "GET").toUpperCase();
   const isMutation = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
 
-  const res = await fetch(url, {
-    credentials: "include",
-    ...init,
-    headers: {
-      ...(isMutation ? csrfHeaders() : {}),
-      ...init?.headers,
-    },
-  });
+  const send = () =>
+    fetch(url, {
+      credentials: "include",
+      ...init,
+      headers: {
+        ...(isMutation ? csrfHeaders() : {}),
+        ...init?.headers,
+      },
+    });
 
-  if (res.status === 401) redirectToLogin();
+  let res = await send();
+  if (res.status === 401) {
+    // The access token lives an hour: renew it once and repeat the request
+    // before giving up on the session.
+    if (await refreshSession()) res = await send();
+    if (res.status === 401) redirectToLogin();
+  }
 
   return res;
 }
 
+let refreshInFlight: Promise<boolean> | null = null;
+
+/**
+ * Renew the session from the httpOnly refresh-token cookie.
+ *
+ * One request at a time per page: a burst of 401s from parallel requests
+ * shares the same renewal. `ifExpiringWithin` (seconds) makes it a cheap
+ * keep-alive — the server renews only when the token ends that soon.
+ * Resolves false when there is nothing to renew from (log in again).
+ */
+export function refreshSession(ifExpiringWithin = 0): Promise<boolean> {
+  if (typeof window === "undefined") return Promise.resolve(false);
+  if (refreshInFlight) return refreshInFlight;
+  const qs = ifExpiringWithin ? `?if_expiring_within=${ifExpiringWithin}` : "";
+  refreshInFlight = fetch(`${_apiBase()}/api/auth/refresh${qs}`, {
+    method: "POST",
+    credentials: "include",
+    headers: csrfHeaders(),
+  })
+    .then((r) => r.ok)
+    .catch(() => false)
+    .finally(() => {
+      refreshInFlight = null;
+    });
+  return refreshInFlight;
+}
+
 /** Send the browser to the login page, keeping the current path as `next`. */
 export function redirectToLogin(): void {
-  if (typeof window === "undefined" || window.location.pathname.startsWith("/auth/")) return;
+  if (
+    typeof window === "undefined" ||
+    window.location.pathname.startsWith("/auth/")
+  )
+    return;
   window.location.href = `/auth/login?next=${encodeURIComponent(window.location.pathname)}`;
 }

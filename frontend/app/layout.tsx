@@ -5,6 +5,7 @@ import "./globals.css";
 import { KeyboardProvider } from "@/lib/keyboard-context";
 import { ClientLayout } from "@/components/ui/client-layout";
 import { ToastProvider } from "@/components/ui/primitives/Toast";
+import { SessionKeeper } from "@/components/auth/SessionKeeper";
 import {
   ServiceWorkerRegistration,
   InstallPrompt,
@@ -54,6 +55,8 @@ export default async function RootLayout({
           {/* Ctrl/⌘+K из любого места: поиск и переходы были разбросаны по
               разделам, хотя проект заявляет keyboard-first. */}
           <CommandPalette />
+          {/* Токен входа живёт час — продлеваем заранее, пока страница открыта. */}
+          <SessionKeeper />
           <ServiceWorkerRegistration />
           <InstallPrompt />
           <OfflineQueueWidget />

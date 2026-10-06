@@ -179,7 +179,9 @@ async def login(
         "response_type": "code",
         "client_id": settings.oauth_client_id,
         "redirect_uri": redirect_uri,
-        "scope": "openid profile email groups",
+        # offline_access: Authentik issues a refresh token only for it, and the
+        # access token lives an hour — without it every session ended hourly.
+        "scope": "openid profile email groups offline_access",
         "state": state,
     }
     # Derive the Authentik authorize base URL from redirect_uri (built by the browser
@@ -299,6 +301,152 @@ async def callback(
     frontend_base = _frontend_base_from_uri(redirect_uri)
     resp = RedirectResponse(url=f"{frontend_base}{_next_path}", status_code=302)
     resp.set_cookie(key="access_token", value=access_token, path="/", **cookie_opts)
+    if tokens.get("refresh_token"):
+        _set_refresh_cookie(resp, tokens["refresh_token"])
+    return resp
+
+
+# ── Session refresh ───────────────────────────────────────────────────────────
+# Authentik's access token lives an hour and nothing renewed it, so every
+# session ended hourly — and a screen that did not redirect on 401 showed it as
+# "could not save settings" (live, 2026-10-06). The refresh token sits in its
+# own httpOnly cookie, scoped to /api/auth and SameSite=Strict, so it only
+# ever reaches these endpoints from this site.
+
+REFRESH_COOKIE = "refresh_token"
+_REFRESH_COOKIE_PATH = "/api/auth"
+# Two tabs refreshing at once must not both spend the same refresh token: the
+# first exchange's result is shared with the others for a short while.
+_REFRESH_RESULT_TTL_S = 60
+
+
+def _set_refresh_cookie(resp: Response, refresh_token: str) -> None:
+    resp.set_cookie(
+        key=REFRESH_COOKIE,
+        value=refresh_token,
+        path=_REFRESH_COOKIE_PATH,
+        httponly=True,
+        secure=settings.app_env == "production",
+        samesite="strict",
+        max_age=settings.oauth_refresh_cookie_days * 86400,
+    )
+
+
+def _clear_session_cookies(resp: Response) -> None:
+    resp.delete_cookie("access_token", path="/")
+    resp.delete_cookie(REFRESH_COOKIE, path=_REFRESH_COOKIE_PATH)
+
+
+def _seconds_left(access_token: str | None) -> int | None:
+    if not access_token:
+        return None
+    try:
+        import base64 as _b64
+        import json as _json
+        import time as _time
+
+        payload = access_token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        exp = int(_json.loads(_b64.urlsafe_b64decode(payload)).get("exp", 0))
+        return exp - int(_time.time())
+    except Exception:
+        return None
+
+
+async def _exchange_refresh_token(refresh_token: str) -> dict:
+    """Authentik refresh grant, single-flight per refresh token via Redis."""
+    import json as _json
+
+    import httpx
+
+    from app.utils.redis_client import get_async_redis
+
+    redis = get_async_redis()
+    key = f"auth_refresh:{_token_hash(refresh_token)}"
+    lock_key = f"{key}:lock"
+    for _ in range(50):  # up to ~5 s waiting for a concurrent exchange
+        cached = await redis.get(key)
+        if cached:
+            return _json.loads(cached)
+        if await redis.set(lock_key, "1", nx=True, ex=15):
+            break
+        import asyncio
+
+        await asyncio.sleep(0.1)
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{settings.authentik_url}/application/o/token/",
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                    "client_id": settings.oauth_client_id,
+                    "client_secret": settings.oauth_client_secret,
+                },
+            )
+        if resp.status_code >= 400:
+            raise HTTPException(status_code=401, detail="refresh_rejected")
+        tokens = resp.json()
+        await redis.set(key, _json.dumps(tokens), ex=_REFRESH_RESULT_TTL_S)
+        return tokens
+    finally:
+        await redis.delete(lock_key)
+
+
+@router.post("/refresh")
+async def refresh_session(
+    request: Request,
+    if_expiring_within: int = Query(default=0, ge=0, le=86400),
+) -> Response:
+    """Renew the access-token cookie from the refresh-token cookie.
+
+    ``if_expiring_within`` lets the page's keep-alive ask "only if the current
+    token ends within N seconds", so a timer can call this freely. 401 means
+    there is nothing to renew from (no or rejected refresh token): the page
+    then sends the user to log in.
+    """
+    if not settings.auth_enabled:
+        return JSONResponse({"ok": True, "refreshed": False})
+    current = request.cookies.get("access_token")
+    left = _seconds_left(current)
+    if if_expiring_within and left is not None and left > if_expiring_within:
+        return JSONResponse({"ok": True, "refreshed": False, "expires_in": left})
+    refresh_token = request.cookies.get(REFRESH_COOKIE)
+    if not refresh_token:
+        return JSONResponse({"detail": "no_refresh_token"}, status_code=401)
+    try:
+        tokens = await _exchange_refresh_token(refresh_token)
+    except HTTPException as exc:
+        resp = JSONResponse({"detail": exc.detail}, status_code=401)
+        resp.delete_cookie(REFRESH_COOKIE, path=_REFRESH_COOKIE_PATH)
+        return resp
+
+    access_token = tokens.get("access_token")
+    if not access_token:
+        return JSONResponse({"detail": "refresh_rejected"}, status_code=401)
+    from app.auth.jwt import _verify_token
+
+    try:
+        await _verify_token(access_token)
+    except HTTPException as exc:
+        # Deactivated account or a bad token: no renewal, and no session left.
+        resp = JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+        _clear_session_cookies(resp)
+        return resp
+
+    ttl = _seconds_left(access_token) or int(tokens.get("expires_in") or 0) or 3600
+    resp = JSONResponse({"ok": True, "refreshed": True, "expires_in": ttl})
+    resp.set_cookie(
+        key="access_token",
+        value=access_token,
+        path="/",
+        httponly=True,
+        secure=settings.app_env == "production",
+        samesite="lax",
+        max_age=ttl,
+    )
+    _set_refresh_cookie(resp, tokens.get("refresh_token") or refresh_token)
+    logger.info("session_refreshed", expires_in=ttl)
     return resp
 
 
@@ -618,6 +766,7 @@ async def logout(
     """
     response.delete_cookie("access_token", path="/")
     response.delete_cookie("csrf_token", path="/")
+    response.delete_cookie(REFRESH_COOKIE, path=_REFRESH_COOKIE_PATH)
 
     if settings.auth_enabled:
         from urllib.parse import urlencode

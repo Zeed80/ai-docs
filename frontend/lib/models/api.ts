@@ -9,7 +9,7 @@
  */
 
 import { getApiBaseUrl } from "@/lib/api-base";
-import { csrfHeaders, redirectToLogin } from "@/lib/auth";
+import { csrfHeaders, redirectToLogin, refreshSession } from "@/lib/auth";
 import type {
   AssignmentDraft,
   CatalogModel,
@@ -41,22 +41,25 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
   const isMutation = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
 
-  const res = await fetch(`${API}${path}`, {
-    credentials: "include",
-    cache: "no-store",
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(isMutation ? csrfHeaders() : {}),
-      ...init?.headers,
-    },
-  });
+  const send = () =>
+    fetch(`${API}${path}`, {
+      credentials: "include",
+      cache: "no-store",
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        ...(isMutation ? csrfHeaders() : {}),
+        ...init?.headers,
+      },
+    });
 
+  let res = await send();
   if (res.status === 401) {
-    // Сессия истекла (токен Authentik живёт час). Как в общем apiFetch — на
-    // вход; иначе истёкшая сессия выглядела как «Не удалось сохранить
-    // настройки» и тому подобные ошибки конкретной кнопки.
-    redirectToLogin();
+    // Токен Authentik живёт час: сначала продлеваем сессию и повторяем
+    // запрос, и только если продлить нечем — на вход. Раньше истёкшая
+    // сессия выглядела как «Не удалось сохранить настройки».
+    if (await refreshSession()) res = await send();
+    if (res.status === 401) redirectToLogin();
   }
 
   if (!res.ok) {
