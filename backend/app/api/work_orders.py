@@ -915,6 +915,52 @@ async def cancel_order(
     return order
 
 
+@router.post("/{work_order_id}/pause", response_model=WorkOrderOut)
+async def pause_order(
+    work_order_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> WorkOrder:
+    """E22: stop claiming new steps; the order is paused once nothing executes.
+
+    The response status is "paused" when acknowledged at once; otherwise the
+    order keeps its status with ``metadata.pause`` set until the executing
+    step finishes. A started step is finished, never treated as undone.
+    """
+    from app.domain.work_orders import request_pause
+
+    order = await _get_owned_order(db, work_order_id, user, lock=True)
+    try:
+        await request_pause(db, order, actor=user.sub)
+    except WorkStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await db.commit()
+    await db.refresh(order)
+    return order
+
+
+@router.post("/{work_order_id}/unpause", response_model=WorkOrderOut)
+async def unpause_order(
+    work_order_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> WorkOrder:
+    """E22: resume a paused order (or withdraw a pending pause request).
+
+    Ownership is checked now, not at pause time; the shared budget is not reset.
+    """
+    from app.domain.work_orders import resume_paused
+
+    order = await _get_owned_order(db, work_order_id, user, lock=True)
+    try:
+        await resume_paused(db, order, actor=user.sub)
+    except WorkStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await db.commit()
+    await db.refresh(order)
+    return order
+
+
 @router.post("/{work_order_id}/run", response_model=WorkOrderOut)
 async def run_order(
     work_order_id: uuid.UUID,

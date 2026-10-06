@@ -42,10 +42,12 @@ ACTIVE_WORK_STATUSES = frozenset(
 )
 
 WORK_TRANSITIONS: dict[str, frozenset[str]] = {
-    "received": frozenset({"scoping", "planning", "canceled", "blocked"}),
+    "received": frozenset({"scoping", "planning", "canceled", "blocked", "paused"}),
     "scoping": frozenset({"planning", "blocked", "canceled"}),
-    "planning": frozenset({"ready", "blocked", "failed", "canceled"}),
-    "ready": frozenset({"running", "waiting_approval", "replanning", "blocked", "canceled"}),
+    "planning": frozenset({"ready", "blocked", "failed", "canceled", "paused"}),
+    "ready": frozenset(
+        {"running", "waiting_approval", "replanning", "blocked", "canceled", "paused"}
+    ),
     "running": frozenset(
         {
             "ready",
@@ -56,6 +58,7 @@ WORK_TRANSITIONS: dict[str, frozenset[str]] = {
             "blocked",
             "failed",
             "canceled",
+            "paused",
         }
     ),
     "waiting_approval": frozenset({"ready", "replanning", "blocked", "canceled"}),
@@ -66,7 +69,7 @@ WORK_TRANSITIONS: dict[str, frozenset[str]] = {
     # normal step, once every child reaches a terminal state.
     "waiting_external": frozenset({"ready", "replanning", "blocked", "canceled", "verifying"}),
     "verifying": frozenset({"completed", "replanning", "blocked", "failed", "canceled"}),
-    "replanning": frozenset({"ready", "blocked", "failed", "canceled"}),
+    "replanning": frozenset({"ready", "blocked", "failed", "canceled", "paused"}),
     # Ф4-re (AGENT_AUTONOMY_ROADMAP.md, found live on the persistence
     # re-verification pilot): "replanning" added here. A semantic-verifier
     # rejection (record_verifier_verdict) lands the order on "blocked" via
@@ -78,6 +81,8 @@ WORK_TRANSITIONS: dict[str, frozenset[str]] = {
     # execution failures ever consumed the max_replans budget.
     "blocked": frozenset({"scoping", "planning", "ready", "verifying", "replanning", "canceled"}),
     "failed": frozenset({"planning", "ready", "canceled"}),
+    # E22: a pause acknowledged at a safe boundary (no step executing).
+    "paused": frozenset({"ready", "planning", "replanning", "canceled"}),
     "completed": frozenset(),
     "canceled": frozenset(),
 }
@@ -623,6 +628,8 @@ async def claim_ready_step(
             WorkPlan.status == "active",
             WorkStep.state.in_(["ready", "retry_wait"]),
             WorkOrder.status.in_(["ready", "running"]),
+            # E22: no new step for an order whose owner asked to pause.
+            WorkOrder.metadata_["pause"].is_(None),
             (WorkStep.next_attempt_at.is_(None) | (WorkStep.next_attempt_at <= now)),
             (WorkStep.lease_expires_at.is_(None) | (WorkStep.lease_expires_at <= now)),
         )
@@ -635,9 +642,11 @@ async def claim_ready_step(
     step = (await db.execute(query)).scalar_one_or_none()
     if step is None:
         return None
-    order = await db.get(WorkOrder, step.work_order_id, with_for_update=True)
-    if order is None:
-        return None
+    order = await db.get(
+        WorkOrder, step.work_order_id, with_for_update=True, populate_existing=True
+    )
+    if order is None or pause_requested(order):
+        return None  # a pause committed between the step query and this lock
     if step.state == "retry_wait":
         await transition_step(db, step, "ready", actor="scheduler")
     await transition_step(db, step, "running", actor=worker_id)
@@ -1884,3 +1893,105 @@ async def record_verifier_verdict(
         await transition_work_order(db, order, "completed", actor=actor)
         return True
     return order.status == "completed"
+
+
+# ── E22: pause at a safe boundary ────────────────────────────────────────────
+#
+# The intent is persisted in ``metadata["pause"]``; no new step is claimed
+# while it is present. The pause is acknowledged (status "paused") only when no
+# step of the order is executing: a started step is finished, never treated as
+# undone. Resume restores the pre-pause working state and never resets the
+# shared budget. Pausing inside one executing agent turn is not covered here.
+
+_PAUSE_ACK_STATUSES = frozenset({"received", "planning", "ready", "running", "replanning"})
+_RESUME_TARGET = {
+    "received": "planning",
+    "planning": "planning",
+    "ready": "ready",
+    "running": "ready",
+    "replanning": "replanning",
+}
+
+
+def pause_requested(order: WorkOrder) -> bool:
+    return isinstance((order.metadata_ or {}).get("pause"), dict)
+
+
+async def _has_executing_step(db: AsyncSession, order_id: uuid.UUID) -> bool:
+    return (
+        await db.scalar(
+            select(WorkStep.id)
+            .where(WorkStep.work_order_id == order_id, WorkStep.state == "running")
+            .limit(1)
+        )
+    ) is not None
+
+
+async def request_pause(db: AsyncSession, order: WorkOrder, *, actor: str) -> bool:
+    """Persist the pause intent; acknowledge it at once when nothing executes.
+
+    Returns True when the order is now paused, False when the pause is
+    requested and waits for the executing step to finish.
+    """
+    if order.status in TERMINAL_WORK_STATUSES:
+        raise WorkStateError(f"Cannot pause a {order.status} work order")
+    if order.status == "paused":
+        return True
+    if not pause_requested(order):
+        order.metadata_ = {
+            **(order.metadata_ or {}),
+            "pause": {"requested_at": utcnow().isoformat(), "requested_by": actor},
+        }
+        await append_event(db, order.id, "work.pause_requested", actor=actor, payload={})
+    return await acknowledge_pause_if_safe(db, order, actor=actor)
+
+
+async def acknowledge_pause_if_safe(db: AsyncSession, order: WorkOrder, *, actor: str) -> bool:
+    if not pause_requested(order) or order.status not in _PAUSE_ACK_STATUSES:
+        return order.status == "paused"
+    if await _has_executing_step(db, order.id):
+        return False
+    pause = dict(order.metadata_["pause"])
+    pause["previous_status"] = order.status
+    pause["acknowledged_at"] = utcnow().isoformat()
+    order.metadata_ = {**(order.metadata_ or {}), "pause": pause}
+    await transition_work_order(
+        db, order, "paused", actor=actor, payload={"previous_status": pause["previous_status"]}
+    )
+    return True
+
+
+async def acknowledge_pause_requests(db: AsyncSession, *, actor: str = "scheduler") -> int:
+    """Housekeeping: acknowledge requested pauses whose executing step ended."""
+    orders = list(
+        await db.scalars(
+            select(WorkOrder)
+            .where(
+                WorkOrder.metadata_["pause"].is_not(None),
+                WorkOrder.status.in_(sorted(_PAUSE_ACK_STATUSES)),
+            )
+            .with_for_update(skip_locked=True)
+        )
+    )
+    acknowledged = 0
+    for order in orders:
+        if await acknowledge_pause_if_safe(db, order, actor=actor):
+            acknowledged += 1
+    return acknowledged
+
+
+async def resume_paused(db: AsyncSession, order: WorkOrder, *, actor: str) -> None:
+    """Resume a paused order, or withdraw a not-yet-acknowledged pause request.
+
+    The shared ledger is untouched: spent budget stays spent.
+    """
+    if order.status != "paused":
+        if not pause_requested(order):
+            raise WorkStateError(f"Work order is not paused ({order.status})")
+        order.metadata_ = {k: v for k, v in (order.metadata_ or {}).items() if k != "pause"}
+        await append_event(db, order.id, "work.pause_withdrawn", actor=actor, payload={})
+        return
+    previous = str(((order.metadata_ or {}).get("pause") or {}).get("previous_status") or "")
+    target = _RESUME_TARGET.get(previous, "replanning")
+    order.metadata_ = {k: v for k, v in (order.metadata_ or {}).items() if k != "pause"}
+    await transition_work_order(db, order, target, actor=actor, payload={"resumed_from": "paused"})

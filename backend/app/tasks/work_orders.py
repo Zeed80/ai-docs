@@ -2230,6 +2230,10 @@ async def _dispatch_ready_work(limit: int = 10) -> int:
         await reclaim_expired_leases(db)
         await enforce_budgets(db)
         await promote_waiting_parents(db)
+        # E22: a requested pause becomes "paused" once no step executes.
+        from app.domain.work_orders import acknowledge_pause_requests
+
+        await acknowledge_pause_requests(db)
         # Ф4 (AGENT_AUTONOMY_ROADMAP.md): must run before
         # find_active_plan_succeeded_steps below — recovers a "ready" order
         # whose active plan finished stepping but was never handed back for

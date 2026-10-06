@@ -1136,6 +1136,11 @@ blocked verifier как итог в UI, подпись needs_review. Embedding/r
 факт после; исчерпанный бюджет блокирует до запуска, перерасход останавливает
 следующие шаги. Отчёт: `docs/agent-employee-delivery/E21-active-time.md`.
 
+**E22 (TESTED / DEPLOYED, граница между шагами):** `pause`/`unpause` с сохраняемым
+намерением и подтверждением на безопасной границе; новые шаги не выдаются, начатый
+доделывается; возобновление без сброса бюджета; UI различает запрос и паузу.
+Пауза внутри хода агента — остаток. Отчёт: `docs/agent-employee-delivery/E22-pause.md`.
+
 1. Сначала точные единицы: tool attempts, LLM calls, tokens, cost, active time,
    replan count. Ожидание человека не смешивать с активным временем без ADR.
 2. Целевые defaults: 2 часа active, 200 tools, 50 LLM calls, 3 replans. Не включать

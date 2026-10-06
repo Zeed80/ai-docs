@@ -71,6 +71,9 @@ E21.3d выпущен: активное время шагов списывает
 измерения ledger (tool_attempts, llm_calls, replans, active_seconds) теперь
 учитываются; tokens/cost — receipts без pre-dispatch bounds (отложено осознанно).
 Следующее по roadmap — P1.2 (E22: persisted pause_requested).
+E22 выпущен для границы между шагами (`docs/agent-employee-delivery/E22-pause.md`);
+пауза внутри хода агента — остаток. Следующее — P1.3 (E23: replan без повтора
+завершённых эффектов).
 Остаются как минимум:
 
 - остальные AIRouter/headless/provider paths;

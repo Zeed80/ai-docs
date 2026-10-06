@@ -1,6 +1,7 @@
 "use client";
 
 import { getApiBaseUrl } from "@/lib/api-base";
+import { pauseLabel } from "@/lib/work-order-pause";
 import { csrfHeaders } from "@/lib/auth";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { tz } from "@/lib/user-time";
@@ -18,9 +19,11 @@ type WorkOrder = {
   plan_revision: number;
   result_summary?: string;
   blocker?: Record<string, unknown>;
+  metadata?: { pause?: { requested_at?: string; acknowledged_at?: string } } | null;
   created_at: string;
   updated_at: string;
 };
+const TERMINAL = new Set(["completed", "blocked", "failed", "canceled"]);
 type WorkStep = {
   id: string;
   step_key: string;
@@ -90,6 +93,7 @@ const statusClass: Record<string, string> = {
   planning: "bg-violet-950/60 text-violet-300",
   replanning: "bg-violet-950/60 text-violet-300",
   ready: "bg-slate-700 text-slate-200",
+  paused: "bg-cyan-950/60 text-cyan-300",
 };
 // Б13.4: a lightweight stand-in for a real DAG widget — steps at the same
 // dependency depth share a color band, so the reader can see "these run in
@@ -259,7 +263,7 @@ export default function WorkOrdersPage() {
       setBusy(false);
     }
   }
-  async function act(action: "run" | "cancel") {
+  async function act(action: "run" | "cancel" | "pause" | "unpause") {
     if (!selected) return;
     await api(`/api/work-orders/${selected}/${action}`, {
       method: "POST",
@@ -413,6 +417,11 @@ export default function WorkOrdersPage() {
                     {current.status}
                   </span>
                 </div>
+                {pauseLabel(current) && (
+                  <p role="status" className="mt-2 text-xs text-cyan-300">
+                    {pauseLabel(current)}
+                  </p>
+                )}
                 {current.blocker && (
                   <pre className="mt-3 text-xs text-red-300 bg-red-950/30 rounded p-3 overflow-auto">
                     {JSON.stringify(current.blocker, null, 2)}
@@ -459,6 +468,22 @@ export default function WorkOrdersPage() {
                       Форсировать шаг вручную (debug)
                     </button>
                   )}
+                  {!TERMINAL.has(current.status) &&
+                    (current.status === "paused" || current.metadata?.pause ? (
+                      <button
+                        onClick={() => act("unpause")}
+                        className="px-3 py-1.5 rounded bg-cyan-900 text-cyan-200 text-xs"
+                      >
+                        Продолжить
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => act("pause")}
+                        className="px-3 py-1.5 rounded bg-slate-700 text-slate-200 text-xs"
+                      >
+                        Пауза
+                      </button>
+                    ))}
                   <button
                     onClick={() => act("cancel")}
                     className="px-3 py-1.5 rounded bg-red-950 text-red-300 text-xs"
