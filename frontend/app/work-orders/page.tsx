@@ -3,7 +3,8 @@
 import { getApiBaseUrl } from "@/lib/api-base";
 import { pauseLabel } from "@/lib/work-order-pause";
 import { csrfHeaders } from "@/lib/auth";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { genId } from "@/lib/ws-url";
 import { tz } from "@/lib/user-time";
 import { httpDetail, notifyError } from "@/components/ui/primitives/Toast";
 
@@ -159,6 +160,9 @@ export default function WorkOrdersPage() {
   const [objective, setObjective] = useState("");
   const [description, setDescription] = useState("");
   const [instruction, setInstruction] = useState("");
+  // One id per instruction draft: a double click or retry is not a second
+  // instruction (the backend ignores a repeated request_id).
+  const instructionRequestId = useRef<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(
     new Set(),
@@ -283,10 +287,15 @@ export default function WorkOrdersPage() {
   }
   async function addInstruction() {
     if (!selected || !instruction.trim()) return;
+    instructionRequestId.current ??= genId();
     await api(`/api/work-orders/${selected}/instructions`, {
       method: "POST",
-      body: JSON.stringify({ instruction }),
+      body: JSON.stringify({
+        instruction,
+        request_id: instructionRequestId.current,
+      }),
     });
+    instructionRequestId.current = null;
     setInstruction("");
     await Promise.all([loadOrders(), loadDetail(selected)]);
   }

@@ -1175,7 +1175,7 @@ blocked verifier как итог в UI, подпись needs_review. Embedding/r
 
 ### E23 — Replan без повтора завершённых эффектов
 
-**Статус:** PARTIAL / DEPLOYED (2026-10-06): E23a — несверенный эффект блокирует перепланирование (`docs/agent-employee-delivery/E23-unknown-frontier.md`); остаток — п. 3–4 (устаревшие вердикты/решения, изменённая цель). **После:** E22.
+**Статус:** DONE / DEPLOYED (2026-10-06): E23a — несверенный эффект блокирует перепланирование (`docs/agent-employee-delivery/E23-unknown-frontier.md`); E23b — шаги/согласования/проверки/вердикты старой ревизии не действуют на новую, изменённая цель доходит до synthesize и verifier (`docs/agent-employee-delivery/E23-stale-revision.md`). **После:** E22.
 **Файлы:** `domain/work_orders.py`, `tasks/work_orders.py`,
 `test_work_order_replanning.py`, `test_work_order_decompose.py`.
 

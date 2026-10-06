@@ -94,6 +94,8 @@ class WorkOrderCreate(BaseModel):
 
 class WorkInstructionIn(BaseModel):
     instruction: str = Field(..., min_length=1)
+    # A client retry or double submit with the same id adds nothing (E23).
+    request_id: str | None = Field(default=None, min_length=1, max_length=120)
 
 
 class WorkApprovalIn(BaseModel):
@@ -110,6 +112,8 @@ class VerifierVerdictIn(BaseModel):
     ok: bool
     reason: str = Field(..., min_length=1)
     evidence: dict[str, Any] = Field(default_factory=dict)
+    # The plan revision whose result was judged; a mismatch is refused (E23).
+    plan_revision: int | None = None
 
 
 class ComputerUseGrantIn(BaseModel):
@@ -530,6 +534,7 @@ async def submit_verifier_verdict(
             reason=body.reason,
             evidence_payload=body.evidence,
             actor=user.sub,
+            expected_revision=body.plan_revision,
         )
     except WorkStateError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -699,6 +704,13 @@ async def add_instruction(
         raise HTTPException(409, "Durable chat checkpoint continuation is not enabled")
     if order.status in {"completed", "canceled"}:
         raise HTTPException(status_code=409, detail=f"Cannot revise a {order.status} work order")
+    metadata = dict(order.metadata_ or {})
+    instructions = list(metadata.get("instructions") or [])
+    if body.request_id and any(
+        isinstance(item, dict) and item.get("request_id") == body.request_id
+        for item in instructions
+    ):
+        return order
     from app.domain.work_orders import unresolved_effect_call_ids
 
     unresolved = await unresolved_effect_call_ids(db, order.id)
@@ -712,11 +724,10 @@ async def add_instruction(
                 "tool_call_ids": unresolved,
             },
         )
-    metadata = dict(order.metadata_ or {})
-    instructions = list(metadata.get("instructions") or [])
-    instructions.append(
-        {"text": body.instruction, "actor": user.sub, "at": datetime.now(UTC).isoformat()}
-    )
+    entry = {"text": body.instruction, "actor": user.sub, "at": datetime.now(UTC).isoformat()}
+    if body.request_id:
+        entry["request_id"] = body.request_id
+    instructions.append(entry)
     metadata["instructions"] = instructions
     order.metadata_ = metadata
     await append_event(

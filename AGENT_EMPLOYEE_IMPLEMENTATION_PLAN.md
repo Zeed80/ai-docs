@@ -82,8 +82,11 @@ E22 выпущен для границы между шагами (`docs/agent-em
 пауза внутри хода агента — остаток. Следующее — P1.3 (E23: replan без повтора
 завершённых эффектов).
 E23a выпущен: несверенный эффект блокирует перепланирование до сверки владельцем
-(`docs/agent-employee-delivery/E23-unknown-frontier.md`); остаток E23 — устаревшие
-вердикты/решения и изменённая цель.
+(`docs/agent-employee-delivery/E23-unknown-frontier.md`). E23b выпущен: шаги,
+согласования, проверки и вердикты старой ревизии не действуют на новую, планировщик
+ждёт шаг в полёте, указания владельца видят synthesize и verifier
+(`docs/agent-employee-delivery/E23-stale-revision.md`). E23 закрыт; следующее —
+P1.4 (E24: fences на фактической границе эффекта).
 Оставшиеся AIRouter/direct paths, entry adapters, legacy reconciliation,
 token/cost accounting и active/replan остаются E21.2b+/E21.3;
 вся E21 не завершена. Отчёт: `docs/agent-employee-delivery/E21-budget-ledger.md`.

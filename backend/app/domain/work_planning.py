@@ -17,6 +17,7 @@ from app.ai.capability_manifest import CapabilityDefinition, load_capability_man
 from app.db.models import WorkOrder, WorkStep
 from app.domain.work_orders import (
     WORK_TRANSITIONS,
+    _has_executing_step,
     append_event,
     create_work_plan,
     is_exploratory,
@@ -430,6 +431,11 @@ async def _read_planner_snapshot(
     """Read every mutable DB input used by the planner under the order lock."""
     order = await db.get(WorkOrder, work_order_id, with_for_update=lock_order)
     if order is None or order.status not in {"received", "planning", "replanning"}:
+        return None
+    if await _has_executing_step(db, order.id):
+        # E23: a step of the previous plan is still executing. Its result
+        # (or failure) must be known before the next revision is planned,
+        # or the new plan may repeat it. The dispatch tick retries planning.
         return None
     completed = list(
         (

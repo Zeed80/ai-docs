@@ -27,6 +27,7 @@ from app.domain.work_orders import (
     enforce_budgets,
     enter_waiting_for_children,
     fail_attempt,
+    owner_instructions,
     promote_ready_dependents,
     promote_waiting_parents,
     reclaim_expired_leases,
@@ -663,6 +664,7 @@ async def _execute_synthesize(
             )
         )
         objective = order.objective
+        instructions = owner_instructions(order)
         exploratory = is_exploratory(order)
         per_step = max(1500, _SYNTHESIS_MAX_INPUT_CHARS // max(1, len(steps)))
         results = [
@@ -692,6 +694,8 @@ async def _execute_synthesize(
     prompt = json.dumps(
         {
             "objective": objective,
+            # Owner revisions of the objective; the later one wins.
+            "owner_instructions": instructions,
             "instruction": str(input_data.get("instruction") or "Сформулируй итог"),
             "step_results": results_json,
         },
@@ -831,7 +835,7 @@ async def _execute_decompose(work_order_id: uuid.UUID, input_data: dict[str, Any
 
 async def verify_completed_step(step_id: uuid.UUID, *, session_factory: Any | None = None) -> bool:
     """Verify a succeeded step in a fresh transaction and execution context."""
-    from app.db.models import WorkOrder, WorkStep
+    from app.db.models import WorkOrder, WorkPlan, WorkStep
     from app.db.session import _get_session_factory
 
     factory = session_factory or _get_session_factory()
@@ -844,6 +848,12 @@ async def verify_completed_step(step_id: uuid.UUID, *, session_factory: Any | No
             return False
         if order.status == "completed":
             return True
+        plan = await db.get(WorkPlan, step.plan_id)
+        if plan is None or plan.status != "active":
+            # E23: a late verification of a superseded revision's step would
+            # judge old output against the current order and could charge a
+            # replan or flip the state of the revision now executing.
+            return False
         if order.status == "ready":
             # Ф4 (AGENT_AUTONOMY_ROADMAP.md): found live on the Ф4 pilot — a
             # succeeded step whose order ends up "ready" instead of
@@ -1008,8 +1018,30 @@ async def _read_verifier_snapshot(
             )
         ).scalars()
     )
+    # E23: results an earlier revision completed and the current plan reuses
+    # instead of repeating (the planner is told they are done; dataflow
+    # references resolve to them). Without them a plan that only finishes the
+    # remainder looks unsupported to the verifier.
+    current_keys = {row.step_key for row in steps}
+    earlier: dict[str, Any] = {}
+    for row in await db.scalars(
+        select(WorkStep)
+        .join(WorkPlan, WorkPlan.id == WorkStep.plan_id)
+        .where(
+            WorkStep.work_order_id == order.id,
+            WorkStep.state == "succeeded",
+            WorkPlan.id != plan.id,
+            WorkStep.kind != "synthesize",
+        )
+        .order_by(WorkStep.finished_at.desc(), WorkStep.id)
+    ):
+        if row.step_key not in current_keys and row.step_key not in earlier:
+            earlier[row.step_key] = row
+    carried = sorted(earlier.values(), key=lambda row: (row.finished_at, str(row.id)))
+    per_output = max(2000, _VERIFIER_EVIDENCE_CHARS // max(1, len(steps) + len(carried)))
     evidence = {
         "objective": order.objective,
+        "owner_instructions": owner_instructions(order),
         "description": order.description,
         "constraints": order.constraints,
         "criteria": [
@@ -1025,13 +1057,12 @@ async def _read_verifier_snapshot(
         # local model judged whatever fit its window; a wrong count passed.
         # Same bounded, omission-explicit view the synthesize step uses.
         "outputs": [
-            {
-                "step": row.step_key,
-                "output": _compact_for_synthesis(
-                    row.output, max(2000, _VERIFIER_EVIDENCE_CHARS // max(1, len(steps)))
-                ),
-            }
+            {"step": row.step_key, "output": _compact_for_synthesis(row.output, per_output)}
             for row in steps
+        ],
+        "outputs_from_earlier_revisions": [
+            {"step": row.step_key, "output": _compact_for_synthesis(row.output, per_output)}
+            for row in carried
         ],
     }
     identity = {
@@ -1135,6 +1166,7 @@ async def verify_semantic_criteria(
             model=model.model,
             provider=model.provider,
             system="""You are an independent acceptance verifier. Judge only from supplied evidence.
+owner_instructions revise the objective; a later instruction overrides an earlier one.
 Return JSON: {verdicts:[{criterion_id,ok,reason,checks:[string]}]}. Fail closed when
 evidence is missing, contradictory, or does not demonstrate the objective. JSON only.""",
             temperature=0.0,

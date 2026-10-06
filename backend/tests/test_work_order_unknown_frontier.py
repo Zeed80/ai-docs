@@ -47,6 +47,11 @@ async def _order_with_unknown_send(db):
         idempotency_key="k",
     )
     db.add(call)
+    # As stop_attempt_for_nonterminal_tool_result leaves it: the step is
+    # settled, only the effect of its call is unknown.
+    step.state = "failed"
+    step.lease_owner = None
+    attempt.status = "failed"
     await db.flush()
     return order, step, call
 

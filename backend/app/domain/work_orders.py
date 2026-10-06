@@ -16,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 logger = structlog.get_logger()
 
 from app.db.models import (
+    Approval,
+    ApprovalStatus,
     WorkAcceptanceCriterion,
     WorkEvent,
     WorkEvidence,
@@ -312,6 +314,19 @@ _DEFAULT_MAX_REPLANS = 2
 _DEFAULT_MAX_REPLANS_EXPLORATORY = 30
 
 
+def owner_instructions(order: WorkOrder) -> list[str]:
+    """Owner revisions of the objective, oldest first (``/instructions``).
+
+    The objective itself is never rewritten; the planner, the synthesis step
+    and the independent verifier all read these as the revised goal.
+    """
+    return [
+        str(item.get("text") or "")
+        for item in (order.metadata_ or {}).get("instructions") or []
+        if isinstance(item, dict) and item.get("text")
+    ]
+
+
 def _max_replans_for(order: WorkOrder) -> int:
     configured = (order.budgets or {}).get("max_replans")
     if configured is not None:
@@ -564,6 +579,49 @@ def _validate_plan_steps(steps: list[dict[str, Any]]) -> None:
         visit(key)
 
 
+_RETIRABLE_STEP_STATES = ("pending", "ready", "retry_wait", "waiting_approval")
+
+
+async def _retire_superseded_steps(
+    db: AsyncSession, order: WorkOrder, plan: WorkPlan, *, actor: str
+) -> None:
+    """E23: unfinished steps of a superseded plan never run or resume.
+
+    A pending approval of such a step expires: deciding it later must not
+    move the order, whose current revision may be waiting on its own step.
+    Succeeded and failed steps stay as history; a running step is not
+    possible here because the planner waits for executing steps to settle.
+    """
+    steps = list(
+        await db.scalars(
+            select(WorkStep).where(
+                WorkStep.plan_id == plan.id, WorkStep.state.in_(_RETIRABLE_STEP_STATES)
+            )
+        )
+    )
+    if not steps:
+        return
+    for step in steps:
+        await transition_step(
+            db, step, "canceled", actor=actor, payload={"reason": "plan_superseded"}
+        )
+    step_ids = {str(step.id) for step in steps}
+    pending = list(
+        await db.scalars(
+            select(Approval).where(
+                Approval.entity_type == "work_order",
+                Approval.entity_id == order.id,
+                Approval.status == ApprovalStatus.pending,
+            )
+        )
+    )
+    for approval in pending:
+        if str((approval.context or {}).get("step_id")) in step_ids:
+            approval.status = ApprovalStatus.expired
+            approval.decision_comment = "План заменён новой ревизией"
+            approval.decided_at = utcnow()
+
+
 async def create_work_plan(
     db: AsyncSession,
     work_order: WorkOrder,
@@ -590,6 +648,7 @@ async def create_work_plan(
     )
     for existing in existing_plans:
         existing.status = "superseded"
+        await _retire_superseded_steps(db, work_order, existing, actor=actor)
     plan = WorkPlan(
         work_order_id=work_order.id,
         revision=revision,
@@ -1265,6 +1324,20 @@ async def fail_attempt(
     step.last_error = error
     step.lease_owner = None
     step.lease_expires_at = None
+    if order.status == "replanning":
+        # E23: a step still in flight when its order went to replanning
+        # settles without touching the order. Retrying it would hand the
+        # superseded plan back to the scheduler, and a second replan charge
+        # would count one revision twice; the planner sees this failure.
+        await transition_step(db, step, "failed", actor=actor, payload={"error": error})
+        await append_event(
+            db,
+            order.id,
+            "step.settled_during_replanning",
+            actor=actor,
+            payload={"step_id": str(step.id), "error": error},
+        )
+        return
     if retryable and step.attempt_count < step.max_attempts:
         await transition_step(db, step, "retry_wait", actor=actor, payload={"error": error})
         base = int((step.retry_policy or {}).get("base_seconds", 5))
@@ -1558,6 +1631,9 @@ async def apply_approval_decision(
         raise WorkStateError("Approval refers to a missing work order or step")
     if order.status != "waiting_approval" or step.state != "waiting_approval":
         raise WorkStateError("Work order is no longer waiting for this approval")
+    plan = await db.get(WorkPlan, step.plan_id)
+    if plan is None or plan.status != "active":
+        raise WorkStateError("Approval belongs to a superseded plan revision")
     if approved:
         step_input = dict(step.input_ or {})
         step_input["approval"] = {
@@ -1764,6 +1840,9 @@ async def block_recorded_recipient_approval_decision(
         raise WorkStateError("Recorded recipient approval binding is invalid")
     if order.status != "waiting_approval" or step.state != "waiting_approval":
         raise WorkStateError("Work order is no longer waiting for this approval")
+    plan = await db.get(WorkPlan, step.plan_id)
+    if plan is None or plan.status != "active":
+        raise WorkStateError("Approval belongs to a superseded plan revision")
     expected_context = await validate_recorded_recipient_binding(
         db,
         order=order,
@@ -1828,12 +1907,23 @@ async def record_verifier_verdict(
     reason: str,
     evidence_payload: dict[str, Any],
     actor: str,
+    expected_revision: int | None = None,
 ) -> bool:
     """Record an independent verdict and complete only when every gate passes."""
     if actor == order.owner_key:
         raise WorkStateError("Work-order owner cannot independently verify its own result")
     if criterion.work_order_id != order.id:
         raise WorkStateError("Criterion does not belong to the work order")
+    if expected_revision is not None and expected_revision != order.plan_revision:
+        raise WorkStateError(
+            f"Verdict was given for plan revision {expected_revision}; "
+            f"the order is at revision {order.plan_revision}"
+        )
+    # E23: a verdict lands only on a result that is waiting for it. While a
+    # revision executes or replans, a late verdict judged earlier output: a
+    # rejection would send the running revision to replanning.
+    if order.status not in {"blocked", "verifying"} or criterion.status != "pending":
+        raise WorkStateError("Criterion is not awaiting an independent verdict")
     criterion.status = "passed" if ok else "failed"
     criterion.verdict = {"ok": ok, "reason": reason}
     criterion.verified_at = utcnow()
@@ -1904,7 +1994,12 @@ async def record_verifier_verdict(
     final_step = (
         await db.execute(
             select(WorkStep)
-            .where(WorkStep.work_order_id == order.id, WorkStep.state == "succeeded")
+            .join(WorkPlan, WorkPlan.id == WorkStep.plan_id)
+            .where(
+                WorkStep.work_order_id == order.id,
+                WorkStep.state == "succeeded",
+                WorkPlan.status == "active",
+            )
             .order_by(WorkStep.finished_at.desc())
             .limit(1)
         )
