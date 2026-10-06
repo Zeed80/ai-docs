@@ -49,9 +49,11 @@ from app.db.models import (
     Invoice,
     InvoiceLine,
     Party,
+    PartyRole,
     PaymentSchedule,
     Project,
     SiteObject,
+    SupplierProfile,
     ToolCatalogEntry,
     ToolSupplier,
 )
@@ -280,6 +282,13 @@ SOURCES: dict[str, SourceDef] = {
             FieldDef("address", "Адрес", "text", ("адрес",)),
             FieldDef("bank_name", "Банк", "text", ("банк",)),
             FieldDef("bank_bik", "БИК", "text", ("бик",)),
+            FieldDef(
+                "total_invoices",
+                "Счетов",
+                "number",
+                ("счетов", "количество счетов", "число счетов"),
+            ),
+            FieldDef("total_amount", "Сумма счетов", "number", ("сумма счетов", "оборот")),
         ),
         default_columns=("name", "inn", "address"),
     ),
@@ -764,6 +773,8 @@ def _suppliers_exprs() -> dict[str, Any]:
         "address": Party.address,
         "bank_name": Party.bank_name,
         "bank_bik": Party.bank_bik,
+        "total_invoices": func.coalesce(SupplierProfile.total_invoices, 0),
+        "total_amount": func.coalesce(SupplierProfile.total_amount, 0),
     }
 
 
@@ -894,7 +905,14 @@ def _base_stmt(
             .outerjoin(Party, Invoice.supplier_id == Party.id)
         )
     if source_key == "suppliers":
-        return select(*cols).select_from(Party)
+        # Suppliers only: our own buyer entities made a 35-supplier table
+        # 39 rows long (live 2026-10-06).
+        return (
+            select(*cols)
+            .select_from(Party)
+            .outerjoin(SupplierProfile, SupplierProfile.party_id == Party.id)
+            .where(Party.role == PartyRole.supplier)
+        )
     if source_key == "warehouse":
         return select(*cols).select_from(InventoryItem)
     if source_key == "documents":

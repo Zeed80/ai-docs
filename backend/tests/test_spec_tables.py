@@ -1295,3 +1295,32 @@ def test_tool_catalog_source_is_in_the_public_catalog():
         else {f.key for f in source.fields}
     )
     assert {"part_number", "name", "supplier_name", "price_value"} <= field_names
+
+
+@pytest.mark.asyncio
+async def test_suppliers_source_lists_suppliers_with_invoice_counts(db_session):
+    """Our own buyer entities made a 35-supplier table 39 rows long, and the
+    invoice-count columns were dropped as unknown (live 2026-10-06)."""
+    from app.db.models import PartyRole, SupplierProfile
+
+    leader = Party(name="ЯЯЯ Лидер спецтаблицы", inn="7700000301", role=PartyRole.supplier)
+    ours = Party(name="ЯЯЯ Наше юрлицо спецтаблицы", inn="7700000302", role=PartyRole.buyer)
+    db_session.add_all([leader, ours])
+    await db_session.flush()
+    db_session.add(SupplierProfile(party_id=leader.id, total_invoices=10_000, total_amount=5.0))
+    await db_session.flush()
+
+    result = await ts.execute_spec(
+        db_session,
+        ts.TableSpec(
+            source="suppliers",
+            columns=[ts.ColumnSpec(field="name"), ts.ColumnSpec(field="total_invoices")],
+            sort=[ts.SortSpec(field="total_invoices", dir="desc")],
+        ),
+    )
+
+    names = [row["name"] for row in result.rows]
+    assert names[0] == "ЯЯЯ Лидер спецтаблицы"
+    assert result.rows[0]["total_invoices"] == 10_000
+    assert "ЯЯЯ Наше юрлицо спецтаблицы" not in names
+    assert result.total == len(result.rows)
