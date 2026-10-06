@@ -21,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.models import WorkOrder
+from app.domain.work_budget_ledger import initialize_budget_ledger
 from app.domain.work_orders import (
     _blocker_reason,
     claim_ready_step,
@@ -36,6 +37,18 @@ from app.domain.work_orders import (
 )
 from app.domain.work_planning import PlannedStep
 from app.tasks.work_orders import _execute_decompose, _split_child_budgets
+
+
+async def _plan_child(db, child_id):
+    """Stand in for the durable capability planner that plans a received child."""
+    child = await db.get(WorkOrder, child_id)
+    await create_single_step_plan(
+        db,
+        child,
+        kind="capability",
+        title=child.objective[:200],
+        input_data={"capability": "documents", "action": "list", "arguments": {}},
+    )
 
 
 def test_blocker_reason_none_for_no_blocker():
@@ -124,6 +137,7 @@ async def test_decompose_creates_children_with_split_budget_and_parent_waits(
             risk_level="medium",
             budgets={"token_budget": 1000},
         )
+        await initialize_budget_ledger(db, order.id)
         await create_single_step_plan(
             db,
             order,
@@ -132,10 +146,13 @@ async def test_decompose_creates_children_with_split_budget_and_parent_waits(
             input_data=children_input,
         )
         order_id = order.id
+        parent_ledger_id = order.budget_ledger_id
         await db.commit()
 
     output = await _execute_decompose(order_id, children_input)
     assert len(output["child_order_ids"]) == 2
+    # A retried step (crash after commit, before settlement) spawns no second set.
+    assert await _execute_decompose(order_id, children_input) == output
 
     async with factory() as db:
         children = list(
@@ -151,7 +168,9 @@ async def test_decompose_creates_children_with_split_budget_and_parent_waits(
             assert child.priority == 80
             assert child.risk_level == "medium"
             assert child.budgets == {"token_budget": 500}  # 1000 split across 2
-            assert child.status == "ready"  # create_single_step_plan already advanced it
+            # Left for the durable capability planner, spending the parent's ledger.
+            assert child.status == "received"
+            assert child.budget_ledger_id == parent_ledger_id
 
 
 @pytest.mark.asyncio
@@ -171,6 +190,7 @@ async def test_decompose_children_inherit_exploratory_constraints(test_engine, m
             objective="Найди каталоги поставщиков",
             constraints={"mode": "exploratory"},
         )
+        await initialize_budget_ledger(db, order.id)
         await create_single_step_plan(
             db,
             order,
@@ -205,6 +225,7 @@ async def test_promote_waiting_parents_completes_once_all_children_succeed(
     children_input = {"children": [{"objective": "Child one"}, {"objective": "Child two"}]}
     async with factory() as db:
         parent = await create_work_order(db, owner_key="tester", objective="Parent")
+        await initialize_budget_ledger(db, parent.id)
         await create_single_step_plan(
             db,
             parent,
@@ -240,6 +261,7 @@ async def test_promote_waiting_parents_completes_once_all_children_succeed(
         assert still_waiting == 0
 
         for child in children:
+            await _plan_child(db, child.id)
             claimed = await claim_ready_step(db, worker_id="w", work_order_id=child.id)
             assert claimed is not None
             c_order, c_step, c_attempt = claimed
@@ -295,6 +317,7 @@ async def test_promote_waiting_parents_builds_structured_coverage_for_explorator
             constraints={"mode": "exploratory"},
             acceptance_criteria=exploratory_acceptance_criteria(),
         )
+        await initialize_budget_ledger(db, parent.id)
         await create_single_step_plan(
             db,
             parent,
@@ -324,6 +347,7 @@ async def test_promote_waiting_parents_builds_structured_coverage_for_explorator
     bad_child = next(c for c in children if "Б" in c.objective)
 
     async with factory() as db:
+        await _plan_child(db, ok_child.id)
         claimed = await claim_ready_step(db, worker_id="w", work_order_id=ok_child.id)
         assert claimed is not None
         c_order, c_step, c_attempt = claimed
@@ -337,6 +361,7 @@ async def test_promote_waiting_parents_builds_structured_coverage_for_explorator
         )
         await verify_nonempty_result(db, order=c_order, step=c_step)
 
+        await _plan_child(db, bad_child.id)
         claimed2 = await claim_ready_step(db, worker_id="w", work_order_id=bad_child.id)
         assert claimed2 is not None
         b_order, b_step, b_attempt = claimed2
@@ -410,6 +435,7 @@ async def test_promote_waiting_parents_fails_when_every_child_fails(test_engine,
         parent = await create_work_order(
             db, owner_key="tester", objective="Parent", budgets={"max_replans": 0}
         )
+        await initialize_budget_ledger(db, parent.id)
         await create_single_step_plan(
             db,
             parent,
@@ -429,6 +455,7 @@ async def test_promote_waiting_parents_fails_when_every_child_fails(test_engine,
         child = (
             await db.execute(select(WorkOrder).where(WorkOrder.id == output["child_order_ids"][0]))
         ).scalar_one()
+        await _plan_child(db, child.id)
         claimed = await claim_ready_step(db, worker_id="w", work_order_id=child.id)
         assert claimed is not None
         c_order, c_step, c_attempt = claimed
@@ -480,6 +507,7 @@ async def test_promote_waiting_parents_replans_when_every_child_fails_but_budget
         parent = await create_work_order(
             db, owner_key="tester", objective="Parent", budgets={"max_replans": 2}
         )
+        await initialize_budget_ledger(db, parent.id)
         await create_single_step_plan(
             db,
             parent,
@@ -499,6 +527,7 @@ async def test_promote_waiting_parents_replans_when_every_child_fails_but_budget
         child = (
             await db.execute(select(WorkOrder).where(WorkOrder.id == output["child_order_ids"][0]))
         ).scalar_one()
+        await _plan_child(db, child.id)
         claimed = await claim_ready_step(db, worker_id="w", work_order_id=child.id)
         assert claimed is not None
         c_order, c_step, c_attempt = claimed

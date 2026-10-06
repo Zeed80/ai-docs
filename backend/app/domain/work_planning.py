@@ -179,6 +179,13 @@ def validate_capability_plan(plan: PlannedWork) -> PlannedWork:
         unknown = set(step.depends_on) - keys
         if unknown or step.step_key in step.depends_on:
             raise ValueError(f"invalid dependencies for {step.step_key}: {sorted(unknown)}")
+        if step.kind == "agent_turn":
+            # Headless agent_turn execution is retired (E21.2b5): such a step
+            # can only fail. Reject the plan so the model sees why and replans.
+            raise ValueError(
+                f"step {step.step_key}: agent_turn is not executable in durable work; "
+                "use capability steps (or decompose)"
+            )
         if step.kind != "capability":
             continue
         capability = capabilities.get(str(step.capability))
@@ -251,8 +258,8 @@ async def generate_capability_plan(
     )
     system = """You are a durable task planner. Return JSON only.
 Build the smallest executable DAG using only listed capability/action pairs. Each external
-operation is one capability step. Use agent_turn only for synthesis/reasoning that cannot be
-done by a capability. Pass data between steps with exact references like
+operation is one capability step. Step kinds are "capability" and "decompose" only; there is
+no free-form agent_turn step. Pass data between steps with exact references like
 ${steps.lookup.output.result.items}. Never repeat completed work during replanning.
 Schema: {assumptions:[string], steps:[{step_key,title,kind,capability?,action?,input,
 depends_on,success_predicate,risk_level,max_attempts,timeout_seconds}],
@@ -268,10 +275,8 @@ verification_plan:{mode,checks}}. Gated actions must be high risk."""
 Your previous plan JSON for this order was REJECTED: {planner_error_context[:300]}
 You MUST return a JSON object matching exactly the Schema above — never a bare {{"text": ...}}
 or {{"result": ...}} conversational reply, even if the objective feels finished or you only
-have a short answer to give. If nothing more needs doing, express that as a plan (e.g. a
-single agent_turn step whose input.prompt asks for a final summary, or for exploratory
-orders the final coverage-report step) — never as a top-level free-form object instead of
-{{assumptions, steps, verification_plan}}."""
+have a short answer to give. Use only "capability" or "decompose" steps — never a top-level
+free-form object instead of {{assumptions, steps, verification_plan}}."""
     if is_exploratory(order):
         # Ф1.A (AGENT_AUTONOMY_ROADMAP.md): constraints.mode="exploratory" is
         # already visible to the model inside the prompt JSON above — this
@@ -627,6 +632,48 @@ async def _persist_planner_stop(
         return True
 
 
+async def _persist_planner_failure(
+    factory: Any, snapshot: PlannerSnapshot, error: str, *, actor: str
+) -> bool:
+    """Count one failed planning attempt; block the order once the streak is spent."""
+    async with factory() as db:
+        current = await _read_planner_snapshot(db, snapshot.work_order_id, lock_order=True)
+        if current is None or current.authority_digest != snapshot.authority_digest:
+            return False
+        order = await db.get(WorkOrder, snapshot.work_order_id)
+        if order is None:
+            return False
+        reason = error[:500]
+        metadata = dict(order.metadata_ or {})
+        streak = int(metadata.get("planner_fallback_streak", 0)) + 1
+        metadata["planner_fallback_streak"] = streak
+        metadata["last_planner_error"] = reason
+        order.metadata_ = metadata
+        await append_event(
+            db,
+            order.id,
+            "plan.planner_failed",
+            actor=actor,
+            payload={"error": error[:1000], "streak": streak},
+        )
+        if streak >= _MAX_CONSECUTIVE_PLANNER_FALLBACKS:
+            order.blocker = {
+                "code": "planner_schema_failure_streak",
+                "streak": streak,
+                "last_error": reason,
+            }
+            if "blocked" in WORK_TRANSITIONS.get(order.status, frozenset()):
+                await transition_work_order(
+                    db,
+                    order,
+                    "blocked",
+                    actor=actor,
+                    payload={"reason": "planner_schema_failure_streak", "streak": streak},
+                )
+        await db.commit()
+        return True
+
+
 async def plan_work_order_detached(
     work_order_id: uuid.UUID,
     *,
@@ -676,10 +723,14 @@ async def plan_work_order_detached(
     except BudgetExecutionStopped as stop:
         await _persist_planner_stop(factory, snapshot, stop, actor=actor)
         return False
-    except Exception as exc:  # noqa: BLE001 - preserve the established fallback policy
-        fallback_error = str(exc)
-        fallback_reason = fallback_error[:500]
-        planned = fallback_plan(snapshot, reason=fallback_reason)
+    except Exception as exc:  # noqa: BLE001 - a planner failure is recorded, not executed
+        # The fallback plan was a single agent_turn step, which E21.2b5 retired
+        # for headless work: every planner failure became a dead step, a failed
+        # attempt and a replan that hit the same wall. Record the failure and
+        # leave the order for the next dispatch tick; the streak backstop below
+        # blocks it after _MAX_CONSECUTIVE_PLANNER_FALLBACKS attempts.
+        await _persist_planner_failure(factory, snapshot, str(exc), actor=actor)
+        return False
 
     async with factory() as db:
         current = await _read_planner_snapshot(db, work_order_id, lock_order=True)

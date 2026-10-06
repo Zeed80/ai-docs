@@ -68,6 +68,10 @@ E21.3a выпущен: перепланирования на общем ledger �
 отложены: без токенизатора честной верхней границы до отправки нет, конечный cap
 по умолчанию не задаётся (fail-closed сохраняется). Следующее в P1.1: исполнимая
 декомпозиция (потомок на ledger родителя, durable шаг), active-time.
+E21.3b выпущен: декомпозиция и fallback планировщика больше не создают мёртвых
+`agent_turn`-шагов. Добавлен в план E21.3c — durable-шаг синтеза (LLM без
+инструментов под общим бюджетом) для итогового текста и отчёта о покрытии
+не-чатовой работы; затем active-time.
 Оставшиеся AIRouter/direct paths, entry adapters, legacy reconciliation,
 token/cost accounting и active/replan остаются E21.2b+/E21.3;
 вся E21 не завершена. Отчёт: `docs/agent-employee-delivery/E21-budget-ledger.md`.

@@ -1116,6 +1116,13 @@ blocked verifier как итог в UI, подпись needs_review. Embedding/r
 исполним (в production не использовался). Отчёт:
 `docs/agent-employee-delivery/E21-shared-replan-budget.md`.
 
+**E21.3b (TESTED / DEPLOYED):** декомпозиция исполнима: потомки сразу на ledger
+родителя, `received`, планируются durable capability-планировщиком; повтор шага не
+плодит потомков. Сбой планировщика больше не создаёт мёртвый `agent_turn`-шаг
+(счётчик, повтор следующим тиком, блок после 5); планы с `agent_turn` отклоняются
+с причиной. Отчёт: `docs/agent-employee-delivery/E21-executable-decomposition.md`.
+Следующий срез E21.3c — durable-шаг синтеза для не-чатовой работы.
+
 1. Сначала точные единицы: tool attempts, LLM calls, tokens, cost, active time,
    replan count. Ожидание человека не смешивать с активным временем без ADR.
 2. Целевые defaults: 2 часа active, 200 tools, 50 LLM calls, 3 replans. Не включать

@@ -70,8 +70,10 @@ def _response(*, valid=True):
                     {
                         "step_key": "execute",
                         "title": "Execute safely",
-                        "kind": "agent_turn",
-                        "input": {"prompt": "execute"},
+                        "kind": "capability",
+                        "capability": "documents",
+                        "action": "list",
+                        "input": {},
                     }
                 ],
                 "verification_plan": {"mode": "deterministic_then_independent"},
@@ -240,7 +242,9 @@ async def test_settlement_failure_blocks_without_plan_or_fallback(test_engine, m
 
 
 @pytest.mark.asyncio
-async def test_ordinary_provider_failure_keeps_existing_fallback_policy(test_engine, monkeypatch):
+async def test_ordinary_provider_failure_records_a_streak_without_a_dead_step(
+    test_engine, monkeypatch
+):
     factory, order_id = await _planning_case(test_engine)
     _install_model(monkeypatch)
 
@@ -251,11 +255,15 @@ async def test_ordinary_provider_failure_keeps_existing_fallback_policy(test_eng
     calls = []
     _install_http(monkeypatch, [RuntimeError("down")] * 3, calls)
 
-    assert await plan_work_order_detached(order_id, session_factory=factory)
+    # The old fallback created a single agent_turn step, which E21.2b5 retired
+    # for headless work. Now no plan is created; the next tick plans again.
+    assert not await plan_work_order_detached(order_id, session_factory=factory)
     assert len(calls) == 1
     async with factory() as db:
         order = await db.get(WorkOrder, order_id)
-        assert order.status == "ready"
+        assert order.status == "planning"
+        plans = await db.scalars(select(WorkPlan).where(WorkPlan.work_order_id == order_id))
+        assert list(plans) == []
         assert order.metadata_["planner_fallback_streak"] == 1
         assert "down" in order.metadata_["last_planner_error"]
 

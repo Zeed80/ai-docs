@@ -813,3 +813,25 @@ async def charge_replan_in_transaction(db, order: WorkOrder) -> bool:
     )
     await db.flush()
     return True
+
+
+async def bind_child_to_parent_ledger(db, parent: WorkOrder, child: WorkOrder) -> WorkBudgetLedger:
+    """Bind a freshly created child to its parent's shared ledger, in-transaction.
+
+    ``initialize_budget_ledger`` cannot do this for a running parent: the
+    parent already has plan/attempt history and that path demands an explicit
+    baseline migration. A brand-new child has no history of its own, so it
+    simply joins the lineage ledger; its usage is charged there from the start.
+    """
+    if parent.budget_ledger_id is None:
+        raise BudgetBindingConflict("Parent WorkOrder has no budget ledger")
+    if child.parent_id != parent.id or child.owner_key != parent.owner_key:
+        raise BudgetBindingConflict("Child WorkOrder does not belong to this parent")
+    if child.budget_ledger_id not in {None, parent.budget_ledger_id}:
+        raise BudgetBindingConflict("WorkOrder ledger binding is immutable")
+    ledger = await db.get(WorkBudgetLedger, parent.budget_ledger_id, with_for_update=True)
+    if ledger is None or ledger.owner_key != parent.owner_key:
+        raise BudgetBindingConflict("Parent budget binding is invalid")
+    child.budget_ledger_id = ledger.id
+    await db.flush()
+    return ledger

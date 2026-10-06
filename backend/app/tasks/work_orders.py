@@ -553,20 +553,40 @@ async def _execute_decompose(work_order_id: uuid.UUID, input_data: dict[str, Any
     being done) happens separately in verify_completed_step, which is the
     existing hook for "what happens after the last step of a plan succeeds".
     """
+    from sqlalchemy import select
+
     from app.db.models import WorkOrder
     from app.db.session import _get_session_factory
-    from app.domain.work_orders import create_single_step_plan, create_work_order
+    from app.domain.work_budget_ledger import bind_child_to_parent_ledger
+    from app.domain.work_orders import create_work_order
 
     children_spec = list(input_data.get("children") or [])
     if not children_spec:
         raise ValueError("decompose step requires a non-empty children list")
+    # Children are committed before this step settles; a crash in between
+    # retries the step. The digest makes that retry return the same children
+    # instead of spawning a second set.
+    spec_digest = hashlib.sha256(
+        json.dumps(children_spec, sort_keys=True, ensure_ascii=True, default=str).encode()
+    ).hexdigest()
 
     factory = _get_session_factory()
     child_ids: list[str] = []
     async with factory() as db:
-        parent = await db.get(WorkOrder, work_order_id)
+        parent = await db.get(WorkOrder, work_order_id, with_for_update=True)
         if parent is None:
             raise ValueError(f"parent work order {work_order_id} not found")
+        existing = [
+            row
+            for row in await db.scalars(select(WorkOrder).where(WorkOrder.parent_id == parent.id))
+            if (row.metadata_ or {}).get("decompose_spec_digest") == spec_digest
+        ]
+        if existing:
+            return {
+                "text": f"Создано дочерних поручений: {len(existing)}",
+                "executor": "decompose",
+                "child_order_ids": [str(row.id) for row in existing],
+            }
         parent_budgets = dict(parent.budgets or {})
         for spec in children_spec:
             objective = str(spec.get("objective") or "").strip()
@@ -588,22 +608,16 @@ async def _execute_decompose(work_order_id: uuid.UUID, input_data: dict[str, Any
                 budgets=child_budgets,
                 # Ф4: inherit constraints (notably mode="exploratory") — a
                 # child decomposed from an exploratory objective is itself
-                # still exploratory (e.g. "find catalog for supplier X" is
-                # small but still open-ended, not a bounded capability DAG
-                # known up front). Matters mainly if this child's own initial
-                # agent_turn step later fails and gets replanned — that
-                # replan should get the same small-horizon planner guidance
-                # the parent did, not silently fall back to default mode.
+                # still exploratory and should get the same planner guidance.
                 constraints=dict(parent.constraints or {}),
                 parent_id=parent.id,
+                metadata={"decompose_spec_digest": spec_digest},
             )
-            await create_single_step_plan(
-                db,
-                child,
-                kind="agent_turn",
-                title=objective[:200],
-                input_data={"prompt": objective},
-            )
+            # E21: the child spends from the parent's shared ledger, and it is
+            # left "received" for the durable capability planner. It used to
+            # get a single agent_turn step, which E21.2b5 retired for headless
+            # work, so no decomposed child could ever run.
+            await bind_child_to_parent_ledger(db, parent, child)
             child_ids.append(str(child.id))
         await db.commit()
 

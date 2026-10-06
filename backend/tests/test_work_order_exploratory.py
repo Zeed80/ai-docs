@@ -263,7 +263,16 @@ class TestExploratoryPlannerPrompt:
             captured["system"] = system
             return {
                 "assumptions": [],
-                "steps": [{"step_key": "s1", "title": "t", "kind": "agent_turn", "input": {}}],
+                "steps": [
+                    {
+                        "step_key": "s1",
+                        "title": "t",
+                        "kind": "capability",
+                        "capability": "documents",
+                        "action": "list",
+                        "input": {},
+                    }
+                ],
                 "verification_plan": {},
             }
 
@@ -311,7 +320,16 @@ class TestExploratoryPlannerPrompt:
             captured["prompt"] = prompt
             return {
                 "assumptions": [],
-                "steps": [{"step_key": "s1", "title": "t", "kind": "agent_turn", "input": {}}],
+                "steps": [
+                    {
+                        "step_key": "s1",
+                        "title": "t",
+                        "kind": "capability",
+                        "capability": "documents",
+                        "action": "list",
+                        "input": {},
+                    }
+                ],
                 "verification_plan": {},
             }
 
@@ -354,7 +372,16 @@ class TestExploratoryPlannerPrompt:
             captured["system"] = system
             return {
                 "assumptions": [],
-                "steps": [{"step_key": "s1", "title": "t", "kind": "agent_turn", "input": {}}],
+                "steps": [
+                    {
+                        "step_key": "s1",
+                        "title": "t",
+                        "kind": "capability",
+                        "capability": "documents",
+                        "action": "list",
+                        "input": {},
+                    }
+                ],
                 "verification_plan": {},
             }
 
@@ -519,7 +546,16 @@ class TestPlannerErrorFeedback:
             captured["system"] = system
             return {
                 "assumptions": [],
-                "steps": [{"step_key": "s1", "title": "t", "kind": "agent_turn", "input": {}}],
+                "steps": [
+                    {
+                        "step_key": "s1",
+                        "title": "t",
+                        "kind": "capability",
+                        "capability": "documents",
+                        "action": "list",
+                        "input": {},
+                    }
+                ],
                 "verification_plan": {},
             }
 
@@ -554,7 +590,16 @@ class TestPlannerErrorFeedback:
             captured["system"] = system
             return {
                 "assumptions": [],
-                "steps": [{"step_key": "s1", "title": "t", "kind": "agent_turn", "input": {}}],
+                "steps": [
+                    {
+                        "step_key": "s1",
+                        "title": "t",
+                        "kind": "capability",
+                        "capability": "documents",
+                        "action": "list",
+                        "input": {},
+                    }
+                ],
                 "verification_plan": {},
             }
 
@@ -625,7 +670,16 @@ class TestPlannerFallbackStreakCap:
         )
         good_plan = {
             "assumptions": [],
-            "steps": [{"step_key": "s1", "title": "t", "kind": "agent_turn", "input": {}}],
+            "steps": [
+                {
+                    "step_key": "s1",
+                    "title": "t",
+                    "kind": "capability",
+                    "capability": "documents",
+                    "action": "list",
+                    "input": {},
+                }
+            ],
             "verification_plan": {},
         }
 
