@@ -24,6 +24,7 @@ from app.db.models import (
     WorkPlan,
     WorkStep,
     WorkStepAttempt,
+    WorkToolCall,
 )
 
 TERMINAL_WORK_STATUSES = frozenset({"completed", "blocked", "failed", "canceled"})
@@ -318,6 +319,22 @@ def _max_replans_for(order: WorkOrder) -> int:
     return _DEFAULT_MAX_REPLANS_EXPLORATORY if is_exploratory(order) else _DEFAULT_MAX_REPLANS
 
 
+UNRESOLVED_EFFECT_STATUSES = ("outcome_unknown", "partial")
+
+
+async def unresolved_effect_call_ids(db: AsyncSession, order_id: uuid.UUID) -> list[str]:
+    """Tool calls whose effect may or may not have happened (E23 frontier)."""
+    rows = await db.scalars(
+        select(WorkToolCall.id)
+        .where(
+            WorkToolCall.work_order_id == order_id,
+            WorkToolCall.status.in_(UNRESOLVED_EFFECT_STATUSES),
+        )
+        .order_by(WorkToolCall.created_at, WorkToolCall.id)
+    )
+    return [str(row) for row in rows]
+
+
 async def _replan_or_block(
     db: AsyncSession, order: WorkOrder, *, actor: str, guarded: bool
 ) -> None:
@@ -330,6 +347,19 @@ async def _replan_or_block(
     """
     from app.domain.work_budget_ledger import charge_replan_in_transaction
 
+    unresolved = await unresolved_effect_call_ids(db, order.id)
+    if unresolved:
+        # E23: a new plan could repeat an effect whose outcome is unknown.
+        if guarded and "blocked" not in WORK_TRANSITIONS.get(order.status, frozenset()):
+            return
+        order.blocker = {
+            "code": "unresolved_effect_requires_reconciliation",
+            "tool_call_ids": unresolved,
+            "cause": order.blocker,
+        }
+        if order.status != "blocked":
+            await transition_work_order(db, order, "blocked", actor=actor)
+        return
     target = "replanning" if order.plan_revision <= _max_replans_for(order) else "blocked"
     if guarded and target not in WORK_TRANSITIONS.get(order.status, frozenset()):
         return

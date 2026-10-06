@@ -81,6 +81,9 @@ E21.3d выпущен: активное время шагов списывает
 E22 выпущен для границы между шагами (`docs/agent-employee-delivery/E22-pause.md`);
 пауза внутри хода агента — остаток. Следующее — P1.3 (E23: replan без повтора
 завершённых эффектов).
+E23a выпущен: несверенный эффект блокирует перепланирование до сверки владельцем
+(`docs/agent-employee-delivery/E23-unknown-frontier.md`); остаток E23 — устаревшие
+вердикты/решения и изменённая цель.
 Оставшиеся AIRouter/direct paths, entry adapters, legacy reconciliation,
 token/cost accounting и active/replan остаются E21.2b+/E21.3;
 вся E21 не завершена. Отчёт: `docs/agent-employee-delivery/E21-budget-ledger.md`.

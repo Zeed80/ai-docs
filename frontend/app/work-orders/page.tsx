@@ -271,6 +271,16 @@ export default function WorkOrdersPage() {
     });
     await Promise.all([loadOrders(), loadDetail(selected)]);
   }
+  // E23: until the owner says whether an unknown-outcome effect happened, the
+  // order cannot be replanned (a new plan could repeat it).
+  async function reconcileCall(callId: string, outcome: "happened" | "not_happened") {
+    if (!selected) return;
+    await api(`/api/work-orders/${selected}/tool-calls/${callId}/reconcile`, {
+      method: "POST",
+      body: JSON.stringify({ outcome }),
+    });
+    await Promise.all([loadOrders(), loadDetail(selected)]);
+  }
   async function addInstruction() {
     if (!selected || !instruction.trim()) return;
     await api(`/api/work-orders/${selected}/instructions`, {
@@ -598,6 +608,25 @@ export default function WorkOrdersPage() {
                                   tool_call · {call.status} · digest{" "}
                                   {call.action_digest?.slice(0, 10) ?? "—"}
                                 </button>
+                                {(call.status === "outcome_unknown" || call.status === "partial") && (
+                                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                                    <span className="text-amber-300">
+                                      Исход неизвестен — сверьте по получателю:
+                                    </span>
+                                    <button
+                                      onClick={() => reconcileCall(call.id, "happened")}
+                                      className="px-2 py-0.5 rounded bg-slate-700 text-slate-100"
+                                    >
+                                      Эффект произошёл
+                                    </button>
+                                    <button
+                                      onClick={() => reconcileCall(call.id, "not_happened")}
+                                      className="px-2 py-0.5 rounded bg-slate-700 text-slate-100"
+                                    >
+                                      Эффекта не было
+                                    </button>
+                                  </div>
+                                )}
                                 {expandedToolCalls.has(call.id) && (
                                   <div className="mt-1 grid grid-cols-1 lg:grid-cols-2 gap-2">
                                     <pre className="bg-slate-950/50 rounded p-2 overflow-auto max-h-32">

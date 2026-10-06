@@ -1141,6 +1141,11 @@ blocked verifier как итог в UI, подпись needs_review. Embedding/r
 доделывается; возобновление без сброса бюджета; UI различает запрос и паузу.
 Пауза внутри хода агента — остаток. Отчёт: `docs/agent-employee-delivery/E22-pause.md`.
 
+**E23a (TESTED / DEPLOYED):** несверенный эффект (`outcome_unknown`/`partial`)
+блокирует любое перепланирование до сверки владельцем
+(`/tool-calls/{id}/reconcile`); подтверждённый эффект — выполненная работа для
+планировщика. Отчёт: `docs/agent-employee-delivery/E23-unknown-frontier.md`.
+
 1. Сначала точные единицы: tool attempts, LLM calls, tokens, cost, active time,
    replan count. Ожидание человека не смешивать с активным временем без ADR.
 2. Целевые defaults: 2 часа active, 200 tools, 50 LLM calls, 3 replans. Не включать

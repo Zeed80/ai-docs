@@ -6,7 +6,7 @@ import hashlib
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, model_validator
@@ -699,6 +699,19 @@ async def add_instruction(
         raise HTTPException(409, "Durable chat checkpoint continuation is not enabled")
     if order.status in {"completed", "canceled"}:
         raise HTTPException(status_code=409, detail=f"Cannot revise a {order.status} work order")
+    from app.domain.work_orders import unresolved_effect_call_ids
+
+    unresolved = await unresolved_effect_call_ids(db, order.id)
+    if unresolved:
+        # E23: replanning now could repeat an effect whose outcome is unknown.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error_code": "unresolved_effect_requires_reconciliation",
+                "message": "Сначала сверьте действия с неизвестным исходом",
+                "tool_call_ids": unresolved,
+            },
+        )
     metadata = dict(order.metadata_ or {})
     instructions = list(metadata.get("instructions") or [])
     instructions.append(
@@ -913,6 +926,57 @@ async def cancel_order(
     await db.commit()
     await db.refresh(order)
     return order
+
+
+class ToolCallReconcileIn(BaseModel):
+    outcome: Literal["happened", "not_happened"]
+    note: str = Field("", max_length=2000)
+
+
+@router.post("/{work_order_id}/tool-calls/{tool_call_id}/reconcile")
+async def reconcile_tool_call(
+    work_order_id: uuid.UUID,
+    tool_call_id: uuid.UUID,
+    body: ToolCallReconcileIn,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict[str, Any]:
+    """E23: the owner records whether an unknown-outcome effect happened.
+
+    This is the owner's statement, kept as such: it does not verify the
+    recipient. "happened" makes the call completed work for the planner, so a
+    replan does not repeat it; "not_happened" lets a replan try it again.
+    """
+    from app.domain.work_orders import UNRESOLVED_EFFECT_STATUSES
+
+    order = await _get_owned_order(db, work_order_id, user, lock=True)
+    call = await db.get(WorkToolCall, tool_call_id, with_for_update=True)
+    if call is None or call.work_order_id != order.id:
+        raise HTTPException(status_code=404, detail="Tool call not found")
+    if call.status not in UNRESOLVED_EFFECT_STATUSES:
+        raise HTTPException(status_code=409, detail=f"Tool call is not unresolved: {call.status}")
+    previous = call.status
+    call.status = f"reconciled_{body.outcome}"
+    call.error = {
+        **(call.error or {}),
+        "reconciliation": {
+            "outcome": body.outcome,
+            "previous_status": previous,
+            "by": user.sub,
+            "at": datetime.now(UTC).isoformat(),
+            "note": body.note,
+            "basis": "owner_statement",
+        },
+    }
+    await append_event(
+        db,
+        order.id,
+        "tool_call.reconciled",
+        actor=user.sub,
+        payload={"tool_call_id": str(call.id), "outcome": body.outcome, "previous": previous},
+    )
+    await db.commit()
+    return {"tool_call_id": str(call.id), "status": call.status}
 
 
 @router.post("/{work_order_id}/pause", response_model=WorkOrderOut)

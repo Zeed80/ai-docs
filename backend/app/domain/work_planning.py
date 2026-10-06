@@ -444,6 +444,34 @@ async def _read_planner_snapshot(
         {"step_key": step.step_key, "title": step.title, "output": _summarize_step_output(step)}
         for step in completed
     ]
+    # E23: an effect whose outcome was unknown and that the owner confirmed
+    # as having happened is completed work; a replan must not repeat it.
+    from app.db.models import WorkToolCall
+
+    confirmed = list(
+        await db.execute(
+            select(WorkToolCall, WorkStep)
+            .join(WorkStep, WorkStep.id == WorkToolCall.step_id)
+            .where(
+                WorkToolCall.work_order_id == order.id,
+                WorkToolCall.status == "reconciled_happened",
+            )
+            .order_by(WorkToolCall.created_at, WorkToolCall.id)
+        )
+    )
+    completed_context.extend(
+        {
+            "step_key": step.step_key,
+            "title": step.title,
+            "output": {
+                "owner_confirmed_effect": True,
+                "capability": call.capability,
+                "action": call.action,
+                "arguments": call.arguments,
+            },
+        }
+        for call, step in confirmed
+    )
     authority = {
         "work_order_id": str(order.id),
         "owner_key": order.owner_key,
