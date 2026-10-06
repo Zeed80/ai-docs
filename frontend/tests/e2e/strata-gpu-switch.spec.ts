@@ -7,6 +7,8 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { mockEmptyApi, setAuthCookie } from "./helpers/mock-api";
 
+const deleted: string[] = [];
+
 const QUANTS = [
   ["Q2_0", "Q2_0 — самая быстрая", 66.4, 34.0],
   ["IQ2_XS", "IQ2_XS — рекомендуемая", 68.0, 35.5],
@@ -29,7 +31,7 @@ function status(over: Record<string, unknown> = {}) {
       reinstall_pending: false,
       install_only: false,
     },
-    installed: ["IQ3_S"],
+    installed: ["IQ3_S", "IQ2_XS"],
     quants: QUANTS.map(([model, label, download_gb, experts_gb]) => ({
       model,
       label,
@@ -37,8 +39,9 @@ function status(over: Record<string, unknown> = {}) {
       disk_need_gb: download_gb + experts_gb + 7,
       experts_gb,
       ram_gb: 60,
-      installed: model === "IQ3_S",
-      size_on_disk_gb: model === "IQ3_S" ? 90.1 : null,
+      installed: model === "IQ3_S" || model === "IQ2_XS",
+      size_on_disk_gb:
+        model === "IQ3_S" ? 90.1 : model === "IQ2_XS" ? 65.5 : null,
       low_ram_mode: model === "IQ3_S",
     })),
     contexts: [32768, 65536, 131072],
@@ -106,6 +109,16 @@ async function setup(
       return route.fulfill({ json: status() });
     if (path === "/api/local-models/strata/slot-plan")
       return route.fulfill({ json: PLAN });
+    if (path.startsWith("/api/local-models/strata/quants/")) {
+      deleted.push(`${route.request().method()} ${path}`);
+      return route.fulfill({
+        json: {
+          ok: true,
+          freed_gb: 65.5,
+          status: status({ installed: ["IQ3_S"] }),
+        },
+      });
+    }
     if (path === "/api/local-models/strata/access")
       return route.fulfill({
         json: {
@@ -219,4 +232,28 @@ test("idle unload is saved and the LAN key is shown on request", async ({
   await expect(page.getByText("k-123")).toHaveCount(0);
   await page.getByRole("button", { name: "Показать ключ" }).click();
   await expect(page.getByText("k-123")).toBeVisible();
+});
+
+test("a downloaded quant that is not selected can be deleted after a confirm", async ({
+  page,
+  context,
+}) => {
+  await setAuthCookie(context);
+  deleted.length = 0;
+  await setup(page, []);
+  await page.goto("/settings/models?tab=overview");
+
+  // The selected quant (IQ3_S) has no delete control; the other downloaded one has.
+  await expect(page.getByRole("button", { name: "Удалить IQ3_S" })).toHaveCount(
+    0,
+  );
+  await page.getByRole("button", { name: "Удалить IQ2_XS" }).click();
+  await expect(
+    page.getByText("Удалить IQ2_XS с диска (65.5 ГБ)?"),
+  ).toBeVisible();
+  expect(deleted).toEqual([]);
+  await page.getByRole("button", { name: "Да, удалить" }).click();
+  await expect
+    .poll(() => deleted)
+    .toEqual(["DELETE /api/local-models/strata/quants/IQ2_XS"]);
 });

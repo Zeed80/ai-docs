@@ -395,3 +395,34 @@ def test_same_model_on_the_cpu_node_is_used_while_strata_owns_the_gpu(monkeypatc
     assert pr.select_instance(ProviderKind.OLLAMA, "qwen3-embedding:8b") is gpu
     monkeypatch.setattr(gpu_runtime, "current_owner", lambda: "strata")
     assert pr.select_instance(ProviderKind.OLLAMA, "qwen3-embedding:8b") is cpu
+
+
+def test_delete_quant_removes_only_its_own_files(tmp_path, monkeypatch):
+    import asyncio
+
+    monkeypatch.setenv("STRATA_DATA_DIR", str(tmp_path))
+    for d in ("models/IQ2_XS", "models/IQ3_S", "packs/iq2_xs", "packs/iq3_s", "config", "mtp/rt"):
+        (tmp_path / d).mkdir(parents=True)
+    (tmp_path / "models/IQ3_S/shard.gguf").write_bytes(b"x" * 1000)
+    (tmp_path / "packs/iq3_s/experts.bin").write_bytes(b"x" * 1000)
+    (tmp_path / "models/mmproj-Qwen3.8-Flash-Next-BF16.gguf").write_bytes(b"shared")
+    for tag in ("iq2_xs", "iq3_s"):
+        (tmp_path / f"config/strata-{tag}.json").write_text("{}")
+    strata_manager.write_desired(model="IQ2_XS", context=65536, vision=True, reinstall=False)
+
+    # The selected quant would just be downloaded again on the next start.
+    with pytest.raises(strata_manager.StrataError, match="выбрана"):
+        asyncio.run(strata_manager.delete_quant("IQ2_XS"))
+
+    asyncio.run(strata_manager.delete_quant("IQ3_S"))
+    assert not (tmp_path / "models/IQ3_S").exists()
+    assert not (tmp_path / "packs/iq3_s").exists()
+    assert not (tmp_path / "config/strata-iq3_s.json").exists()
+    # Shared by every quant, and the other quant itself: untouched.
+    assert (tmp_path / "models/mmproj-Qwen3.8-Flash-Next-BF16.gguf").exists()
+    assert (tmp_path / "mtp/rt").exists()
+    assert (tmp_path / "config/strata-iq2_xs.json").exists()
+    assert strata_manager.installed_quants() == ["IQ2_XS"]
+
+    with pytest.raises(strata_manager.StrataError, match="не скачана"):
+        asyncio.run(strata_manager.delete_quant("IQ3_S"))

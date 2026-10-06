@@ -571,6 +571,39 @@ async def start_strata() -> list[str]:
     return unloaded
 
 
+async def delete_quant(model: str) -> float:
+    """Remove one quant's files from the volume; returns the GB freed.
+
+    Only what belongs to that quant goes: its model files, the pack setup built
+    from them and its run config. The image encoder, the MTP draft layer and
+    the expert profile are shared by every quant and stay. The selected quant
+    cannot be deleted (the next start would download it again), nor one that
+    is being downloaded right now.
+    """
+    if model not in QUANTS:
+        raise StrataError(f"Неизвестное квантование: {model}")
+    desired = read_desired()
+    if model == desired["model"]:
+        raise StrataError(
+            f"{model} выбрана для запуска. Сначала выберите и примените другое квантование."
+        )
+    targets = [
+        data_dir() / "models" / model,
+        data_dir() / "packs" / _tag(model),
+        data_dir() / "config" / f"strata-{_tag(model)}.json",
+    ]
+    if not any(t.exists() for t in targets):
+        raise StrataError(f"{model} не скачана — удалять нечего")
+    freed = _size_on_disk_gb(model) or 0.0
+    for target in targets:
+        if target.is_dir():
+            shutil.rmtree(target)
+        elif target.exists():
+            target.unlink()
+    logger.info("strata_quant_deleted", model=model, freed_gb=freed)
+    return freed
+
+
 async def install_strata() -> None:
     """Download and set up the chosen quant without serving it.
 

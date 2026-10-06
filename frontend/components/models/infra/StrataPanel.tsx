@@ -22,6 +22,7 @@ import {
 import {
   strataConfig,
   strataAccess,
+  strataDeleteQuant,
   strataInstall,
   strataRuntime,
   strataSlotPlan,
@@ -462,44 +463,53 @@ export function StrataPanel() {
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {st.quants.map((q) => (
-                <label
+                <div
                   key={q.model}
-                  className={`flex items-start gap-2 rounded border p-2 text-xs cursor-pointer min-w-0 ${
+                  className={`flex flex-wrap items-start gap-2 rounded border p-2 text-xs min-w-0 ${
                     draft.model === q.model
                       ? "border-blue-600 bg-blue-950/30"
                       : "border-slate-700 hover:border-slate-500"
                   }`}
                 >
-                  <input
-                    type="radio"
-                    name="strata-quant"
-                    className="mt-0.5"
-                    checked={draft.model === q.model}
-                    onChange={() => setDraft({ ...draft, model: q.model })}
-                  />
-                  <span className="min-w-0">
-                    <span className="block text-slate-100 font-medium">
-                      {q.label}
-                      {q.installed && (
-                        <span className="ml-2 text-emerald-300 font-normal">
-                          скачана
-                        </span>
-                      )}
-                      {st.desired.model === q.model && (
-                        <span className="ml-2 text-blue-300 font-normal">
-                          выбрана
-                        </span>
-                      )}
+                  <label className="flex flex-1 items-start gap-2 cursor-pointer min-w-0">
+                    <input
+                      type="radio"
+                      name="strata-quant"
+                      className="mt-0.5"
+                      checked={draft.model === q.model}
+                      onChange={() => setDraft({ ...draft, model: q.model })}
+                    />
+                    <span className="min-w-0">
+                      <span className="block text-slate-100 font-medium">
+                        {q.label}
+                        {q.installed && (
+                          <span className="ml-2 text-emerald-300 font-normal">
+                            скачана
+                          </span>
+                        )}
+                        {st.desired.model === q.model && (
+                          <span className="ml-2 text-blue-300 font-normal">
+                            выбрана
+                          </span>
+                        )}
+                      </span>
+                      <span className="block text-slate-400">
+                        {q.installed
+                          ? `на диске ${q.size_on_disk_gb ?? "?"} ГБ`
+                          : `скачать ~${q.download_gb} ГБ, займёт ~${Math.round(q.disk_need_gb)} ГБ`}{" "}
+                        · эксперты {q.experts_gb} ГБ
+                        {q.low_ram_mode && " · режим нехватки ОЗУ (медленнее)"}
+                      </span>
                     </span>
-                    <span className="block text-slate-400">
-                      {q.installed
-                        ? `на диске ${q.size_on_disk_gb ?? "?"} ГБ`
-                        : `скачать ~${q.download_gb} ГБ, займёт ~${Math.round(q.disk_need_gb)} ГБ`}{" "}
-                      · эксперты {q.experts_gb} ГБ
-                      {q.low_ram_mode && " · режим нехватки ОЗУ (медленнее)"}
-                    </span>
-                  </span>
-                </label>
+                  </label>
+                  {q.installed && st.desired.model !== q.model && (
+                    <QuantDelete
+                      model={q.model}
+                      sizeGb={q.size_on_disk_gb}
+                      onDeleted={(next) => setSt(next)}
+                    />
+                  )}
+                </div>
               ))}
             </div>
             <div className="flex flex-wrap items-center gap-3">
@@ -737,5 +747,72 @@ function StrataAccessBlock({ externalUrl }: { externalUrl: string | null }) {
         . Ключ обязателен: без него сервер не отвечает.
       </div>
     </div>
+  );
+}
+
+/** Удаление скачанного квантования: два шага, потому что вернуть его — это
+ * повторная загрузка десятков гигабайт. Выбранное квантование не удаляется
+ * (кнопки у него нет, сервер тоже откажет). */
+function QuantDelete({
+  model,
+  sizeGb,
+  onDeleted,
+}: {
+  model: string;
+  sizeGb: number | null;
+  onDeleted: (s: StrataStatus) => void;
+}) {
+  const toast = useToast();
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const remove = async () => {
+    setBusy(true);
+    try {
+      const r = await strataDeleteQuant(model);
+      onDeleted(r.status);
+      toast.ok(`${model} удалена`, `Освобождено ~${Math.round(r.freed_gb)} ГБ`);
+    } catch (e) {
+      toast.error("Не удалось удалить", String((e as Error).message ?? e));
+    } finally {
+      setBusy(false);
+      setConfirming(false);
+    }
+  };
+
+  if (!confirming) {
+    return (
+      <button
+        type="button"
+        className="text-xs text-red-400 hover:text-red-300"
+        aria-label={`Удалить ${model}`}
+        onClick={() => setConfirming(true)}
+      >
+        Удалить
+      </button>
+    );
+  }
+  return (
+    <span className="flex flex-wrap items-center gap-2">
+      <span className="text-red-300">
+        Удалить {model} с диска{sizeGb != null ? ` (${sizeGb} ГБ)` : ""}?
+      </span>
+      <button
+        type="button"
+        className={`${btn} bg-red-700 hover:bg-red-600 text-white disabled:opacity-50`}
+        disabled={busy}
+        onClick={() => void remove()}
+      >
+        {busy ? "Удаляю…" : "Да, удалить"}
+      </button>
+      <button
+        type="button"
+        className={btnSecondary}
+        disabled={busy}
+        onClick={() => setConfirming(false)}
+      >
+        Отмена
+      </button>
+    </span>
   );
 }

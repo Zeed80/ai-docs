@@ -373,6 +373,15 @@ async def _restore_slots(db: AsyncSession, user: UserInfo) -> list[str]:
     return sorted(restored)
 
 
+@router.delete("/quants/{model}", dependencies=_admin)
+async def strata_delete_quant(model: str) -> dict:
+    try:
+        freed = await strata_manager.delete_quant(model)
+    except strata_manager.StrataError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"ok": True, "freed_gb": freed, "status": await strata_manager.status()}
+
+
 @router.post("/install", dependencies=_admin)
 async def strata_install() -> dict:
     try:

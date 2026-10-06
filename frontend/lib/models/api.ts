@@ -301,3 +301,9 @@ export const strataRuntime = (body: {
 
 export const strataAccess = () =>
   request<StrataAccess>("/api/local-models/strata/access");
+
+export const strataDeleteQuant = (model: string) =>
+  request<{ ok: boolean; freed_gb: number; status: StrataStatus }>(
+    `/api/local-models/strata/quants/${encodeURIComponent(model)}`,
+    { method: "DELETE" },
+  );
