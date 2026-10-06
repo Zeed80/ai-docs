@@ -156,9 +156,7 @@ def write_desired(
         raise StrataError(
             f"Том Strata не подключён к бэкенду ({path.parent}). Пересоберите стек с сервисом strata."
         )
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    tmp.replace(path)
+    _atomic_write(path, "\n".join(lines) + "\n")
 
 
 def read_runtime() -> dict:
@@ -192,9 +190,7 @@ def _save_runtime(runtime: dict) -> None:
         raise StrataError(f"Том Strata не подключён к бэкенду ({path.parent}).")
     body = {k: runtime[k] for k in DEFAULT_RUNTIME}
     body["config_keys"] = _config_keys(body)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(body, indent=1), encoding="utf-8")
-    tmp.replace(path)
+    _atomic_write(path, json.dumps(body, indent=1))
 
 
 def _config_keys(runtime: dict) -> dict:
@@ -244,13 +240,33 @@ def apply_runtime_keys() -> list[str]:
             else:
                 new[key] = value
         if new != cfg:
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(new, indent=1), encoding="utf-8")
-            tmp.replace(path)
+            try:
+                _atomic_write(path, json.dumps(new, indent=1))
+            except StrataError as exc:
+                logger.warning("strata_config_unwritable", path=str(path), error=str(exc)[:200])
+                continue
             changed.append(model)
     if changed:
         logger.info("strata_runtime_keys_applied", quants=changed, **runtime)
     return changed
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """Write via a temp file; a permission problem becomes a readable StrataError.
+
+    The volume is created by the strata container as root, the backend runs as
+    appuser: without the group grant in the strata service command this was a
+    bare PermissionError — a 500 and "could not save settings" in the panel.
+    """
+    tmp = path.with_name(f".{path.name}.tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(path)
+    except PermissionError as exc:
+        raise StrataError(
+            f"Нет прав на запись в том Strata ({path.parent}). Перезапустите контейнер "
+            "strata — он выдаёт бэкенду права на том при старте."
+        ) from exc
 
 
 def _tag(model: str) -> str:
@@ -616,11 +632,17 @@ async def delete_quant(model: str) -> float:
     if not any(t.exists() for t in targets):
         raise StrataError(f"{model} не скачана — удалять нечего")
     freed = _size_on_disk_gb(model) or 0.0
-    for target in targets:
-        if target.is_dir():
-            shutil.rmtree(target)
-        elif target.exists():
-            target.unlink()
+    try:
+        for target in targets:
+            if target.is_dir():
+                shutil.rmtree(target)
+            elif target.exists():
+                target.unlink()
+    except PermissionError as exc:
+        raise StrataError(
+            f"Нет прав на удаление файлов {model} в томе Strata. Перезапустите контейнер "
+            "strata — он выдаёт бэкенду права на том при старте."
+        ) from exc
     logger.info("strata_quant_deleted", model=model, freed_gb=freed)
     return freed
 

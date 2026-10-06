@@ -446,3 +446,33 @@ def test_runtime_file_carries_ready_config_keys_for_the_container(tmp_path, monk
     keys = json.loads((tmp_path / "aiw-runtime.json").read_text())["config_keys"]
     assert keys == {"idle_unload_s": None, "min_free_vram_mib": None, "before_load": None}
     assert strata_manager.read_runtime()["idle_unload_s"] == 0
+
+
+def test_unwritable_volume_is_a_readable_error_not_a_500(tmp_path, monkeypatch):
+    """Live: the volume was root-owned, the backend runs as appuser — the panel got a 500."""
+    import os
+
+    if os.geteuid() == 0:
+        pytest.skip("root ignores directory permissions")
+    monkeypatch.setenv("STRATA_DATA_DIR", str(tmp_path))
+    tmp_path.chmod(0o555)
+    try:
+        with pytest.raises(strata_manager.StrataError, match="Нет прав на запись"):
+            strata_manager.write_desired(
+                model="IQ2_XS", context=65536, vision=True, reinstall=False
+            )
+    finally:
+        tmp_path.chmod(0o755)
+
+
+def test_permission_error_on_write_becomes_strata_error(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    monkeypatch.setenv("STRATA_DATA_DIR", str(tmp_path))
+
+    def deny(self, *_a, **_k):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "write_text", deny)
+    with pytest.raises(strata_manager.StrataError, match="Нет прав на запись"):
+        strata_manager.write_desired(model="IQ2_XS", context=65536, vision=True, reinstall=False)

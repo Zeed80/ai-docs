@@ -778,6 +778,15 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
+        # The backend (uid/gid 10001, appuser) writes aiw.env, aiw-runtime.json
+        # and the run configs and deletes quants on this volume, while
+        # everything here is created as root: give the volume to its group
+        # (setgid dirs + umask 002 keep new files writable for it too).
+        # Without it, saving Strata settings in the panel failed with a 500.
+        chgrp -R "$${STRATA_SHARED_GID:-10001}" /data 2>/dev/null
+        chmod -R g+rwX /data 2>/dev/null
+        find /data -type d -exec chmod g+s {} + 2>/dev/null
+        umask 002
         set -a
         [ -f /data/aiw.env ] && . /data/aiw.env
         set +a
