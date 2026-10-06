@@ -528,6 +528,32 @@ async def _execute_step_kind(
     raise ValueError(f"Unsupported durable work-step kind: {kind}")
 
 
+async def _attempt_reserved_dispatch(db: Any, work_order_id: uuid.UUID, attempt_id: Any) -> bool:
+    """True when this attempt reserved any tool or model dispatch.
+
+    A reservation precedes every physical tool/model call, so its absence
+    proves the attempt never crossed a dispatch boundary. A reservation
+    without a confirmed call still counts as dispatched (conservative).
+    """
+    from sqlalchemy import or_, select
+
+    from app.db.work_budget_models import WorkBudgetReservation
+
+    found = await db.scalar(
+        select(WorkBudgetReservation.id)
+        .where(
+            WorkBudgetReservation.work_order_id == work_order_id,
+            WorkBudgetReservation.reserved_units > 0,
+            or_(
+                WorkBudgetReservation.operation_key.like(f"tool:{attempt_id}%"),
+                WorkBudgetReservation.operation_key.like(f"llm:{attempt_id}%"),
+            ),
+        )
+        .limit(1)
+    )
+    return found is not None
+
+
 _SYNTHESIS_MAX_INPUT_CHARS = 12_000
 
 
@@ -1825,14 +1851,26 @@ async def execute_claimed_step(
                     actor=worker,
                     payload={"error": error},
                 )
-                order.blocker = error
-                await transition_work_order(
-                    db,
-                    order,
-                    "blocked",
-                    actor=worker,
-                    payload={"budget_error": error},
+                preempted = (
+                    exc.code == "budget_execution_inactive"
+                    and order.status != "running"
+                    and recipient_output is None
+                    and not await _attempt_reserved_dispatch(db, order.id, attempt_id)
                 )
+                if not preempted:
+                    order.blocker = error
+                    await transition_work_order(
+                        db,
+                        order,
+                        "blocked",
+                        actor=worker,
+                        payload={"budget_error": error},
+                    )
+                # A preempted sibling (the order already left "running", e.g. a
+                # parallel step failed and sent it to replanning) never reached
+                # dispatch: fail only this step. Blocking here turned every
+                # sibling failure into a dead order instead of a replan (live
+                # 2026-10-06).
                 if call_row is not None:
                     call_row.status = (
                         "failed" if recipient_confirmed is not False else "outcome_unknown"
