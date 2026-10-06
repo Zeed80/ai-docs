@@ -88,7 +88,22 @@ _SWITCH_REVISION_KEY = "strata:switch_revision"
 # by another program" instead of starting into a full card.
 RUNTIME_FILE_NAME = "aiw-runtime.json"
 IDLE_CHOICES = (0, 60, 300, 600, 1800)
-DEFAULT_RUNTIME = {"idle_unload_s": 300, "free_comfyui": True, "min_free_vram_mib": 12000}
+# Measured 2026-10-06 (IQ2_XS, 128K, RTX 3090 + 59 GB): "parallel": 2 costs a
+# solo request ~0-4% and the GPU ~9% of its expert cache, gives two concurrent
+# requests +20% and lets a short request through in 6.6 s instead of waiting
+# 24 s behind a 60K-token read. The conversation cache parks up to 4 chats in
+# RAM: an agent turn after a foreign request read 0.5 s instead of re-reading
+# 60K tokens for 28 s (4 parked chats took 3 GB of the 6 GB budget).
+PARALLEL_CHOICES = (1, 2)
+CONVERSATION_CACHE_CHOICES = (0, 2048, 4096, 6144, 8192)
+CONVERSATION_CACHE_SLOTS = 4
+DEFAULT_RUNTIME = {
+    "idle_unload_s": 300,
+    "free_comfyui": True,
+    "min_free_vram_mib": 12000,
+    "parallel": 2,
+    "conversation_cache_mib": 6144,
+}
 
 
 class StrataError(RuntimeError):
@@ -172,10 +187,32 @@ def read_runtime() -> dict:
     return out
 
 
-def write_runtime(*, idle_unload_s: int, free_comfyui: bool) -> dict:
-    if idle_unload_s not in IDLE_CHOICES:
-        raise StrataError(f"Простой должен быть одним из {', '.join(map(str, IDLE_CHOICES))} с")
-    runtime = {**read_runtime(), "idle_unload_s": idle_unload_s, "free_comfyui": free_comfyui}
+def write_runtime(
+    *,
+    idle_unload_s: int | None = None,
+    free_comfyui: bool | None = None,
+    parallel: int | None = None,
+    conversation_cache_mib: int | None = None,
+) -> dict:
+    """Change some runtime settings; None leaves a setting as it is."""
+    runtime = read_runtime()
+    if idle_unload_s is not None:
+        if idle_unload_s not in IDLE_CHOICES:
+            raise StrataError(f"Простой должен быть одним из {', '.join(map(str, IDLE_CHOICES))} с")
+        runtime["idle_unload_s"] = idle_unload_s
+    if free_comfyui is not None:
+        runtime["free_comfyui"] = bool(free_comfyui)
+    if parallel is not None:
+        if parallel not in PARALLEL_CHOICES:
+            raise StrataError("Параллельных запросов может быть 1 или 2")
+        runtime["parallel"] = parallel
+    if conversation_cache_mib is not None:
+        if conversation_cache_mib not in CONVERSATION_CACHE_CHOICES:
+            raise StrataError(
+                "Кэш разговоров: "
+                + ", ".join(f"{c // 1024} ГБ" for c in CONVERSATION_CACHE_CHOICES)
+            )
+        runtime["conversation_cache_mib"] = conversation_cache_mib
     _save_runtime(runtime)
     return runtime
 
@@ -192,6 +229,7 @@ def _save_runtime(runtime: dict) -> None:
         raise StrataError(f"Том Strata не подключён к бэкенду ({path.parent}).")
     body = {k: runtime[k] for k in DEFAULT_RUNTIME}
     body["config_keys"] = _config_keys(body)
+    body["config_args"] = _config_args(body)
     _atomic_write(path, json.dumps(body, indent=1))
 
 
@@ -202,7 +240,41 @@ def _config_keys(runtime: dict) -> dict:
         "idle_unload_s": idle or None,
         "min_free_vram_mib": int(runtime["min_free_vram_mib"]) if idle else None,
         "before_load": _comfyui_free_command() if idle and runtime["free_comfyui"] else None,
+        "parallel": int(runtime["parallel"]) if int(runtime["parallel"]) > 1 else None,
     }
+
+
+def _config_args(runtime: dict) -> dict:
+    """Engine flags in the run config's "args"; None means "remove the flag and its value"."""
+    mib = int(runtime["conversation_cache_mib"])
+    return {
+        "--conversation-cache-mib": str(mib) if mib else None,
+        "--conversation-cache-slots": str(CONVERSATION_CACHE_SLOTS) if mib else None,
+    }
+
+
+def merge_run_config(cfg: dict, keys: dict, args: dict) -> dict:
+    """The run config with these keys/flags applied (None removes).
+
+    The strata service command applies the same rules from aiw-runtime.json at
+    every container start; keep the two in step.
+    """
+    new = dict(cfg)
+    for key, value in keys.items():
+        if value is None:
+            new.pop(key, None)
+        else:
+            new[key] = value
+    argv = list(new.get("args") or [])
+    for flag, value in args.items():
+        if flag in argv:
+            i = argv.index(flag)
+            del argv[i : i + 2]
+        if value is not None:
+            argv += [flag, value]
+    if "args" in new or argv:
+        new["args"] = argv
+    return new
 
 
 def _comfyui_free_command() -> list[str]:
@@ -223,6 +295,7 @@ def apply_runtime_keys() -> list[str]:
     """
     runtime = read_runtime()
     keys = _config_keys(runtime)
+    args = _config_args(runtime)
     try:
         _save_runtime(runtime)  # the container re-applies these at every start
     except StrataError as exc:
@@ -235,12 +308,7 @@ def apply_runtime_keys() -> list[str]:
         except (OSError, ValueError) as exc:
             logger.warning("strata_config_unreadable", path=str(path), error=str(exc)[:200])
             continue
-        new = dict(cfg)
-        for key, value in keys.items():
-            if value is None:
-                new.pop(key, None)
-            else:
-                new[key] = value
+        new = merge_run_config(cfg, keys, args)
         if new != cfg:
             try:
                 _atomic_write(path, json.dumps(new, indent=1))
@@ -499,6 +567,8 @@ async def status() -> dict:
         "log_tail": logs[-12:],
         "runtime": read_runtime(),
         "idle_choices": list(IDLE_CHOICES),
+        "parallel_choices": list(PARALLEL_CHOICES),
+        "conversation_cache_choices": list(CONVERSATION_CACHE_CHOICES),
         "external_url": settings.strata_public_url or None,
         "switch_revision": _get_switch_revision() or ("tasks" if get_switch_tasks() else None),
     }

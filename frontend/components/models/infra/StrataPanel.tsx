@@ -601,9 +601,14 @@ function StrataResidency({
   const toast = useToast();
   const [idle, setIdle] = useState(st.runtime.idle_unload_s);
   const [freeComfy, setFreeComfy] = useState(st.runtime.free_comfyui);
+  const [parallel, setParallel] = useState(st.runtime.parallel);
+  const [cacheMib, setCacheMib] = useState(st.runtime.conversation_cache_mib);
   const [busy, setBusy] = useState(false);
   const changed =
-    idle !== st.runtime.idle_unload_s || freeComfy !== st.runtime.free_comfyui;
+    idle !== st.runtime.idle_unload_s ||
+    freeComfy !== st.runtime.free_comfyui ||
+    parallel !== st.runtime.parallel ||
+    cacheMib !== st.runtime.conversation_cache_mib;
 
   const apply = async () => {
     setBusy(true);
@@ -611,10 +616,12 @@ function StrataResidency({
       const r = await strataRuntime({
         idle_unload_s: idle,
         free_comfyui: freeComfy,
+        parallel,
+        conversation_cache_mib: cacheMib,
       });
       onStatus(r.status);
       toast.ok(
-        "Выгрузка при простое сохранена",
+        "Настройки работы Strata сохранены",
         r.restarted
           ? "Strata перезапускается"
           : "Применится при следующем включении",
@@ -628,9 +635,7 @@ function StrataResidency({
 
   return (
     <div className="space-y-2 border-t border-slate-800 pt-3">
-      <div className="text-xs font-medium text-slate-300">
-        Выгрузка при простое
-      </div>
+      <div className="text-xs font-medium text-slate-300">Работа модели</div>
       <div className="flex flex-wrap items-center gap-3">
         <label className="flex items-center gap-2 text-xs text-slate-300">
           Выгружать модель после простоя
@@ -655,6 +660,34 @@ function StrataResidency({
           />
           Перед загрузкой просить ComfyUI освободить видеопамять
         </label>
+        <label className="flex items-center gap-2 text-xs text-slate-300">
+          Параллельные запросы
+          <select
+            className={`${select} !w-auto`}
+            value={parallel}
+            onChange={(e) => setParallel(Number(e.target.value))}
+          >
+            {st.parallel_choices.map((c) => (
+              <option key={c} value={c}>
+                {c === 1 ? "1 — по очереди" : `${c} одновременно`}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-xs text-slate-300">
+          Кэш разговоров
+          <select
+            className={`${select} !w-auto`}
+            value={cacheMib}
+            onChange={(e) => setCacheMib(Number(e.target.value))}
+          >
+            {st.conversation_cache_choices.map((c) => (
+              <option key={c} value={c}>
+                {c === 0 ? "выключен" : `${c / 1024} ГБ ОЗУ`}
+              </option>
+            ))}
+          </select>
+        </label>
         <button
           className={btnPrimary}
           disabled={busy || !changed}
@@ -668,7 +701,12 @@ function StrataResidency({
         на него приходит позже. Задачи Студии сами выгружают Strata перед
         запуском. Если видеопамяти меньше{" "}
         {Math.round(st.runtime.min_free_vram_mib / 1024)} ГБ, Strata не
-        загружается и отвечает «видеокарта занята другой программой».
+        загружается и отвечает «видеокарта занята другой программой». Два
+        параллельных запроса: короткие задачи не ждут, пока читается длинный
+        документ, суммарно на ~20% быстрее, но на видеокарте ~9% меньше
+        экспертов. Кэш разговоров хранит до 4 разговоров в ОЗУ: реплика агента
+        после чужого запроса не перечитывает длинную историю (0,5 с вместо 28 с
+        на 60 тыс. токенов).
       </div>
     </div>
   );

@@ -413,16 +413,24 @@ async def strata_config(body: ConfigIn) -> dict:
 
 
 class RuntimeIn(BaseModel):
-    idle_unload_s: int
-    free_comfyui: bool = True
+    idle_unload_s: int | None = None
+    free_comfyui: bool | None = None
+    parallel: int | None = None
+    conversation_cache_mib: int | None = None
 
 
 @router.put("/runtime", dependencies=_admin)
 async def strata_runtime(body: RuntimeIn) -> dict:
-    """Idle unload / ComfyUI hand-off. Applied by a restart (Strata reads them at start)."""
+    """Idle unload, ComfyUI hand-off, parallel slots, conversation cache.
+
+    Applied by a restart: Strata reads them at start.
+    """
     try:
         strata_manager.write_runtime(
-            idle_unload_s=body.idle_unload_s, free_comfyui=body.free_comfyui
+            idle_unload_s=body.idle_unload_s,
+            free_comfyui=body.free_comfyui,
+            parallel=body.parallel,
+            conversation_cache_mib=body.conversation_cache_mib,
         )
         strata_manager.apply_runtime_keys()
         restarted = await strata_manager.restart_if_running()

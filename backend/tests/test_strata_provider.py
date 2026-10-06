@@ -239,7 +239,12 @@ def test_idle_unload_keys_land_in_every_installed_config(tmp_path, monkeypatch):
     assert cfg["idle_unload_s"] == 300
     assert cfg["min_free_vram_mib"] == 12000
     assert cfg["before_load"][-1].endswith("/free")
-    assert cfg["args"] == ["--pack", "/data/packs/iq3_s"]  # the rest is untouched
+    # Existing flags stay; the conversation cache is added after them.
+    assert cfg["args"][:2] == ["--pack", "/data/packs/iq3_s"]
+    assert cfg["args"][2:] == [
+        "--conversation-cache-mib", "6144", "--conversation-cache-slots", "4",
+    ]  # fmt: skip
+    assert cfg["parallel"] == 2
     assert strata_manager.apply_runtime_keys() == []  # idempotent
 
     strata_manager.write_runtime(idle_unload_s=0, free_comfyui=True)
@@ -444,7 +449,12 @@ def test_runtime_file_carries_ready_config_keys_for_the_container(tmp_path, monk
 
     strata_manager.write_runtime(idle_unload_s=0, free_comfyui=True)
     keys = json.loads((tmp_path / "aiw-runtime.json").read_text())["config_keys"]
-    assert keys == {"idle_unload_s": None, "min_free_vram_mib": None, "before_load": None}
+    assert keys == {
+        "idle_unload_s": None,
+        "min_free_vram_mib": None,
+        "before_load": None,
+        "parallel": 2,
+    }
     assert strata_manager.read_runtime()["idle_unload_s"] == 0
 
 
@@ -476,3 +486,81 @@ def test_permission_error_on_write_becomes_strata_error(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "write_text", deny)
     with pytest.raises(strata_manager.StrataError, match="Нет прав на запись"):
         strata_manager.write_desired(model="IQ2_XS", context=65536, vision=True, reinstall=False)
+
+
+def test_parallel_and_conversation_cache_become_config_keys_and_flags(tmp_path, monkeypatch):
+    monkeypatch.setenv("STRATA_DATA_DIR", str(tmp_path))
+    body = json.loads(
+        (
+            strata_manager._save_runtime(strata_manager.read_runtime())
+            or tmp_path / "aiw-runtime.json"
+        ).read_text()
+    )
+    assert body["config_keys"]["parallel"] == 2
+    assert body["config_args"] == {
+        "--conversation-cache-mib": "6144",
+        "--conversation-cache-slots": "4",
+    }
+    strata_manager.write_runtime(parallel=1, conversation_cache_mib=0)
+    body = json.loads((tmp_path / "aiw-runtime.json").read_text())
+    assert body["config_keys"]["parallel"] is None
+    assert body["config_args"] == {
+        "--conversation-cache-mib": None,
+        "--conversation-cache-slots": None,
+    }
+    # Unchanged settings stay as they were.
+    assert strata_manager.read_runtime()["idle_unload_s"] == 300
+    with pytest.raises(strata_manager.StrataError):
+        strata_manager.write_runtime(parallel=3)
+    with pytest.raises(strata_manager.StrataError):
+        strata_manager.write_runtime(conversation_cache_mib=1000)
+
+
+def test_merge_run_config_sets_replaces_and_removes_flags():
+    cfg = {
+        "args": ["--pack", "/p", "--conversation-cache-mib", "2048", "--kv", "int8"],
+        "port": 8080,
+    }
+    merged = strata_manager.merge_run_config(
+        cfg,
+        {"parallel": 2, "idle_unload_s": None},
+        {"--conversation-cache-mib": "6144", "--conversation-cache-slots": "4"},
+    )
+    assert merged["parallel"] == 2
+    assert merged["args"] == [
+        "--pack", "/p", "--kv", "int8",
+        "--conversation-cache-mib", "6144", "--conversation-cache-slots", "4",
+    ]  # fmt: skip
+    off = strata_manager.merge_run_config(
+        merged,
+        {"parallel": None},
+        {"--conversation-cache-mib": None, "--conversation-cache-slots": None},
+    )
+    assert "parallel" not in off
+    assert off["args"] == ["--pack", "/p", "--kv", "int8"]
+    assert cfg["args"][2] == "--conversation-cache-mib"  # the input is not mutated
+
+
+def test_container_merge_matches_the_backend(tmp_path, monkeypatch):
+    """The strata service command applies aiw-runtime.json with its own copy of the rules."""
+    import re
+    import subprocess
+    import sys
+    import textwrap
+    from pathlib import Path
+
+    compose = (Path(__file__).parents[2] / "infra" / "docker-compose.yml").read_text()
+    snippet = re.search(r"<<'PY'\n(.*?)\n\s*PY\n", compose, re.S).group(1)
+    snippet = textwrap.dedent(snippet).replace("/data/", f"{tmp_path}/")
+
+    monkeypatch.setenv("STRATA_DATA_DIR", str(tmp_path))
+    (tmp_path / "config").mkdir()
+    cfg = {"args": ["--pack", "/p", "--conversation-cache-mib", "2048"], "idle_unload_s": 60}
+    (tmp_path / "config" / "strata-iq2_xs.json").write_text(json.dumps(cfg))
+    strata_manager._save_runtime(strata_manager.read_runtime())
+    runtime = json.loads((tmp_path / "aiw-runtime.json").read_text())
+
+    subprocess.run([sys.executable, "-c", snippet, "iq2_xs"], check=True, capture_output=True)
+    container = json.loads((tmp_path / "config" / "strata-iq2_xs.json").read_text())
+    backend = strata_manager.merge_run_config(cfg, runtime["config_keys"], runtime["config_args"])
+    assert container == backend

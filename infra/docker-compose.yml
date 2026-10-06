@@ -818,22 +818,43 @@ services:
           [ "$$(basename "$$f")" = "strata-$$tag.json" ] && continue
           rm -f "$$f"
         done
-        # Residency keys (idle unload, ComfyUI hand-off) from the backend's
-        # /data/aiw-runtime.json "config_keys": null removes a key.
+        # A setup pass leaves the chosen quant's config as a regular FILE in
+        # /opt/strata (copied to /data/config at its end), and Strata starts
+        # from that file: later edits to /data/config (idle unload, parallel)
+        # never reached it. Make it a link to the canonical copy.
+        cur="/opt/strata/strata-$$tag.json"
+        if [ -f "/data/config/strata-$$tag.json" ] && [ ! -L "$$cur" ]; then
+          rm -f "$$cur" && ln -s "/data/config/strata-$$tag.json" "$$cur"
+        fi
+        # Runtime settings from the backend's /data/aiw-runtime.json (same rules
+        # as strata_manager.merge_run_config): "config_keys" are run-config keys
+        # (idle unload, ComfyUI hand-off, parallel), "config_args" engine flags
+        # (conversation cache); null removes.
         .venv/bin/python - "$$tag" <<'PY'
         import json, pathlib, sys
         cfg = pathlib.Path(f"/data/config/strata-{sys.argv[1]}.json")
         rt = pathlib.Path("/data/aiw-runtime.json")
         if cfg.exists() and rt.exists():
-            keys = json.loads(rt.read_text()).get("config_keys") or {}
+            body = json.loads(rt.read_text())
+            keys = body.get("config_keys") or {}
+            flags = body.get("config_args") or {}
             c = json.loads(cfg.read_text())
             for k, v in keys.items():
                 if v is None:
                     c.pop(k, None)
                 else:
                     c[k] = v
+            argv = list(c.get("args") or [])
+            for flag, v in flags.items():
+                if flag in argv:
+                    i = argv.index(flag)
+                    del argv[i:i + 2]
+                if v is not None:
+                    argv += [flag, v]
+            if "args" in c or argv:
+                c["args"] = argv
             cfg.write_text(json.dumps(c, indent=1))
-            print(f"[aiw] residency keys applied to {cfg.name}: {sorted(keys)}")
+            print(f"[aiw] runtime settings applied to {cfg.name}: {sorted(keys) + sorted(flags)}")
         PY
         exec ./docker-entrypoint.sh
     networks:

@@ -298,8 +298,12 @@ export interface StrataStatus {
     idle_unload_s: number;
     free_comfyui: boolean;
     min_free_vram_mib: number;
+    parallel: number;
+    conversation_cache_mib: number;
   };
   idle_choices: number[];
+  parallel_choices: number[];
+  conversation_cache_choices: number[];
   external_url: string | null;
 }
 

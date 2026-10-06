@@ -301,8 +301,10 @@ export const strataInstall = () =>
   );
 
 export const strataRuntime = (body: {
-  idle_unload_s: number;
-  free_comfyui: boolean;
+  idle_unload_s?: number;
+  free_comfyui?: boolean;
+  parallel?: number;
+  conversation_cache_mib?: number;
 }) =>
   request<{ ok: boolean; restarted: boolean; status: StrataStatus }>(
     "/api/local-models/strata/runtime",

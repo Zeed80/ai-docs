@@ -53,8 +53,12 @@ function status(over: Record<string, unknown> = {}) {
       idle_unload_s: 300,
       free_comfyui: true,
       min_free_vram_mib: 12000,
+      parallel: 2,
+      conversation_cache_mib: 6144,
     },
     idle_choices: [0, 60, 300, 600, 1800],
+    parallel_choices: [1, 2],
+    conversation_cache_choices: [0, 2048, 4096, 6144, 8192],
     external_url: "http://192.168.1.246:8090",
     ...over,
   };
@@ -138,6 +142,8 @@ async function setup(
               idle_unload_s: 600,
               free_comfyui: true,
               min_free_vram_mib: 12000,
+              parallel: 1,
+              conversation_cache_mib: 4096,
             },
           }),
         },
@@ -223,10 +229,17 @@ test("idle unload is saved and the LAN key is shown on request", async ({
   await page.goto("/settings/models?tab=overview");
 
   await page.getByLabel("Выгружать модель после простоя").selectOption("600");
-  const residency = page.getByText("Выгрузка при простое").locator("..");
+  await page.getByLabel("Параллельные запросы").selectOption("1");
+  await page.getByLabel("Кэш разговоров").selectOption("4096");
+  const residency = page.getByText("Работа модели").locator("..");
   await residency.getByRole("button", { name: "Применить" }).click();
   await expect.poll(() => runtimeBodies.length).toBe(1);
-  expect(runtimeBodies[0]).toEqual({ idle_unload_s: 600, free_comfyui: true });
+  expect(runtimeBodies[0]).toEqual({
+    idle_unload_s: 600,
+    free_comfyui: true,
+    parallel: 1,
+    conversation_cache_mib: 4096,
+  });
 
   await expect(page.getByText("http://192.168.1.246:8090/v1")).toBeVisible();
   await expect(page.getByText("k-123")).toHaveCount(0);
