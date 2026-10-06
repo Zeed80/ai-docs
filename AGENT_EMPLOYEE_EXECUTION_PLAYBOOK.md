@@ -1123,6 +1123,14 @@ blocked verifier как итог в UI, подпись needs_review. Embedding/r
 с причиной. Отчёт: `docs/agent-employee-delivery/E21-executable-decomposition.md`.
 Следующий срез E21.3c — durable-шаг синтеза для не-чатовой работы.
 
+**E21.3c (TESTED / DEPLOYED):** durable-шаг `synthesize` (локальная модель без
+инструментов, общий ledger, receipt). Живой цикл не-чатовой работы доведён до
+верного ответа: соседний шаг не блокирует перепланирование, заказ с выполняющимся
+шагом остаётся `running`, перепланирование может зависеть от выполненных шагов,
+синтез и verifier видят точный total и число пропущенных строк, счётчики поставщиков
+пересчитываются из счетов, каталог и сортировка `/api/suppliers` исправлены.
+Отчёт: `docs/agent-employee-delivery/E21-executable-decomposition.md`.
+
 1. Сначала точные единицы: tool attempts, LLM calls, tokens, cost, active time,
    replan count. Ожидание человека не смешивать с активным временем без ADR.
 2. Целевые defaults: 2 часа active, 200 tools, 50 LLM calls, 3 replans. Не включать
