@@ -894,11 +894,15 @@ class RecipientWorkBudgetContext:
 
     async def preflight_direct_text_call(self, provider: str | None) -> None:
         self.raise_if_stopped()
-        if provider != "ollama":
+        # Strata's reasoning leaf is one POST per reservation, charged with an
+        # explicit unknown usage, the same boundary the direct text path uses.
+        # Only Ollama was allowed here, so with the GPU on Strata every chat
+        # turn that built an SQL table stopped (live 2026-10-06).
+        if provider not in _AIROUTER_PROVEN_PROVIDERS:
             raise await self._stop(
                 BudgetExecutionStopped(
                     "http_recipient_provider_unsupported",
-                    "The SQL recipient supports only the proven Ollama physical boundary",
+                    "The SQL recipient supports only providers with a proven physical boundary",
                     details={"provider": str(provider or "")},
                 )
             )
@@ -920,11 +924,12 @@ class RecipientWorkBudgetContext:
         provider_attempt: int,
         request: dict[str, Any],
     ) -> str:
-        if provider != "ollama":
+        if provider not in _AIROUTER_PROVEN_PROVIDERS:
             raise await self._stop(
                 BudgetExecutionStopped(
                     "http_recipient_provider_unsupported",
-                    "The SQL recipient supports only Ollama",
+                    "The SQL recipient supports only providers with a proven physical boundary",
+                    details={"provider": str(provider or "")},
                 )
             )
         await self.preflight_direct_text_call(provider)

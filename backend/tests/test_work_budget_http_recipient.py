@@ -538,3 +538,39 @@ async def test_duplicate_after_parent_settlement_does_not_claim_no_prior_publica
     result = _result(response)
     assert result["status"] == "failed"
     assert result["evidence"]["publication_state"] == "prior_outcome_unknown"
+
+
+@pytest.mark.asyncio
+async def test_strata_recipient_charges_one_post_on_the_parent_ledger(test_engine, monkeypatch):
+    """With the GPU on Strata the SQL table stopped as an unsupported provider
+    (live 2026-10-06); its reasoning leaf is the same one-POST boundary."""
+    from tests.test_work_budget_direct_text import _OpenAIResponse
+
+    factory, run, _parent, headers = await _setup(test_engine, monkeypatch)
+    context = await resolve_sql_recipient_context(_request(headers))
+    _install_local_runtime(monkeypatch, provider="strata")
+    posts, _ = _install_http(monkeypatch, [_OpenAIResponse("SELECT 1")])
+
+    with bind_http_recipient_budget_context(context):
+        await context.assert_ready()
+        result = await ollama_client.reasoning_generate("sql", confidential=True)
+
+    assert result == "SELECT 1"
+    rows = await _rows(factory, run["work_order_id"], "recipient-llm:")
+    assert len(posts) == len(rows) == 1
+    assert rows[0].state == "charged"
+    assert posts[0][0].endswith("/v1/chat/completions")
+
+
+@pytest.mark.asyncio
+async def test_recipient_still_refuses_a_cloud_provider(test_engine, monkeypatch):
+    _factory, _run, _parent, headers = await _setup(test_engine, monkeypatch)
+    context = await resolve_sql_recipient_context(_request(headers))
+    _install_local_runtime(monkeypatch, provider="anthropic")
+    posts, _ = _install_http(monkeypatch, [])
+
+    with bind_http_recipient_budget_context(context), pytest.raises(BudgetExecutionStopped) as stop:
+        await ollama_client.reasoning_generate("sql")
+
+    assert stop.value.code == "http_recipient_provider_unsupported"
+    assert posts == []
