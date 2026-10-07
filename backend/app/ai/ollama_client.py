@@ -1034,6 +1034,19 @@ async def reasoning_generate(
 
     # ── Cloud providers ───────────────────────────────────────────────────────
     if not confidential and provider == "anthropic" and settings.anthropic_api_key:
+        if budget_context is not None:
+            return await _metered_cloud_text(
+                budget_context,
+                provider,
+                lambda: _claude_generate(
+                    prompt,
+                    model=model_name,
+                    system=system,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                ),
+                request={"model": model_name, "system": system, "prompt": prompt},
+            )
         return await _claude_generate(
             prompt,
             model=model_name,
@@ -1094,10 +1107,23 @@ async def reasoning_generate(
         headers = {"content-type": "application/json"}
         if api_key:
             headers["authorization"] = f"Bearer {api_key}"
-        async with httpx.AsyncClient(timeout=float(max_tokens * 0.1 + 60)) as client:
-            resp = await client.post(f"{base_url}/chat/completions", headers=headers, json=payload)
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+
+        async def _post_cloud() -> str:
+            async with httpx.AsyncClient(timeout=float(max_tokens * 0.1 + 60)) as client:
+                resp = await client.post(
+                    f"{base_url}/chat/completions", headers=headers, json=payload
+                )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
+
+        if budget_context is not None:
+            return await _metered_cloud_text(
+                budget_context,
+                provider,
+                _post_cloud,
+                request={"url": f"{base_url}/chat/completions", "payload": payload},
+            )
+        return await _post_cloud()
 
     # ── llamacpp ─────────────────────────────────────────────────────────────
     if provider == "llamacpp":
@@ -1200,6 +1226,29 @@ async def _strata_reasoning_text(
     if response_error is not None:
         raise response_error
     return (data or {}).get("choices", [{}])[0].get("message", {}).get("content") or ""
+
+
+async def _metered_cloud_text(budget_context, provider: str, post, *, request: dict) -> str:
+    """One cloud POST inside durable work: reserved before, charged after.
+
+    Reached only where the budget context let a cloud provider through (the
+    SQL recipient with full access on). The provider's own usage is not read
+    here, so the receipt says unknown rather than a guessed number.
+    """
+    logical_call_no = await budget_context.begin_direct_text_call(provider=provider)
+    operation_key = await budget_context.prepare_provider_call(
+        logical_call_no=logical_call_no,
+        provider=provider,
+        provider_attempt=1,
+        request=request,
+    )
+    try:
+        return await post()
+    finally:
+        await budget_context.charge_provider_call(
+            operation_key, usage_evidence=unknown_ollama_usage("missing")
+        )
+        await budget_context.assert_direct_text_current()
 
 
 async def _claude_generate(

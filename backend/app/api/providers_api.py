@@ -3487,6 +3487,70 @@ async def set_slot_allow_cloud(slot: str, payload: SlotCloudWrite) -> dict:
     return {"ok": True, "slot": slot, "cloud_allowed": payload.allowed}
 
 
+class DataAccessWrite(BaseModel):
+    enabled: bool
+    # Turning it on is the operator's decision, stated, not a side effect of
+    # a form save: without it the request is refused.
+    acknowledged: bool = False
+
+
+def _data_access_state() -> dict:
+    from app.ai.data_access import SECRET_COLUMNS, SECRET_TABLES, sql_full_access_enabled
+
+    return {
+        "sql_full_access": sql_full_access_enabled(),
+        "secret_tables": sorted(SECRET_TABLES),
+        "secret_columns": {table: sorted(cols) for table, cols in SECRET_COLUMNS.items()},
+    }
+
+
+@router.get("/policy/data-access", dependencies=_admin)
+async def get_data_access() -> dict:
+    """Full SQL read access of every model — the current state."""
+    return _data_access_state()
+
+
+@router.put("/policy/data-access")
+async def set_data_access(
+    payload: DataAccessWrite,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(require_role(UserRole.admin)),
+) -> dict:
+    """Turn full SQL read access for every model on or off — protected setting.
+
+    On: every model, cloud ones included, sees the schema of every table but
+    the secret ones and reads them through the agent SQL pipeline. The query
+    content (schema and task) goes to whichever provider the reasoning slot
+    names. Off restores the seven-table allowlist and local-only recipient.
+    """
+    from app.ai.agent_config import BuiltinAgentConfigUpdate, update_builtin_agent_config
+    from app.ai.data_access import sync_full_reader_grants
+    from app.audit.service import log_action
+
+    if payload.enabled and not payload.acknowledged:
+        raise HTTPException(
+            422,
+            "Полный доступ включается только с явным подтверждением (acknowledged=true)",
+        )
+    granted = None
+    if payload.enabled:
+        granted = await sync_full_reader_grants(db)
+    update_builtin_agent_config(BuiltinAgentConfigUpdate(sql_full_access=payload.enabled))
+    await log_action(
+        db,
+        action="settings.sql_full_access." + ("enabled" if payload.enabled else "disabled"),
+        entity_type="agent_config",
+        user_id=user.sub,
+        details={"sql_full_access": payload.enabled, "granted_tables": granted},
+    )
+    await db.commit()
+    from app.ai import table_sql_pipeline
+
+    table_sql_pipeline._FULL_SCHEMA_CACHE = None
+    logger.warning("sql_full_access_changed", enabled=payload.enabled, by=user.sub, tables=granted)
+    return {**_data_access_state(), "granted_tables": granted}
+
+
 class SlotThinkingWrite(BaseModel):
     enabled: bool | None  # None → model default; True/False → force on/off for this slot
     level: str | None = (

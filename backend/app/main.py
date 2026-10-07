@@ -259,6 +259,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         logger.warning("provider_instances_bootstrap_failed", error=str(exc))
 
+    # Full SQL read access (operator's switch): re-grant the full reader so a
+    # table added by a migration since it was turned on is readable too.
+    try:
+        from app.ai.data_access import sql_full_access_enabled, sync_full_reader_grants
+        from app.db.session import _get_session_factory
+
+        if sql_full_access_enabled():
+            async with _get_session_factory()() as db:
+                await sync_full_reader_grants(db)
+                await db.commit()
+    except Exception as exc:
+        logger.warning("sql_full_reader_grants_failed", error=str(exc))
+
     # Warm the pinned orchestrator model so the agent has an instant first
     # response; other models load on demand and free VRAM when idle.
     # Strata running ⇔ the GPU is Strata's; the container state is the truth

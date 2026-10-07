@@ -32,6 +32,19 @@ from app.domain.work_orders import attempt_owns_lease
 _AIROUTER_PROVEN_PROVIDERS = frozenset({"ollama", "strata"})
 
 
+def _recipient_provider_allowed(provider: str | None) -> bool:
+    """Local providers always; any provider once the operator turned on full
+    SQL access (data_access.sql_full_access). A cloud call is then one POST,
+    reserved and charged like Strata's, its usage an explicit unknown."""
+    if provider in _AIROUTER_PROVEN_PROVIDERS:
+        return True
+    if not provider:
+        return False
+    from app.ai.data_access import sql_full_access_enabled
+
+    return sql_full_access_enabled()
+
+
 class BudgetExecutionStopped(BaseException):
     """Terminal, non-retryable durable execution boundary.
 
@@ -898,7 +911,7 @@ class RecipientWorkBudgetContext:
         # explicit unknown usage, the same boundary the direct text path uses.
         # Only Ollama was allowed here, so with the GPU on Strata every chat
         # turn that built an SQL table stopped (live 2026-10-06).
-        if provider not in _AIROUTER_PROVEN_PROVIDERS:
+        if not _recipient_provider_allowed(provider):
             raise await self._stop(
                 BudgetExecutionStopped(
                     "http_recipient_provider_unsupported",
@@ -924,7 +937,7 @@ class RecipientWorkBudgetContext:
         provider_attempt: int,
         request: dict[str, Any],
     ) -> str:
-        if provider not in _AIROUTER_PROVEN_PROVIDERS:
+        if not _recipient_provider_allowed(provider):
             raise await self._stop(
                 BudgetExecutionStopped(
                     "http_recipient_provider_unsupported",

@@ -31,6 +31,9 @@ PROTECTED_SETTINGS = {
     # Data-flow boundary: quality checks may only go to cloud after an
     # explicit human decision (Dual AI principle).
     "auditor_allow_cloud",
+    # Data-access boundary: every model, cloud ones included, reading every
+    # non-secret table through SQL — only the operator's explicit decision.
+    "sql_full_access",
     # Physical hardware: fan curves and presets are a human-only decision.
     # A wrong value here overheats the machine, so the agent may not even
     # propose one — see backend/app/api/cooling_api.py.

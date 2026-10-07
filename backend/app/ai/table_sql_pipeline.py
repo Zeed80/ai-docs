@@ -83,6 +83,61 @@ def _get_schema_context() -> str:
         return ""
 
 
+_FULL_SCHEMA_CACHE: tuple[str, frozenset[str]] | None = None
+_FULL_SCHEMA_MTIME: float = 0.0
+_SHORT_TYPES = {
+    "timestamp with time zone": "timestamptz",
+    "timestamp without time zone": "timestamp",
+    "character varying": "varchar",
+    "double precision": "float",
+    "integer": "int",
+    "bigint": "bigint",
+    "boolean": "bool",
+    "USER-DEFINED": "enum",
+}
+
+
+async def _full_schema() -> tuple[str, frozenset[str]]:
+    """Schema text and table set for full access (data_access.sql_full_access).
+
+    Every non-secret table of the live database, one line each, short types;
+    a secret column (chat share token) is left out of the text as well as the
+    grants. About 10k tokens, so it needs a model with a large context.
+    """
+    global _FULL_SCHEMA_CACHE, _FULL_SCHEMA_MTIME
+    now = time.time()
+    if _FULL_SCHEMA_CACHE and (now - _FULL_SCHEMA_MTIME) < _SCHEMA_TTL:
+        return _FULL_SCHEMA_CACHE
+    from app.ai.data_access import SECRET_COLUMNS, public_tables, readable_tables
+    from app.db.session import _get_session_factory
+
+    async with _get_session_factory()() as db:
+        tables = await public_tables(db)
+    allowed = frozenset(readable_tables(set(tables)))
+    lines = []
+    for table in sorted(allowed):
+        hidden = SECRET_COLUMNS.get(table, frozenset())
+        cols = ", ".join(
+            f"{name} {_SHORT_TYPES.get(kind, kind)}"
+            for name, kind in tables[table]
+            if name not in hidden
+        )
+        lines.append(f"{table}({cols})")
+    _FULL_SCHEMA_CACHE = ("\n".join(lines), allowed)
+    _FULL_SCHEMA_MTIME = now
+    return _FULL_SCHEMA_CACHE
+
+
+async def _access_scope() -> tuple[bool, str, frozenset[str] | None]:
+    """(full, schema text, allowed tables or None for the default allowlist)."""
+    from app.ai.data_access import sql_full_access_enabled
+
+    if sql_full_access_enabled():
+        schema, allowed = await _full_schema()
+        return True, schema, allowed
+    return False, _get_schema_context(), None
+
+
 # ── SQL validation ─────────────────────────────────────────────────────────────
 
 # Dangerous patterns that must not appear in generated SQL
@@ -198,7 +253,7 @@ def referenced_tables(sql: str) -> set[str]:
     return {m.lower() for m in _TABLE_REF_RE.findall(probe)}
 
 
-def validate_sql(sql: str) -> str | None:
+def validate_sql(sql: str, *, allowed: frozenset[str] | None = None) -> str | None:
     """Return cleaned SQL if safe, or None if dangerous/invalid.
 
     Checks:
@@ -227,7 +282,7 @@ def validate_sql(sql: str) -> str | None:
         return None
 
     tables = referenced_tables(sql)
-    forbidden = tables - ALLOWED_TABLES
+    forbidden = tables - (ALLOWED_TABLES if allowed is None else allowed)
     if forbidden:
         logger.warning(
             "sql_pipeline_table_not_allowed",
@@ -285,7 +340,7 @@ async def generate_sql(
 
     Returns validated SQL or None on failure.
     """
-    schema = _get_schema_context()
+    _full, schema, allowed = await _access_scope()
     if not schema:
         return None
 
@@ -301,7 +356,7 @@ async def generate_sql(
 
         # Extract SQL from response (strip prose/markdown)
         sql = _extract_sql(raw or "")
-        return validate_sql(sql) if sql else None
+        return validate_sql(sql, allowed=allowed) if sql else None
     except Exception as exc:
         logger.warning("table_pipeline_sql_gen_failed", task=task[:80], error=str(exc))
         return None
@@ -335,7 +390,8 @@ async def execute_sql(sql: str, *, max_rows: int = 200) -> list[dict[str, Any]]:
 
     from app.db.session import _get_session_factory
 
-    safe_sql = validate_sql(sql)
+    full, _schema, allowed = await _access_scope()
+    safe_sql = validate_sql(sql, allowed=allowed)
     if not safe_sql:
         raise ValueError("SQL failed validation")
 
@@ -357,7 +413,7 @@ async def execute_sql(sql: str, *, max_rows: int = 200) -> list[dict[str, Any]]:
         # выше — это разбор текста, написанного моделью по содержимому письма
         # или документа; ошибка в нём пропустила бы запрос к чужой таблице, а
         # права СУБД — нет.
-        await _enter_reader_role(db)
+        await _enter_reader_role(db, full=full)
         result = await db.execute(text(safe_sql))
         cols = list(result.keys())
         rows = [dict(zip(cols, row)) for row in result.fetchall()]
@@ -370,7 +426,7 @@ async def execute_sql(sql: str, *, max_rows: int = 200) -> list[dict[str, Any]]:
 _READER_ROLE = "agent_sql_reader"
 
 
-async def _enter_reader_role(db) -> None:
+async def _enter_reader_role(db, *, full: bool = False) -> None:
     """Переключить транзакцию на роль только для чтения разрешённых таблиц.
 
     Роль может отсутствовать: база поднята через ``create_all`` без миграций
@@ -380,6 +436,14 @@ async def _enter_reader_role(db) -> None:
     """
     from sqlalchemy import text
 
+    if full:
+        # Полный доступ держится только на роли: белый список в этом режиме —
+        # почти вся база. Без роли запрос ушёл бы от имени владельца базы,
+        # которому видны и секреты, поэтому здесь отказ, а не продолжение.
+        from app.ai.data_access import FULL_READER_ROLE
+
+        await db.execute(text(f"SET LOCAL ROLE {FULL_READER_ROLE}"))
+        return
     try:
         await db.execute(text(f"SET LOCAL ROLE {_READER_ROLE}"))
     except Exception as exc:  # noqa: BLE001 — отсутствие роли не повод падать

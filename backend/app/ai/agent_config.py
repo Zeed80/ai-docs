@@ -61,6 +61,10 @@ class BuiltinAgentConfig(BaseModel):
     # router still hard-blocks any confidential content from cloud routes.
     # Protected setting: changing it requires an explicit human decision.
     auditor_allow_cloud: bool = False
+    # Full read access of every model, cloud ones included, to every table but
+    # the secret ones, through the agent SQL pipeline. The operator's explicit
+    # decision on the Models screen; protected (policy_engine), default off.
+    sql_full_access: bool = False
     builder_model: str | None = None
     builder_provider: str | None = None
     builder_disable_thinking: bool = False
@@ -165,6 +169,7 @@ class BuiltinAgentConfigUpdate(BaseModel):
     auditor_disable_thinking: bool | None = None
     auditor_thinking_level: Literal["low", "medium", "high"] | None = None
     auditor_allow_cloud: bool | None = None
+    sql_full_access: bool | None = None
     builder_model: str | None = None
     builder_provider: str | None = None
     builder_disable_thinking: bool | None = None

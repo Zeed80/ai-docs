@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from "react";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { csrfHeaders } from "@/lib/auth";
 import { useToast } from "@/components/ui/primitives/Toast";
+import { DataAccessCard } from "@/components/models/assignment/DataAccessCard";
 import { DiffPanel } from "@/components/models/assignment/DiffPanel";
 import { RevisionHistory } from "@/components/models/assignment/RevisionHistory";
 import {
@@ -573,6 +574,7 @@ export function AssignmentBoard() {
 
   return (
     <div className="space-y-6">
+      <DataAccessCard />
       <RoutingChains />
       <RevisionHistory onRolledBack={load} />
       {/* wrap + gap: на телефоне пояснение и кнопки стояли в одной несжимаемой
