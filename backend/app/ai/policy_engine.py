@@ -34,6 +34,8 @@ PROTECTED_SETTINGS = {
     # Data-access boundary: every model, cloud ones included, reading every
     # non-secret table through SQL — only the operator's explicit decision.
     "sql_full_access",
+    # Which slots may send their content to cloud models.
+    "cloud_allowed_slots",
     # Physical hardware: fan curves and presets are a human-only decision.
     # A wrong value here overheats the machine, so the agent may not even
     # propose one — see backend/app/api/cooling_api.py.

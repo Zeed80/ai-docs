@@ -1884,40 +1884,78 @@ def _slot_meta(slot: str):
 # opt a single slot into cloud models; the effective local_only below then flips
 # to False, which both unlocks cloud in the picker AND lets the AI router allow
 # cloud for that task (routing.local_only follows the assigned model).
+#
+# The choice lives in the agent config (cloud_allowed_slots), whose durable
+# copy is Postgres and which startup hydrates. It used to live only in this
+# Redis set, and its auditor mirror auditor_allow_cloud was reset from the
+# stale Postgres copy on every start (found 2026-10-07). The set is read once
+# at startup to carry an existing choice over (migrate_slot_cloud_choice).
 _SLOT_CLOUD_KEY = "providers:slot_allow_cloud"
 
 
 def _cloud_allowed_slots() -> set[str]:
     try:
-        from app.utils.redis_client import get_sync_redis
+        from app.ai.agent_config import get_builtin_agent_config
 
-        raw = get_sync_redis().smembers(_SLOT_CLOUD_KEY)
-        return {m.decode() if isinstance(m, bytes) else str(m) for m in (raw or set())}
-    except Exception:  # noqa: BLE001 — absence of Redis just means "no opt-in"
+        return set(get_builtin_agent_config().cloud_allowed_slots)
+    except Exception:  # noqa: BLE001 — unreadable config means "no opt-in"
         return set()
 
 
 def _set_slot_cloud_allowed(slot: str, allowed: bool) -> None:
-    from app.utils.redis_client import get_sync_redis
+    """Record the choice in the agent config; the caller persists it."""
+    from app.ai.agent_config import BuiltinAgentConfigUpdate, update_builtin_agent_config
 
-    client = get_sync_redis()
+    slots = _cloud_allowed_slots()
     if allowed:
-        client.sadd(_SLOT_CLOUD_KEY, slot)
+        slots.add(slot)
     else:
-        client.srem(_SLOT_CLOUD_KEY, slot)
-
+        slots.discard(slot)
+    patch = BuiltinAgentConfigUpdate(cloud_allowed_slots=sorted(slots))
     if slot == "agent_auditor":
         # У аудитора собственный выключатель облака в конфиге агента, и именно
         # его читает роутер при вызове (orchestrator.semantic_audit). Без этой
         # синхронизации разрешение на слоте позволяло ВЫБРАТЬ облачную модель,
         # а вызов всё равно уходил бы локально — то самое молчаливое
         # расхождение, ради которого назначение и собирали в одном месте.
-        from app.ai.agent_config import (
-            BuiltinAgentConfigUpdate,
-            update_builtin_agent_config,
-        )
+        patch.auditor_allow_cloud = allowed
+    update_builtin_agent_config(patch)
 
-        update_builtin_agent_config(BuiltinAgentConfigUpdate(auditor_allow_cloud=allowed))
+
+async def _persist_agent_config(db: AsyncSession) -> None:
+    """Write the agent config to Postgres; startup hydrates Redis from it."""
+    from app.ai.agent_config import get_builtin_agent_config
+
+    await model_runtime_store.persist_agent_config(
+        db, config=get_builtin_agent_config().model_dump(mode="json")
+    )
+
+
+async def migrate_slot_cloud_choice(db: AsyncSession) -> list[str]:
+    """Carry a choice still kept only in the old Redis set into the config."""
+    from app.ai.agent_config import (
+        BuiltinAgentConfigUpdate,
+        get_builtin_agent_config,
+        update_builtin_agent_config,
+    )
+    from app.utils.redis_client import get_sync_redis
+
+    client = get_sync_redis()
+    raw = client.smembers(_SLOT_CLOUD_KEY) or set()
+    legacy = {m.decode() if isinstance(m, bytes) else str(m) for m in raw}
+    if not legacy:
+        return []
+    config = get_builtin_agent_config()
+    merged = sorted(set(config.cloud_allowed_slots) | legacy)
+    patch = BuiltinAgentConfigUpdate(cloud_allowed_slots=merged)
+    if "agent_auditor" in legacy:
+        patch.auditor_allow_cloud = True
+    update_builtin_agent_config(patch)
+    await _persist_agent_config(db)
+    await db.commit()
+    client.delete(_SLOT_CLOUD_KEY)
+    logger.info("slot_cloud_choice_migrated", slots=merged)
+    return merged
 
 
 def _slot_base_local_only(slot: str) -> bool:
@@ -2924,9 +2962,13 @@ async def apply_assignment_draft(
     # Разрешение облака применяется ПЕРВЫМ: оно определяет, законно ли само
     # назначение. Остальное — после того, как модель встала на место, потому
     # что рассуждение и узел зависят от выбранной модели.
+    cloud_changed = False
     for slot, d in payload.drafts.items():
         if d.allow_cloud is not None and _slot_base_local_only(slot):
             _set_slot_cloud_allowed(slot, d.allow_cloud)
+            cloud_changed = True
+    if cloud_changed:
+        await _persist_agent_config(db)
 
     await _apply_draft_atomic(db, diff, before, registry)  # rolls back Redis on error
 
@@ -3457,7 +3499,9 @@ class SlotCloudWrite(BaseModel):
 
 
 @router.patch("/slots/{slot}/allow-cloud", dependencies=_admin)
-async def set_slot_allow_cloud(slot: str, payload: SlotCloudWrite) -> dict:
+async def set_slot_allow_cloud(
+    slot: str, payload: SlotCloudWrite, db: AsyncSession = Depends(get_db)
+) -> dict:
     """Opt a confidential slot into (or out of) cloud models — protected setting.
 
     Only meaningful for a base-local-only slot: enabling it lets the picker offer
@@ -3484,6 +3528,8 @@ async def set_slot_allow_cloud(slot: str, payload: SlotCloudWrite) -> dict:
             tasks=_slot_affected(slot),
         )
     _set_slot_cloud_allowed(slot, payload.allowed)
+    await _persist_agent_config(db)
+    await db.commit()
     return {"ok": True, "slot": slot, "cloud_allowed": payload.allowed}
 
 

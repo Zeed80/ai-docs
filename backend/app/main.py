@@ -256,6 +256,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         async with _get_session_factory()() as db:
             await seed_and_refresh_providers(db)
             await hydrate_runtime_cache(db)
+            # Per-slot cloud choice moved from a Redis-only set into the
+            # durable agent config; carry an existing one over, once.
+            from app.api.providers_api import migrate_slot_cloud_choice
+
+            await migrate_slot_cloud_choice(db)
     except Exception as exc:
         logger.warning("provider_instances_bootstrap_failed", error=str(exc))
 

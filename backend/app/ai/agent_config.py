@@ -65,6 +65,10 @@ class BuiltinAgentConfig(BaseModel):
     # the secret ones, through the agent SQL pipeline. The operator's explicit
     # decision on the Models screen; protected (policy_engine), default off.
     sql_full_access: bool = False
+    # Slots the operator opened to cloud models (providers_api per-slot
+    # opt-in). Lived only in the Redis set providers:slot_allow_cloud, while
+    # its mirror auditor_allow_cloud was reset from Postgres on every start.
+    cloud_allowed_slots: list[str] = Field(default_factory=list)
     builder_model: str | None = None
     builder_provider: str | None = None
     builder_disable_thinking: bool = False
@@ -170,6 +174,7 @@ class BuiltinAgentConfigUpdate(BaseModel):
     auditor_thinking_level: Literal["low", "medium", "high"] | None = None
     auditor_allow_cloud: bool | None = None
     sql_full_access: bool | None = None
+    cloud_allowed_slots: list[str] | None = None
     builder_model: str | None = None
     builder_provider: str | None = None
     builder_disable_thinking: bool | None = None
