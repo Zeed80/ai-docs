@@ -134,9 +134,68 @@ def _strip_comments(sql: str) -> str:
     return _BLOCK_COMMENT_RE.sub(" ", _LINE_COMMENT_RE.sub(" ", sql))
 
 
+# Функции, у которых FROM — часть синтаксиса аргументов, а не ссылка на
+# таблицу: `EXTRACT(MONTH FROM invoice_date)` разбирался как таблица
+# invoice_date, и верный помесячный запрос отвергался (живой ход 2026-10-07).
+_FROM_SYNTAX_FUNCTIONS = frozenset({"extract", "substring", "trim", "overlay"})
+_WORD_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _mask_function_from(sql: str) -> str:
+    """Заменить FROM внутри аргументов EXTRACT/SUBSTRING/TRIM/OVERLAY.
+
+    Маскируется только FROM, у которого ближайшая открытая скобка принадлежит
+    одной из этих функций; строковые литералы пропускаются целиком. Настоящий
+    FROM запроса (в том числе в подзапросе внутри такой функции — у него своя
+    скобка без имени функции) остаётся и проверяется как раньше.
+    """
+    out: list[str] = []
+    stack: list[str | None] = []
+    last_word: str | None = None
+    i = 0
+    while i < len(sql):
+        ch = sql[i]
+        if ch == "'":
+            end = i + 1
+            while end < len(sql):
+                if sql[end] == "'":
+                    if end + 1 < len(sql) and sql[end + 1] == "'":
+                        end += 2
+                        continue
+                    break
+                end += 1
+            out.append(sql[i : end + 1])
+            i = end + 1
+            last_word = None
+            continue
+        if ch == "(":
+            stack.append(last_word)
+            last_word = None
+        elif ch == ")":
+            if stack:
+                stack.pop()
+            last_word = None
+        elif ch.isalpha() or ch == "_":
+            match = _WORD_RE.match(sql, i)
+            word = match.group(0)
+            if word.lower() == "from" and stack and stack[-1] in _FROM_SYNTAX_FUNCTIONS:
+                out.append(" " * len(word))
+            else:
+                out.append(word)
+            last_word = word.lower()
+            i = match.end()
+            continue
+        elif not ch.isspace():
+            last_word = None
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def referenced_tables(sql: str) -> set[str]:
     """Имена таблиц, к которым обращается запрос."""
-    return {m.lower() for m in _TABLE_REF_RE.findall(_strip_comments(sql))}
+    probe = _mask_function_from(_strip_comments(sql))
+    return {m.lower() for m in _TABLE_REF_RE.findall(probe)}
 
 
 def validate_sql(sql: str) -> str | None:

@@ -105,3 +105,31 @@ def test_writes_and_system_functions_stay_refused(sql):
 def test_a_query_without_any_table_is_refused():
     """`SELECT version()` ничего полезного не даёт, а вот лишнее — может."""
     assert validate_sql("SELECT 1") is None
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # The live monthly-count query: the column was taken for a table.
+        "SELECT EXTRACT(MONTH FROM invoice_date) AS m, COUNT(*) FROM invoices "
+        "WHERE EXTRACT(YEAR FROM invoice_date) = 2024 GROUP BY 1",
+        "SELECT SUBSTRING(invoice_number FROM 1 FOR 3) FROM invoices",
+        "SELECT TRIM(BOTH ' ' FROM name) FROM parties",
+        "SELECT extract ( month from i.invoice_date ) FROM invoices i",
+    ],
+)
+def test_from_inside_function_arguments_is_not_a_table(sql):
+    assert validate_sql(sql) is not None
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT EXTRACT(MONTH FROM (SELECT created_at FROM secret_table LIMIT 1)) FROM invoices",
+        "SELECT TRIM(BOTH 'x' FROM name) FROM parties JOIN secret_table ON true",
+        "SELECT 'EXTRACT(MONTH FROM ' || name FROM secret_table",
+    ],
+)
+def test_masking_function_from_cannot_hide_a_real_table(sql):
+    assert "secret_table" in referenced_tables(sql)
+    assert validate_sql(sql) is None
