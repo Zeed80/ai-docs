@@ -436,6 +436,7 @@ class AgentOrchestrator:
         if await self._try_spec_table_patch_directly(content, config, turn_started_at):
             return
 
+        await self._wait_for_strata_load()
         decision = await self._decide_turn(content, config)
         if self._route_unavailable:
             await self._outer_send(
@@ -686,6 +687,30 @@ class AgentOrchestrator:
                 "Используй эту последовательность как отправную точку."
             )
         return ""
+
+    async def _wait_for_strata_load(self) -> None:
+        """With the GPU on Strata, wait out a reload after its idle unload.
+
+        The reload took 86 s live and the 45 s turn router gave up first, so
+        the turn ended as "model unavailable" (2026-10-07). Only an unloaded
+        model is waited for; a loaded one costs one /health request.
+        """
+        from app.ai import gpu_runtime
+        from app.ai.providers import strata_manager
+
+        if gpu_runtime.current_owner() != gpu_runtime.STRATA:
+            return
+        h = await strata_manager.health()
+        if h is not None and h.get("loaded", True):
+            return
+        await self._outer_send(
+            {
+                "type": "status",
+                "content": "Загружаю модель Strata после простоя — обычно до двух минут…",
+            }
+        )
+        if not await strata_manager.ensure_loaded():
+            logger.warning("strata_load_wait_timed_out")
 
     async def _decide_turn(self, content: str, config: BuiltinAgentConfig) -> TurnDecision:
         """Route the turn via the LLM router (two-tier: fast → orchestrator model).

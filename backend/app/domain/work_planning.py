@@ -9,6 +9,7 @@ import uuid
 from dataclasses import dataclass, replace
 from typing import Any
 
+import structlog
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +24,8 @@ from app.domain.work_orders import (
     is_exploratory,
     transition_work_order,
 )
+
+logger = structlog.get_logger()
 
 # Ф4-re post-mortem (AGENT_AUTONOMY_ROADMAP.md, pilot 5db58ac6): found by
 # reading this exact order's plan.fallback_used events after it went
@@ -750,6 +753,7 @@ async def plan_work_order_detached(
         authority_snapshot = await _read_planner_snapshot(db, work_order_id, lock_order=True)
     if authority_snapshot is None:
         return False
+    await _wait_for_strata_load()
     snapshot = authority_snapshot
     fallback_reason: str | None = None
     fallback_error: str | None = None
@@ -812,6 +816,20 @@ async def plan_work_order_detached(
             order.blocker = None
         await db.commit()
     return True
+
+
+async def _wait_for_strata_load() -> None:
+    """Before a planner call, wait out Strata's reload after its idle unload
+    (86 s live) instead of spending the call's own timeout on it. Outside any
+    transaction; the authority snapshot is re-checked before the plan lands."""
+    from app.ai import gpu_runtime
+
+    if gpu_runtime.current_owner() != gpu_runtime.STRATA:
+        return
+    from app.ai.providers import strata_manager
+
+    if not await strata_manager.ensure_loaded():
+        logger.warning("strata_load_wait_timed_out", path="planner")
 
 
 def _path_get(value: Any, path: str | None) -> Any:

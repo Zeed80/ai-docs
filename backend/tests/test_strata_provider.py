@@ -564,3 +564,90 @@ def test_container_merge_matches_the_backend(tmp_path, monkeypatch):
     container = json.loads((tmp_path / "config" / "strata-iq2_xs.json").read_text())
     backend = strata_manager.merge_run_config(cfg, runtime["config_keys"], runtime["config_args"])
     assert container == backend
+
+
+# ── Reload after the idle unload (live 2026-10-07: 86 s vs a 45 s router) ────
+
+
+def _install_strata_health(monkeypatch, answers):
+    """Health answers in order (None = down/loading); records /v1/load posts."""
+    remaining = list(answers)
+    loads: list[str] = []
+
+    async def health():
+        return remaining.pop(0) if len(remaining) > 1 else remaining[0]
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, **_kwargs):
+            loads.append(url)
+
+    monkeypatch.setattr(strata_manager, "health", health)
+    monkeypatch.setattr(strata_manager.httpx, "AsyncClient", Client)
+    monkeypatch.setattr(strata_manager, "_base_url", lambda: "http://strata:8080")
+    return loads
+
+
+@pytest.mark.asyncio
+async def test_ensure_loaded_waits_until_strata_reports_loaded(monkeypatch):
+    loads = _install_strata_health(monkeypatch, [{"loaded": False}, None, None, {"loaded": True}])
+    assert await strata_manager.ensure_loaded(timeout_s=5, poll_s=0) is True
+    assert loads == ["http://strata:8080/v1/load"]
+
+
+@pytest.mark.asyncio
+async def test_ensure_loaded_does_nothing_for_a_loaded_model(monkeypatch):
+    loads = _install_strata_health(monkeypatch, [{"loaded": True}])
+    assert await strata_manager.ensure_loaded(timeout_s=5, poll_s=0) is True
+    assert loads == []
+
+
+@pytest.mark.asyncio
+async def test_ensure_loaded_reports_a_model_that_did_not_come_up(monkeypatch):
+    _install_strata_health(monkeypatch, [{"loaded": False}])
+    assert await strata_manager.ensure_loaded(timeout_s=0.05, poll_s=0.01) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("owner", "health", "waits"),
+    [
+        (gpu_runtime.STRATA, {"loaded": False}, True),
+        (gpu_runtime.STRATA, {"loaded": True}, False),
+        (gpu_runtime.OLLAMA, {"loaded": False}, False),
+    ],
+)
+async def test_chat_turn_waits_only_for_an_unloaded_strata(monkeypatch, owner, health, waits):
+    from app.ai.orchestrator import AgentOrchestrator
+
+    sent: list[dict] = []
+    ensured: list[bool] = []
+
+    async def fake_health():
+        return health
+
+    async def fake_ensure(**_kwargs):
+        ensured.append(True)
+        return True
+
+    async def outer_send(message):
+        sent.append(message)
+
+    monkeypatch.setattr(gpu_runtime, "current_owner", lambda: owner)
+    monkeypatch.setattr(strata_manager, "health", fake_health)
+    monkeypatch.setattr(strata_manager, "ensure_loaded", fake_ensure)
+    orchestrator = AgentOrchestrator.__new__(AgentOrchestrator)
+    orchestrator._outer_send = outer_send
+
+    await orchestrator._wait_for_strata_load()
+
+    assert bool(ensured) is waits
+    assert [m["type"] for m in sent] == (["status"] if waits else [])

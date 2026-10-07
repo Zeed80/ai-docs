@@ -493,6 +493,53 @@ async def health() -> dict | None:
     return None
 
 
+async def ensure_loaded(*, timeout_s: float = 300.0, poll_s: float = 3.0) -> bool:
+    """Wait until Strata's model is loaded; start the load when it is unloaded.
+
+    After ``idle_unload_s`` Strata reloads on the next request, which took 86 s
+    live (39 GB of experts into RAM) — longer than the 45 s turn router, so the
+    chat turn ended with "model unavailable" two seconds before the model was
+    ready (2026-10-07). True when loaded; False when it did not come up in time.
+    """
+    import asyncio
+    import time
+
+    h = await health()
+    if h is not None and h.get("loaded", True):
+        return True
+    from app.ai.provider_registry import select_instance
+    from app.ai.schemas import ProviderKind
+
+    headers: dict[str, str] = {}
+    try:
+        node = select_instance(ProviderKind.STRATA)
+        if node.api_key:
+            headers["Authorization"] = f"Bearer {node.api_key}"
+    except Exception:  # noqa: BLE001 — the load request is best effort, health decides
+        pass
+
+    async def _load() -> None:
+        # Blocks until loaded; 409 means a request is already loading it.
+        try:
+            async with httpx.AsyncClient(timeout=timeout_s) as client:
+                await client.post(f"{_base_url()}/v1/load", headers=headers, json={})
+        except Exception as exc:  # noqa: BLE001
+            logger.info("strata_load_request_failed", error=str(exc)[:200])
+
+    loader = asyncio.create_task(_load())
+    deadline = time.monotonic() + timeout_s
+    try:
+        while time.monotonic() < deadline:
+            h = await health()
+            if h is not None and h.get("loaded", True):
+                return True
+            await asyncio.sleep(poll_s)
+        return False
+    finally:
+        if not loader.done():
+            loader.cancel()
+
+
 def _phase(
     container_state: str | None, h: dict | None, logs: list[str], install_only: bool = False
 ) -> str:
