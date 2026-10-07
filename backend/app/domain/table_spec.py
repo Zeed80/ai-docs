@@ -1391,6 +1391,10 @@ def _heal_filter(source: SourceDef, flt: FilterSpec) -> FilterSpec | None:
         )
     ):
         healed = _primary_number_field(source, base)
+    if healed is None and any(w in raw for w in ("date", "дат", "period", "период")):
+        # «date_from»/«date_to»: the year filter of «счета по месяцам 2024 года»
+        # was dropped and the table showed every invoice (live 2026-10-07).
+        healed = next((fd for fd in source.fields.values() if fd.type == "date"), None)
     if healed is not None:
         return flt.model_copy(update={"field": healed.key, "op": op})
     return None

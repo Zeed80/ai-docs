@@ -1324,3 +1324,24 @@ async def test_suppliers_source_lists_suppliers_with_invoice_counts(db_session):
     assert result.rows[0]["total_invoices"] == 10_000
     assert "ЯЯЯ Наше юрлицо спецтаблицы" not in names
     assert result.total == len(result.rows)
+
+
+def test_date_from_and_date_to_become_bounds_on_the_primary_date():
+    """«date_from»/«date_to» were dropped as unknown, so a 2024 table showed
+    every invoice (live 2026-10-07)."""
+    spec = ts.TableSpec(
+        source="invoices",
+        columns=[ts.ColumnSpec(field="invoice_number")],
+        filters=[
+            ts.FilterSpec(field="date_from", op="eq", value="2024-01-01"),
+            ts.FilterSpec(field="date_to", op="eq", value="2024-12-31"),
+        ],
+    )
+    source = ts.SOURCES["invoices"]
+
+    healed = [ts._heal_filter(source, flt) for flt in spec.filters]
+
+    assert [(f.field, f.op, f.value) for f in healed] == [
+        ("invoice_date", "gte", "2024-01-01"),
+        ("invoice_date", "lte", "2024-12-31"),
+    ]
