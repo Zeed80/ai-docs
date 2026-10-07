@@ -46,6 +46,17 @@ def _capture_budgeted_ollama_response(
     return body, ollama_usage_from_body(body), None
 
 
+def _strata_structured_output_failed(response) -> bool:
+    """Strata's 502 for a json_object answer that was not valid JSON."""
+    if getattr(response, "status_code", None) != 502:
+        return False
+    try:
+        error = (response.json() or {}).get("error") or {}
+    except Exception:
+        return False
+    return "structured_output_failed" in (error.get("code"), error.get("type"))
+
+
 class AIBackend(str, Enum):
     OLLAMA = "ollama"
     CLAUDE = "claude"
@@ -802,6 +813,13 @@ async def generate_json(
                     if ambient_budget_context is not None:
                         await ambient_budget_context.assert_direct_text_current()
 
+            if use_strata and _strata_structured_output_failed(response):
+                # Strata validates json_object itself and answers 502 when the
+                # model's text is not JSON; that is the same retryable case as
+                # Ollama returning non-JSON content, not a server failure. The
+                # verifier failed on the first such answer (live 2026-10-06).
+                raw = ""
+                raise json.JSONDecodeError("Strata structured_output_failed", "", 0)
             if budget_context is not None or ambient_budget_context is not None:
                 if response_error is not None:
                     raise response_error

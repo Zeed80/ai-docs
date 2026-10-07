@@ -547,3 +547,44 @@ async def test_strata_reasoning_leaf_charges_one_post(test_engine, monkeypatch):
     physical = await _physical(factory, run["work_order_id"])
     assert len(posts) == len(physical) == 1
     assert physical[0].state == "charged"
+
+
+class _StrataStructuredOutputFailed:
+    status_code = 502
+
+    def raise_for_status(self):
+        request = httpx.Request("POST", "http://strata:8080/v1/chat/completions")
+        raise httpx.HTTPStatusError(
+            "Server error '502 Bad Gateway'",
+            request=request,
+            response=httpx.Response(502, request=request),
+        )
+
+    def json(self):
+        return {"error": {"type": "structured_output_failed", "code": "structured_output_failed"}}
+
+
+@pytest.mark.asyncio
+async def test_strata_invalid_json_answer_is_retried_like_ollama(test_engine, monkeypatch):
+    """Strata answers 502 structured_output_failed when the model's json_object
+    text is not JSON; the verifier stopped on it as a provider failure (live
+    2026-10-06). It is the same retryable case as non-JSON Ollama content."""
+    factory, run, context = await _claimed_context(test_engine)
+    _install_local_runtime(monkeypatch, provider="strata")
+    posts, _ = _install_http(
+        monkeypatch, [_StrataStructuredOutputFailed(), _OpenAIResponse('{"ok": true}')]
+    )
+
+    async def no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    with bind_airouter_budget_context(context):
+        result = await ollama_client.generate_json(
+            "json", model="qwen3.8-flash-next", provider="strata"
+        )
+
+    assert result == {"ok": True}
+    physical = await _physical(factory, run["work_order_id"])
+    assert len(posts) == len(physical) == 2
+    assert {row.state for row in physical} == {"charged"}
