@@ -60,3 +60,62 @@ async def test_keyword_fallback_only_without_a_decision():
     assert s._workspace_expected is None
     await s._deliver_final_content("Январь — 100; Февраль — 200; Март — 300. " * 8)
     s._publish_canvas.assert_awaited_once()
+
+
+_PUBLISHED_V1 = {
+    "version": 1,
+    "status": "succeeded",
+    "data": {
+        "status": "published",
+        "canvas_id": "agent:spec-table",
+        "total": 4,
+        "shown": 4,
+        "message": "Опубликовал таблицу «Письма по отправителям»: 4 строк.",
+    },
+}
+
+
+def test_publish_fast_path_reads_the_v1_envelope():
+    """status "published" lives under data: the fast path never fired and a
+    second model round retold the table (live 2026-10-07)."""
+    reply = AgentSession._terminal_publish_reply([("workspace", _PUBLISHED_V1)])
+    assert reply == "Опубликовал таблицу «Письма по отправителям»: 4 строк."
+    failed = {**_PUBLISHED_V1, "status": "failed"}
+    assert AgentSession._terminal_publish_reply([("workspace", failed)]) is None
+
+
+@pytest.mark.asyncio
+async def test_a_retold_table_does_not_replace_the_published_one():
+    """The model's markdown table replaced the real SQL table on the desktop
+    with a placeholder row "(данные по 4 адресам)" (live 2026-10-07)."""
+    import json
+
+    s = _session_with_user("сколько писем от каждого отправителя")
+    s.messages.append({"role": "tool", "content": json.dumps(_PUBLISHED_V1, ensure_ascii=False)})
+    table = "| Отправитель | Количество |\n|---|---|\n| (данные по 4 адресам) | всего |"
+    await s._deliver_final_content(table)
+    s._publish_canvas.assert_not_awaited()
+    s._send.assert_awaited_once_with({"type": "text", "content": table})
+
+
+@pytest.mark.asyncio
+async def test_a_published_table_of_an_earlier_turn_does_not_count():
+    import json
+
+    s = _session_with_user("покажи письма")
+    s.messages.append({"role": "tool", "content": json.dumps(_PUBLISHED_V1, ensure_ascii=False)})
+    s.messages.append({"role": "user", "content": "а теперь таблицу затрат"})
+    await s._deliver_final_content("| Месяц | Сумма |\n|---|---|\n| Январь | 100 |")
+    s._publish_canvas.assert_awaited_once()
+
+
+def test_sql_table_preview_carries_the_rows_by_label():
+    from app.api.workspace import _table_preview
+
+    block = {
+        "columns": [{"key": "a", "label": "Отправитель"}, {"key": "b", "label": "Писем"}],
+        "rows": [{"a": "x@y", "b": 12}, {"a": "z" * 500, "b": 1}],
+    }
+    preview = _table_preview(block)
+    assert preview[0] == {"Отправитель": "x@y", "Писем": 12}
+    assert len(preview[1]["Отправитель"]) == 201

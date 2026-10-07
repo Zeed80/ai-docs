@@ -92,6 +92,9 @@ class WorkspaceToolResponse(BaseModel):
     shown: int
     message: str
     filters: dict[str, Any] = {}
+    # First rows of a published SQL table for the model and the verifier:
+    # without them the agent only knew "N rows" and made the rows up.
+    preview: list[dict[str, Any]] = []
 
 
 class WorkspaceVerifyBlockRequest(BaseModel):
@@ -1162,7 +1165,33 @@ async def _publish_sql_table(
         shown=row_count,
         message=f"Опубликовал таблицу «{title}»: {row_count} строк. SQL: {block.get('sql', '')[:120]}",
         filters={},
+        preview=_table_preview(canvas_block),
     )
+
+
+_PREVIEW_ROWS = 20
+_PREVIEW_CELL_CHARS = 200
+
+
+def _table_preview(block: dict[str, Any]) -> list[dict[str, Any]]:
+    """First rows of a canvas table, keyed by column label, cells bounded."""
+    columns = block.get("columns") or []
+    labels = {
+        str(col.get("key")): str(col.get("label") or col.get("header") or col.get("key"))
+        for col in columns
+        if isinstance(col, dict) and col.get("key") is not None
+    }
+    preview = []
+    for row in (block.get("rows") or [])[:_PREVIEW_ROWS]:
+        if not isinstance(row, dict):
+            continue
+        item = {}
+        for key, value in row.items():
+            if isinstance(value, str) and len(value) > _PREVIEW_CELL_CHARS:
+                value = value[:_PREVIEW_CELL_CHARS] + "…"
+            item[labels.get(str(key), str(key))] = value
+        preview.append(item)
+    return preview
 
 
 @router.post("/agent/generated/general", response_model=WorkspaceToolResponse)

@@ -3161,6 +3161,10 @@ class AgentSession:
             "",
         )
         parsed_table = _parse_markdown_table(text)
+        if parsed_table and self._turn_published_tool_table():
+            # The real block is already on the desktop; the text stays a reply.
+            await self._send({"type": "text", "content": text})
+            return text
         if parsed_table:
             title, columns, rows = parsed_table
             await self._publish_canvas(
@@ -3658,14 +3662,32 @@ class AgentSession:
         if len(results) != 1:
             return None
         _fn, res = results[0]
-        if (
-            isinstance(res, dict)
-            and res.get("status") == "published"
-            and res.get("canvas_id")
-            and res.get("message")
-        ):
+        res = _published_payload(res)
+        if res is not None and res.get("message"):
             return str(res["message"])
         return None
+
+    def _turn_published_tool_table(self) -> bool:
+        """A tool already published a block on the desktop in this turn.
+
+        Read from this turn's tool messages, so it survives a checkpoint
+        restore. A markdown table in the final text is then the model's
+        retelling of that block, not data: publishing it replaced the real
+        SQL table with a made-up one ("(данные по 4 адресам)", live 2026-10-07).
+        """
+        for message in reversed(self.messages):
+            role = message.get("role")
+            if role == "user":
+                return False
+            if role != "tool":
+                continue
+            try:
+                payload = json.loads(message.get("content") or "")
+            except (TypeError, ValueError):
+                continue
+            if _published_payload(payload) is not None:
+                return True
+        return False
 
     _EXPLICIT_SEND_RE = re.compile(
         r"(отправ|пошл[иёе]|разошл|send|отош)[а-яё]*[\s\S]{0,60}"
@@ -4083,6 +4105,26 @@ class AgentSession:
             )
         )
         self._trim_history()
+
+
+def _published_payload(payload: Any) -> dict | None:
+    """The tool's own result when it published a desktop block, else None.
+
+    Results arrive in the ToolResult v1 envelope; reading "status" at the top
+    level saw "succeeded", never "published", so the publish fast path never
+    fired and another model round retold the table (live 2026-10-07).
+    """
+    if isinstance(payload, dict) and payload.get("version") == 1 and "status" in payload:
+        if payload.get("status") != "succeeded":
+            return None
+        payload = payload.get("data")
+    if (
+        isinstance(payload, dict)
+        and payload.get("status") == "published"
+        and payload.get("canvas_id")
+    ):
+        return payload
+    return None
 
 
 def extract_list_count(payload: Any) -> int | None:
