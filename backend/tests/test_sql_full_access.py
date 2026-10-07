@@ -133,7 +133,9 @@ async def test_sql_recipient_charges_a_cloud_call_once_the_switch_is_on(test_eng
 
 
 @pytest.mark.asyncio
-async def test_api_turns_it_on_only_with_an_explicit_acknowledgement(client, monkeypatch):
+async def test_api_turns_it_on_only_with_an_explicit_acknowledgement(
+    client, db_session, monkeypatch
+):
     synced = []
 
     async def fake_sync(_db):
@@ -141,6 +143,15 @@ async def test_api_turns_it_on_only_with_an_explicit_acknowledgement(client, mon
         return 123
 
     monkeypatch.setattr(data_access, "sync_full_reader_grants", fake_sync)
+
+    # As on the stand: a durable config written before the switch existed.
+    from app.ai.agent_config import get_builtin_agent_config
+    from app.ai.model_runtime_store import persist_agent_config
+
+    stale = get_builtin_agent_config().model_dump(mode="json")
+    stale.pop("sql_full_access")
+    await persist_agent_config(db_session, config=stale)
+    await db_session.flush()
 
     refused = await client.put("/api/providers/policy/data-access", json={"enabled": True})
     assert refused.status_code == 422
@@ -154,6 +165,12 @@ async def test_api_turns_it_on_only_with_an_explicit_acknowledgement(client, mon
     assert on.json()["granted_tables"] == 123
     assert "provider_instances" in on.json()["secret_tables"]
     assert synced == [True]
+
+    # It survives a restart: startup hydrates Redis from the durable copy.
+    from app.ai.model_runtime_store import hydrate_runtime_cache
+
+    await hydrate_runtime_cache(db_session)
+    assert data_access.sql_full_access_enabled() is True
 
     off = await client.put("/api/providers/policy/data-access", json={"enabled": False})
     assert off.json()["sql_full_access"] is False

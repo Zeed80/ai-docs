@@ -3535,7 +3535,10 @@ async def set_data_access(
     granted = None
     if payload.enabled:
         granted = await sync_full_reader_grants(db)
-    update_builtin_agent_config(BuiltinAgentConfigUpdate(sql_full_access=payload.enabled))
+    config = update_builtin_agent_config(BuiltinAgentConfigUpdate(sql_full_access=payload.enabled))
+    # Postgres is the durable copy: startup hydrates Redis from it, and a
+    # Redis-only write was undone by the next restart (live 2026-10-07).
+    await model_runtime_store.persist_agent_config(db, config=config.model_dump(mode="json"))
     await log_action(
         db,
         action="settings.sql_full_access." + ("enabled" if payload.enabled else "disabled"),
