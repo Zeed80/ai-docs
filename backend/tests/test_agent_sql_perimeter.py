@@ -133,3 +133,15 @@ def test_from_inside_function_arguments_is_not_a_table(sql):
 def test_masking_function_from_cannot_hide_a_real_table(sql):
     assert "secret_table" in referenced_tables(sql)
     assert validate_sql(sql) is None
+
+
+def test_cyrillic_aliases_do_not_break_the_table_check():
+    """The prompt asks for Russian aliases; an unquoted «AS количество» crashed
+    the FROM masking with a NoneType error, so every such table failed (live
+    2026-10-07)."""
+    sql = (
+        "SELECT EXTRACT(MONTH FROM invoice_date) AS месяц, COUNT(*) AS количество "
+        "FROM invoices GROUP BY месяц"
+    )
+    assert referenced_tables(sql) == {"invoices"}
+    assert validate_sql(sql) is not None

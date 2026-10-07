@@ -193,7 +193,7 @@ def _strip_comments(sql: str) -> str:
 # таблицу: `EXTRACT(MONTH FROM invoice_date)` разбирался как таблица
 # invoice_date, и верный помесячный запрос отвергался (живой ход 2026-10-07).
 _FROM_SYNTAX_FUNCTIONS = frozenset({"extract", "substring", "trim", "overlay"})
-_WORD_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_WORD_RE = re.compile(r"\w+")
 
 
 def _mask_function_from(sql: str) -> str:
