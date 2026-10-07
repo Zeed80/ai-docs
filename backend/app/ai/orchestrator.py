@@ -1866,8 +1866,10 @@ class AgentOrchestrator:
             self._trace.tool_call_args[tool_name] = dict(raw_args)
             self._trace.tool_call_seq.append((tool_name, dict(raw_args)))
         elif msg_type == "tool_result":
-            self._trace.tool_results.append(data)
-            result = data.get("result")
+            # The audit's copy is unwrapped; the client still gets the event as is.
+            traced = _unwrap_succeeded_tool_result(data)
+            self._trace.tool_results.append(traced)
+            result = traced.get("result")
             if isinstance(result, dict) and result.get("canvas_id"):
                 self._trace.workspace_events.append(
                     {
@@ -3437,6 +3439,27 @@ def _normalize_model_plan(plan: OrchestratorPlan, content: str) -> OrchestratorP
             ),
         }
     )
+
+
+def _unwrap_succeeded_tool_result(data: dict[str, Any]) -> dict[str, Any]:
+    """Give the turn audit the tool's own result, not its ToolResult v1 envelope.
+
+    Every audit check here reads the tool's fields (status "published" or
+    "not_found", canvas_id, filters, spec). Under the envelope they sit in
+    "data", so a published SQL table registered no workspace event, the audit
+    called it unpublished and retried the turn (live 2026-10-07), and the title
+    and filter checks silently skipped every result. A failed envelope is kept
+    whole: its error_code is already at the top level.
+    """
+    result = data.get("result")
+    if (
+        isinstance(result, dict)
+        and result.get("version") == 1
+        and result.get("status") == "succeeded"
+        and isinstance(result.get("data"), dict)
+    ):
+        return {**data, "result": result["data"]}
+    return data
 
 
 def _workspace_updated_at_snapshot() -> dict[str, str]:

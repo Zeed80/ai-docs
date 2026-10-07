@@ -147,3 +147,53 @@ def test_chat_table_detector():
     assert _looks_like_chat_table("Поставщик | Сумма\nРомашка | 100")
     assert not _looks_like_chat_table("Обычный текст без таблицы.\nВторая строка.")
     assert not _looks_like_chat_table("Цена 100 | скидка 5")  # single pipe, one row
+
+
+@pytest.mark.asyncio
+async def test_a_sql_table_published_in_a_v1_envelope_counts_as_published(monkeypatch):
+    """The audit read the tool's status at the top level of the ToolResult v1
+    envelope: a published SQL table registered no workspace event, the turn
+    was audited "not published" and retried (live 2026-10-07)."""
+    from app.ai import orchestrator as orch_module
+
+    send = AsyncMock()
+    orc = AgentOrchestrator(send=send)
+    orc._workspace_before = {}
+    monkeypatch.setattr(
+        orch_module, "get_workspace_block", lambda cid: {"id": cid, "updated_at": "now"}
+    )
+    event = {
+        "type": "tool_result",
+        "tool": "workspace",
+        "result": {
+            "version": 1,
+            "status": "succeeded",
+            "data": {"status": "published", "canvas_id": "agent:spec-table", "total": 33},
+        },
+    }
+
+    await orc._send_from_executor(event)
+
+    plan = _decision_to_plan(
+        TurnDecision(intent="analytical_table", output_channel="workspace"),
+        "счета по поставщикам",
+    )
+    orc._trace.text_chunks = ["Опубликовал таблицу «Счета по поставщикам»: 33 строк."]
+    audit = await orc._audit_turn(plan, get_builtin_agent_config())
+    assert AuditCode.WORKSPACE_NOT_PUBLISHED.value not in audit.issue_codes
+    assert audit.workspace_verified is True
+    # The client still receives the event as the tool sent it.
+    assert send.await_args_list[-1].args[0]["result"]["version"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_not_found_result_in_a_v1_envelope_is_still_not_found():
+    orc = AgentOrchestrator(send=AsyncMock())
+    await orc._send_from_executor(
+        {
+            "type": "tool_result",
+            "tool": "workspace",
+            "result": {"version": 1, "status": "succeeded", "data": {"status": "not_found"}},
+        }
+    )
+    assert orc._has_not_found_tool_result() is True

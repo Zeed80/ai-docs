@@ -618,6 +618,12 @@ async def test_documents_source(db_session, seeded):
             ts.ColumnSpec(field="status"),
             ts.ColumnSpec(field="created_at"),
         ],
+        # Other tests commit documents to the shared test DB: count only ours.
+        filters=[
+            ts.FilterSpec(
+                field="file_name", op="in", value=["INV-001.pdf", "INV-002.pdf", "INV-003.pdf"]
+            )
+        ],
         sort=[ts.SortSpec(field="file_name", dir="asc")],
     )
     result = await ts.execute_spec(db_session, spec)
