@@ -95,6 +95,8 @@ class WorkspaceToolResponse(BaseModel):
     # First rows of a published SQL table for the model and the verifier:
     # without them the agent only knew "N rows" and made the rows up.
     preview: list[dict[str, Any]] = []
+    # The query behind a SQL table, whole; the message stays a user sentence.
+    sql: str = ""
 
 
 class WorkspaceVerifyBlockRequest(BaseModel):
@@ -1163,9 +1165,12 @@ async def _publish_sql_table(
         canvas_id=canvas_id,
         total=row_count,
         shown=row_count,
-        message=f"Опубликовал таблицу «{title}»: {row_count} строк. SQL: {block.get('sql', '')[:120]}",
+        # The message is the turn's answer on the publish fast path: a SQL
+        # snippet cut at 120 characters ended it mid-word (live 2026-10-07).
+        message=f"Опубликовал таблицу «{title}»: {row_count} строк.",
         filters={},
         preview=_table_preview(canvas_block),
+        sql=str(block.get("sql") or ""),
     )
 
 

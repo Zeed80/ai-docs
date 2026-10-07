@@ -119,3 +119,34 @@ def test_sql_table_preview_carries_the_rows_by_label():
     preview = _table_preview(block)
     assert preview[0] == {"Отправитель": "x@y", "Писем": 12}
     assert len(preview[1]["Отправитель"]) == 201
+
+
+@pytest.mark.asyncio
+async def test_sql_table_answer_is_a_sentence_and_the_query_is_kept_whole(monkeypatch):
+    """The publish fast path shows the tool message as the answer; it ended
+    with a SQL snippet cut mid-word (live 2026-10-07)."""
+    from app.api import workspace
+
+    long_sql = (
+        "SELECT p.name, COUNT(i.id) FROM invoices i JOIN parties p ON p.id = i.supplier_id " * 3
+    )
+
+    async def build(**_kwargs):
+        return {
+            "status": "ok",
+            "sql": long_sql,
+            "data": {"type": "table", "title": "Счета", "columns": [], "rows": [{"a": 1}]},
+        }
+
+    monkeypatch.setattr("app.ai.table_sql_pipeline.build_table_from_task", build)
+    monkeypatch.setattr(workspace, "upsert_workspace_block", lambda cid, block: block)
+
+    async def publish(_event):
+        return None
+
+    monkeypatch.setattr(workspace.chat_bus, "publish", publish)
+    response = await workspace._publish_sql_table(
+        workspace.WorkspaceSqlTableRequest(task="счета", canvas_id="agent:spec-table")
+    )
+    assert response.message == "Опубликовал таблицу «Счета»: 1 строк."
+    assert response.sql == long_sql
