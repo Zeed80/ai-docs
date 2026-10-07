@@ -46,15 +46,17 @@ def _capture_budgeted_ollama_response(
     return body, ollama_usage_from_body(body), None
 
 
-def _strata_structured_output_failed(response) -> bool:
-    """Strata's 502 for a json_object answer that was not valid JSON."""
+def _strata_structured_output_failed(response) -> str | None:
+    """Strata's 502 for a json_object answer that was not valid JSON: its message."""
     if getattr(response, "status_code", None) != 502:
-        return False
+        return None
     try:
         error = (response.json() or {}).get("error") or {}
     except Exception:
-        return False
-    return "structured_output_failed" in (error.get("code"), error.get("type"))
+        return None
+    if "structured_output_failed" not in (error.get("code"), error.get("type")):
+        return None
+    return str(error.get("message") or "structured_output_failed")[:300]
 
 
 class AIBackend(str, Enum):
@@ -813,13 +815,19 @@ async def generate_json(
                     if ambient_budget_context is not None:
                         await ambient_budget_context.assert_direct_text_current()
 
-            if use_strata and _strata_structured_output_failed(response):
+            if use_strata and (strata_error := _strata_structured_output_failed(response)):
                 # Strata validates json_object itself and answers 502 when the
                 # model's text is not JSON; that is the same retryable case as
                 # Ollama returning non-JSON content, not a server failure. The
-                # verifier failed on the first such answer (live 2026-10-06).
+                # retry drops response_format: Strata's format directive makes
+                # the IQ2 model write one-line JSON that broke near char 1000
+                # in 8 of 8 verifier calls, while the same request without it
+                # was valid 8 of 8 (live 2026-10-07). Our parser checks it.
                 raw = ""
-                raise json.JSONDecodeError("Strata structured_output_failed", "", 0)
+                payload = {k: v for k, v in payload.items() if k != "response_format"}
+                raise json.JSONDecodeError(
+                    f"Strata structured_output_failed: {strata_error}", "", 0
+                )
             if budget_context is not None or ambient_budget_context is not None:
                 if response_error is not None:
                     raise response_error

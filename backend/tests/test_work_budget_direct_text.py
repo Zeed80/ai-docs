@@ -588,3 +588,7 @@ async def test_strata_invalid_json_answer_is_retried_like_ollama(test_engine, mo
     physical = await _physical(factory, run["work_order_id"])
     assert len(posts) == len(physical) == 2
     assert {row.state for row in physical} == {"charged"}
+    # The retry drops Strata's own json_object check (8/8 broken live) and
+    # parses the plain answer itself.
+    assert posts[0][1]["json"]["response_format"] == {"type": "json_object"}
+    assert "response_format" not in posts[1][1]["json"]
