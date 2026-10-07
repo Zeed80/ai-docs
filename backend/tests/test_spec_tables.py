@@ -1345,3 +1345,56 @@ def test_date_from_and_date_to_become_bounds_on_the_primary_date():
         ("invoice_date", "gte", "2024-01-01"),
         ("invoice_date", "lte", "2024-12-31"),
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("flt", "expected"),
+    [
+        (
+            ts.FilterSpec(field="invoice_date", op="contains", value="2026-05"),
+            ["INV-001", "INV-002"],
+        ),
+        (ts.FilterSpec(field="invoice_date", op="gte", value="2026-05-20"), ["INV-002", "INV-003"]),
+        (ts.FilterSpec(field="invoice_date", op="lte", value="20.05.2026"), ["INV-001", "INV-002"]),
+        (
+            ts.FilterSpec(field="invoice_date", op="eq", value="2026"),
+            ["INV-001", "INV-002", "INV-003"],
+        ),
+        (
+            ts.FilterSpec(field="invoice_date", op="between", value="2026-05-11", value2="2026-06"),
+            ["INV-002", "INV-003"],
+        ),
+        (ts.FilterSpec(field="invoice_date", op="eq", value="2025"), []),
+    ],
+)
+async def test_date_filters_compare_periods_not_strings(db_session, seeded, flt, expected):
+    """A string compared with the timestamp column was a 500 for the whole
+    table (live 2026-10-07)."""
+    result = await ts.execute_spec(
+        db_session,
+        ts.TableSpec(
+            source="invoices",
+            columns=[ts.ColumnSpec(field="invoice_number")],
+            filters=[
+                ts.FilterSpec(
+                    field="invoice_number", op="in", value=["INV-001", "INV-002", "INV-003"]
+                ),
+                flt,
+            ],
+            sort=[ts.SortSpec(field="invoice_number")],
+        ),
+    )
+    assert [row["invoice_number"] for row in result.rows] == expected
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_date_is_a_spec_error_not_a_silent_drop(db_session, seeded):
+    with pytest.raises(ValueError, match="дату"):
+        await ts.execute_spec(
+            db_session,
+            ts.TableSpec(
+                source="invoices",
+                filters=[ts.FilterSpec(field="invoice_date", op="gte", value="прошлой весной")],
+            ),
+        )

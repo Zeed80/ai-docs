@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from dataclasses import field as dc_field
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
 import structlog
@@ -1750,7 +1751,9 @@ async def execute_spec(
             continue
         expr = exprs[flt.field]
         cond = None
-        if flt.op == "eq":
+        if source.fields[flt.field].type == "date":
+            cond = _date_condition(expr, flt)
+        elif flt.op == "eq":
             cond = expr == flt.value
         elif flt.op == "ne":
             cond = expr != flt.value
@@ -2288,6 +2291,68 @@ def _detect_agg_intent(text: str) -> str | None:
         if rx.search(text):
             return agg
     return None
+
+
+_DATE_FORMATS = (
+    (re.compile(r"^(\d{4})-(\d{1,2})-(\d{1,2})"), "ymd"),
+    (re.compile(r"^(\d{1,2})\.(\d{1,2})\.(\d{4})$"), "dmy"),
+    (re.compile(r"^(\d{4})-(\d{1,2})$"), "ym"),
+    (re.compile(r"^(\d{1,2})\.(\d{4})$"), "my"),
+    (re.compile(r"^(\d{4})$"), "y"),
+)
+
+
+def _date_period(value: Any) -> tuple[date, date]:
+    """A filter value on a date field as a period [start, end).
+
+    «2024» is the whole year, «2024-03» or «03.2024» a month, a full date one
+    day. A string compared with a timestamp column was a 500 for the whole
+    table (live 2026-10-07: «счета по месяцам 2024 года»).
+    """
+    if isinstance(value, datetime):
+        value = value.date()
+    if isinstance(value, date):
+        return value, value + timedelta(days=1)
+    text = str(value if value is not None else "").strip()
+    for pattern, kind in _DATE_FORMATS:
+        match = pattern.match(text)
+        if not match:
+            continue
+        parts = [int(part) for part in match.groups()]
+        try:
+            if kind == "y":
+                return date(parts[0], 1, 1), date(parts[0] + 1, 1, 1)
+            if kind in ("ym", "my"):
+                year, month = (parts[0], parts[1]) if kind == "ym" else (parts[1], parts[0])
+                start = date(year, month, 1)
+                end = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+                return start, end
+            year, month, day = parts if kind == "ymd" else (parts[2], parts[1], parts[0])
+            start = date(year, month, day)
+            return start, start + timedelta(days=1)
+        except ValueError:
+            break
+    raise ValueError(f"не удалось разобрать дату «{text}» (нужно ГГГГ, ГГГГ-ММ или ГГГГ-ММ-ДД)")
+
+
+def _date_condition(expr: Any, flt: FilterSpec) -> Any:
+    """Compare a date column with a period, never with a raw string."""
+    if flt.op == "in":
+        values = flt.value if isinstance(flt.value, list) else [flt.value]
+        periods = [_date_period(value) for value in values]
+        return or_(*[and_(expr >= start, expr < end) for start, end in periods])
+    start, end = _date_period(flt.value)
+    if flt.op == "gte":
+        return expr >= start
+    if flt.op == "lte":
+        return expr < end
+    if flt.op == "ne":
+        return or_(expr < start, expr >= end)
+    if flt.op == "between":
+        upper = _date_period(flt.value2)[1] if flt.value2 is not None else end
+        return and_(expr >= start, expr < upper)
+    # eq / contains: «за 2024», «в марте 2024».
+    return and_(expr >= start, expr < end)
 
 
 def _primary_number_field(source: SourceDef, text: str) -> FieldDef | None:
