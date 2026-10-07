@@ -3524,7 +3524,7 @@ async def set_data_access(
     names. Off restores the seven-table allowlist and local-only recipient.
     """
     from app.ai.agent_config import BuiltinAgentConfigUpdate, update_builtin_agent_config
-    from app.ai.data_access import sync_full_reader_grants
+    from app.ai.data_access import revoke_full_reader_grants, sync_full_reader_grants
     from app.audit.service import log_action
 
     if payload.enabled and not payload.acknowledged:
@@ -3535,6 +3535,8 @@ async def set_data_access(
     granted = None
     if payload.enabled:
         granted = await sync_full_reader_grants(db)
+    else:
+        await revoke_full_reader_grants(db)
     config = update_builtin_agent_config(BuiltinAgentConfigUpdate(sql_full_access=payload.enabled))
     # Postgres is the durable copy: startup hydrates Redis from it, and a
     # Redis-only write was undone by the next restart (live 2026-10-07).

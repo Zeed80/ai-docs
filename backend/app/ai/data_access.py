@@ -121,3 +121,15 @@ async def sync_full_reader_grants(db) -> int:
         granted += 1
     logger.info("sql_full_reader_grants_synced", tables=granted)
     return granted
+
+
+async def revoke_full_reader_grants(db) -> None:
+    """Switch off: the full reader keeps no table grant at all."""
+    from sqlalchemy import text
+
+    exists = await db.scalar(
+        text("SELECT 1 FROM pg_roles WHERE rolname = :r"), {"r": FULL_READER_ROLE}
+    )
+    if exists:
+        await db.execute(text(f"REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {FULL_READER_ROLE}"))
+    logger.info("sql_full_reader_grants_revoked")

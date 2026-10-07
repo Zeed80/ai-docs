@@ -65,6 +65,12 @@ async def test_full_reader_grants_read_data_and_withhold_secrets(test_engine):
     # Read-only even here.
     assert not await as_full_reader("DELETE FROM invoices WHERE false")
 
+    # Switched off, the role keeps nothing.
+    async with factory() as db:
+        await data_access.revoke_full_reader_grants(db)
+        await db.commit()
+    assert not await as_full_reader("SELECT count(*) FROM invoices")
+
 
 @pytest.mark.asyncio
 async def test_full_mode_fails_closed_without_its_role(monkeypatch):
@@ -143,6 +149,11 @@ async def test_api_turns_it_on_only_with_an_explicit_acknowledgement(
         return 123
 
     monkeypatch.setattr(data_access, "sync_full_reader_grants", fake_sync)
+
+    async def fake_revoke(_db):
+        synced.append(False)
+
+    monkeypatch.setattr(data_access, "revoke_full_reader_grants", fake_revoke)
 
     # As on the stand: a durable config written before the switch existed.
     from app.ai.agent_config import get_builtin_agent_config
