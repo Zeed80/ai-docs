@@ -81,7 +81,10 @@ class _Browser:
 
     async def ensure(self):
         async with self._lock:
-            if self._browser is None or not self._browser.is_connected():
+            if self._browser is None or not self.alive():
+                # E37: after a crash of Chromium or of the driver, start over:
+                # a dead driver cannot launch anything.
+                await self._reset_dead()
                 if self._pw is None:
                     self._pw = await async_playwright().start()
                 if self._proxy is None:
@@ -94,17 +97,39 @@ class _Browser:
                 )
             return self._browser
 
+    async def _reset_dead(self) -> None:
+        for closer in (
+            (self._browser.close if self._browser is not None else None),
+            (self._pw.stop if self._pw is not None else None),
+        ):
+            if closer is None:
+                continue
+            try:
+                await asyncio.wait_for(closer(), 5)
+            except Exception:  # noqa: BLE001 — it is already dead
+                pass
+        self._browser = None
+        self._pw = None
+        self._dead = False
+
+    def mark_dead(self) -> None:
+        """The driver or browser is gone even if the object has not noticed."""
+        self._dead = True
+
+    def alive(self) -> bool:
+        if getattr(self, "_dead", False):
+            return False
+        try:
+            return self._browser is not None and self._browser.is_connected()
+        except Exception:  # noqa: BLE001
+            return False
+
     async def start_proxy(self) -> None:
         if self._proxy is None:
             self._proxy, self.proxy_port = await egress.start_proxy()
 
     async def close(self) -> None:
-        if self._browser is not None:
-            await self._browser.close()
-            self._browser = None
-        if self._pw is not None:
-            await self._pw.stop()
-            self._pw = None
+        await self._reset_dead()
         if self._proxy is not None:
             self._proxy.close()
             self._proxy = None
@@ -562,6 +587,7 @@ async def desktop_start(req: DesktopStartRequest) -> dict:
         "owner": req.owner,
         "created": now,
         "last_used": now,
+        "browser": _engine._browser,
     }
     session = _sessions[session_id]
     _watch_downloads(session, page)
@@ -583,6 +609,9 @@ async def desktop_action(req: DesktopActionRequest) -> dict:
     # Another owner's session answers exactly like a missing one.
     if session is None or session["owner"] != req.owner:
         return {"ok": False, "error": "session_not_found"}
+    if session["browser"] is not _engine._browser or not _engine.alive():
+        _sessions.pop(req.session_id, None)
+        return {"ok": False, "error": "session_lost"}
     if _expired(session, time.monotonic()):
         await _close_session(req.session_id)
         return {"ok": False, "error": "session_expired"}
@@ -597,6 +626,15 @@ async def desktop_action(req: DesktopActionRequest) -> dict:
         try:
             result = await _desktop_step(session, req)
         except Exception as exc:  # noqa: BLE001
+            if _dead_browser_error(exc):
+                _engine.mark_dead()
+            if not _engine.alive() or session["browser"] is not _engine._browser:
+                # E37: the browser (or its driver) died. Every session on it is
+                # gone; nothing is retried here — the caller reconciles.
+                for sid, other in list(_sessions.items()):
+                    if other["browser"] is session["browser"]:
+                        _sessions.pop(sid, None)
+                return {"ok": False, "error": "session_lost"}
             error = f"action_failed:{str(exc)[:300]}"
             if req.secret:
                 error = error.replace(req.secret, "•••")
@@ -652,6 +690,18 @@ def _page_origin(url: str) -> str:
     port = parts.port or default
     host = (parts.hostname or "").lower()
     return f"{scheme}://{host}" + ("" if port == default else f":{port}")
+
+
+_DEAD_MARKERS = (
+    "connection closed",
+    "browser has been closed",
+    "browser has disconnected",
+)  # not "target page ... closed": a site closing its own tab is not a crash
+
+
+def _dead_browser_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in _DEAD_MARKERS)
 
 
 async def _desktop_step(session: dict, req: DesktopActionRequest) -> dict:
