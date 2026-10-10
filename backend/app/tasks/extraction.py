@@ -2231,26 +2231,9 @@ def process_approved_document(self, document_id: str) -> dict:
 
 def _normalize_company_name(name: str) -> str:
     """Strip common Russian legal form prefixes for fuzzy comparison."""
-    import re as _re
+    from app.domain.party_names import company_core_name
 
-    s = name.lower().strip()
-    for pat in [
-        r"общество с ограниченной ответственностью",
-        r"акционерное общество",
-        r"закрытое акционерное общество",
-        r"публичное акционерное общество",
-        r"индивидуальный предприниматель",
-        r"\bооо\b",
-        r"\bао\b",
-        r"\bзао\b",
-        r"\bпао\b",
-        r"\bип\b",
-        r"\bгуп\b",
-        r"\bмуп\b",
-    ]:
-        s = _re.sub(pat, "", s)
-    s = _re.sub(r'["\'\«\»\(\)]', "", s)
-    return _re.sub(r"\s+", " ", s).strip()
+    return company_core_name(name)
 
 
 def _llm_match_supplier_name(new_name: str, existing_parties: list) -> "uuid.UUID | None":

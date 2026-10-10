@@ -86,15 +86,19 @@ def test_a_huge_stdout_is_cut_to_the_bound(client):  # noqa: F811
     assert len(result["stdout"]) == 64 * 1024
 
 
-def test_killing_the_bootstrap_is_refused_by_the_kernel(client):  # noqa: F811
-    """The bootstrap is PID 1 of its namespace: the kernel does not deliver a
-    signal it has no handler for from inside, so the run still reports
-    honestly instead of losing its result frame."""
+def test_killing_the_bootstrap_never_reads_as_success(client):  # noqa: F811
+    """Linux (runc) does not deliver an unhandled signal to PID 1 from inside
+    its namespace, so the run reports normally. gVisor delivers it: the run
+    then ends without its result frame and must say so — a failure, not a
+    success and not an "oom"."""
     code = (
         "import os, signal\nos.kill(os.getppid(), signal.SIGKILL)\nprint('parent', os.getppid())\n"
     )
     result = _run(client, code).json()
-    assert (result["status"], result["stdout"].split()) == ("succeeded", ["parent", "1"])
+    if result["oci_runtime"] == "runsc":
+        assert (result["status"], result["reason"]) == ("failed", "killed_before_result")
+    else:
+        assert (result["status"], result["stdout"].split()) == ("succeeded", ["parent", "1"])
 
 
 def test_a_forged_result_frame_does_not_win(client):  # noqa: F811

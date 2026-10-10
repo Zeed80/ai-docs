@@ -370,15 +370,23 @@ async def search_suppliers(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: supplier.search — Search suppliers by name, INN, or address."""
+    from app.domain.party_names import company_core_name
+
     q = payload.query
-    query = select(Party).where(
-        or_(
-            Party.name.ilike(f"%{q}%"),
-            Party.inn.ilike(f"%{q}%"),
-            Party.address.ilike(f"%{q}%"),
-            Party.contact_email.ilike(f"%{q}%"),
+    conditions = [
+        Party.name.ilike(f"%{q}%"),
+        Party.inn.ilike(f"%{q}%"),
+        Party.address.ilike(f"%{q}%"),
+        Party.contact_email.ilike(f"%{q}%"),
+    ]
+    # The name as written elsewhere: other quotes, legal form spelled out or
+    # missing. Matched on the core of both sides.
+    core = company_core_name(q)
+    if core and core != q.lower().strip():
+        conditions.append(
+            func.regexp_replace(Party.name, "[\"'«»“”„()]", "", "g").ilike(f"%{core}%")
         )
-    )
+    query = select(Party).where(or_(*conditions))
 
     count_q = select(func.count()).select_from(query.subquery())
     total = (await db.execute(count_q)).scalar() or 0

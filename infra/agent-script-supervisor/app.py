@@ -261,9 +261,17 @@ class Supervisor:
             (line for line in reversed(logs.splitlines()) if line.startswith(FRAME)), None
         )
         if frame_line is None:
-            # Killed before the frame (OOM inside the bootstrap, kernel kill).
+            # Killed before the frame. A real OOM is reported by the engine
+            # (OOMKilled, above, under runc and runsc alike); an exit 137
+            # without it is a kill — under gVisor the script may kill its
+            # own bootstrap — and calling that "oom" would be a false reason.
             code = state.get("ExitCode")
-            return {**base, "status": "oom" if code == 137 else "failed", "exit_code": code}
+            return {
+                **base,
+                "status": "failed",
+                "exit_code": code,
+                "reason": "killed_before_result" if code == 137 else "no_result_frame",
+            }
         frame = json.loads(frame_line[len(FRAME) :])
         outputs = []
         with tarfile.open(

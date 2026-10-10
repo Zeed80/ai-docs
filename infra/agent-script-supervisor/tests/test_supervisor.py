@@ -10,6 +10,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import sys
 import time
 import uuid
@@ -37,7 +38,8 @@ def runtime_id() -> str:
 def client(monkeypatch, runtime_id):
     monkeypatch.setenv("SCRIPT_SUPERVISOR_KEY", KEY)
     monkeypatch.setenv("SCRIPT_RUNTIMES", json.dumps({"python3.11": runtime_id}))
-    monkeypatch.setenv("SCRIPT_OCI_RUNTIME", "runc")
+    # AIW_TEST_OCI_RUNTIME=runsc runs the same suite under gVisor.
+    monkeypatch.setenv("SCRIPT_OCI_RUNTIME", os.environ.get("AIW_TEST_OCI_RUNTIME", "runc"))
     supervisor_app.supervisor = supervisor_app.Supervisor()
     with TestClient(supervisor_app.app) as test_client:
         yield test_client

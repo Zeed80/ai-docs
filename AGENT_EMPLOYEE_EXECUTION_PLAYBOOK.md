@@ -1286,7 +1286,7 @@ blocked verifier как итог в UI, подпись needs_review. Embedding/r
 
 ### E30 — Adversarial sandbox suite
 
-**Статус:** DONE (2026-10-10): 16 атак на настоящую изоляцию (цикл, fork bomb, сирота, диск, stdout, сигнал PID 1, поддельная рамка, IPv4/IPv6/DNS/metadata/raw, окружение, /proc, Docker socket, symlink) — эффект предотвращён ядром, лимиты соблюдены, сосед не затронут; загрузчик снимает все процессы перед рамкой (`docs/agent-employee-delivery/E30-adversarial-sandbox.md`). **Gate C** (включение `script_runs_enabled`, gVisor) — решение владельца. **После:** E29. **Создать:** отдельный security integration набор.
+**Статус:** DONE (2026-10-10): 16 атак на настоящую изоляцию (цикл, fork bomb, сирота, диск, stdout, сигнал PID 1, поддельная рамка, IPv4/IPv6/DNS/metadata/raw, окружение, /proc, Docker socket, symlink) — эффект предотвращён ядром, лимиты соблюдены, сосед не затронут; загрузчик снимает все процессы перед рамкой (`docs/agent-employee-delivery/E30-adversarial-sandbox.md`). **Gate C — пройден (2026-10-10, решение владельца «включай»):** gVisor `release-20260928.0` (`runsc` + `gvisor-bin`) зарегистрирован в Docker, supervisor на `runsc`, оба набора (30 тестов) зелёные на runsc и на runc; `script_runs_enabled=true`, планировщик может ставить шаг `script` (вход `code` + `data` → `data.json`, `${…}` в коде запрещены). Под gVisor скрипт способен убить свой загрузчик — прогон честно `failed`/`killed_before_result`, а не ложное `oom`. **После:** E29. **Создать:** отдельный security integration набор.
 
 1. Проверить бесконечный цикл/import, fork bomb, orphan process, disk fill,
    огромный stdout, сигнал, crash runtime, timeout при зависшем child.
@@ -1424,7 +1424,7 @@ DocumentChunk, embeddings, documents/mail/artifacts и существующие 
 
 ### E39 — SQL и кэши
 
-**Статус:** TODO. **После:** REVIEWED E38.
+**Статус:** SQL — DONE (2026-10-10): Postgres RLS на ролях агента, пользователь транзакции в `agent_sql_actors` (не `set_config` — его перепишет SQL модели), личное — только владельцу, производное — как источник, тест покрытия таблиц; `visibility_filter` больше не открывает всем строки с владельцем без отдела (`docs/agent-employee-delivery/E39-sql-row-security.md`). Кэши — остаток. **После:** REVIEWED E38.
 **Файлы:** `api/memory.py`, `ai/memory_manager.py`, реальные callers, scope tests.
 
 1. Вынести согласованные SQL predicates без изменения смысла доменных прав.

@@ -28,6 +28,28 @@ seccomp, AppArmor).
 а supervisor берёт последнюю. Тест на внука подтверждает поведение, но окно
 слишком узкое, чтобы стабильно воспроизвести атаку на старой версии.
 
-Остаток и решение владельца: runc делит ядро с хостом, поэтому уязвимость
-ядра остаётся классом риска. gVisor (`SCRIPT_OCI_RUNTIME=runsc`) его снимает, но
-требует установки на хост. Включение `script_runs_enabled` — Gate C.
+## Gate C (2026-10-10): включено на gVisor
+
+Владелец решил включить. На хост поставлен gVisor `release-20260928.0`
+(sha512 архива сверен): `/usr/local/bin/runsc` и рядом `gvisor-bin/` — без
+него новый `runsc` не стартует (`sidecar "gvisor_sentry" not usable`). Runtime
+зарегистрирован в `/etc/docker/daemon.json` (копия — `daemon.json.bak-2026-10-10`),
+применён `systemctl reload docker` без перезапуска контейнеров. Ядро в
+песочнице — `4.19.0-gvisor`: syscalls скрипта обслуживает Sentry, а не ядро
+хоста.
+
+Наборы E27 и E30 параметризованы (`AIW_TEST_OCI_RUNTIME=runsc`): 30/30 на
+runsc и 30/30 на runc. Одно расхождение: gVisor доставляет `SIGKILL` от
+скрипта загрузчику (PID 1). Прогон теряет рамку результата и теперь честно
+`failed` с `reason=killed_before_result`. Раньше supervisor называл любой
+выход 137 без рамки `oom`; настоящий OOM Docker отмечает `OOMKilled` и под
+runc, и под runsc.
+
+`infra/.env`: `SCRIPT_RUNS_ENABLED=true`, `SCRIPT_OCI_RUNTIME=runsc`,
+`SCRIPT_RUNTIMES` — ID образа `aiw-script-runtime:py311`, ключ подписи.
+Supervisor — профиль compose `scripts`, сеть `app`.
+
+Планировщик может ставить шаг `script`: `code` и `data` (JSON с
+`${steps…}`-ссылками, приходит файлом `data.json`); ссылки внутри `code`
+запрещены, иначе в исходник подставился бы repr. При выключенном флажке план
+с `script` отклоняется, и модель перепланирует.

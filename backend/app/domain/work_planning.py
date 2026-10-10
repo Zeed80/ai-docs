@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.capability_manifest import CapabilityDefinition, load_capability_manifest
+from app.config import settings
 from app.db.models import WorkOrder, WorkStep
 from app.domain.work_orders import (
     WORK_TRANSITIONS,
@@ -82,7 +83,7 @@ class PlannedChildSpec(BaseModel):
 class PlannedStep(BaseModel):
     step_key: str = Field(pattern=r"^[a-zA-Z0-9_-]+$", max_length=120)
     title: str = Field(min_length=1, max_length=500)
-    kind: str = Field(pattern="^(capability|agent_turn|decompose|synthesize)$")
+    kind: str = Field(pattern="^(capability|agent_turn|decompose|synthesize|script)$")
     capability: str | None = None
     action: str | None = None
     input: dict[str, Any] = Field(default_factory=dict)
@@ -133,6 +134,17 @@ class PlannedStep(BaseModel):
                 raise ValueError("decompose step requires a non-empty input.children list")
             for child in children:
                 PlannedChildSpec.model_validate(child)  # raises on malformed entry
+        if self.kind == "script":
+            code = self.input.get("code")
+            if not isinstance(code, str) or not code.strip():
+                raise ValueError("script step requires input.code (Python source)")
+            if "${" in code:
+                # Inline substitution would paste a repr into the source; data
+                # goes through input.data, which arrives as data.json.
+                raise ValueError(
+                    "script code must not contain ${...} references; "
+                    "pass them in input.data and read data.json"
+                )
         return self
 
 
@@ -206,6 +218,11 @@ def validate_capability_plan(
                 f"step {step.step_key}: agent_turn is not executable in durable work; "
                 "use capability, decompose or synthesize steps"
             )
+        if step.kind == "script" and not settings.script_runs_enabled:
+            raise ValueError(
+                f"step {step.step_key}: script steps are switched off here; "
+                "use capability, decompose or synthesize steps"
+            )
         if step.kind != "capability":
             continue
         capability = capabilities.get(str(step.capability))
@@ -237,8 +254,6 @@ def _planner_now() -> str:
     """Current local time with its offset and weekday, for date arithmetic."""
     from datetime import UTC, datetime
     from zoneinfo import ZoneInfo
-
-    from app.config import settings
 
     try:
         zone = ZoneInfo(settings.default_timezone)
@@ -307,6 +322,19 @@ words like "tomorrow". Never repeat completed work during replanning.
 Schema: {assumptions:[string], steps:[{step_key,title,kind,capability?,action?,input,
 depends_on,success_predicate,risk_level,max_attempts,timeout_seconds}],
 verification_plan:{mode,checks}}. Gated actions must be high risk."""
+    if settings.script_runs_enabled:
+        system += """
+
+A "script" step runs Python 3.11 (standard library only) in an isolated sandbox: no network,
+no database, no access to anything but its inputs, 60 s by default. Use it for computation a
+capability does not offer — totals, grouping, comparisons, reformatting data from earlier steps.
+Input {"code": Python source, "data": any JSON, usually ${steps.<key>.output...} references}.
+The script reads data.json from its working directory, prints its result to stdout and may
+write files to /tmp/out (they become artifacts). Never put ${...} inside "code".
+data.json holds exactly the referenced value, and its shape is only known when the script runs:
+if the fields you expect are missing, print what you found (keys, types) to stderr and exit
+with a non-zero code — a failed script is replanned with that message. Never print a result
+you could not compute as if it were one."""
     if planner_error_context:
         # Ф4-re post-mortem: the previous call's own rejection reason was
         # never shown to the model before this fix — it had no way to know
@@ -897,12 +925,29 @@ def _path_get(value: Any, path: str | None) -> Any:
                 # an open-ended "guess the path" search.
                 value = value["result"][segment]
             else:
-                raise KeyError(segment)
+                # Say what IS there: the replan sees this message, and a bare
+                # "'supplier_id'" made it repeat the same reference (live
+                # 2026-10-10).
+                keys = sorted(value)[:12]
+                raise DataflowPathError(
+                    f"no field {segment!r} in the output at {path!r}; fields here: {keys}"
+                )
         elif isinstance(value, list) and segment.isdigit():
+            if int(segment) >= len(value):
+                # Usually a search that found nothing; "list index out of
+                # range" told the replan nothing of the kind.
+                raise DataflowPathError(
+                    f"{path!r}: index {segment} but the list has {len(value)} items"
+                    + (" — the earlier step found nothing" if not value else "")
+                )
             value = value[int(segment)]
         else:
-            raise ValueError(f"dataflow path does not exist: {path}")
+            raise DataflowPathError(f"dataflow path does not exist: {path}")
     return value
+
+
+class DataflowPathError(ValueError):
+    """A ${steps...} reference points at something the output does not have."""
 
 
 async def resolve_step_input(

@@ -56,6 +56,11 @@ x-backend-env: &backend-env
   # prefill mail.<домен> instead of making the admin retype it.
   TRAEFIK_DOMAIN: ${TRAEFIK_DOMAIN:-localhost}
   SKILL_RUNNER_URL: http://skill-runner:8077
+  # E26–E30: isolated script runs (supervisor below, profile "scripts").
+  # Off unless SCRIPT_RUNS_ENABLED=true; the key signs every request.
+  SCRIPT_RUNS_ENABLED: ${SCRIPT_RUNS_ENABLED:-false}
+  SCRIPT_SUPERVISOR_URL: http://agent-script-supervisor:8078
+  SCRIPT_SUPERVISOR_KEY: ${SCRIPT_SUPERVISOR_KEY:-}
   GPU_TEMP_HELPER_URL: http://gpu-temp-helper:9966
   # Ф4 (AGENT_AUTONOMY_ROADMAP.md): found live on the exploratory pilot's
   # first real multi-step run — BuiltinAgentConfig.backend_url defaults to
@@ -934,6 +939,13 @@ services:
       SCRIPT_OCI_RUNTIME: ${SCRIPT_OCI_RUNTIME:-runc}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8078/health', timeout=3).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - app
 
   skill-runner:
     build:

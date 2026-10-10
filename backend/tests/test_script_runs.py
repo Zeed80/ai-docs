@@ -327,3 +327,68 @@ async def test_canceling_the_order_kills_its_running_script(factory, enabled):
     assert time.time() - started < 30
     run = await _run_row(factory, order_id)
     assert run.status == "canceled"
+
+
+@pytest.mark.asyncio
+async def test_data_from_earlier_steps_arrives_as_data_json(factory, enabled):
+    code = (
+        "import json\n"
+        "rows = json.load(open('data.json'))['rows']\n"
+        "print(sum(r['total'] for r in rows))\n"
+    )
+    order_id, step_id, attempt_id = await _script_step(
+        factory, code, data={"rows": [{"total": 40}, {"total": 2}]}
+    )
+
+    assert await _execute(factory, step_id, attempt_id)
+
+    run = await _run_row(factory, order_id)
+    assert run.status == "succeeded" and run.result["stdout"].strip() == "42"
+
+
+def _script_plan(code: str):
+    from app.domain.work_planning import PlannedStep, PlannedWork
+
+    return PlannedWork(
+        steps=[PlannedStep(step_key="calc", title="calc", kind="script", input={"code": code})]
+    )
+
+
+def test_the_planner_may_emit_a_script_step_only_while_scripts_are_on(monkeypatch):
+    from app.domain.work_planning import validate_capability_plan
+
+    monkeypatch.setattr(settings, "script_runs_enabled", False)
+    with pytest.raises(ValueError, match="switched off"):
+        validate_capability_plan(_script_plan("print(1)"))
+    monkeypatch.setattr(settings, "script_runs_enabled", True)
+    assert validate_capability_plan(_script_plan("print(1)")).steps[0].kind == "script"
+
+
+def test_script_code_cannot_carry_substituted_references():
+    with pytest.raises(ValueError, match="input.data"):
+        _script_plan("x = '${steps.lookup.output.result}'")
+    with pytest.raises(ValueError, match="input.code"):
+        _script_plan("")
+
+
+@pytest.mark.asyncio
+async def test_a_failed_script_tells_the_replan_what_it_saw(factory, enabled):
+    code = (
+        "import json, sys\n"
+        "data = json.load(open('data.json'))\n"
+        "if 'results' not in data:\n"
+        "    print('expected results, found keys', sorted(data), file=sys.stderr)\n"
+        "    sys.exit(2)\n"
+    )
+    order_id, step_id, attempt_id = await _script_step(
+        factory, code, data={"items": [], "total": 0}
+    )
+
+    await _execute(factory, step_id, attempt_id)
+
+    async with factory() as db:
+        step = await db.get(WorkStep, step_id)
+        message = step.last_error["message"]
+    assert message.startswith("script_run_failed: ")
+    detail = json.loads(message.removeprefix("script_run_failed: "))
+    assert detail["stderr_tail"].strip() == "expected results, found keys ['items', 'total']"

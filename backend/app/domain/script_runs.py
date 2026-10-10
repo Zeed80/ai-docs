@@ -41,6 +41,7 @@ from app.domain.script_broker import (
     register_outputs,
 )
 
+_MAX_DATA_BYTES = 8 * 1024 * 1024
 _FINISHED = frozenset({"succeeded", "failed", "timed_out", "refused", "canceled"})
 _STATUS = {
     "succeeded": "succeeded",
@@ -56,9 +57,13 @@ class ScriptRunError(RuntimeError):
     """A run that ended without success: the step fails for good."""
 
     def __init__(self, code: str, detail: dict[str, Any] | None = None) -> None:
-        super().__init__(code)
+        # The step keeps only str(exc); the replan must see why — the
+        # script's own stderr names the fields it did not find.
+        detail = detail or {}
+        shown = {key: value for key, value in detail.items() if value not in (None, "")}
+        super().__init__(f"{code}: {json.dumps(shown, ensure_ascii=False)}" if shown else code)
         self.code = code
-        self.detail = detail or {}
+        self.detail = detail
 
 
 class ScriptRunPending(TimeoutError):
@@ -148,9 +153,16 @@ def _output(run: AgentScriptRun) -> dict[str, Any]:
 def _finish(run: AgentScriptRun) -> dict[str, Any]:
     if run.status == "succeeded":
         return _output(run)
+    result = run.result or {}
     raise ScriptRunError(
         f"script_run_{run.status}",
-        {"run_id": str(run.id), "reason": (run.result or {}).get("reason")},
+        {
+            "run_id": str(run.id),
+            "reason": result.get("reason"),
+            "exit_code": result.get("exit_code"),
+            "stderr_tail": (result.get("stderr") or "")[-800:],
+            "stdout_tail": (result.get("stdout") or "")[-300:],
+        },
     )
 
 
@@ -174,6 +186,15 @@ async def run_script_step(
     runtime = str(input_data.get("runtime") or "python3.11")
     refs = [ScriptInputRef.model_validate(item) for item in input_data.get("inputs") or []]
     timeout = int(input_data.get("timeout_seconds") or 60)
+    # Data from earlier steps (already resolved references) arrives as
+    # data.json; the code itself never carries substituted values.
+    data_file: bytes | None = None
+    if input_data.get("data") is not None:
+        data_file = json.dumps(input_data["data"], ensure_ascii=False, default=str).encode()
+        if len(data_file) > _MAX_DATA_BYTES:
+            raise ScriptRunError("script_data_too_large", {"bytes": len(data_file)})
+        if any(ref.name == "data.json" for ref in refs):
+            raise ScriptRunError("script_input_name_conflict", {"name": "data.json"})
 
     # 1. Intent before any job: one run per step, across attempts.
     async with factory() as db:
@@ -243,6 +264,7 @@ async def run_script_step(
         "files": {
             "main.py": base64.b64encode(code.encode()).decode(),
             **{name: base64.b64encode(data).decode() for name, data in files.items()},
+            **({"data.json": base64.b64encode(data_file).decode()} if data_file else {}),
         },
         "timeout_seconds": timeout,
         "extended_time_authorized": bool(input_data.get("extended_time_authorized")),

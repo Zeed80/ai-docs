@@ -131,6 +131,34 @@ async def test_search_suppliers(client: AsyncClient, supplier):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query",
+    [
+        "ООО «ИНАТЕК-М»",
+        "ООО ИНАТЕК-М",
+        "Общество с ограниченной ответственностью ИНАТЕК-М",
+        "инатек-м",
+    ],
+)
+async def test_search_finds_a_name_spelled_with_other_quotes_or_form(
+    client: AsyncClient, db_session, query
+):
+    """Live 2026-10-10: the planner searched «ООО «ИНАТЕК-М»» for a supplier
+    stored as 'ООО "ИНАТЕК-М"' with 17 invoices and got nothing."""
+    db_session.add(Party(name='ООО "ИНАТЕК-М"', inn="7700000001", role=PartyRole.supplier))
+    await db_session.commit()
+    resp = await client.post("/api/suppliers/search", json={"query": query})
+    assert [r["name"] for r in resp.json()["results"]] == ['ООО "ИНАТЕК-М"']
+
+
+def test_company_core_name_strips_the_longest_legal_form():
+    from app.domain.party_names import company_core_name
+
+    assert company_core_name("Закрытое акционерное общество «Ромашка»") == "ромашка"
+    assert company_core_name('ООО "ИНАТЕК-М"') == "инатек-м"
+
+
+@pytest.mark.asyncio
 async def test_search_by_inn(client: AsyncClient, supplier):
     resp = await client.post("/api/suppliers/search", json={"query": "7719826705"})
     assert resp.status_code == 200
