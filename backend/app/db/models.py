@@ -2148,6 +2148,23 @@ class WorkToolCall(UUIDPrimaryKey, TimestampMixin, Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class BrowserSecret(UUIDPrimaryKey, TimestampMixin, Base):
+    """E34: a password a person stored for one site, typed only by the broker.
+
+    The model only ever sees the id and label. The value is decrypted by the
+    backend for one fill into a password field of a page on exactly ``origin``
+    and is never returned, logged or shown.
+    """
+
+    __tablename__ = "browser_secrets"
+
+    owner_sub: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    label: Mapped[str] = mapped_column(String(200), nullable=False)
+    origin: Mapped[str] = mapped_column(String(500), nullable=False)
+    value_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class ComputerUseGrant(UUIDPrimaryKey, TimestampMixin, Base):
     """Short-lived least-privilege authority for brokered OS/browser actions."""
 
@@ -2167,6 +2184,8 @@ class ComputerUseGrant(UUIDPrimaryKey, TimestampMixin, Base):
     allowed_commands: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     max_actions: Mapped[int] = mapped_column(Integer, default=20, nullable=False)
     used_actions: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # E34: browser secrets this grant may type, each once.
+    secret_ids: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )

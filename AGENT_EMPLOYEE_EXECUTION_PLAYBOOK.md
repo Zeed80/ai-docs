@@ -1348,7 +1348,7 @@ blocked verifier как итог в UI, подпись needs_review. Embedding/r
 
 ### E34 — Login/MFA/CAPTCHA и брокер секретов
 
-**Статус:** TODO. **После:** REVIEWED E33.
+**Статус:** БРОКЕР DONE (2026-10-10), Gate D2 — review владельца: пароль хранит человек, грант называет, ввод один раз только в поле password страницы его origin; значения нет в ответах, снимках, ошибках, аудите (сервис вычищает повторы страницы). Остаток: передача живой сессии человеку для MFA/CAPTCHA и экран секретов (`docs/agent-employee-delivery/E34-browser-secret-broker.md`). **После:** REVIEWED E33.
 **Файлы:** browser session API/service, secret storage integration, UI handoff.
 
 1. Предпочтительно human handoff в owner session. CAPTCHA не обходить автоматически.

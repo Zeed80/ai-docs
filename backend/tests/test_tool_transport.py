@@ -81,6 +81,7 @@ def test_browser_script_mcp_allowlist_matches_reviewed_catalog_inventory():
             "computer_use.desktop_read",
             "computer_use.desktop_navigate",
             "computer_use.desktop_tabs",
+            "computer_use.desktop_fill_secret",
             "computer_use.desktop_close",
             "computer_use.file_read",
             "computer_use.file_write",

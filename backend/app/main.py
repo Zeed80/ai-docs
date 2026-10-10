@@ -42,6 +42,7 @@ from app.api import (
     auth,
     auto_approval,
     boms,
+    browser_secrets,
     calendar,
     canonical,
     canvas,
@@ -532,6 +533,12 @@ def create_app() -> FastAPI:
         work_orders.router,
         prefix="/api/work-orders",
         tags=["work-orders"],
+        dependencies=_auth,
+    )
+    app.include_router(
+        browser_secrets.router,
+        prefix="/api/browser-secrets",
+        tags=["browser-secrets"],
         dependencies=_auth,
     )
     app.include_router(

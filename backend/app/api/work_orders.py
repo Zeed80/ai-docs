@@ -124,6 +124,8 @@ class ComputerUseGrantIn(BaseModel):
     max_actions: int = Field(20, ge=1, le=200)
     ttl_seconds: int = Field(3600, ge=60, le=86400)
     reason: str = Field(min_length=1, max_length=1000)
+    # E34: stored browser secrets of the order's owner this grant may type.
+    secret_ids: list[uuid.UUID] = Field(default_factory=list, max_length=10)
 
 
 class WorkOrderOut(BaseModel):
@@ -614,6 +616,7 @@ async def grant_computer_use(
         "desktop_read",
         "desktop_navigate",
         "desktop_tabs",
+        "desktop_fill_secret",
         "desktop_close",
         "file_read",
         "file_write",
@@ -623,9 +626,24 @@ async def grant_computer_use(
         raise HTTPException(status_code=422, detail="Unknown computer-use action")
     if any(root in {"/", "~", ""} or not root.startswith("/") for root in body.allowed_roots):
         raise HTTPException(status_code=422, detail="Allowed roots must be narrow absolute paths")
+    if body.secret_ids:
+        from app.db.models import BrowserSecret
+
+        if "desktop_fill_secret" not in body.actions:
+            raise HTTPException(422, "secret_ids need the desktop_fill_secret action")
+        found = list(
+            await db.scalars(select(BrowserSecret).where(BrowserSecret.id.in_(body.secret_ids)))
+        )
+        # Only the order owner's own, live secrets: a manager granting the
+        # work cannot hand it someone else's password.
+        if len(found) != len(set(body.secret_ids)) or any(
+            s.owner_sub != order.owner_key or s.revoked_at is not None for s in found
+        ):
+            raise HTTPException(422, "Unknown, foreign or revoked browser secret")
     grant = ComputerUseGrant(
         work_order_id=order.id,
         granted_to=order.owner_key,
+        secret_ids=[str(i) for i in dict.fromkeys(body.secret_ids)],
         granted_by=user.sub,
         actions=list(dict.fromkeys(body.actions)),
         allowed_roots=list(dict.fromkeys(body.allowed_roots)),
@@ -646,6 +664,7 @@ async def grant_computer_use(
             "grant_id": str(grant.id),
             "actions": grant.actions,
             "expires_at": grant.expires_at.isoformat(),
+            "secret_ids": grant.secret_ids,
         },
     )
     await db.commit()

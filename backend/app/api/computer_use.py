@@ -28,7 +28,7 @@ router = APIRouter()
 
 class ComputerActionIn(BaseModel):
     action: str = Field(
-        pattern="^(browser_fetch|desktop_snapshot|desktop_start|desktop_observe|desktop_click|desktop_type|desktop_read|desktop_navigate|desktop_tabs|desktop_close|file_read|file_write|shell)$"
+        pattern="^(browser_fetch|desktop_snapshot|desktop_start|desktop_observe|desktop_click|desktop_type|desktop_read|desktop_navigate|desktop_tabs|desktop_fill_secret|desktop_close|file_read|file_write|shell)$"
     )
     work_order_id: uuid.UUID
     step_id: uuid.UUID | None = None
@@ -65,6 +65,42 @@ def _host_allowed(url: str, hosts: list[str]) -> bool:
     return any(
         host == allowed.casefold() or host.endswith("." + allowed.casefold()) for allowed in hosts
     )
+
+
+async def _secret_for_fill(body: dict, grant: ComputerUseGrant) -> dict:
+    """E34: the value for one fill — checked here, never returned.
+
+    The secret must be named by this grant, belong to the order's owner, be
+    live and not used before under this grant. The browser service types it
+    only into a password field of a page on exactly the secret's origin.
+    """
+    from sqlalchemy import func
+    from sqlalchemy import select as _select
+
+    from app.ai.secret_box import decrypt
+    from app.db.models import BrowserSecret
+    from app.db.session import _get_session_factory
+
+    secret_id = str(body.get("secret_id") or "")
+    if secret_id not in {str(i) for i in grant.secret_ids or []}:
+        raise HTTPException(status_code=403, detail="Secret is not granted for this work")
+    async with _get_session_factory()() as db:
+        secret = await db.get(BrowserSecret, uuid.UUID(secret_id))
+        if secret is None or secret.revoked_at is not None or secret.owner_sub != grant.granted_to:
+            raise HTTPException(status_code=403, detail="Secret is not available")
+        # This attempt's own audit row is already committed as "running";
+        # any other running or succeeded use of the secret makes two.
+        uses = await db.scalar(
+            _select(func.count()).where(
+                ComputerUseAction.grant_id == grant.id,
+                ComputerUseAction.action == "desktop_fill_secret",
+                ComputerUseAction.status.in_(["running", "succeeded"]),
+                ComputerUseAction.arguments["secret_id"].as_string() == secret_id,
+            )
+        )
+        if uses and uses > 1:
+            raise HTTPException(status_code=409, detail="Secret was already used under this grant")
+        return {"secret": decrypt(secret.value_encrypted), "origin": secret.origin}
 
 
 def _browser_action(action: str, body: dict) -> str:
@@ -154,6 +190,8 @@ async def _perform(
                 "wait_ms": min(int(body.get("wait_ms", 0)), 15000),
             }
         )
+        if action == "desktop_fill_secret":
+            payload.update(await _secret_for_fill(body, grant))
         if action == "desktop_navigate" and not _host_allowed(
             str(body.get("url") or ""), list(grant.allowed_hosts or [])
         ):

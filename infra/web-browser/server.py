@@ -22,6 +22,8 @@ import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 import egress
 from patchright.async_api import async_playwright
@@ -171,6 +173,15 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="web-browser", lifespan=lifespan)
 
 
+@app.exception_handler(RequestValidationError)
+async def _validation_without_input(_request, exc: RequestValidationError):
+    """E34: a validation error must not echo the request — it may carry a secret."""
+    return JSONResponse(
+        status_code=422,
+        content={"detail": [{"loc": e.get("loc"), "msg": e.get("msg")} for e in exc.errors()]},
+    )
+
+
 class FetchRequest(BaseModel):
     url: str = Field(..., min_length=4, max_length=2048)
     screenshot: bool = False
@@ -217,7 +228,7 @@ class DesktopActionRequest(BaseModel):
     session_id: str
     owner: str = Field(min_length=1, max_length=200)
     action: str = Field(
-        pattern="^(observe|click|type|read|screenshot|navigate|tabs|switch_tab|close)$"
+        pattern="^(observe|click|type|fill_secret|read|screenshot|navigate|tabs|switch_tab|close)$"
     )
     # E32: click/type address an element by the ref an observe returned,
     # under that observe's revision — never a model-written CSS selector
@@ -228,6 +239,9 @@ class DesktopActionRequest(BaseModel):
     url: str | None = Field(default=None, max_length=2048)
     tab: int | None = Field(default=None, ge=0, le=20)
     wait_ms: int = Field(0, ge=0, le=15000)
+    # E34: only for fill_secret, from the backend's broker; never echoed.
+    secret: str | None = Field(default=None, max_length=4000, repr=False)
+    origin: str | None = Field(default=None, max_length=500)
 
 
 # E32: what an observe sees. Interactive elements of the active tab's main
@@ -450,7 +464,10 @@ async def desktop_action(req: DesktopActionRequest) -> dict:
         try:
             result = await _desktop_step(session, req)
         except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "error": f"action_failed:{str(exc)[:300]}"}
+            error = f"action_failed:{str(exc)[:300]}"
+            if req.secret:
+                error = error.replace(req.secret, "•••")
+            return _redact(session, {"ok": False, "error": error})
         if result.get("ok") is False:
             return result
         page = session["page"]
@@ -458,7 +475,7 @@ async def desktop_action(req: DesktopActionRequest) -> dict:
             await _close_session(req.session_id)
             return {"ok": False, "error": "navigation_left_allowlist"}
         shot = await page.screenshot(type="png", animations="disabled", caret="initial")
-        return {
+        return _redact(session, {
             "ok": True,
             "url": page.url,
             "title": await page.title(),
@@ -468,7 +485,34 @@ async def desktop_action(req: DesktopActionRequest) -> dict:
             "content_trust": "untrusted_page",
             **result,
             "screenshot_b64": base64.b64encode(shot).decode("ascii"),
-        }
+        })
+
+
+def _redact(session: dict, value):
+    """E34: a secret typed in this session never comes back in an answer,
+    even if the page repeats it in a visible field, its text, URL or title."""
+    secrets = session.get("secrets") or ()
+    if not secrets:
+        return value
+    if isinstance(value, str):
+        for secret in secrets:
+            if secret:
+                value = value.replace(secret, "•••")
+        return value
+    if isinstance(value, list):
+        return [_redact(session, v) for v in value]
+    if isinstance(value, dict):
+        return {k: (v if k == "screenshot_b64" else _redact(session, v)) for k, v in value.items()}
+    return value
+
+
+def _page_origin(url: str) -> str:
+    parts = urlparse(url)
+    scheme = parts.scheme
+    default = {"http": 80, "https": 443}.get(scheme)
+    port = parts.port or default
+    host = (parts.hostname or "").lower()
+    return f"{scheme}://{host}" + ("" if port == default else f":{port}")
 
 
 async def _desktop_step(session: dict, req: DesktopActionRequest) -> dict:
@@ -525,6 +569,17 @@ async def _desktop_step(session: dict, req: DesktopActionRequest) -> dict:
         return {"ok": False, "error": "frame_not_actionable"}
     if await target.is_disabled():
         return {"ok": False, "error": "element_disabled"}
+    if req.action == "fill_secret":
+        # Exactly the secret's origin, in the main frame, into a password field.
+        if not req.secret or not req.origin:
+            return {"ok": False, "error": "secret_required"}
+        if _page_origin(page.url) != req.origin:
+            return {"ok": False, "error": "origin_mismatch"}
+        if (await target.get_attribute("type") or "").lower() != "password":
+            return {"ok": False, "error": "not_a_password_field"}
+        session.setdefault("secrets", set()).add(req.secret)
+        await target.fill(req.secret, timeout=10000)
+        return {"done": "fill_secret"}
     if req.action == "click":
         await target.click(timeout=10000)
     else:

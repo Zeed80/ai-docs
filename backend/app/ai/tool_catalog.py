@@ -33,6 +33,13 @@ _OPERATIONS = {
     "computer_use.desktop_read": ("POST", "/api/computer-use/execute", [], "read", False),
     "computer_use.desktop_navigate": ("POST", "/api/computer-use/execute", [], "interact", False),
     "computer_use.desktop_tabs": ("POST", "/api/computer-use/execute", [], "read", False),
+    "computer_use.desktop_fill_secret": (
+        "POST",
+        "/api/computer-use/execute",
+        [],
+        "interact",
+        False,
+    ),
     "computer_use.desktop_close": ("POST", "/api/computer-use/execute", [], "interact", False),
     "computer_use.file_read": ("POST", "/api/computer-use/execute", [], "read", False),
     "computer_use.file_write": ("POST", "/api/computer-use/execute", [], "write", False),

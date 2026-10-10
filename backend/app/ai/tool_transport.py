@@ -36,6 +36,7 @@ BROWSER_SCRIPT_MCP_OPERATIONS = frozenset(
         "computer_use.desktop_read",
         "computer_use.desktop_navigate",
         "computer_use.desktop_tabs",
+        "computer_use.desktop_fill_secret",
         "computer_use.desktop_close",
         "computer_use.file_read",
         "computer_use.file_write",
