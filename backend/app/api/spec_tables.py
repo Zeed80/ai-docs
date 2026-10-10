@@ -418,6 +418,18 @@ async def edit_spec_table_cell(
             status="error", message="Некорректный идентификатор строки."
         )
 
+    # E42: the approval is for this row as it is now. If the row changes before
+    # someone approves, the approved edit must not land on a version the
+    # approver never saw.
+    from sqlalchemy import select as _select
+
+    current = (
+        await db.execute(_select(wb.model.updated_at).where(wb.model.id == entity_id))
+    ).scalar_one_or_none()
+    if current is None:
+        return SpecTableCellEditResponse(status="error", message="Строка не найдена.")
+    base_version = current.isoformat()
+
     approval = Approval(
         action_type=ApprovalActionType.table_apply_diff,
         entity_type=wb.entity_type,
@@ -428,6 +440,8 @@ async def edit_spec_table_cell(
             "field": payload.field,
             "value": payload.value,
             "title": block.get("title"),
+            "base_version": base_version,
+            "block_revision": block.get("revision"),
         },
     )
     db.add(approval)
@@ -441,6 +455,7 @@ async def edit_spec_table_cell(
             "source": source_key,
             "field": payload.field,
             "value": payload.value,
+            "base_version": base_version,
         },
         approval_id=approval.id,
     )

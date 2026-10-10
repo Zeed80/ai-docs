@@ -175,6 +175,27 @@ class OwnedWorkspaceBlock(UUIDPrimaryKey, TimestampMixin, Base):
     owner_key: Mapped[str] = mapped_column(String(200), index=True)
     block_key: Mapped[str] = mapped_column(String(300))
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    # E42: bumped by every write; a write may require the revision it read.
+    revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+
+
+class OwnedWorkspaceBlockVersion(UUIDPrimaryKey, Base):
+    """E42: every revision of a workspace block, never overwritten.
+
+    The live row is the latest; earlier revisions stay readable by number, so
+    an approval or a check made on one revision can be compared with what the
+    block says now.
+    """
+
+    __tablename__ = "owned_workspace_block_versions"
+    __table_args__ = (UniqueConstraint("owner_key", "block_key", "revision"),)
+
+    owner_key: Mapped[str] = mapped_column(String(200), index=True)
+    block_key: Mapped[str] = mapped_column(String(300))
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class DelegationGrant(UUIDPrimaryKey, TimestampMixin, Base):

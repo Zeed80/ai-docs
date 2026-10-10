@@ -7,7 +7,7 @@ from collections import defaultdict
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
@@ -122,6 +122,26 @@ async def get_workspace_blocks() -> WorkspaceBlockResponse:
 async def get_workspace_block_endpoint(block_id: str) -> dict[str, Any] | None:
     """Get one Workspace block by ID."""
     return get_workspace_block(block_id)
+
+
+@router.get("/blocks/{block_id}/versions")
+async def list_workspace_block_versions_endpoint(block_id: str) -> dict[str, Any]:
+    """Every revision of a block (E42): number, content hash and time."""
+    from app.domain.workspace import list_workspace_block_versions
+
+    versions = list_workspace_block_versions(block_id)
+    return {"block_id": block_id, "versions": versions, "total": len(versions)}
+
+
+@router.get("/blocks/{block_id}/versions/{revision}", response_model=dict[str, Any])
+async def get_workspace_block_version_endpoint(block_id: str, revision: int) -> dict[str, Any]:
+    """One earlier revision of a block, as it was."""
+    from app.domain.workspace import get_workspace_block_version
+
+    version = get_workspace_block_version(block_id, revision)
+    if version is None:
+        raise HTTPException(404, "Block revision not found")
+    return version
 
 
 @router.post("/agent/verify-block", response_model=WorkspaceVerifyBlockResponse)

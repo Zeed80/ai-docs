@@ -1045,15 +1045,31 @@ def coerce_writeback_value(source_key: str, field: str, value: Any) -> Any:
 
 
 async def apply_cell_writeback(
-    db: AsyncSession, source_key: str, pk: Any, field: str, value: Any
+    db: AsyncSession,
+    source_key: str,
+    pk: Any,
+    field: str,
+    value: Any,
+    *,
+    base_version: str | None = None,
 ) -> tuple[bool, str]:
-    """Apply one approved cell edit. Returns (ok, message). Caller commits."""
+    """Apply one approved cell edit. Returns (ok, message). Caller commits.
+
+    ``base_version`` is the row's ``updated_at`` when the edit was requested
+    (E42): a row changed since then is not overwritten on an approval given
+    for its earlier state.
+    """
     wb = WRITEBACK.get(source_key)
     if wb is None or field not in wb.editable:
         return False, f"Поле «{field}» нередактируемо для источника «{source_key}»"
-    obj = (await db.execute(select(wb.model).where(wb.model.id == pk))).scalar_one_or_none()
+    obj = (
+        await db.execute(select(wb.model).where(wb.model.id == pk).with_for_update())
+    ).scalar_one_or_none()
     if obj is None:
         return False, "Строка не найдена"
+    if base_version is not None and obj.updated_at is not None:
+        if obj.updated_at.isoformat() != base_version:
+            return False, "stale: строка изменилась после запроса правки — нужен новый запрос"
     try:
         setattr(obj, field, coerce_writeback_value(source_key, field, value))
     except ValueError as exc:

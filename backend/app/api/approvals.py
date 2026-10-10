@@ -759,6 +759,7 @@ async def _execute_approved_action(approval: Approval, db: AsyncSession) -> None
                     approval.entity_id,
                     str(d.get("field", "")),
                     d.get("value"),
+                    base_version=d.get("base_version"),
                 )
                 if ok:
                     draft.executed = True
@@ -770,6 +771,13 @@ async def _execute_approved_action(approval: Approval, db: AsyncSession) -> None
                         field=d.get("field"),
                     )
                 else:
+                    # Say so on the approval: an approved edit that did not
+                    # land (stale row, gone row) must not look applied.
+                    approval.context = {
+                        **(approval.context or {}),
+                        "writeback": {"status": "not_applied", "reason": msg},
+                    }
+                    await db.commit()
                     logger.warning("table_cell_writeback_skipped", reason=msg)
         except Exception as e:
             logger.error("execute_approved_action_error", error=str(e))

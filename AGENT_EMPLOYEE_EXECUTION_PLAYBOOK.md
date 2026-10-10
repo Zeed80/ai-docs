@@ -1466,7 +1466,7 @@ DocumentChunk, embeddings, documents/mail/artifacts и существующие 
 
 ### E42 — Неизменяемые версии блоков и артефактов
 
-**Статус:** TODO. **После:** E41.
+**Статус:** DONE (2026-10-10): ревизии блоков в `owned_workspace_block_versions`, `expected_revision` → 409, старые версии по API; согласование правки ячейки привязано к `updated_at` строки — устаревшее не применяется и это видно в согласовании; `WorkArtifact` неизменяем, вердикт привязан к хэшу; общего доступа к блокам нет — расширять нечего (`docs/agent-employee-delivery/E42-immutable-versions.md`). **После:** E41.
 **Файлы:** OwnedWorkspaceBlock, WorkArtifact, API blocks/artifacts, миграции.
 
 1. Новая версия вместо перезаписи; expected_revision предотвращает lost update.
