@@ -318,6 +318,7 @@ async def _execute_capability(
                         "idempotency_key": idempotency_key,
                     },
                 )
+                headers.update(budget_context.effect_fence_headers(operation_key))
             try:
                 response = await client.post(url, json=payload, headers=headers)
             except BaseException as exc:
@@ -1566,6 +1567,8 @@ async def _execute_claimed_step(
             step_id=step_id,
             attempt_id=attempt_id,
             session_factory=factory,
+            fence_plan_id=frozen_plan_id,
+            fence_plan_revision=frozen_plan_revision,
         )
         if kind == "capability"
         else WorkBudgetContext(

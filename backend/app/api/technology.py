@@ -1535,6 +1535,19 @@ async def generate_tp_from_drawing(
         await db.flush()
         plan_id = plan.id
 
+    await log_action(
+        db,
+        action="tech.generate_tp_from_drawing",
+        entity_type="process_plan",
+        entity_id=plan_id,
+        user_id=created_by,
+        details={"drawing_id": str(drawing_id)},
+    )
+    # Commit before the task is queued: the worker reads the plan row, and a
+    # durable caller's effect fence decides at this commit (E24). The task was
+    # queued first and the audit entry was added after the last commit, so it
+    # was never written.
+    await db.commit()
     task = celery_tp_task.apply_async(
         kwargs={
             "plan_id": str(plan_id),
@@ -1543,16 +1556,6 @@ async def generate_tp_from_drawing(
             "auto_normcontrol": payload.get("auto_normcontrol", True),
             "created_by": created_by,
         }
-    )
-
-    await db.commit()
-    await log_action(
-        db,
-        action="tech.generate_tp_from_drawing",
-        entity_type="process_plan",
-        entity_id=plan_id,
-        user_id=created_by,
-        details={"drawing_id": str(drawing_id)},
     )
 
     return {"plan_id": str(plan_id), "task_id": task.id, "status": "queued"}

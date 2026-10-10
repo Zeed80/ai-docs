@@ -78,8 +78,11 @@ E23a выпущен: несверенный эффект блокирует пе
 (`docs/agent-employee-delivery/E23-unknown-frontier.md`). E23b выпущен: шаги,
 согласования, проверки и вердикты старой ревизии не действуют на новую, планировщик
 ждёт шаг в полёте, указания владельца видят synthesize и verifier
-(`docs/agent-employee-delivery/E23-stale-revision.md`). E23 закрыт; следующее —
-P1.4 (E24: fences на фактической границе эффекта).
+(`docs/agent-employee-delivery/E23-stale-revision.md`). E23 закрыт.
+E24a выпущен: получатель проверяет текущую попытку в транзакции своего `commit`
+и пишет квитанцию эффекта; отмена каскадируется на потомков
+(`docs/agent-employee-delivery/E24-effect-fence.md`). Остаток E24 — эффекты вне
+БД до `commit`, хранилище рабочего стола, child context, отзыв grant.
 Остаются как минимум:
 
 - остальные AIRouter/headless/provider paths;

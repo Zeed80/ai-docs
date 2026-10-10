@@ -668,12 +668,19 @@ def _relayed_handoff(capability_name: str, action: str, request: Request) -> dic
     and is verified, fenced and single-use at the recipient; the gateway only
     relays it, after its own policy checks, for this one action.
     """
+    from app.auth.effect_fence import EFFECT_FENCE_HEADER
     from app.auth.work_budget_handoff import WORK_BUDGET_HANDOFF_HEADER
 
+    relayed: dict[str, str] = {}
     token = request.headers.get(WORK_BUDGET_HANDOFF_HEADER)
     if capability_name == "workspace" and action == "sql_table" and token:
-        return {WORK_BUDGET_HANDOFF_HEADER: token}
-    return {}
+        relayed[WORK_BUDGET_HANDOFF_HEADER] = token
+    # E24: the recipient checks the attempt at its own commit; the gateway's
+    # policy checks happened before and do not stand in for that fence.
+    fence = request.headers.get(EFFECT_FENCE_HEADER)
+    if fence:
+        relayed[EFFECT_FENCE_HEADER] = fence
+    return relayed
 
 
 async def _audit_tool_call(

@@ -45,6 +45,10 @@ engine = _proxy  # type: ignore[assignment]
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:
+    from app.auth.effect_fence import install_effect_fence
+
     factory = _get_session_factory()
     async with factory() as session:
+        # E24: a durable tool effect commits only while its attempt is current.
+        install_effect_fence(session)
         yield session

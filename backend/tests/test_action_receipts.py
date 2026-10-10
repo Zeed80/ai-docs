@@ -307,19 +307,21 @@ async def test_committed_action_accepts_source_or_current_attempt_for_read_only_
 @pytest.mark.asyncio
 async def test_cancellation_and_recipient_share_order_lock(test_engine, monkeypatch):
     from app.api import work_orders as work_order_api
+    from app.domain import work_orders as work_order_domain
 
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     payload, run, _, _, key = await proposal(factory)
     lock_acquired = asyncio.Event()
     release_cancel = asyncio.Event()
-    real_transition = work_order_api.transition_work_order
+    real_transition = work_order_domain.transition_work_order
 
     async def pause_after_order_lock(*args, **kwargs):
         lock_acquired.set()
         await release_cancel.wait()
         return await real_transition(*args, **kwargs)
 
-    monkeypatch.setattr(work_order_api, "transition_work_order", pause_after_order_lock)
+    # Cancellation lives in the domain since E24 (cancel_work_order).
+    monkeypatch.setattr(work_order_domain, "transition_work_order", pause_after_order_lock)
 
     async def cancel():
         async with factory() as db:
@@ -601,19 +603,21 @@ async def test_warehouse_receipt_failure_rolls_back_item_mutation(test_engine, m
 @pytest.mark.asyncio
 async def test_warehouse_cancellation_and_recipient_share_order_lock(test_engine, monkeypatch):
     from app.api import work_orders as work_order_api
+    from app.domain import work_orders as work_order_domain
 
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     payload, run, action_id, item_id, key = await warehouse_update_proposal(factory)
     lock_acquired = asyncio.Event()
     release_cancel = asyncio.Event()
-    real_transition = work_order_api.transition_work_order
+    real_transition = work_order_domain.transition_work_order
 
     async def pause_after_order_lock(*args, **kwargs):
         lock_acquired.set()
         await release_cancel.wait()
         return await real_transition(*args, **kwargs)
 
-    monkeypatch.setattr(work_order_api, "transition_work_order", pause_after_order_lock)
+    # Cancellation lives in the domain since E24 (cancel_work_order).
+    monkeypatch.setattr(work_order_domain, "transition_work_order", pause_after_order_lock)
 
     async def cancel():
         async with factory() as db:

@@ -2120,3 +2120,98 @@ async def resume_paused(db: AsyncSession, order: WorkOrder, *, actor: str) -> No
     target = _RESUME_TARGET.get(previous, "replanning")
     order.metadata_ = {k: v for k, v in (order.metadata_ or {}).items() if k != "pause"}
     await transition_work_order(db, order, target, actor=actor, payload={"resumed_from": "paused"})
+
+
+# ── Cancellation (moved from the API, E24: cascades to child orders) ────────
+
+
+async def cancel_work_order(db: AsyncSession, order: WorkOrder, *, actor: str) -> list[str]:
+    """Cancel an order and every unfinished child order under it.
+
+    A decomposed parent used to be canceled alone: its children kept running
+    and producing effects for work nobody wanted any more (E24 card test
+    "parent canceled while a child is pending"). A running step is not torn
+    down here except for durable chat; the effect fence at the recipient
+    refuses its commit once the order is canceled. Returns canceled child ids.
+    """
+    await transition_work_order(db, order, "canceled", actor=actor)
+    steps = list(
+        (
+            await db.execute(
+                select(WorkStep).where(
+                    WorkStep.work_order_id == order.id,
+                    WorkStep.state.in_(["pending", "ready", "retry_wait", "waiting_approval"]),
+                )
+            )
+        ).scalars()
+    )
+    for step in steps:
+        await transition_step(db, step, "canceled", actor=actor)
+    if order.source == "durable_chat":
+        # Fence the running pilot as well: a late worker must not settle or
+        # requeue a canceled conversation. Already sent effects are unknown.
+        running = list(
+            await db.scalars(
+                select(WorkStep)
+                .where(WorkStep.work_order_id == order.id, WorkStep.state == "running")
+                .with_for_update()
+            )
+        )
+        now = utcnow()
+        for step in running:
+            await transition_step(db, step, "canceled", actor=actor)
+            step.lease_owner = None
+            step.lease_expires_at = None
+            attempts = list(
+                await db.scalars(
+                    select(WorkStepAttempt)
+                    .where(
+                        WorkStepAttempt.step_id == step.id,
+                        WorkStepAttempt.status == "running",
+                    )
+                    .with_for_update()
+                )
+            )
+            for attempt in attempts:
+                attempt.status = "canceled"
+                attempt.finished_at = now
+                attempt.error = {"code": "canceled", "outcome": "unknown"}
+            calls = list(
+                await db.scalars(
+                    select(WorkToolCall)
+                    .where(
+                        WorkToolCall.step_id == step.id,
+                        WorkToolCall.status.in_(["prepared", "running"]),
+                    )
+                    .with_for_update()
+                )
+            )
+            for call in calls:
+                call.status = "outcome_unknown"
+                call.finished_at = now
+                call.error = {
+                    "code": "canceled",
+                    "message": "Already sent effects require reconciliation",
+                }
+        order.lease_owner = None
+        order.lease_expires_at = None
+    canceled: list[str] = []
+    children = list(
+        await db.scalars(
+            select(WorkOrder)
+            .where(
+                WorkOrder.parent_id == order.id,
+                WorkOrder.status.notin_(["completed", "canceled", "failed"]),
+            )
+            .with_for_update()
+        )
+    )
+    for child in children:
+        if "canceled" not in WORK_TRANSITIONS.get(child.status, frozenset()):
+            continue
+        await append_event(
+            db, child.id, "work.parent_canceled", actor=actor, payload={"parent_id": str(order.id)}
+        )
+        canceled.append(str(child.id))
+        canceled.extend(await cancel_work_order(db, child, actor=actor))
+    return canceled

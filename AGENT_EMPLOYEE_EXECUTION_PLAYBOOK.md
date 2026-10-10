@@ -1190,7 +1190,7 @@ blocked verifier как итог в UI, подпись needs_review. Embedding/r
 
 ### E24 — Fencing вложенных инструментов и получателей
 
-**Статус:** TODO. **После:** E23, E07.
+**Статус:** PARTIAL / DEPLOYED (2026-10-10): E24a — забор эффекта на коммите получателя для всех endpoint'ов через `get_db` (311 из 323 действий шлюза), квитанция эффекта, каскадная отмена потомков, перечень получателей (`docs/agent-employee-delivery/E24-effect-fence.md`); остаток — поштучная проверка эффектов вне БД до `commit`, хранилище рабочего стола, ограниченный контекст child execution, отзыв grant на границе. **После:** E23, E07.
 **Файлы:** gateway, domain recipients из E03, вложенные worker/tool adapters.
 
 1. Найти прямые обходы gateway и вложенные calls, которые не несут identity/fence.

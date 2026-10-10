@@ -388,7 +388,22 @@ def create_app() -> FastAPI:
     )
 
     # Middleware order: CORS → SecurityHeaders → RateLimit → CSRF → Prometheus
-    # (Starlette applies middleware in reverse registration order)
+    # → EffectFence (Starlette applies middleware in reverse registration order)
+    # EffectFence is innermost: its contextvar must reach the endpoint's task.
+    from app.auth.effect_fence import EffectFenceMiddleware, EffectFenceRejected
+
+    app.add_middleware(EffectFenceMiddleware)
+
+    @app.exception_handler(EffectFenceRejected)
+    async def _effect_fence_rejected(_request, exc: EffectFenceRejected):
+        # The effect's commit was aborted: nothing was written.
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(
+            status_code=409,
+            content={"detail": {"error_code": "effect_fence_rejected", "reason": exc.reason}},
+        )
+
     app.add_middleware(PrometheusMiddleware)
     app.add_middleware(CSRFMiddleware)
     app.add_middleware(RateLimitMiddleware)

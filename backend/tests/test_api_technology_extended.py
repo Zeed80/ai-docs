@@ -322,3 +322,38 @@ async def test_approve_allowed_when_normcontrol_passed(
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "approved"
+
+
+@pytest.mark.asyncio
+async def test_generate_tp_commits_the_plan_and_audit_before_queueing(
+    client: AsyncClient, analyzed_drawing: Drawing, db_session, monkeypatch
+):
+    """The task was queued before the plan was committed (the worker could
+    miss it) and the audit entry was added after the last commit, so it was
+    never written; a durable caller's effect fence decides at that commit."""
+    events: list[str] = []
+    real_commit = db_session.commit
+
+    async def commit():
+        events.append("commit")
+        await real_commit()
+
+    async def log_action(*_args, **_kwargs):
+        events.append("audit")
+
+    monkeypatch.setattr(db_session, "commit", commit)
+    monkeypatch.setattr("app.api.technology.log_action", log_action)
+    mock_celery = MagicMock()
+
+    def queue(**_kwargs):
+        events.append("queue")
+        return MagicMock(id="mock-task-id")
+
+    mock_celery.apply_async.side_effect = queue
+    with patch("app.api.technology.celery_tp_task", mock_celery):
+        resp = await client.post(
+            "/api/technology/process-plans/generate-from-drawing",
+            json={"drawing_id": str(analyzed_drawing.id), "created_by": "test"},
+        )
+    assert resp.status_code == 200
+    assert events.index("audit") < events.index("commit") < events.index("queue")

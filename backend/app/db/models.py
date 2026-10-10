@@ -2091,6 +2091,28 @@ class WorkStepAttempt(UUIDPrimaryKey, Base):
     step: Mapped["WorkStep"] = relationship(back_populates="attempts")
 
 
+class WorkEffectReceipt(UUIDPrimaryKey, TimestampMixin, Base):
+    """E24: one row per durable tool effect, written in the effect's own commit.
+
+    Proves which attempt committed the effect; its unique operation key makes
+    a replayed fence token unable to commit a second one (app.auth.effect_fence).
+    """
+
+    __tablename__ = "work_effect_receipts"
+    __table_args__ = (
+        UniqueConstraint("operation_key", name="uq_work_effect_receipt_operation_key"),
+    )
+
+    operation_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    work_order_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("work_orders.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    step_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False)
+    attempt_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False, index=True)
+    method: Mapped[str] = mapped_column(String(10), nullable=False)
+    path: Mapped[str] = mapped_column(String(500), nullable=False)
+
+
 class WorkToolCall(UUIDPrimaryKey, TimestampMixin, Base):
     """Immutable intent plus mutable settlement for one external executor call."""
 

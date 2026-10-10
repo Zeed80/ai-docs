@@ -1925,9 +1925,6 @@ async def classify_document(
         current_step="classification",
         memory_seed_done=True,
     )
-    task = classify_task.delay(str(document_id), force)
-    job.celery_task_id = str(task.id) if task else None
-
     await log_action(
         db,
         action="doc.classify",
@@ -1942,6 +1939,12 @@ async def classify_document(
         summary="Document classification started",
         actor="system",
     )
+    # Commit before the task is queued: a durable caller's effect fence
+    # decides at this commit (E24), and a refused one must not leave a
+    # classification already running.
+    await db.commit()
+    task = classify_task.delay(str(document_id), force)
+    job.celery_task_id = str(task.id) if task else None
     await db.commit()
 
     logger.info("classify_triggered", document_id=str(document_id), task_id=task.id)

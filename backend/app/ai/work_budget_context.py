@@ -108,6 +108,10 @@ class WorkBudgetContext:
     expected_plan_id: uuid.UUID | None = None
     expected_plan_revision: int | None = None
     expected_ledger_id: uuid.UUID | None = None
+    # E24: the plan the attempt runs, for the recipient's effect fence only;
+    # unlike expected_plan_*, it does not tighten this context's own binding.
+    fence_plan_id: uuid.UUID | None = None
+    fence_plan_revision: int | None = None
     _state: _ExecutionState = field(default_factory=_ExecutionState, repr=False, compare=False)
 
     async def _stop(self, error: BudgetExecutionStopped) -> BudgetExecutionStopped:
@@ -532,6 +536,29 @@ class WorkBudgetContext:
                     details={"budget_error": str(exc), "operation_key": operation_key},
                 )
             ) from exc
+
+    def effect_fence_headers(self, operation_key: str) -> dict[str, str]:
+        """E24: the signed fence the recipient checks at its own commit."""
+        plan_id = self.expected_plan_id or self.fence_plan_id
+        revision = (
+            self.expected_plan_revision
+            if self.expected_plan_revision is not None
+            else self.fence_plan_revision
+        )
+        if plan_id is None or revision is None:
+            return {}
+        from app.auth.effect_fence import EFFECT_FENCE_HEADER, new_effect_fence
+
+        return {
+            EFFECT_FENCE_HEADER: new_effect_fence(
+                work_order_id=self.work_order_id,
+                step_id=self.step_id,
+                attempt_id=self.attempt_id,
+                plan_id=plan_id,
+                plan_revision=revision,
+                operation_key=operation_key,
+            )
+        }
 
     async def prepare_tool_attempt(
         self,

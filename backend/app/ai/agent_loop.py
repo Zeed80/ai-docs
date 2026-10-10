@@ -977,6 +977,9 @@ async def execute_skill(
                             "idempotency_key": idempotency_key,
                         },
                     )
+                    effect_fence = getattr(budget_context, "effect_fence_headers", None)
+                    if effect_fence is not None:
+                        _hdrs.update(effect_fence(tool_operation_key))
                     if sql_http_recipient:
                         from app.ai.actor_context import get_acting_user
                         from app.auth.work_budget_handoff import WORK_BUDGET_HANDOFF_HEADER
