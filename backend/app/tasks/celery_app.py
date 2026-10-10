@@ -141,16 +141,6 @@ celery_app.conf.beat_schedule = {
         "task": "approval.escalate_expired",
         "schedule": float(settings.approval_escalation_interval_seconds),
     },
-    # Skill self-improvement: evolve failing skills every 2 hours
-    "evolve-failing-skills": {
-        "task": "skill.evolve_failing_skills",
-        "schedule": 7_200.0,
-    },
-    # A/B shadow test evaluation every 30 minutes
-    "evaluate-shadow-tests": {
-        "task": "skill.evaluate_shadow_tests",
-        "schedule": 1_800.0,
-    },
     # Proactive: check approaching invoice due dates every 6 hours
     "proactive-due-dates": {
         "task": "proactive.check_due_dates",
@@ -320,7 +310,6 @@ from app.tasks import lora_training as _lora_training  # noqa: F401
 from app.tasks import notification_digest as _notification_digest  # noqa: F401
 from app.tasks import proactive as _proactive  # noqa: F401
 from app.tasks import saved_query_alerts as _saved_query_alerts  # noqa: F401
-from app.tasks import skill_evolution as _skill_evolution  # noqa: F401
 from app.tasks import tp_generation as _tp_generation  # noqa: F401
 from app.tasks import vector_acl as _vector_acl  # noqa: F401
 from app.tasks import work_orders as _work_orders  # noqa: F401

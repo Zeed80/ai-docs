@@ -70,15 +70,6 @@ RETRYABLE: frozenset[AuditCode] = frozenset(
     }
 )
 
-# Issues that signal a genuinely missing capability (feed the builder flow).
-CAPABILITY_GAP_CODES: frozenset[AuditCode] = frozenset(
-    {
-        AuditCode.UNKNOWN_SKILL,
-        AuditCode.WRONG_CANVAS,
-        AuditCode.TOOL_OFF_PLAN,
-    }
-)
-
 
 def blocking(issues: list[AuditIssue]) -> list[AuditIssue]:
     return [issue for issue in issues if issue.severity == "blocking"]

@@ -177,7 +177,7 @@ async def _subscriber_loop() -> None:
                 except (json.JSONDecodeError, TypeError):
                     continue
 
-                # Canvas map cache invalidation (broadcast from capability_builder)
+                # Canvas map cache invalidation
                 if channel == f"{_PREFIX}:skill_reload":
                     try:
                         from app.ai.orchestrator import invalidate_canvas_map_cache

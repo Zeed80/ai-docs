@@ -4,9 +4,8 @@ Runs in its own locked-down container (non-root, read-only fs, no secrets, no
 network — see docker-compose's ``cad_sandbox`` internal network — resource
 limits). The backend talks to it over HTTP:
 
-- ``POST /execute`` — AST-gate the code against an IMPORT ALLOWLIST (not the
-  blocklist ``capability_sandbox.py`` uses for promoted skills — this code is
-  never reviewed by a human before running, once per CAD digitization, so the
+- ``POST /execute`` — AST-gate the code against an IMPORT ALLOWLIST (not a
+  blocklist — this code is never reviewed by a human before running, once per CAD digitization, so the
   narrower rule is "prove it only does geometry", not "block known-bad
   modules"), then run it in a subprocess with a hard timeout (the
   container's own cgroup mem_limit bounds memory — see the module-level

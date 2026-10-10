@@ -178,25 +178,6 @@ async def refine(
     )
 
 
-async def refine_code(
-    code: str,
-    task: str,
-    generate_fn: Callable[[str, str | None], Coroutine[Any, Any, str]],
-    *,
-    max_rounds: int = 3,
-    target_score: float = 8.5,
-) -> RefineResult:
-    """Specialized refinement for Python skill code."""
-    return await refine(
-        code,
-        task,
-        generate_fn,
-        max_rounds=max_rounds,
-        target_score=target_score,
-        mode="code",
-    )
-
-
 async def revise_with_issues(
     response: str,
     task: str,

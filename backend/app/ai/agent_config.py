@@ -127,7 +127,9 @@ class BuiltinAgentConfig(BaseModel):
     max_audit_retries: int = Field(1, ge=0, le=5)
     memory_enabled: bool = True
     audit_enabled: bool = True
-    allow_capability_builder: bool = True
+    # Retired (E48): generated capabilities are gone. The fields stay so stored
+    # configs and old clients still load; the validator above pins them off.
+    allow_capability_builder: bool = False
     capability_builder_requires_approval: bool = True
     autonomy_mode: str = "max_autonomy"
     permission_mode: str = "workspace_write"

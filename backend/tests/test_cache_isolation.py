@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.ai import flow_awareness, result_cache, skill_cache
+from app.ai import flow_awareness, result_cache
 from app.ai.actor_context import cache_scope, set_acting_user
 
 
@@ -100,14 +100,3 @@ async def test_the_flow_snapshot_is_per_user(redis, monkeypatch):
     assert (await flow_awareness.get_flow_snapshot(_Config()))["unread_emails"] == 7
     set_acting_user("bob")
     assert (await flow_awareness.get_flow_snapshot(_Config()))["unread_emails"] == 0
-
-
-def test_skill_cache_keys_differ_by_user_and_need_one():
-    set_acting_user(None)
-    assert skill_cache._cache_key("invoices.list", {}) is None
-    set_acting_user("alice")
-    alice = skill_cache._cache_key("invoices.list", {})
-    set_acting_user("bob")
-    bob = skill_cache._cache_key("invoices.list", {})
-    set_acting_user(None)
-    assert alice and bob and alice != bob

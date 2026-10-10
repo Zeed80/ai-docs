@@ -234,25 +234,6 @@ async def _drain_background_tasks(timeout: float = 5.0) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _generated_skills_go_to_tmp(tmp_path, monkeypatch):
-    """CapabilityBuilder не должен писать черновики в исходники приложения.
-
-    В тестах он их пишет: любой ход агента, упершийся в нехватку возможности,
-    оставляет заглушку в ``app/ai/generated_skills``. Файлы накапливались от
-    прогона к прогону, попадали в индекс с новым timestamp — и, что хуже,
-    подхватывались следующими прогонами как настоящие скиллы. Из-за четырёх
-    таких заглушек `test_secretary_answers_flow_status_directly` начинал
-    уводить вопрос к исполнителю вместо прямого ответа: тест падал не там,
-    где ломалось, а прогон замедлялся с 17 до 110 секунд.
-    """
-    root = tmp_path / "generated_skills"
-    root.mkdir()
-    monkeypatch.setattr("app.ai.capability_builder._GENERATED_ROOT", root)
-    monkeypatch.setattr("app.api.dynamic_skill_runner._GENERATED_ROOT", root)
-    return root
-
-
-@pytest.fixture(autouse=True)
 def _redis_in_memory(request, monkeypatch):
     """Клиенты Redis приложения — в памяти, свежие на каждый тест.
 
@@ -314,11 +295,9 @@ def _settings_files_go_to_tmp(tmp_path, monkeypatch):
 
     ``data/`` на хосте — рабочие копии разработчика, а в контейнере это
     боевой том (/app/data): тест PATCH /api/ai/config переписывал выбор моделей
-    агента, конструктор возможностей копил каталоги в agent_sandbox.
+    агента.
     """
     data = tmp_path / "data"
     data.mkdir()
     monkeypatch.setattr("app.api.ai_settings._CONFIG_FILE", data / "ai_config.json")
     monkeypatch.setattr("app.ai.agent_config._CONFIG_FILE", data / "agent_config.json")
-    monkeypatch.setattr("app.ai.capability_sandbox._ROOT", data / "agent_sandbox")
-    monkeypatch.setattr("app.ai.capability_sandbox._STAGING_ROOT", data / "agent_staging")

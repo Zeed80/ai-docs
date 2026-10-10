@@ -80,7 +80,6 @@ skills:
   - config.propose
   - capability.propose
   - capability.status
-  - capability.sandbox_apply
   - task.create
   - tech.resource_list
   - tech.resource_create

@@ -51,12 +51,7 @@ async def test_config_patch_writes_only_the_test_copy(client: AsyncClient, tmp_p
     assert get_sync_redis().get("ai_config") is not None  # в памяти, не снаружи
 
 
-def test_agent_config_and_sandbox_paths_are_in_tmp(tmp_path):
-    from app.ai import agent_config, capability_sandbox
+def test_agent_config_path_is_in_tmp(tmp_path):
+    from app.ai import agent_config
 
-    for path in (
-        agent_config._CONFIG_FILE,
-        capability_sandbox._ROOT,
-        capability_sandbox._STAGING_ROOT,
-    ):
-        assert Path(path).is_relative_to(tmp_path)
+    assert Path(agent_config._CONFIG_FILE).is_relative_to(tmp_path)

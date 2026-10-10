@@ -42,9 +42,6 @@ services:
   vl-embedding:
     restart: unless-stopped
 
-  skill-runner:
-    restart: unless-stopped
-
   cad-code-runner:
     restart: unless-stopped
 

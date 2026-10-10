@@ -845,7 +845,6 @@ export function AssistantPanel() {
       // Durable execution accepts decisions only through the server-issued
       // checkpoint card below. A legacy approval event is display-only: its
       // approval_id/db_id is not authority to resume a stopped WorkOrder.
-      const isCapability = data.tool === "capability.proposal";
 
       setMessages((prev) => [
         ...prev,
@@ -863,7 +862,7 @@ export function AssistantPanel() {
               : undefined,
           dbId:
             typeof data.db_id === "string" && data.db_id ? data.db_id : undefined,
-          status: isCapability ? "pending" : "unsupported",
+          status: "unsupported",
         },
       ]);
       return;
@@ -1109,56 +1108,14 @@ export function AssistantPanel() {
     }
   }, [isConnected, sendAgentText]);
 
-  async function handleApproval(msgId: string, approved: boolean) {
-    const msg = messages.find((m) => m.id === msgId);
-
-    // Capability proposals: decided via REST, then agent continues via WS
-    if (msg?.tool === "capability.proposal") {
-      const args = msg.args as Record<string, string> | undefined;
-      const proposalId = args?.proposal_id;
-      const title = args?.title ?? "новая capability";
-      let restOk = false;
-      if (proposalId) {
-        try {
-          const res = await mutFetch(
-            `/api/agent/capabilities/${proposalId}/decide`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                approved,
-                decided_by: "user_chat",
-                comment: approved ? "Одобрено в чате" : "Отклонено в чате",
-              }),
-            },
-          );
-          restOk = res.ok;
-        } catch {
-          // Это и есть проверка доступности: недоступный REST — ожидаемый
-          // исход, ради которого вызов и делается.
-        }
-      }
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === msgId
-            ? { ...m, status: approved ? "approved" : "rejected" }
-            : m,
-        ),
-      );
-      if (approved && restOk && transportRef.current?.isOpen) {
-        transportRef.current.send(
-          JSON.stringify(
-            buildDurableUserCommand(
-              `Capability "${title}" одобрена и добавлена в систему. Продолжи выполнение исходной задачи, используя новый инструмент.`,
-              currentSessionId,
-              undefined,
-              reasoningMode,
-            ),
-          ),
-        );
-      }
-      return;
-    }
+  // A legacy approval card is display-only: decisions go through the
+  // server-issued checkpoint card, and capability proposals are no longer
+  // decided at all (E48, the server answers 410). Any click just closes the
+  // old card as unsupported instead of pretending it was approved.
+  function handleApproval(msgId: string) {
+    setMessages((prev) =>
+      prev.map((m) => (m.id === msgId ? { ...m, status: "unsupported" } : m)),
+    );
   }
 
   function stopGeneration() {
@@ -1878,13 +1835,13 @@ export function AssistantPanel() {
                 {isPending ? (
                   <div className="flex gap-2">
                     <button
-                      onClick={() => void handleApproval(msg.id, true)}
+                      onClick={() => handleApproval(msg.id)}
                       className={`flex-1 py-1.5 rounded text-xs font-medium transition-colors text-white ${isCapability ? "bg-violet-700 hover:bg-violet-600" : "bg-green-700 hover:bg-green-600"}`}
                     >
                       Добавить
                     </button>
                     <button
-                      onClick={() => void handleApproval(msg.id, false)}
+                      onClick={() => handleApproval(msg.id)}
                       className="flex-1 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded text-xs font-medium transition-colors"
                     >
                       Отклонить

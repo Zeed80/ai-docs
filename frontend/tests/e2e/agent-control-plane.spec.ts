@@ -64,7 +64,6 @@ const agentConfig = {
   exposed_skills: [
     "config.propose",
     "capability.propose",
-    "capability.sandbox_apply",
   ],
   approval_gates: [],
   system_prompt: null,
@@ -250,27 +249,6 @@ async function mockSettingsApi(page: Page, calls: string[]) {
       request.method() === "GET"
     ) {
       return route.fulfill({ json: [capability] });
-    }
-    if (
-      url.pathname ===
-        `/api/agent/capabilities/${capabilityProposal.id}/sandbox-apply` &&
-      request.method() === "POST"
-    ) {
-      capability = {
-        ...capability,
-        status: "sandbox_ready",
-        sandbox_status: "ready",
-        test_status: "passed",
-      };
-      return route.fulfill({ json: capability });
-    }
-    if (
-      url.pathname ===
-        `/api/agent/capabilities/${capabilityProposal.id}/decide` &&
-      request.method() === "POST"
-    ) {
-      capability = { ...capability, status: "approved" };
-      return route.fulfill({ json: capability });
     }
 
     if (url.pathname === "/api/approvals/policy") {
@@ -473,7 +451,9 @@ async function mockSettingsApi(page: Page, calls: string[]) {
           email: "e2e@example.local",
           name: "E2E User",
           preferred_username: "e2e",
-          roles: [],
+          // The control plane is an admin screen; a user without the role
+          // is sent back to the desk before any panel renders.
+          roles: ["admin"],
           groups: [],
         },
       });
@@ -527,7 +507,7 @@ test("settings control plane approves protected config proposal", async ({
   );
 });
 
-test("settings control plane runs sandbox and approves capability proposal", async ({
+test("settings shows capability gap reports read-only, without builder controls", async ({
   page,
   context,
 }) => {
@@ -537,18 +517,23 @@ test("settings control plane runs sandbox and approves capability proposal", asy
 
   await page.goto("/settings");
 
-  const panel = page.getByText("Capability proposals").locator("../..");
+  // E48: generated capabilities are retired. The agent's reports of a
+  // missing capability stay visible, but nothing offers to build, sandbox,
+  // approve or promote them, and no toggle promises a builder mode.
+  const panel = page
+    .getByText("Нехватка возможностей — отчёты агента")
+    .locator("../..");
   await expect(panel.getByText("E2E capability proposal")).toBeVisible();
-  await panel.getByRole("button", { name: "Sandbox" }).click();
-  await expect(panel.getByText("Sandbox: ready")).toBeVisible();
-
-  await panel.getByRole("button", { name: "Разрешить" }).click();
-  await expect(panel.getByText("approved")).toBeVisible();
-  expect(calls).toContain(
-    `POST /api/agent/capabilities/${capabilityProposal.id}/sandbox-apply`,
-  );
-  expect(calls).toContain(
-    `POST /api/agent/capabilities/${capabilityProposal.id}/decide`,
+  await expect(panel.getByText("Только для чтения.", { exact: false })).toBeVisible();
+  await expect(panel.getByRole("button")).toHaveCount(0);
+  await expect(
+    page.getByText("Разрешить выявлять недостающие tools/skills"),
+  ).toHaveCount(0);
+  await expect(
+    page.getByText("Требовать подтверждение перед builder-режимом"),
+  ).toHaveCount(0);
+  expect(calls.filter((c) => c.includes("/api/agent/capabilities/"))).toEqual(
+    [],
   );
 });
 

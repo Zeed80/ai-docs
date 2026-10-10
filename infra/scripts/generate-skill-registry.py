@@ -62,6 +62,10 @@ def extract_skills() -> list[dict]:
             continue
         if not route.path.startswith("/api/"):
             continue
+        # Retired surfaces (E48) stay reachable only to answer old clients
+        # with 410; they are hidden from the schema and never become tools.
+        if getattr(route, "include_in_schema", True) is False:
+            continue
 
         method = next(iter(route.methods - {"HEAD", "OPTIONS"}), None)
         if not method:

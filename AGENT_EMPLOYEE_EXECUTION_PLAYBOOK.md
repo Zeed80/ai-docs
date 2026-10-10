@@ -1555,7 +1555,7 @@ DocumentChunk, embeddings, documents/mail/artifacts и существующие 
 
 ### E48 — Удаление retired и эвристического мусора
 
-**Статус:** TODO. **После:** E47.
+**Статус:** DONE в коде (2026-10-10): удалены builder, evolver с beat-задачами, песочница, кэш скиллов, `generated_skills`, контейнер `skill-runner` и мёртвая ветка «нехватка → черновик» оркестратора. Списанные маршруты отвечают 410 и скрыты из схемы и реестров. Отчёты о нехватке в `/settings` только для чтения, карточка capability в чате больше не обещает одобрения (`docs/agent-employee-delivery/E48-retired-cleanup.md`). Пересборка и живая проверка отложены: модель стенда занята. **После:** E47.
 **Читать:** manifest/catalog/settings/UI, `capability_builder.py`,
 `capability_sandbox.py`, архивные recipe/skill helpers, все callers через `rg`.
 

@@ -9421,14 +9421,6 @@
       "method": "GET",
       "path": "/api/agent/capabilities/{proposal_id}/status",
       "approval_required": false
-    },
-    {
-      "name": "capability.sandbox_apply",
-      "description": "Skill: capability.sandbox_apply — Prepare sandbox validation for a draft capability.",
-      "category": "agent_control",
-      "method": "POST",
-      "path": "/api/agent/capabilities/{proposal_id}/sandbox-apply",
-      "approval_required": false
     }
   ]
 }

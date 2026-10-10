@@ -120,14 +120,9 @@ class Settings(BaseSettings):
     # Must be set to the same value in all services that need to call the backend API.
     agent_service_key: str = ""
 
-    # Isolated executor for agent-generated skills (infra/skill-runner).
-    # Generated code never runs inside the backend process.
-    skill_runner_url: str = "http://skill-runner:8077"
-
     # Isolated executor for VLM-generated CAD-reading code (ezdxf/numpy
-    # geometry scripts, infra/cad-code-runner) — a separate, narrower sandbox
-    # from skill-runner: import allowlist, its own internal-only network, no
-    # promoted-skills review gate (this code runs once per digitization).
+    # geometry scripts, infra/cad-code-runner): import allowlist, its own
+    # internal-only network (this code runs once per digitization).
     cad_code_runner_url: str = "http://cad-code-runner:8078"
 
     # Auth (Authentik SSO)

@@ -1313,96 +1313,6 @@ export default function SettingsPage() {
     setAgentSaving(false);
   }
 
-  async function decideCapabilityProposal(
-    proposalId: string,
-    approved: boolean,
-  ) {
-    setAgentSaving(true);
-    setAgentError(null);
-    try {
-      const response = await mutFetch(
-        `${API}/api/agent/capabilities/${proposalId}/decide`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ approved, decided_by: "user" }),
-        },
-      );
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null);
-        throw new Error(payload?.detail || `HTTP ${response.status}`);
-      }
-      await loadAgentControlPlane();
-      await loadAgentRuntime();
-      await loadCapabilityProposals();
-      setAgentSaved(true);
-      setTimeout(() => setAgentSaved(false), 2000);
-    } catch (error) {
-      setAgentError(
-        error instanceof Error ? error.message : "Не удалось применить решение",
-      );
-    }
-    setAgentSaving(false);
-  }
-
-  async function sandboxApplyCapabilityProposal(proposalId: string) {
-    setAgentSaving(true);
-    setAgentError(null);
-    try {
-      const response = await mutFetch(
-        `${API}/api/agent/capabilities/${proposalId}/sandbox-apply`,
-        {
-          method: "POST",
-        },
-      );
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null);
-        throw new Error(
-          typeof payload?.detail === "string"
-            ? payload.detail
-            : payload?.detail?.message || `HTTP ${response.status}`,
-        );
-      }
-      await loadAgentControlPlane();
-      await loadAgentRuntime();
-      await loadCapabilityProposals();
-      setAgentSaved(true);
-      setTimeout(() => setAgentSaved(false), 2000);
-    } catch (error) {
-      setAgentError(
-        error instanceof Error ? error.message : "Sandbox не выполнен",
-      );
-    }
-    setAgentSaving(false);
-  }
-
-  async function promoteCapabilityProposal(proposalId: string) {
-    setAgentSaving(true);
-    setAgentError(null);
-    try {
-      const response = await mutFetch(
-        `${API}/api/agent/capabilities/${proposalId}/promote`,
-        { method: "POST" },
-      );
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null);
-        throw new Error(payload?.detail || `HTTP ${response.status}`);
-      }
-      await loadAgentControlPlane();
-      await loadAgentRuntime();
-      await loadCapabilityProposals();
-      setAgentSaved(true);
-      setTimeout(() => setAgentSaved(false), 2000);
-    } catch (error) {
-      setAgentError(
-        error instanceof Error
-          ? error.message
-          : "Не удалось продвинуть capability",
-      );
-    }
-    setAgentSaving(false);
-  }
-
   function updateAgentSkill(name: string, enabled: boolean) {
     if (!agentConfig) return;
     const exposed = new Set(agentConfig.exposed_skills);
@@ -2455,12 +2365,18 @@ export default function SettingsPage() {
                           <div className="rounded-md border border-blue-800/50 bg-blue-950/20 p-3">
                             <div className="flex items-center justify-between">
                               <span className="text-sm font-medium text-blue-200">
-                                Capability proposals
+                                Нехватка возможностей — отчёты агента
                               </span>
                               <span className="rounded bg-blue-900/50 px-1.5 py-0.5 text-xs text-blue-300">
-                                {openProposals.length} ожидают
+                                {openProposals.length}
                               </span>
                             </div>
+                            <p className="mt-1 text-xs text-slate-400">
+                              Только для чтения. Генерация инструментов агентом
+                              снята (E48): недостающее делает разработчик
+                              обычным выпуском, разовая работа с кодом идёт
+                              шагом-скриптом рабочего заказа.
+                            </p>
                             <div className="mt-2 space-y-2">
                               {openProposals.slice(0, 5).map((proposal) => (
                                 <div
@@ -2503,52 +2419,6 @@ export default function SettingsPage() {
                                           )}
                                         </div>
                                       )}
-                                    </div>
-                                    <div className="flex flex-wrap gap-1.5">
-                                      {!["sandbox_ready", "approved"].includes(
-                                        proposal.status,
-                                      ) && (
-                                        <button
-                                          type="button"
-                                          disabled={agentSaving}
-                                          onClick={() =>
-                                            sandboxApplyCapabilityProposal(
-                                              proposal.id,
-                                            )
-                                          }
-                                          className="rounded bg-blue-700 px-2 py-1 text-xs text-white hover:bg-blue-600 disabled:opacity-50"
-                                        >
-                                          Sandbox
-                                        </button>
-                                      )}
-                                      {proposal.status !== "approved" && (
-                                        <button
-                                          type="button"
-                                          disabled={agentSaving}
-                                          onClick={() =>
-                                            decideCapabilityProposal(
-                                              proposal.id,
-                                              true,
-                                            )
-                                          }
-                                          className="rounded bg-emerald-700 px-2 py-1 text-xs text-white hover:bg-emerald-600 disabled:opacity-50"
-                                        >
-                                          Разрешить
-                                        </button>
-                                      )}
-                                      <button
-                                        type="button"
-                                        disabled={agentSaving}
-                                        onClick={() =>
-                                          decideCapabilityProposal(
-                                            proposal.id,
-                                            false,
-                                          )
-                                        }
-                                        className="rounded bg-slate-700 px-2 py-1 text-xs text-slate-100 hover:bg-slate-600 disabled:opacity-50"
-                                      >
-                                        Отклонить
-                                      </button>
                                     </div>
                                   </div>
                                 </div>
@@ -2615,41 +2485,6 @@ export default function SettingsPage() {
                       />
                       <span className="text-sm text-slate-200">
                         Проверять результат аудитором
-                      </span>
-                    </label>
-                    <label className="flex items-start gap-3 rounded-md bg-slate-900/50 border border-slate-700 p-3">
-                      <input
-                        type="checkbox"
-                        className="mt-0.5"
-                        checked={agentConfig.allow_capability_builder}
-                        onChange={(e) =>
-                          setAgentConfig({
-                            ...agentConfig,
-                            allow_capability_builder: e.target.checked,
-                          })
-                        }
-                      />
-                      <span className="text-sm text-slate-200">
-                        Разрешить выявлять недостающие tools/skills
-                      </span>
-                    </label>
-                    <label className="flex items-start gap-3 rounded-md bg-slate-900/50 border border-slate-700 p-3">
-                      <input
-                        type="checkbox"
-                        className="mt-0.5"
-                        checked={
-                          agentConfig.capability_builder_requires_approval
-                        }
-                        onChange={(e) =>
-                          setAgentConfig({
-                            ...agentConfig,
-                            capability_builder_requires_approval:
-                              e.target.checked,
-                          })
-                        }
-                      />
-                      <span className="text-sm text-slate-200">
-                        Требовать подтверждение перед builder-режимом
                       </span>
                     </label>
                   </div>

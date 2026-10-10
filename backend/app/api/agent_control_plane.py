@@ -29,7 +29,6 @@ from app.ai.gateway_config import gateway_config
 from app.ai.policy_engine import classify_skill_risk, is_protected_setting
 from app.auth.jwt import require_human_role, require_role
 from app.auth.models import UserInfo, UserRole
-from app.core.chat_bus import chat_bus
 from app.db.models import (
     AgentAction,
     AgentConfigProposal,
@@ -360,133 +359,6 @@ def _unwrap_value(value: dict | None) -> Any:
     return value
 
 
-def _draft_value(draft: dict, *keys: str) -> str:
-    value: Any = draft
-    for key in keys:
-        if not isinstance(value, dict):
-            return ""
-        value = value.get(key)
-    return str(value or "").strip()
-
-
-def _contains_destructive_marker(value: str) -> bool:
-    text = value.lower()
-    markers = (
-        "delete",
-        "remove",
-        "drop",
-        "truncate",
-        "send",
-        "approve",
-        "reject",
-        "decide",
-        "external",
-        "email",
-        "telegram",
-        "export",
-        "payment",
-        "credential",
-        "secret",
-    )
-    return any(marker in text for marker in markers)
-
-
-def _draft_contains_executable_code(draft: dict) -> bool:
-    """True when the proposal ships runnable code (not just a registry entry).
-
-    Code can arrive as inline `code`/`implementation_code` strings or as a
-    `files`/`tests` payload that the promote step would write to disk.
-    """
-    for key in ("code", "implementation_code"):
-        value = draft.get(key)
-        if isinstance(value, str) and value.strip():
-            return True
-    for key in ("files", "tests"):
-        value = draft.get(key)
-        if isinstance(value, dict) and value:
-            return True
-        if isinstance(value, list) and any(
-            isinstance(item, dict) and (item.get("content") or item.get("code")) for item in value
-        ):
-            return True
-    return False
-
-
-def _safe_auto_approval_reason(proposal: CapabilityProposal) -> str | None:
-    """Return an auto-approval reason for safe capabilities.
-
-    Auto-approves low/medium risk GET/POST tools that have no destructive markers
-    and no explicit approval_required flag.  Critical risk is always manual.
-    Anything that ships executable code is always manual: the runner offers no
-    real isolation, so no policy scan can make agent-written code "safe".
-    """
-    if proposal.risk_level == "critical":
-        return None
-    if proposal.suggested_artifact not in {"tool", "skill", "workspace_template", "config"}:
-        return None
-
-    draft = proposal.draft or {}
-    if _draft_contains_executable_code(draft):
-        return None
-    tool_name = (
-        _draft_value(draft, "tool_name")
-        or _draft_value(draft, "skill_registry_entry", "name")
-        or ""
-    )
-    endpoint_path = (
-        _draft_value(draft, "endpoint_path")
-        or _draft_value(draft, "skill_registry_entry", "path")
-        or ""
-    )
-    method = (
-        _draft_value(draft, "method")
-        or _draft_value(draft, "skill_registry_entry", "method")
-        or "GET"
-    ).upper()
-    approval_required = (
-        isinstance(draft.get("skill_registry_entry"), dict)
-        and draft["skill_registry_entry"].get("approval_required") is True
-    )
-
-    if approval_required:
-        return None
-    if method not in {"GET", "POST", "PATCH"}:
-        return None
-    if _contains_destructive_marker(f"{tool_name} {endpoint_path}"):
-        return None
-
-    # High risk: require human review unless explicitly safe
-    if proposal.risk_level == "high":
-        safe_high = tool_name.startswith("workspace.") or endpoint_path.startswith(
-            "/api/workspace/"
-        )
-        if not safe_high:
-            return None
-
-    return "auto-approved: safe read/write capability; sandbox passed"
-
-
-async def _publish_capability_approval_request(proposal: CapabilityProposal) -> None:
-    await chat_bus.publish(
-        {
-            "type": "approval_request",
-            "tool": "capability.proposal",
-            "args": {
-                "proposal_id": str(proposal.id),
-                "title": proposal.title,
-                "risk_level": proposal.risk_level,
-                "suggested_artifact": proposal.suggested_artifact,
-                "reason": proposal.reason,
-            },
-            "preview": (
-                f"{proposal.title}\n"
-                f"Риск: {proposal.risk_level} · Тип: {proposal.suggested_artifact}\n"
-                f"{proposal.reason or proposal.missing_capability or ''}"
-            ),
-        }
-    )
-
-
 def _current_setting_value(setting_path: str) -> Any:
     from app.ai.agent_config import BuiltinAgentConfig
 
@@ -604,11 +476,8 @@ async def _create_capability_proposal(
     db.add(proposal)
     await db.commit()
     await db.refresh(proposal)
-    # Notify chat only for high/critical risk — low risk will be auto-approved
-    # during sandbox_apply and the card will appear then if needed.
-    config = get_builtin_agent_config()
-    if payload.risk_level in {"high", "critical"} or not config.safe_auto_apply_enabled:
-        await _publish_capability_approval_request(proposal)
+    # A proposal is a report of a missing capability, not a request to decide:
+    # generated capabilities are retired (E48), so no approval card is sent.
     return proposal
 
 
@@ -1521,32 +1390,32 @@ async def get_capability_status(
     return proposal
 
 
-@router.post("/capabilities/{proposal_id}/sandbox-apply", response_model=CapabilityProposalOut)
+@router.post("/capabilities/{proposal_id}/sandbox-apply", include_in_schema=False)
 async def sandbox_apply_capability(
     proposal_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _user: UserInfo = Depends(require_role(UserRole.admin)),
-) -> CapabilityProposal:
+) -> None:
     raise HTTPException(410, "Capability generation is retired; use task-scoped scripts")
 
 
-@router.post("/capabilities/{proposal_id}/decide", response_model=CapabilityProposalOut)
+@router.post("/capabilities/{proposal_id}/decide", include_in_schema=False)
 async def decide_capability_proposal(
     proposal_id: uuid.UUID,
     payload: CapabilityDecision,
     db: AsyncSession = Depends(get_db),
     _user: UserInfo = Depends(require_role(UserRole.admin)),
-) -> CapabilityProposal:
+) -> None:
     raise HTTPException(410, "Capability promotion is an engineering release operation")
 
 
-@router.post("/capabilities/{proposal_id}/promote", response_model=CapabilityProposalOut)
+@router.post("/capabilities/{proposal_id}/promote", include_in_schema=False)
 async def promote_capability_proposal(
     proposal_id: uuid.UUID,
     decided_by: str = "user",
     db: AsyncSession = Depends(get_db),
     _user: UserInfo = Depends(require_role(UserRole.admin)),
-) -> CapabilityProposal:
+) -> None:
     raise HTTPException(410, "Capability promotion is an engineering release operation")
 
 

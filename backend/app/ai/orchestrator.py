@@ -8,7 +8,6 @@ The existing AgentSession remains the tool-calling executor.
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 import time
 from collections.abc import Awaitable, Callable
@@ -49,7 +48,6 @@ from app.ai import route_table
 from app.ai.agent_config import BuiltinAgentConfig, get_builtin_agent_config
 from app.ai.agent_loop import AgentSession, execute_skill, extract_list_count
 from app.ai.audit import (
-    CAPABILITY_GAP_CODES,
     RETRYABLE,
     AuditCode,
     AuditIssue,
@@ -88,7 +86,7 @@ from app.ai.orchestrator_memory import (
 from app.ai.policy_engine import check_tool_execution
 from app.ai.router import ai_router
 from app.ai.schemas import AIRequest, AITask, ChatMessage
-from app.domain.workspace import get_workspace_block, list_workspace_blocks, upsert_workspace_block
+from app.domain.workspace import get_workspace_block, list_workspace_blocks
 
 # Только для аннотаций: имена стоят в строковых типах, поэтому в рантайме
 # не вычисляются — но без импорта их не видят ни type checker, ни IDE, и
@@ -252,26 +250,6 @@ class AuditReport(BaseModel):
     @property
     def issue_codes(self) -> list[str]:
         return _issue_codes(self.issues)
-
-
-class CapabilityGapRequest(BaseModel):
-    missing_capability: str
-    reason: str
-    suggested_artifact: Literal["tool", "skill", "script", "workspace_template"] = "tool"
-    builder_model: str | None = None
-
-
-class CapabilityBuildDraft(BaseModel):
-    title: str
-    tool_name: str
-    endpoint_path: str
-    method: str = "POST"
-    skill_registry_entry: dict[str, Any] = Field(default_factory=dict)
-    request_schema: dict[str, Any] = Field(default_factory=dict)
-    response_schema: dict[str, Any] = Field(default_factory=dict)
-    implementation_plan: list[str] = Field(default_factory=list)
-    validation_plan: list[str] = Field(default_factory=list)
-    notes: str = ""
 
 
 @dataclass
@@ -581,8 +559,6 @@ class AgentOrchestrator:
         # Reactive self-refine: only when the auditor flagged a generative answer.
         await self._maybe_refine_answer(plan, config, audit)
         await self._publish_audit(audit)
-        if not audit.passed and self._should_report_capability_gap(plan, audit, config):
-            await self._publish_capability_gap(plan, audit, config)
 
         # Record turn outcome for adaptive planning in future turns
         _record_feedback_async(
@@ -2750,18 +2726,6 @@ class AgentOrchestrator:
                 }
             )
 
-    def _should_report_capability_gap(
-        self,
-        plan: OrchestratorPlan,
-        audit: AuditReport,
-        config: BuiltinAgentConfig,
-    ) -> bool:
-        if not config.allow_capability_builder:
-            return False
-        if _has_code(audit.issues, *CAPABILITY_GAP_CODES):
-            return True
-        return plan.workspace.required and not audit.workspace_verified
-
     def _can_retry_with_executor(self, plan: OrchestratorPlan, audit: AuditReport) -> bool:
         if _has_code(audit.issues, AuditCode.UNKNOWN_SKILL):
             return False  # retrying cannot invent a missing tool
@@ -2966,237 +2930,6 @@ class AgentOrchestrator:
 
     async def _record_orchestrator_tool_event(self, event: dict[str, Any]) -> None:
         await self._send_from_executor(event)
-
-    async def _publish_capability_gap(
-        self,
-        plan: OrchestratorPlan,
-        audit: AuditReport,
-        config: BuiltinAgentConfig,
-    ) -> None:
-        gap = CapabilityGapRequest(
-            missing_capability=plan.workspace.description or plan.intent,
-            reason="; ".join(audit.issue_messages) or "Недостаточно существующих инструментов.",
-            suggested_artifact="workspace_template" if plan.workspace.required else "tool",
-            builder_model=(config.builder_model or config.orchestrator_model or config.model),
-        )
-        await self._outer_send(
-            {
-                "type": "capability_gap.detected",
-                "content": (
-                    "Оркестратор: обнаружил недостающую исполнимую возможность. "
-                    "Передаю задачу builder-модели и готовлю новый tool/skill draft."
-                ),
-                "gap": gap.model_dump(mode="json"),
-            }
-        )
-        draft = await self._build_capability_draft(gap, plan, config)
-        proposal_id = await self._persist_capability_proposal(gap, draft, plan, audit, config)
-        await self._outer_send(
-            {
-                "type": "capability_gap.builder_draft",
-                "content": "Builder: подготовил проект недостающего инструмента и skill-записи.",
-                "draft": draft.model_dump(mode="json"),
-                "proposal_id": proposal_id,
-            }
-        )
-
-        # Draft real code for the proposal package; activation stays behind
-        # the human-approval flow.
-        if config.allow_capability_builder:
-            await self._invoke_capability_builder(gap, draft, plan, config)
-        upsert_workspace_block(
-            "agent:capability-builder-draft",
-            {
-                "id": "agent:capability-builder-draft",
-                "type": "markdown",
-                "title": "Проект недостающей возможности",
-                "content": _format_capability_draft_markdown(draft, proposal_id=proposal_id),
-                "source": "orchestrator.capability_builder",
-            },
-        )
-        await self._outer_send(
-            {
-                "type": "workspace.updated",
-                "canvas_id": "agent:capability-builder-draft",
-            }
-        )
-
-    async def _build_capability_draft(
-        self,
-        gap: CapabilityGapRequest,
-        plan: OrchestratorPlan,
-        config: BuiltinAgentConfig,
-    ) -> CapabilityBuildDraft:
-        prompt = (
-            "Нужно спроектировать недостающий backend tool и AiAgent skill.\n"
-            f"Gap: {gap.model_dump(mode='json')}\n"
-            f"Plan: {plan.model_dump(mode='json')}\n"
-            f"Used tools: {self._trace.tool_calls}\n"
-            f"Errors: {self._trace.errors}\n"
-            "Верни CapabilityBuildDraft JSON. Не пиши prose вне JSON."
-        )
-        try:
-            response = await ai_router.run(
-                AIRequest(
-                    # CODE_GENERATION → Claude API preferred for code tasks
-                    task=AITask.CODE_GENERATION,
-                    messages=[
-                        ChatMessage(
-                            role="system",
-                            content=(
-                                "Ты builder-инженер. Проектируешь недостающие "
-                                "FastAPI tools, workspace templates и AiAgent skills."
-                            ),
-                        ),
-                        ChatMessage(role="user", content=prompt),
-                    ],
-                    response_schema=CapabilityBuildDraft,
-                    confidential=False,
-                    allow_cloud=True,
-                    preferred_model=_registry_model_name(
-                        config.builder_model or config.orchestrator_model
-                    ),
-                )
-            )
-            if isinstance(response.data, CapabilityBuildDraft):
-                return response.data
-        except Exception as exc:
-            logger.warning("capability_draft_model_failed", error=str(exc))
-        return _fallback_capability_draft(gap, plan)
-
-    async def _persist_capability_proposal(
-        self,
-        gap: CapabilityGapRequest,
-        draft: CapabilityBuildDraft,
-        plan: OrchestratorPlan,
-        audit: AuditReport,
-        config: BuiltinAgentConfig,
-    ) -> str | None:
-        try:
-            async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
-                resp = await client.post(
-                    f"{config.backend_url.rstrip('/')}/api/agent/capabilities/propose",
-                    json={
-                        "title": draft.title,
-                        "missing_capability": gap.missing_capability,
-                        "reason": gap.reason,
-                        "suggested_artifact": gap.suggested_artifact,
-                        "draft": draft.model_dump(mode="json"),
-                        "risk_level": _capability_risk_level(gap, audit),
-                        "rollback_plan": [
-                            "Do not promote generated files until tests and audit pass.",
-                            "Disable the generated skill and remove it from exposed_skills on rollback.",
-                            "Revert sandbox branch or discard draft files if promotion is rejected.",
-                        ],
-                        "metadata": {
-                            "plan": plan.model_dump(mode="json"),
-                            "audit": audit.model_dump(mode="json"),
-                            "used_tools": self._trace.tool_calls,
-                        },
-                    },
-                    headers=_agent_headers(),
-                )
-            if resp.status_code >= 400:
-                return None
-            data = resp.json()
-            proposal_id = data.get("id")
-            if (
-                proposal_id
-                and config.safe_auto_apply_enabled
-                and data.get("risk_level")
-                in {
-                    "low",
-                    "medium",
-                }
-            ):
-                await self._sandbox_capability_proposal(str(proposal_id), config)
-            return str(proposal_id) if proposal_id else None
-        except Exception as exc:
-            log_degraded("orchestrator.capability_proposal", exc)
-            return None
-
-    async def _sandbox_capability_proposal(
-        self,
-        proposal_id: str,
-        config: BuiltinAgentConfig,
-    ) -> None:
-        try:
-            async with httpx.AsyncClient(timeout=float(config.backend_timeout_seconds)) as client:
-                await client.post(
-                    f"{config.backend_url.rstrip('/')}/api/agent/capabilities/"
-                    f"{proposal_id}/sandbox-apply",
-                    headers=_agent_headers(),
-                )
-        except Exception as exc:
-            log_degraded("orchestrator.sandbox_apply", exc)
-
-    async def _invoke_capability_builder(
-        self,
-        gap: CapabilityGapRequest,
-        draft: CapabilityBuildDraft,
-        plan: OrchestratorPlan,
-        config: BuiltinAgentConfig,
-    ) -> None:
-        """Invoke CapabilityBuilder to draft skill code for the pending proposal.
-
-        The draft is written to generated_skills/ but is NOT registered or
-        imported: activation requires the proposal flow (sandbox → human
-        decision → promote).
-        """
-        from app.ai.capability_builder import build_capability
-
-        gap_text = (
-            f"{gap.missing_capability}. "
-            f"Причина: {gap.reason}. "
-            f"Запрошенный артефакт: {gap.suggested_artifact}."
-        )
-        skill_name = str(draft.tool_name or "").replace(".", "_") or None
-        await self._outer_send(
-            {
-                "type": "capability_gap.building",
-                "content": "AgentDeveloper: пишу код нового скилла...",
-            }
-        )
-        try:
-            result = await build_capability(
-                gap_description=gap_text,
-                skill_name=skill_name,
-                context_skills=list(plan.worker.recommended_skills),
-            )
-            if result.ok:
-                await self._outer_send(
-                    {
-                        "type": "capability_gap.built",
-                        "content": (
-                            f"AgentDeveloper: черновик скилла **{result.skill_name}** готов. "
-                            "Он станет доступен после проверки и подтверждения человеком "
-                            "(предложение уже в очереди согласования)."
-                        ),
-                        "skill_name": result.skill_name,
-                        "skill_path": result.skill_path,
-                    }
-                )
-                logger.info(
-                    "capability_builder_success",
-                    skill=result.skill_name,
-                    path=result.skill_path,
-                )
-            else:
-                await self._outer_send(
-                    {
-                        "type": "capability_gap.build_failed",
-                        "content": f"AgentDeveloper: не удалось создать скилл: {'; '.join(result.errors)}",
-                        "errors": result.errors,
-                    }
-                )
-        except Exception as exc:
-            logger.error("capability_builder_invoke_failed", error=str(exc))
-            await self._outer_send(
-                {
-                    "type": "capability_gap.build_failed",
-                    "content": f"AgentDeveloper: ошибка при создании скилла: {exc}",
-                }
-            )
 
 
 # Keyword heuristics are delegated to the declarative table in
@@ -3883,88 +3616,6 @@ def _last_published_table(trace: _TurnTrace) -> dict[str, Any] | None:
         ):
             out = r
     return out
-
-
-def _fallback_capability_draft(
-    gap: CapabilityGapRequest,
-    plan: OrchestratorPlan,
-) -> CapabilityBuildDraft:
-    base_name = (plan.intent or "generated_capability").replace(".", "_")
-    tool_name = f"workspace.{base_name}_tool"
-    return CapabilityBuildDraft(
-        title=f"Draft: {gap.missing_capability}",
-        tool_name=tool_name,
-        endpoint_path=f"/api/workspace/agent/generated/{base_name}",
-        method="POST",
-        skill_registry_entry={
-            "name": tool_name,
-            "category": "workspace" if plan.workspace.required else "agent",
-            "method": "POST",
-            "path": f"/api/workspace/agent/generated/{base_name}",
-            "approval_required": False,
-        },
-        request_schema={
-            "type": "object",
-            "properties": {
-                "canvas_id": {"type": "string", "default": plan.workspace.canvas_id},
-                "limit": {"type": "integer", "default": 5000},
-            },
-        },
-        response_schema={
-            "type": "object",
-            "properties": {
-                "status": {"type": "string"},
-                "canvas_id": {"type": "string"},
-                "message": {"type": "string"},
-            },
-        },
-        implementation_plan=[
-            "Add typed request/response model to the relevant FastAPI router.",
-            "Query SQL/vector/graph data required by the user request.",
-            "Build a stable Workspace block schema and upsert it to the existing Workspace.",
-            "Register the tool in AiAgent registry and gateway exposed skills.",
-            "Add regression tests for data correctness and workspace publication.",
-        ],
-        validation_plan=[
-            "Verify the tool returns a canvas_id and updates the Workspace block updated_at.",
-            "Run ruff, targeted pytest, and strict AiAgent contract check.",
-        ],
-        notes=gap.reason,
-    )
-
-
-def _capability_risk_level(gap: CapabilityGapRequest, audit: AuditReport) -> str:
-    text = f"{gap.reason} {' '.join(audit.issue_messages)}".lower()
-    if any(marker in text for marker in ("external", "email.send", "delete", "approval")):
-        return "high"
-    if gap.suggested_artifact in {"script", "tool"}:
-        return "medium"
-    return "low"
-
-
-def _format_capability_draft_markdown(
-    draft: CapabilityBuildDraft,
-    *,
-    proposal_id: str | None = None,
-) -> str:
-    return "\n\n".join(
-        [
-            f"# {draft.title}",
-            f"Proposal ID: `{proposal_id}`" if proposal_id else "Proposal: not persisted",
-            f"Tool: `{draft.tool_name}`",
-            f"Endpoint: `{draft.method} {draft.endpoint_path}`",
-            "## Skill registry entry\n"
-            f"```json\n{json.dumps(draft.skill_registry_entry, ensure_ascii=False, indent=2)}\n```",
-            "## Request schema\n"
-            f"```json\n{json.dumps(draft.request_schema, ensure_ascii=False, indent=2)}\n```",
-            "## Response schema\n"
-            f"```json\n{json.dumps(draft.response_schema, ensure_ascii=False, indent=2)}\n```",
-            "## Implementation plan\n"
-            + "\n".join(f"- {item}" for item in draft.implementation_plan),
-            "## Validation plan\n" + "\n".join(f"- {item}" for item in draft.validation_plan),
-            f"## Notes\n{draft.notes}",
-        ]
-    )
 
 
 def _latest_workspace_table_id() -> str | None:
