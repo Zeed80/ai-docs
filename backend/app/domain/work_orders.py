@@ -2195,6 +2195,15 @@ async def cancel_work_order(db: AsyncSession, order: WorkOrder, *, actor: str) -
                 }
         order.lease_owner = None
         order.lease_expires_at = None
+    # A canceled order's computer-use grants authorize nothing more.
+    from app.db.models import ComputerUseGrant
+
+    for grant in await db.scalars(
+        select(ComputerUseGrant)
+        .where(ComputerUseGrant.work_order_id == order.id, ComputerUseGrant.revoked_at.is_(None))
+        .with_for_update()
+    ):
+        grant.revoked_at = utcnow()
     canceled: list[str] = []
     children = list(
         await db.scalars(

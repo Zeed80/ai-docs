@@ -654,6 +654,36 @@ async def grant_computer_use(
     }
 
 
+@router.post("/{work_order_id}/computer-grants/{grant_id}/revoke")
+async def revoke_computer_use(
+    work_order_id: uuid.UUID,
+    grant_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(require_role(UserRole.manager)),
+) -> dict:
+    """E24: take a computer-use grant back before it expires.
+
+    There was no way to: a grant lived until its TTL or action limit. The
+    executor locks the grant and checks revoked_at in the same commit that
+    consumes it, so a revoked grant authorizes nothing more; an action that
+    already passed that commit is not undone.
+    """
+    grant = await db.get(ComputerUseGrant, grant_id, with_for_update=True)
+    if grant is None or grant.work_order_id != work_order_id:
+        raise HTTPException(status_code=404, detail="Computer-use grant not found")
+    if grant.revoked_at is None:
+        grant.revoked_at = datetime.now(UTC)
+        await append_event(
+            db,
+            work_order_id,
+            "computer_use.revoked",
+            actor=user.sub,
+            payload={"grant_id": str(grant.id), "used_actions": grant.used_actions},
+        )
+        await db.commit()
+    return {"id": str(grant.id), "revoked_at": grant.revoked_at}
+
+
 @router.get("/{work_order_id}/tool-calls")
 async def get_tool_calls(
     work_order_id: uuid.UUID,

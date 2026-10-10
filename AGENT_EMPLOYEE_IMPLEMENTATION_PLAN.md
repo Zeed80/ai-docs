@@ -88,8 +88,9 @@ E23a выпущен: несверенный эффект блокирует пе
 (`docs/agent-employee-delivery/E23-stale-revision.md`). E23 закрыт.
 E24a выпущен: получатель проверяет текущую попытку в транзакции своего `commit`
 и пишет квитанцию эффекта; отмена каскадируется на потомков
-(`docs/agent-employee-delivery/E24-effect-fence.md`). Остаток E24 — эффекты вне
-БД до `commit`, хранилище рабочего стола, child context, отзыв grant.
+(`docs/agent-employee-delivery/E24-effect-fence.md`). E24 закрыт: `fence_effect`
+перед эффектами вне БД, отзыв `ComputerUseGrant`, дочерний не наследует grant;
+неподдержанные получатели перечислены. Следующее — P1.5 (E25: process-kill harness).
 Оставшиеся AIRouter/direct paths, entry adapters, legacy reconciliation,
 token/cost accounting и active/replan остаются E21.2b+/E21.3;
 вся E21 не завершена. Отчёт: `docs/agent-employee-delivery/E21-budget-ledger.md`.
