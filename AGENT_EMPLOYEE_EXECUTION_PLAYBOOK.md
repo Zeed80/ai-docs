@@ -1223,7 +1223,7 @@ blocked verifier как итог в UI, подпись needs_review. Embedding/r
 
 ### E26 — Контракт ScriptRun и threat model
 
-**Статус:** TODO. **После:** REVIEWED E25.
+**Статус:** DONE (2026-10-10): ADR и контракт — один запуск = один контейнер через доверенный supervisor (сеть none, read-only, tmpfs 512 МБ, 1 ГБ, 1 CPU, 64 PID, uid 65534, без capabilities, seccomp/AppArmor, вход stdin-tar, выход get_archive, образ по digest); лимиты проверены на хосте, убийство только через Docker API; отказ без fallback; gVisor — открытое решение владельца (`docs/agent-employee-delivery/script-isolation-contract.md`). **После:** REVIEWED E25.
 **Читать:** AgentScriptRun, WorkArtifact, старый disabled runner, Compose.
 **Создать:** `docs/agent-employee-delivery/script-isolation-contract.md`.
 
