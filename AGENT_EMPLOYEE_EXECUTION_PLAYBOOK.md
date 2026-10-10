@@ -1286,7 +1286,7 @@ blocked verifier как итог в UI, подпись needs_review. Embedding/r
 
 ### E30 — Adversarial sandbox suite
 
-**Статус:** TODO. **После:** E29. **Создать:** отдельный security integration набор.
+**Статус:** DONE (2026-10-10): 16 атак на настоящую изоляцию (цикл, fork bomb, сирота, диск, stdout, сигнал PID 1, поддельная рамка, IPv4/IPv6/DNS/metadata/raw, окружение, /proc, Docker socket, symlink) — эффект предотвращён ядром, лимиты соблюдены, сосед не затронут; загрузчик снимает все процессы перед рамкой (`docs/agent-employee-delivery/E30-adversarial-sandbox.md`). **Gate C** (включение `script_runs_enabled`, gVisor) — решение владельца. **После:** E29. **Создать:** отдельный security integration набор.
 
 1. Проверить бесконечный цикл/import, fork bomb, orphan process, disk fill,
    огромный stdout, сигнал, crash runtime, timeout при зависшем child.

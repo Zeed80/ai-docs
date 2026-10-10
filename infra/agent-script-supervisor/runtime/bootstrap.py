@@ -11,6 +11,7 @@ import base64
 import io
 import json
 import os
+import signal
 import subprocess
 import sys
 import tarfile
@@ -47,6 +48,14 @@ def main() -> None:
             status = "failed"
     except subprocess.TimeoutExpired as exc:
         out, err, code, status = exc.stdout or b"", exc.stderr or b"", -9, "timeout"
+    # Nothing but this process may write after this point: a detached
+    # grandchild could otherwise append a forged result frame between ours
+    # and the container's end (the supervisor reads the last frame). As PID 1
+    # of the run's namespace, kill(-1) reaches every other process in it.
+    try:
+        os.kill(-1, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
     buffer = io.BytesIO()
     files, total = 0, 0
     with tarfile.open(fileobj=buffer, mode="w") as archive:

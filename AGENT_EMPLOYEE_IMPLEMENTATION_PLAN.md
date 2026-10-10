@@ -94,7 +94,10 @@ E24a выпущен: получатель проверяет текущую по
 SIGKILL воркера, reclaim разбирает вызов в полёте по квитанции — эффект не
 повторяется (`docs/agent-employee-delivery/E25-crash-harness.md`); точки входа
 устойчивы одной транзакцией. Пакет P1 (E21–E25) закрыт, кроме осознанно
-отложенных pre-dispatch token bounds; следующее — P2 (E26: ScriptRun).
+отложенных pre-dispatch token bounds. Пакет P2 (E26–E30) реализован и выключен
+до Gate C: supervisor `infra/agent-script-supervisor`, брокер, жизненный цикл,
+враждебный набор (`docs/agent-employee-delivery/E30-adversarial-sandbox.md`);
+включение и gVisor — решение владельца. Следующее — P4 (ACL), затем P3.
 Оставшиеся AIRouter/direct paths, entry adapters, legacy reconciliation,
 token/cost accounting и active/replan остаются E21.2b+/E21.3;
 вся E21 не завершена. Отчёт: `docs/agent-employee-delivery/E21-budget-ledger.md`.
