@@ -67,6 +67,30 @@ def _host_allowed(url: str, hosts: list[str]) -> bool:
     )
 
 
+def browser_session_owner(work_order_id: uuid.UUID) -> str:
+    return f"wo:{work_order_id}"
+
+
+async def close_browser_sessions(work_order_id: uuid.UUID) -> int:
+    """Close the work order's browser sessions (grant revoked, work canceled).
+
+    Best effort: if the browser service is unreachable its sessions end by
+    their own TTL, and no action can reach them without a live grant anyway.
+    """
+    from app.ai.web_search_config import get_config
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(
+                get_config().browser_url.rstrip("/") + "/desktop/close-owner",
+                json={"owner": browser_session_owner(work_order_id)},
+            )
+        return int(response.json().get("closed") or 0)
+    except Exception as exc:  # noqa: BLE001
+        log_degraded("computer_use.browser_close_owner", exc)
+        return 0
+
+
 async def _perform(
     action: str, target: str, body: dict, grant: ComputerUseGrant
 ) -> tuple[dict, dict]:
@@ -103,11 +127,15 @@ async def _perform(
         if action == "desktop_start" and not _host_allowed(target, list(grant.allowed_hosts or [])):
             raise HTTPException(status_code=403, detail="Host is outside granted allowlist")
         endpoint = "/desktop/start" if action == "desktop_start" else "/desktop/action"
+        # E31: the session belongs to this work order; the browser service
+        # refuses another owner's session id as if it did not exist.
+        owner = browser_session_owner(grant.work_order_id)
         payload = (
-            {"url": target, "allowed_hosts": list(grant.allowed_hosts or [])}
+            {"url": target, "allowed_hosts": list(grant.allowed_hosts or []), "owner": owner}
             if action == "desktop_start"
             else {
                 "session_id": target,
+                "owner": owner,
                 "action": action.removeprefix("desktop_"),
                 "selector": body.get("selector"),
                 "text": body.get("text"),

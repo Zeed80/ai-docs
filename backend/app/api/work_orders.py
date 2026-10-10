@@ -681,6 +681,10 @@ async def revoke_computer_use(
             payload={"grant_id": str(grant.id), "used_actions": grant.used_actions},
         )
         await db.commit()
+        # E31: an open browser session must not outlive the right to use it.
+        from app.api.computer_use import close_browser_sessions
+
+        await close_browser_sessions(work_order_id)
     return {"id": str(grant.id), "revoked_at": grant.revoked_at}
 
 
@@ -911,6 +915,9 @@ async def cancel_order(
     await db.refresh(order)
     if script_runs:
         await kill_script_runs(script_runs, order.owner_key)
+    from app.api.computer_use import close_browser_sessions
+
+    await close_browser_sessions(order.id)
     return order
 
 

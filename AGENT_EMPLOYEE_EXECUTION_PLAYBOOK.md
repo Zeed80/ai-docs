@@ -1302,7 +1302,7 @@ blocked verifier как итог в UI, подпись needs_review. Embedding/r
 
 ### E31 — Владелец браузерной сессии и ресурсная модель
 
-**Статус:** TODO. **После:** E30.
+**Статус:** DONE (2026-10-10): сессия принадлежит заказу (`wo:<id>`), чужой владелец получает `session_not_found`; TTL простоя/всего с уборкой, лимиты сессий и вкладок; отзыв гранта и отмена заказа закрывают сессии; было — по известному id действовал любой грант (`docs/agent-employee-delivery/E31-browser-session-owner.md`). **После:** E30.
 **Файлы:** `api/computer_use.py`, `infra/web-browser/server.py`,
 `test_computer_use_grants.py`; создать schema/migration сессий при необходимости.
 

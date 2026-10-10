@@ -138,3 +138,66 @@ async def test_a_child_order_does_not_inherit_the_parents_grant(client, db_sessi
     )
     assert from_child.status_code == 423
     assert not (tmp_path / "child.txt").exists()
+
+
+class _BrowserService:
+    """Records what the backend sends to the browser service."""
+
+    def __init__(self):
+        self.calls: list[tuple[str, dict]] = []
+
+    def install(self, monkeypatch):
+        import httpx
+
+        service = self
+
+        class _Client:
+            def __init__(self, *a, **k):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, url, json=None):
+                service.calls.append((url.rsplit("/", 2)[-2] + "/" + url.rsplit("/", 1)[-1], json))
+                body = {"ok": True, "session_id": "s-1", "url": "https://example.com/"}
+                if url.endswith("close-owner"):
+                    body = {"ok": True, "closed": 1}
+                return httpx.Response(200, json=body, request=httpx.Request("POST", url))
+
+        monkeypatch.setattr("app.api.computer_use.httpx.AsyncClient", _Client)
+
+
+@pytest.mark.asyncio
+async def test_desktop_actions_carry_the_work_order_as_owner(client, monkeypatch):
+    """E31: the browser service refuses a session id under another owner."""
+    service = _BrowserService()
+    service.install(monkeypatch)
+    order_id = (await client.post("/api/work-orders", json={"objective": "Browse"})).json()["id"]
+    granted = await client.post(
+        f"/api/work-orders/{order_id}/computer-grants",
+        json={
+            "actions": ["desktop_start", "desktop_read"],
+            "allowed_hosts": ["example.com"],
+            "max_actions": 5,
+            "reason": "test",
+        },
+    )
+    assert granted.status_code == 201, granted.text
+    for action, target in (("desktop_start", "https://example.com/"), ("desktop_read", "s-1")):
+        resp = await client.post(
+            "/api/computer-use/execute",
+            json={"action": action, "work_order_id": order_id, "target": target},
+        )
+        assert resp.status_code == 200, resp.text
+    owners = {payload["owner"] for _path, payload in service.calls}
+    assert owners == {f"wo:{order_id}"}
+
+    revoked = await client.post(
+        f"/api/work-orders/{order_id}/computer-grants/{granted.json()['id']}/revoke"
+    )
+    assert revoked.status_code == 200
+    assert service.calls[-1] == ("desktop/close-owner", {"owner": f"wo:{order_id}"})

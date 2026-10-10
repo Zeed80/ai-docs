@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import os
 import random
+import time
 import uuid
 from contextlib import asynccontextmanager
 
@@ -93,13 +95,58 @@ class _Browser:
 _engine = _Browser()
 _sessions: dict[str, dict] = {}
 
+# E31: a desktop session belongs to the work that started it. Every action
+# names its owner; a wrong owner reads exactly like a missing session, so a
+# known session id gives nothing. Sessions end on their own.
+SESSION_IDLE_SECONDS = int(os.environ.get("BROWSER_SESSION_IDLE_SECONDS", "600"))
+SESSION_MAX_SECONDS = int(os.environ.get("BROWSER_SESSION_MAX_SECONDS", "1800"))
+MAX_SESSIONS = int(os.environ.get("BROWSER_MAX_SESSIONS", "8"))
+MAX_SESSIONS_PER_OWNER = int(os.environ.get("BROWSER_MAX_SESSIONS_PER_OWNER", "2"))
+MAX_TABS = int(os.environ.get("BROWSER_MAX_TABS", "4"))
+
+
+def _expired(session: dict, now: float) -> bool:
+    return (
+        now - session["last_used"] > SESSION_IDLE_SECONDS
+        or now - session["created"] > SESSION_MAX_SECONDS
+    )
+
+
+async def _close_session(session_id: str) -> bool:
+    session = _sessions.pop(session_id, None)
+    if session is None:
+        return False
+    try:
+        await session["context"].close()
+    except Exception:  # noqa: BLE001 — the context may already be gone
+        pass
+    return True
+
+
+async def _sweep_expired() -> int:
+    now = time.monotonic()
+    expired = [sid for sid, session in list(_sessions.items()) if _expired(session, now)]
+    for sid in expired:
+        await _close_session(sid)
+    return len(expired)
+
+
+async def _sweeper() -> None:
+    while True:
+        await asyncio.sleep(30)
+        try:
+            await _sweep_expired()
+        except Exception:  # noqa: BLE001 — keep sweeping
+            pass
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    sweeper = asyncio.create_task(_sweeper())
     yield
-    for session in list(_sessions.values()):
-        await session["context"].close()
-    _sessions.clear()
+    sweeper.cancel()
+    for sid in list(_sessions):
+        await _close_session(sid)
     await _engine.close()
 
 
@@ -141,10 +188,16 @@ class FetchResponse(BaseModel):
 class DesktopStartRequest(BaseModel):
     url: str = Field(..., min_length=4, max_length=2048)
     allowed_hosts: list[str] = Field(min_length=1, max_length=50)
+    owner: str = Field(min_length=1, max_length=200)
+
+
+class DesktopCloseOwnerRequest(BaseModel):
+    owner: str = Field(min_length=1, max_length=200)
 
 
 class DesktopActionRequest(BaseModel):
     session_id: str
+    owner: str = Field(min_length=1, max_length=200)
     action: str = Field(pattern="^(click|type|read|screenshot|close)$")
     selector: str | None = Field(default=None, max_length=2000)
     text: str | None = Field(default=None, max_length=200000)
@@ -250,7 +303,19 @@ async def health() -> dict:
 async def desktop_start(req: DesktopStartRequest) -> dict:
     if not _session_host_allowed(req.url, req.allowed_hosts):
         return {"ok": False, "error": "host_not_allowed"}
+    await _sweep_expired()
+    if len(_sessions) >= MAX_SESSIONS:
+        return {"ok": False, "error": "session_limit"}
+    if sum(1 for s in _sessions.values() if s["owner"] == req.owner) >= MAX_SESSIONS_PER_OWNER:
+        return {"ok": False, "error": "owner_session_limit"}
+    # A fresh context per session: no cookies, storage or cache of anyone else.
     context = await _new_browser_context()
+
+    def _cap_tabs(new_page) -> None:
+        if len(context.pages) > MAX_TABS:
+            asyncio.create_task(new_page.close())
+
+    context.on("page", _cap_tabs)
     page = await context.new_page()
     try:
         response = await page.goto(req.url, wait_until="domcontentloaded", timeout=30000)
@@ -260,11 +325,15 @@ async def desktop_start(req: DesktopStartRequest) -> dict:
         await context.close()
         return {"ok": False, "error": "navigation_left_allowlist"}
     session_id = str(uuid.uuid4())
+    now = time.monotonic()
     _sessions[session_id] = {
         "context": context,
         "page": page,
         "allowed_hosts": list(req.allowed_hosts),
         "lock": asyncio.Lock(),
+        "owner": req.owner,
+        "created": now,
+        "last_used": now,
     }
     shot = await page.screenshot(type="png", animations="disabled", caret="hide")
     return {
@@ -280,13 +349,20 @@ async def desktop_start(req: DesktopStartRequest) -> dict:
 @app.post("/desktop/action")
 async def desktop_action(req: DesktopActionRequest) -> dict:
     session = _sessions.get(req.session_id)
-    if session is None:
+    # Another owner's session answers exactly like a missing one.
+    if session is None or session["owner"] != req.owner:
         return {"ok": False, "error": "session_not_found"}
+    if _expired(session, time.monotonic()):
+        await _close_session(req.session_id)
+        return {"ok": False, "error": "session_expired"}
     async with session["lock"]:
+        if _sessions.get(req.session_id) is not session:
+            # Closed (by owner, revoke or sweep) while this action waited.
+            return {"ok": False, "error": "session_not_found"}
+        session["last_used"] = time.monotonic()
         page = session["page"]
         if req.action == "close":
-            await session["context"].close()
-            _sessions.pop(req.session_id, None)
+            await _close_session(req.session_id)
             return {"ok": True, "closed": True}
         if req.action in {"click", "type"} and not req.selector:
             return {"ok": False, "error": "selector_required"}
@@ -300,8 +376,7 @@ async def desktop_action(req: DesktopActionRequest) -> dict:
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": f"action_failed:{str(exc)[:300]}"}
         if not _session_host_allowed(page.url, session["allowed_hosts"]):
-            await session["context"].close()
-            _sessions.pop(req.session_id, None)
+            await _close_session(req.session_id)
             return {"ok": False, "error": "navigation_left_allowlist"}
         text = ""
         if req.action == "read":
@@ -314,6 +389,16 @@ async def desktop_action(req: DesktopActionRequest) -> dict:
             "text": text[:200000],
             "screenshot_b64": base64.b64encode(shot).decode("ascii"),
         }
+
+
+@app.post("/desktop/close-owner")
+async def desktop_close_owner(req: DesktopCloseOwnerRequest) -> dict:
+    """Close every session of one owner: its grant was revoked or its work canceled."""
+    closed = 0
+    for sid, session in list(_sessions.items()):
+        if session["owner"] == req.owner:
+            closed += int(await _close_session(sid))
+    return {"ok": True, "closed": closed}
 
 
 async def _fetch_pdf(context, req, headers, diagnostics, nav_response=None):
