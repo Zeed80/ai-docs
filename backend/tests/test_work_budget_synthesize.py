@@ -101,6 +101,11 @@ async def test_synthesis_writes_the_answer_and_charges_the_shared_ledger(test_en
         )
     sent = json.loads(calls[0][1]["json"]["messages"][-1]["content"])
     assert "39" in sent["step_results"]  # the model saw the completed result
+    # Stored times are UTC; the answer called a correct 09:00 Moscow reminder
+    # "06:00 UTC instead of 09:00" without the local clock (live 2026-10-10).
+    assert "Europe/Moscow" in sent["now"]
+    system = calls[0][1]["json"]["messages"][0]["content"]
+    assert "часовом поясе из «now»" in system
     charged = [row for row in await _reservations(factory, order_id) if row.reserved_units == 1]
     assert len(calls) == len(charged) == 1
     assert charged[0].ledger_id == ledger_id

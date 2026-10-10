@@ -688,13 +688,21 @@ async def _execute_synthesize(
         "Ты пишешь итоговый ответ по завершённой задаче на русском языке. Используй "
         "только переданные результаты шагов; ничего не выдумывай, недостающее назови "
         "прямо. Списки могут быть показаны частично: «total» — полное число записей, "
-        "«items_omitted» — сколько строк не показано. Никогда не считай записи по "
+        "«items_omitted» — сколько строк не показано. Время в результатах хранится в UTC: "
+        "показывай его в часовом поясе из «now» и не называй расхождением одно и то же "
+        "время в разных поясах. Никогда не считай записи по "
         "показанным строкам, если items_omitted > 0: бери total. Если для ответа нужны "
         "все строки (например, подсчёт или сравнение по полю), а они показаны не все, "
         f"прямо скажи, что данных для этого недостаточно. Верни только JSON вида {shape}."
     )
+    from app.domain.work_planning import _planner_now
+
     prompt = json.dumps(
         {
+            # The local clock: stored times are UTC, and without the zone the
+            # answer called a correct 09:00 Moscow reminder "06:00 UTC instead
+            # of 09:00" (live 2026-10-10).
+            "now": _planner_now(),
             "objective": objective,
             # Owner revisions of the objective; the later one wins.
             "owner_instructions": instructions,
