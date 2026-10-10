@@ -758,17 +758,29 @@ _RU_MONTHS_GENITIVE = (
 
 def _today_context() -> str:
     """Live 'today is <date>' line for the system prompt — see _effective_system."""
-    from datetime import datetime
+    from datetime import UTC, datetime
+    from zoneinfo import ZoneInfo
 
-    now = datetime.now().astimezone()
+    # The company's zone, not the container's UTC: "remind me at 9:00" was
+    # stored as 09:00 UTC, i.e. noon in Moscow (live 2026-10-10).
+    try:
+        zone = ZoneInfo(_settings.default_timezone)
+    except Exception:  # noqa: BLE001 — a bad setting falls back to UTC
+        zone = UTC
+    now = datetime.now(UTC).astimezone(zone)
     weekday = _RU_WEEKDAYS[now.weekday()]
     month = _RU_MONTHS_GENITIVE[now.month - 1]
+    offset = now.strftime("%z")
+    offset = f"{offset[:3]}:{offset[3:]}"
     return (
         f"## Текущая дата и время\n"
         f"Сегодня {now.day} {month} {now.year} г., {weekday}, "
-        f"{now.strftime('%H:%M')} ({now.strftime('%Z') or 'локальное время сервера'}). "
-        f"ISO: {now.strftime('%Y-%m-%d')}. Все относительные даты («завтра», «через неделю», "
-        f"«в следующий понедельник») считай от этой даты, а не по памяти."
+        f"{now.strftime('%H:%M')} ({zone}, UTC{offset}). "
+        f"ISO: {now.isoformat(timespec='minutes')}. Все относительные даты («завтра», «через неделю», "
+        f"«в следующий понедельник») считай от этой даты, а не по памяти. Время, которое "
+        f"называет человек, — в этом поясе: передавай его в инструменты в ISO 8601 со "
+        f"смещением {offset} (например, {now.strftime('%Y-%m-%d')}T09:00:00{offset}), "
+        f"а время из результатов (оно в UTC) показывай в этом поясе."
     )
 
 

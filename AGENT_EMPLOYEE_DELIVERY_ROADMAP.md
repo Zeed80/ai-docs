@@ -596,3 +596,25 @@ push не выполняется без отдельного разрешени�
 
 Во всём, что не меняет порядок поставки и указанные зависимости, исходные
 контракты E00–E52 и их Definition of Done продолжают действовать полностью.
+
+## 20. Найденный по ходу долг (вписан по правилу «дорогое — в план»)
+
+**T1. Тесты, читающие чужие строки общей тестовой БД (2026-10-10).** Полный
+прогон бэкенда: 12 падений, каждое проходит изолированно — источник загрязнения
+в другом файле. Найдено и исправлено 14 (`e961723a`: планировщик/верификатор
+считали все попытки, обнаружение пробелов — все неудачи, lease — глобальный
+reclaim, telegram — все чат-прогоны, `test_action_receipts` оставлял `dev-user`).
+Осталось:
+`test_agent_outbox` (3), `test_agent_routing_golden::test_routing_golden_set`,
+`test_documents::test_development_purge_all_documents`,
+`test_email_send_actually_sends::test_approval_memory_is_cleared_between_turns`,
+`test_inbox_feed::test_feed_merges_all_three_sources`,
+`test_security_rbac::test_purge_all_admin_{allowed_in_production,dev_allowed}`,
+`test_visibility` (3).
+Причина класса: тесты с собственными `async_sessionmaker` коммитят строки, которые
+видят следующие; проверки «всё в таблице» и уникальные `sub` ломаются.
+Как закрыть: поиск источника делением (полный прогон ~27 мин), затем либо
+очистка в фикстуре источника, либо сужение проверки до своих строк. Без этого
+сравнение с базой остаётся единственным способом читать полный прогон.
+Проверка: `python3 -m pytest backend/tests -m "not live and not llamacpp and not vllm" -q`
+— цель 0 падений, кроме `live`.

@@ -76,3 +76,15 @@ def test_effective_system_still_includes_live_date_grounding_regardless_of_tone(
     fake = _fake_session(system="BASE", tone="concise")
     result = AgentSession._effective_system(fake)
     assert _today_context() in result
+
+
+def test_today_context_uses_the_company_zone_with_its_offset(monkeypatch):
+    """Containers run in UTC: "remind me at 9:00" was stored as 09:00 UTC,
+    i.e. noon in Moscow (live 2026-10-10)."""
+    from app.ai import agent_loop
+
+    monkeypatch.setattr(agent_loop._settings, "default_timezone", "Europe/Moscow")
+    line = agent_loop._today_context()
+    assert "Europe/Moscow, UTC+03:00" in line
+    assert "T09:00:00+03:00" in line
+    assert "показывай в этом поясе" in line
