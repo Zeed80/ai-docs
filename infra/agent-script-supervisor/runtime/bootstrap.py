@@ -39,6 +39,7 @@ def main() -> None:
             cwd="/tmp/work",
             capture_output=True,
             timeout=timeout,
+            check=False,
             env={"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/tmp/work"},
         )
         out, err, code = child.stdout, child.stderr, child.returncode
