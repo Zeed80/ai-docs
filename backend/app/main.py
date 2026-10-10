@@ -277,6 +277,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         logger.warning("sql_full_reader_grants_failed", error=str(exc))
 
+    # E39: row-level security for the agent's SQL readers. Without it the
+    # pipeline refuses to query (fail-closed), so a failure here is an error.
+    try:
+        from app.ai.sql_row_security import install_row_security
+        from app.db.session import _get_session_factory
+
+        async with _get_session_factory()() as db:
+            await install_row_security(db)
+            await db.commit()
+    except Exception as exc:
+        logger.error("sql_row_security_install_failed", error=str(exc))
+
     # Warm the pinned orchestrator model so the agent has an instant first
     # response; other models load on demand and free VRAM when idle.
     # Strata running ⇔ the GPU is Strata's; the container state is the truth

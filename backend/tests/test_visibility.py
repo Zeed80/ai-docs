@@ -34,6 +34,10 @@ async def docs(db_session):
             _doc("ownA", owner_sub="u:alice", department_id=dept_a.id),
             _doc("ownB", owner_sub="u:bob", department_id=dept_b.id),
             _doc("deptA_other", owner_sub="u:carol", department_id=dept_a.id),
+            # Owned, no department: private to Bob, not legacy.
+            _doc("bob_private", owner_sub="u:bob"),
+            # Department, no owner: the department's.
+            _doc("deptB_unowned", department_id=dept_b.id),
         ]
     )
     # Alice belongs to department A.
@@ -61,12 +65,12 @@ async def _names(db_session, user) -> set[str]:
 
 async def test_admin_sees_everything(db_session, docs):
     names = await _names(db_session, _info("u:admin", UserRole.admin))
-    assert names == {"legacy", "ownA", "ownB", "deptA_other"}
+    assert names == {"legacy", "ownA", "ownB", "deptA_other", "bob_private", "deptB_unowned"}
 
 
 async def test_manager_sees_everything(db_session, docs):
     names = await _names(db_session, _info("u:mgr", UserRole.manager))
-    assert names == {"legacy", "ownA", "ownB", "deptA_other"}
+    assert names == {"legacy", "ownA", "ownB", "deptA_other", "bob_private", "deptB_unowned"}
 
 
 async def test_user_sees_own_dept_and_legacy_not_other_dept(db_session, docs):
@@ -76,9 +80,11 @@ async def test_user_sees_own_dept_and_legacy_not_other_dept(db_session, docs):
     assert "ownA" in names
     assert "deptA_other" in names  # same department
     assert "ownB" not in names  # other department
+    assert "bob_private" not in names  # someone's own, no department
+    assert "deptB_unowned" not in names
 
 
 async def test_user_without_department_sees_only_own_and_legacy(db_session, docs):
     # Bob has no User row / no department here → only legacy + his own docs.
     names = await _names(db_session, _info("u:bob", UserRole.buyer))
-    assert names == {"legacy", "ownB"}
+    assert names == {"legacy", "ownB", "bob_private"}

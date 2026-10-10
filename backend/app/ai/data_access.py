@@ -27,6 +27,7 @@ FULL_READER_ROLE = "agent_sql_reader_full"
 SECRET_TABLES = frozenset(
     {
         "agent_config_store",  # MCP server env and other saved agent secrets
+        "agent_sql_actors",  # E39: who an agent SQL transaction reads for
         "api_keys",
         "device_registrations",  # ntfy topics: knowing one is being able to push
         "device_unlock_credentials",

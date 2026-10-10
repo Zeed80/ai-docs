@@ -403,6 +403,15 @@ async def execute_sql(sql: str, *, max_rows: int = 200) -> list[dict[str, Any]]:
         safe_sql = f"{safe_sql} LIMIT {max_rows}"
 
     async with _get_session_factory()() as db:
+        # Четвёртый рубеж — строки (E39): от чьего имени читаем. Запись живёт
+        # только в этой транзакции и снимается откатом ниже; ставится до
+        # read-only и до смены роли — читатель сам в эту таблицу писать не
+        # может. Не удалось записать — запроса нет: без политик строк роль
+        # видела бы чужие документы и почту.
+        from app.ai.actor_context import get_acting_user
+        from app.ai.sql_row_security import bind_actor
+
+        await bind_actor(db, get_acting_user())
         # Второй рубеж, не зависящий от качества регулярных выражений: сама
         # транзакция объявлена только на чтение, а долгий запрос обрывается по
         # таймауту, а не занимает соединение до бесконечности.
@@ -429,28 +438,19 @@ _READER_ROLE = "agent_sql_reader"
 async def _enter_reader_role(db, *, full: bool = False) -> None:
     """Переключить транзакцию на роль только для чтения разрешённых таблиц.
 
-    Роль может отсутствовать: база поднята через ``create_all`` без миграций
-    (так делают тесты) или миграция ещё не применена. Тогда остаются два
-    прежних рубежа — белый список и read-only транзакция, — но об этом надо
-    знать, поэтому пишем в журнал уровнем error, а не молча продолжаем.
+    Без роли запроса нет — ни в полном режиме, ни в обычном. Раньше обычный
+    режим при отсутствии роли продолжал от имени владельца базы; с политиками
+    строк (E39) это значило бы читать чужие документы и почту: владелец их
+    обходит. Роль и её права создаёт ``install_row_security`` на старте.
     """
     from sqlalchemy import text
 
     if full:
-        # Полный доступ держится только на роли: белый список в этом режиме —
-        # почти вся база. Без роли запрос ушёл бы от имени владельца базы,
-        # которому видны и секреты, поэтому здесь отказ, а не продолжение.
         from app.ai.data_access import FULL_READER_ROLE
 
         await db.execute(text(f"SET LOCAL ROLE {FULL_READER_ROLE}"))
         return
-    try:
-        await db.execute(text(f"SET LOCAL ROLE {_READER_ROLE}"))
-    except Exception as exc:  # noqa: BLE001 — отсутствие роли не повод падать
-        await db.rollback()
-        logger.error("sql_pipeline_reader_role_unavailable", error=str(exc))
-        await db.execute(text("SET LOCAL transaction_read_only = on"))
-        await db.execute(text("SET LOCAL statement_timeout = '15s'"))
+    await db.execute(text(f"SET LOCAL ROLE {_READER_ROLE}"))
 
 
 # ── Canvas block formatting ────────────────────────────────────────────────────

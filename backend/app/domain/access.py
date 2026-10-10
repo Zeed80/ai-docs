@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import ColumnElement
 from sqlalchemy.sql.selectable import Select
@@ -56,10 +56,14 @@ async def visibility_filter(
     if _is_unrestricted(user):
         return None
 
-    # Legacy/unowned rows remain visible to everyone.
-    clauses: list[ColumnElement] = [owner_col.is_(None)]
+    # Legacy rows — neither an owner nor a department — remain visible to
+    # everyone. Both must be missing: a row owned by someone but with no
+    # department (a personal mailbox's attachment, an upload) is theirs, not
+    # the company's. This was an OR, which made every such row public.
+    legacy = owner_col.is_(None)
     if department_col is not None:
-        clauses.append(department_col.is_(None))
+        legacy = and_(legacy, department_col.is_(None))
+    clauses: list[ColumnElement] = [legacy]
 
     # Rows the user owns.
     clauses.append(owner_col == user.sub)
