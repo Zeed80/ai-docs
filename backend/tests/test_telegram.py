@@ -602,13 +602,17 @@ async def test_telegram_rebind_starts_new_owner_history(db_session, telegram_ses
     # new Bob request merely because E12 namespaces intake by verified owner.
     await _telegram_bot(telegram_id)._handle_text(first, MagicMock())
 
+    owners = ["telegram-rebind-alice", "telegram-rebind-bob"]
+    # Only this test's owners: the test DB is shared and other tests commit
+    # chat runs of their own (it failed in every full run).
     runs = (
-        await db_session.scalars(select(DurableChatRun).order_by(DurableChatRun.created_at))
+        await db_session.scalars(
+            select(DurableChatRun)
+            .where(DurableChatRun.owner_key.in_(owners))
+            .order_by(DurableChatRun.created_at)
+        )
     ).all()
-    assert [run.owner_key for run in runs] == [
-        "telegram-rebind-alice",
-        "telegram-rebind-bob",
-    ]
+    assert [run.owner_key for run in runs] == owners
     assert runs[0].session_id != runs[1].session_id
     sessions = (
         await db_session.scalars(

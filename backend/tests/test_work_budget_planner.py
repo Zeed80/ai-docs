@@ -147,7 +147,17 @@ async def test_planner_charges_one_call_without_fake_attempt(test_engine, monkey
         order = await db.get(WorkOrder, order_id)
         assert order.status == "ready"
         assert order.plan_revision == 1
-        assert await db.scalar(select(func.count()).select_from(WorkStepAttempt)) == 0
+        # This order's attempts only: the test DB is shared and other tests
+        # commit attempts of their own (it failed in every full run).
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(WorkStepAttempt)
+                .join(WorkStep, WorkStep.id == WorkStepAttempt.step_id)
+                .where(WorkStep.work_order_id == order_id)
+            )
+            == 0
+        )
 
 
 @pytest.mark.asyncio

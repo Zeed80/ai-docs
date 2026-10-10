@@ -57,7 +57,9 @@ async def test_expired_lease_is_reclaimed_and_retried(db_session):
 
     reclaimed = await reclaim_expired_leases(db_session)
 
-    assert reclaimed == 1
+    # >= 1: reclaim is global and the shared test DB can hold other tests'
+    # expired leases (it failed in every full run); this step is asserted below.
+    assert reclaimed >= 1
     assert claimed_order.status == "ready"
     assert claimed_step.state == "retry_wait"
     assert claimed_step.lease_owner is None
@@ -288,7 +290,9 @@ async def test_reclaim_expired_leases_still_blocks_order_when_it_already_left_ru
 
     reclaimed = await reclaim_expired_leases(db_session)
 
-    assert reclaimed == 1
+    # >= 1: reclaim is global and the shared test DB can hold other tests'
+    # expired leases (it failed in every full run); this step is asserted below.
+    assert reclaimed >= 1
     assert claimed_step_b.state == "failed"
     assert order_a.blocker is not None
     assert order_a.status in {"replanning", "blocked"}, (

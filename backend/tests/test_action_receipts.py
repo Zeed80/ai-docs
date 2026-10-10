@@ -64,9 +64,16 @@ from app.domain.work_orders import (
 async def settle_receipt_test_orders(test_engine):
     # These integration tests commit across independent connections. Leave no
     # active receipt-test orders for subsequent global budget/reaper tests.
-    yield
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    actor_subs = (_DEV_USER.sub, "foreign-owner")
     async with factory() as db:
+        existing_users = set(await db.scalars(select(User.sub).where(User.sub.in_(actor_subs))))
+    yield
+    async with factory() as db:
+        # The recipient path registers the acting users; committed, they made
+        # every later test that inserts its own "dev-user" fail on the unique
+        # sub (test_admin, test_device_unlock, test_telegram, …).
+        await db.execute(delete(User).where(User.sub.in_(set(actor_subs) - existing_users)))
         receipt_orders = select(WorkOrder.id).where(
             WorkOrder.objective.startswith("Receipt scenario ")
             | (WorkOrder.objective == "Newer owner turn")

@@ -8,9 +8,10 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import select
+import pytest_asyncio
+from sqlalchemy import select, update
 
-from app.db.models import CapabilityProposal
+from app.db.models import CapabilityProposal, WorkStepAttempt
 from app.domain.work_gap_detection import (
     _error_signature,
     create_gap_proposals,
@@ -22,6 +23,20 @@ from app.domain.work_orders import (
     create_work_order,
     fail_attempt,
 )
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def only_this_tests_failures(db_session):
+    """Gap detection reads every failed attempt in its window, and the test DB
+    is shared: attempts other tests committed formed groups of their own and
+    these tests failed in every full run. Hide them inside this test's
+    transaction, which is rolled back afterwards."""
+    await db_session.execute(
+        update(WorkStepAttempt)
+        .where(WorkStepAttempt.status == "failed")
+        .values(status="hidden_for_gap_test")
+    )
+    yield
 
 
 def test_error_signature_prefers_code_over_type():
