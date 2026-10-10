@@ -39,6 +39,13 @@ from app.db.models import (
     KnowledgeNode,
 )
 
+_AUTO_METHODS = frozenset({"deterministic_regex"})
+
+
+def _auto_built(node: KnowledgeNode) -> bool:
+    meta = node.metadata_ if isinstance(node.metadata_, dict) else {}
+    return meta.get("method") in _AUTO_METHODS
+
 
 class GraphAccess:
     """Per-request visibility with memoized document and node answers."""
@@ -146,7 +153,14 @@ class GraphAccess:
                 ) and await self.entity_visible(node.entity_type, node.entity_id)
             else:
                 docs = support.get(node.id, set())
-                ok = not docs or bool(docs & visible_support)
+                if docs:
+                    ok = bool(docs & visible_support)
+                else:
+                    # No document behind it any more. A node the builder made
+                    # from document text keeps that text in its title: once its
+                    # sources are gone it is nobody's to read (E44). A node
+                    # made by hand (a supplier, a manual note) is company data.
+                    ok = not _auto_built(node)
             self._nodes[node.id] = ok
         return {node_id for node_id, ok in self._nodes.items() if ok}
 

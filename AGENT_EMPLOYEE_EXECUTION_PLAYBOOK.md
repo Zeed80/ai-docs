@@ -1494,7 +1494,7 @@ DocumentChunk, embeddings, documents/mail/artifacts и существующие 
 
 ### E44 — Удаление и отзыв во всех производных хранилищах
 
-**Статус:** TODO. **После:** E43.
+**Статус:** DONE (2026-10-10): чтение закрывается по БД сразу, индекс отстаёт только в полноте; узел регулярки без документной опоры скрыт (иначе удаление документа делало его ИНН публичным); файлы и векторы стираются после коммита, не до; удаление в аудите без текста; повтор безопасен (`docs/agent-employee-delivery/E44-deletion-revocation.md`). Gate E2 — сквозная приёмка Alice/Bob: `test_sql_row_security`, `test_graph_access`, `test_object_guards`, `test_vector_acl`, `test_spec_table_scope`. **После:** E43.
 
 1. Tombstone/revoke авторитетного источника немедленно запрещает чтение.
 2. Outbox удаляет/обновляет derived SQL, graph, vector, caches, artifacts по policy.

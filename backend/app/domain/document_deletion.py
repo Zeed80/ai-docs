@@ -475,13 +475,47 @@ async def hard_delete_document(
     counts["documents"] = int(result.rowcount or 0)
     counts["deleted"] = counts["documents"]
 
+    # Files and vectors are erased only once the deletion commits (E44): erased
+    # before, a failed commit left a document row whose file was gone. A crash
+    # between commit and these calls leaves orphans that the nightly vector
+    # sync purges; reads are fail-closed meanwhile (hits are rechecked against
+    # the documents table).
     if delete_files:
-        counts["storage_deleted"] = _delete_storage_paths(storage_paths)
-
-    _delete_qdrant_document(document_id)
-    _delete_qdrant_memory_points(embedding_points)
+        counts["storage_deleted"] = len([p for p in storage_paths if p])
+        _after_commit(db, lambda paths=list(storage_paths): _delete_storage_paths(paths))
+    _after_commit(db, lambda: _delete_qdrant_document(document_id))
+    _after_commit(db, lambda points=list(embedding_points): _delete_qdrant_memory_points(points))
     logger.info("document_hard_deleted", document_id=str(document_id), counts=counts)
     return counts
+
+
+_EFFECTS_KEY = "aiw_after_commit_effects"
+_effects_installed = False
+
+
+def _after_commit(db: AsyncSession, effect) -> None:
+    """Run ``effect`` after the session's next successful commit, never before."""
+    global _effects_installed
+    session = db.sync_session
+    session.info.setdefault(_EFFECTS_KEY, []).append(effect)
+    if _effects_installed:
+        return
+    from sqlalchemy import event
+    from sqlalchemy.orm import Session
+
+    def run(sess) -> None:
+        for fn in sess.info.pop(_EFFECTS_KEY, []):
+            try:
+                fn()
+            except Exception as exc:  # noqa: BLE001 — the nightly sync is the backstop
+                logger.warning("document_delete_effect_failed", error=str(exc))
+
+    def drop(sess) -> None:
+        sess.info.pop(_EFFECTS_KEY, None)
+
+    event.listen(Session, "after_commit", run)
+    event.listen(Session, "after_rollback", drop)
+    _effects_installed = True
 
 
 async def hard_delete_documents(

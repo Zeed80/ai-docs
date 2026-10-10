@@ -1373,6 +1373,15 @@ async def bulk_delete_documents(
         payload.document_ids,
         delete_files=payload.delete_files,
     )
+    for item in result["results"]:
+        if int(item.get("deleted") or 0):
+            await log_action(
+                db,
+                action="doc.delete",
+                entity_type="document",
+                entity_id=uuid.UUID(str(item["document_id"])),
+                details={k: v for k, v in item.items() if isinstance(v, int)},
+            )
     await db.commit()
     return DocumentBulkDeleteResponse(
         deleted=int(result["deleted"]),
@@ -2090,6 +2099,15 @@ async def delete_document_hard(
     result = await hard_delete_document(db, document_id, delete_files=delete_files)
     if int(result.get("missing") or 0):
         raise HTTPException(status_code=404, detail="Document not found")
+    # E44: the deletion is audited with ids and counts only — never a copy of
+    # the text being erased.
+    await log_action(
+        db,
+        action="doc.delete",
+        entity_type="document",
+        entity_id=document_id,
+        details={k: v for k, v in result.items() if isinstance(v, int)},
+    )
     await db.commit()
     return _delete_result_payload(result)
 

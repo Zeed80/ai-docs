@@ -168,6 +168,7 @@ RULES: dict[str, str] = {
     "agent_script_runs": "aiw_rls_own(owner_key)",
     "archived_conversation_imports": "aiw_rls_own(owner_key)",
     "owned_workspace_blocks": "aiw_rls_own(owner_key)",
+    "owned_workspace_block_versions": "aiw_rls_own(owner_key)",
     "verified_commit_decisions": "aiw_rls_own(owner_key)",
     "work_acceptance_criteria": "aiw_rls_work_order(work_order_id)",
     "work_artifacts": "aiw_rls_work_order(work_order_id)",
@@ -468,12 +469,13 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
       WHEN n.source_document_id IS NOT NULL OR n.entity_id IS NOT NULL
         THEN aiw_rls_document(n.source_document_id)
              AND aiw_rls_entity(n.entity_type, n.entity_id)
-      ELSE NOT EXISTS (
+      ELSE (coalesce(n.metadata::jsonb ->> 'method', '') <> 'deterministic_regex'
+            AND NOT EXISTS (
              SELECT 1 FROM entity_mentions m WHERE m.node_id = n.id AND m.document_id IS NOT NULL
              UNION ALL
              SELECT 1 FROM knowledge_edges k
               WHERE (k.source_node_id = n.id OR k.target_node_id = n.id)
-                AND k.source_document_id IS NOT NULL)
+                AND k.source_document_id IS NOT NULL))
         OR EXISTS (
              SELECT 1 FROM entity_mentions m
               WHERE m.node_id = n.id AND aiw_rls_document(m.document_id)
