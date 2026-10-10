@@ -26,7 +26,10 @@ capabilities:
       secret_id} вводит сохранённый человеком пароль в поле type=password
       страницы ровно с его origin — значения ты не видишь и не передаёшь;
       секрет должен быть в гранте, используется один раз. CAPTCHA и коды MFA
-      не обходи — попроси владельца,
+      не обходи — попроси владельца. Файлы: desktop_downloads — что скачалось в
+      сессии; desktop_save_download {download_id} сохраняет файл артефактом
+      заказа; desktop_upload {ref, revision, inputs: [{artifact_id, sha256,
+      name}]} кладёт в поле файла только артефакты владельца,
       file_read/file_write работают только внутри разрешённых корней, shell —
       только argv-команды из allowlist без shell-интерпретации. web_discover —
       поиск + чтение найденного за один вызов (для exploratory-задач, когда
@@ -40,13 +43,13 @@ capabilities:
     path: /api/agent/cap/computer_use
     method: POST
     gate_actions: [desktop_click, desktop_type, file_write, shell]
-    non_recipeable_actions: [desktop_start, desktop_click, desktop_type, desktop_navigate, desktop_fill_secret, desktop_close, file_write, shell]
+    non_recipeable_actions: [desktop_start, desktop_click, desktop_type, desktop_navigate, desktop_fill_secret, desktop_upload, desktop_save_download, desktop_close, file_write, shell]
     parameters:
       type: object
       properties:
         action:
           type: string
-          description: "browser_fetch | desktop_snapshot | desktop_start | desktop_observe | desktop_click | desktop_type | desktop_read | desktop_navigate | desktop_tabs | desktop_fill_secret | desktop_close | file_read | file_write | shell | web_discover"
+          description: "browser_fetch | desktop_snapshot | desktop_start | desktop_observe | desktop_click | desktop_type | desktop_read | desktop_navigate | desktop_tabs | desktop_fill_secret | desktop_upload | desktop_downloads | desktop_save_download | desktop_close | file_read | file_write | shell | web_discover"
         work_order_id:
           type: string
           description: "ID поручения, к которому привязан grant"

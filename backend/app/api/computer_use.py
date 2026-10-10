@@ -28,7 +28,7 @@ router = APIRouter()
 
 class ComputerActionIn(BaseModel):
     action: str = Field(
-        pattern="^(browser_fetch|desktop_snapshot|desktop_start|desktop_observe|desktop_click|desktop_type|desktop_read|desktop_navigate|desktop_tabs|desktop_fill_secret|desktop_close|file_read|file_write|shell)$"
+        pattern="^(browser_fetch|desktop_snapshot|desktop_start|desktop_observe|desktop_click|desktop_type|desktop_read|desktop_navigate|desktop_tabs|desktop_fill_secret|desktop_upload|desktop_downloads|desktop_save_download|desktop_close|file_read|file_write|shell)$"
     )
     work_order_id: uuid.UUID
     step_id: uuid.UUID | None = None
@@ -103,8 +103,74 @@ async def _secret_for_fill(body: dict, grant: ComputerUseGrant) -> dict:
         return {"secret": decrypt(secret.value_encrypted), "origin": secret.origin}
 
 
+async def _upload_files(body: dict, grant: ComputerUseGrant) -> list[dict]:
+    """E35: upload only the named versions of the owner's artifacts."""
+    import base64
+
+    from app.db.session import _get_session_factory
+    from app.domain.script_broker import BrokerRefused, ScriptInputRef, materialize_inputs
+
+    try:
+        refs = [ScriptInputRef.model_validate(item) for item in body.get("inputs") or []]
+        if not refs or len(refs) > 5:
+            raise BrokerRefused("inputs_required", "1..5")
+        async with _get_session_factory()() as db:
+            files = await materialize_inputs(db, owner_key=grant.granted_to, refs=refs)
+    except BrokerRefused as refused:
+        raise HTTPException(status_code=403, detail=refused.reason) from refused
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="inputs: {artifact_id, sha256, name}") from exc
+    return [
+        {"name": name, "content_b64": base64.b64encode(data).decode("ascii")}
+        for name, data in files.items()
+    ]
+
+
+async def _register_download(result: dict, grant: ComputerUseGrant) -> dict:
+    """E35: a browser download becomes an artifact only through the broker."""
+    from app.db.session import _get_session_factory
+    from app.domain.script_broker import BrokerRefused, register_outputs
+
+    info = result.get("download") or {}
+    content = result.pop("content_b64", "") or ""
+    name = str(info.get("name") or "download")
+    try:
+        async with _get_session_factory()() as db:
+            rows = await register_outputs(
+                db,
+                work_order_id=grant.work_order_id,
+                step_id=None,
+                run_id=str(info.get("id") or ""),
+                outputs=[
+                    {
+                        "name": name,
+                        "content_b64": content,
+                        "sha256": info.get("sha256"),
+                        "size": info.get("size"),
+                    }
+                ],
+                artifact_type="browser_download",
+                path_prefix=f"browser-downloads/{grant.work_order_id}",
+                metadata={
+                    "source_url": info.get("url"),
+                    "sniffed_type": info.get("sniffed_type"),
+                    "grant_id": str(grant.id),
+                },
+            )
+            await db.commit()
+    except BrokerRefused as refused:
+        raise HTTPException(status_code=409, detail=refused.reason) from refused
+    [row] = rows
+    return {
+        **result,
+        "artifact": {"id": str(row.id), "name": row.name, "sha256": row.content_hash},
+    }
+
+
 def _browser_action(action: str, body: dict) -> str:
     name = action.removeprefix("desktop_")
+    if name == "save_download":
+        return "take_download"
     if name == "tabs" and body.get("tab") is not None:
         return "switch_tab"
     return name
@@ -192,6 +258,10 @@ async def _perform(
         )
         if action == "desktop_fill_secret":
             payload.update(await _secret_for_fill(body, grant))
+        if action == "desktop_upload":
+            payload["files"] = await _upload_files(body, grant)
+        if action == "desktop_save_download":
+            payload["download_id"] = str(body.get("download_id") or "")
         if action == "desktop_navigate" and not _host_allowed(
             str(body.get("url") or ""), list(grant.allowed_hosts or [])
         ):
@@ -206,6 +276,8 @@ async def _perform(
             raise HTTPException(
                 status_code=409, detail=result.get("error") or "Desktop action failed"
             )
+        if action == "desktop_save_download":
+            result = await _register_download(result, grant)
         screenshot = result.get("screenshot_b64")
         evidence = {
             "url": result.get("url"),

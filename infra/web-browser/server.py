@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import os
 import random
 import time
@@ -52,8 +53,7 @@ _TIMEZONE = "Europe/Moscow"
 _EXTRA_HEADERS = {
     "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
     "Accept": (
-        "text/html,application/xhtml+xml,application/xml;q=0.9,"
-        "image/avif,image/webp,*/*;q=0.8"
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
     ),
     "Sec-Ch-Ua": '"Chromium";v="131", "Not_A Brand";v="24", "Google Chrome";v="131"',
     "Sec-Ch-Ua-Mobile": "?0",
@@ -121,6 +121,90 @@ SESSION_MAX_SECONDS = int(os.environ.get("BROWSER_SESSION_MAX_SECONDS", "1800"))
 MAX_SESSIONS = int(os.environ.get("BROWSER_MAX_SESSIONS", "8"))
 MAX_SESSIONS_PER_OWNER = int(os.environ.get("BROWSER_MAX_SESSIONS_PER_OWNER", "2"))
 MAX_TABS = int(os.environ.get("BROWSER_MAX_TABS", "4"))
+# E35: downloads are read into memory under a size and time limit, at most a
+# few per session; the backend registers them through its artifact broker.
+DOWNLOAD_MAX_BYTES = int(os.environ.get("BROWSER_DOWNLOAD_MAX_BYTES", str(25 * 1024 * 1024)))
+DOWNLOAD_MAX_SECONDS = int(os.environ.get("BROWSER_DOWNLOAD_MAX_SECONDS", "120"))
+MAX_DOWNLOADS = int(os.environ.get("BROWSER_MAX_DOWNLOADS", "5"))
+_SIGNATURES = (
+    (b"%PDF", "application/pdf"),
+    (b"PK\x03\x04", "application/zip"),
+    (b"\x89PNG", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF8", "image/gif"),
+    (b"\x7fELF", "application/x-executable"),
+    (b"MZ", "application/x-msdownload"),
+)
+
+
+def _sniff(data: bytes) -> str:
+    for magic, mime in _SIGNATURES:
+        if data.startswith(magic):
+            return mime
+    try:
+        data[:4096].decode("utf-8")
+        return "text/plain"
+    except UnicodeDecodeError:
+        return "application/octet-stream"
+
+
+def _display_name(suggested: str) -> str:
+    """A flat label from Content-Disposition: never a path, never trusted."""
+    base = (suggested or "download").replace("\\", "/").rsplit("/", 1)[-1]
+    clean = "".join(c if (c.isascii() and c.isalnum()) or c in "._-" else "_" for c in base)
+    while ".." in clean:
+        clean = clean.replace("..", "_")
+    clean = clean.lstrip(".-")  # no hidden or option-like names; "_" may lead
+    return (clean or "download")[:100]
+
+
+async def _capture_download(session: dict, download) -> None:
+    downloads = session.setdefault("downloads", {})
+    if len(downloads) >= MAX_DOWNLOADS:
+        await download.cancel()
+        return
+    record = {
+        "id": uuid.uuid4().hex[:16],
+        "url": download.url,
+        "name": _display_name(download.suggested_filename),
+        "status": "running",
+    }
+    downloads[record["id"]] = record
+    try:
+        # The egress proxy cuts any response over its byte limit, so an endless
+        # body cannot fill the disk before this times out.
+        path = await asyncio.wait_for(download.path(), DOWNLOAD_MAX_SECONDS)
+    except (TimeoutError, asyncio.TimeoutError):
+        record.update(status="refused", reason="too_slow")
+        await download.cancel()
+        return
+    except Exception as exc:  # noqa: BLE001 — canceled, cut or the page closed
+        record.update(status="failed", reason=str(exc)[:200])
+        return
+    failure = await download.failure()
+    if failure or path is None:
+        record.update(status="failed", reason=str(failure or "no_file")[:200])
+        return
+    try:
+        size = os.path.getsize(path)
+        if size > DOWNLOAD_MAX_BYTES:
+            record.update(status="refused", reason="too_large", size=size)
+            return
+        with open(path, "rb") as handle:
+            data = handle.read()
+    finally:
+        await download.delete()
+    record.update(
+        status="done",
+        size=len(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        sniffed_type=_sniff(data),
+        data=data,
+    )
+
+
+def _watch_downloads(session: dict, page) -> None:
+    page.on("download", lambda d: asyncio.create_task(_capture_download(session, d)))
 
 
 def _expired(session: dict, now: float) -> bool:
@@ -228,7 +312,7 @@ class DesktopActionRequest(BaseModel):
     session_id: str
     owner: str = Field(min_length=1, max_length=200)
     action: str = Field(
-        pattern="^(observe|click|type|fill_secret|read|screenshot|navigate|tabs|switch_tab|close)$"
+        pattern="^(observe|click|type|fill_secret|upload|read|screenshot|navigate|tabs|switch_tab|downloads|take_download|close)$"
     )
     # E32: click/type address an element by the ref an observe returned,
     # under that observe's revision — never a model-written CSS selector
@@ -242,6 +326,10 @@ class DesktopActionRequest(BaseModel):
     # E34: only for fill_secret, from the backend's broker; never echoed.
     secret: str | None = Field(default=None, max_length=4000, repr=False)
     origin: str | None = Field(default=None, max_length=500)
+    # E35: upload — in-memory files from the backend's artifact broker; no
+    # host path ever reaches the browser. take_download — this session's id.
+    files: list[dict] | None = Field(default=None, max_length=5)
+    download_id: str | None = Field(default=None, max_length=40)
 
 
 # E32: what an observe sees. Interactive elements of the active tab's main
@@ -304,8 +392,7 @@ def _session_host_allowed(url: str, hosts: list[str]) -> bool:
     parsed = urlparse(url)
     host = (parsed.hostname or "").casefold()
     return parsed.scheme in {"http", "https"} and any(
-        host == allowed.casefold() or host.endswith("." + allowed.casefold())
-        for allowed in hosts
+        host == allowed.casefold() or host.endswith("." + allowed.casefold()) for allowed in hosts
     )
 
 
@@ -433,6 +520,9 @@ async def desktop_start(req: DesktopStartRequest) -> dict:
         "created": now,
         "last_used": now,
     }
+    session = _sessions[session_id]
+    _watch_downloads(session, page)
+    context.on("page", lambda p: _watch_downloads(session, p))
     shot = await page.screenshot(type="png", animations="disabled", caret="initial")
     return {
         "ok": True,
@@ -475,17 +565,20 @@ async def desktop_action(req: DesktopActionRequest) -> dict:
             await _close_session(req.session_id)
             return {"ok": False, "error": "navigation_left_allowlist"}
         shot = await page.screenshot(type="png", animations="disabled", caret="initial")
-        return _redact(session, {
-            "ok": True,
-            "url": page.url,
-            "title": await page.title(),
-            "tab": session["context"].pages.index(page),
-            # E32: what the page says is data from the site, never an
-            # instruction to the agent or a change of its owner or rights.
-            "content_trust": "untrusted_page",
-            **result,
-            "screenshot_b64": base64.b64encode(shot).decode("ascii"),
-        })
+        return _redact(
+            session,
+            {
+                "ok": True,
+                "url": page.url,
+                "title": await page.title(),
+                "tab": session["context"].pages.index(page),
+                # E32: what the page says is data from the site, never an
+                # instruction to the agent or a change of its owner or rights.
+                "content_trust": "untrusted_page",
+                **result,
+                "screenshot_b64": base64.b64encode(shot).decode("ascii"),
+            },
+        )
 
 
 def _redact(session: dict, value):
@@ -502,7 +595,10 @@ def _redact(session: dict, value):
     if isinstance(value, list):
         return [_redact(session, v) for v in value]
     if isinstance(value, dict):
-        return {k: (v if k == "screenshot_b64" else _redact(session, v)) for k, v in value.items()}
+        return {
+            k: (v if k in {"screenshot_b64", "content_b64"} else _redact(session, v))
+            for k, v in value.items()
+        }
     return value
 
 
@@ -533,8 +629,7 @@ async def _desktop_step(session: dict, req: DesktopActionRequest) -> dict:
     if req.action == "tabs":
         return {
             "tabs": [
-                {"index": i, "url": p.url, "active": p is page}
-                for i, p in enumerate(context.pages)
+                {"index": i, "url": p.url, "active": p is page} for i, p in enumerate(context.pages)
             ]
         }
     if req.action == "switch_tab":
@@ -550,6 +645,24 @@ async def _desktop_step(session: dict, req: DesktopActionRequest) -> dict:
         return {"status": response.status if response else None}
     if req.action == "read":
         return {"text": (await page.locator("body").inner_text(timeout=15000))[:200000]}
+    if req.action == "downloads":
+        return {
+            "downloads": [
+                {k: v for k, v in d.items() if k != "data"}
+                for d in session.get("downloads", {}).values()
+            ]
+        }
+    if req.action == "take_download":
+        record = session.get("downloads", {}).get(req.download_id or "")
+        if record is None:
+            # Another session's download id names nothing here.
+            return {"ok": False, "error": "download_not_found"}
+        if record["status"] != "done":
+            return {"ok": False, "error": f"download_{record['status']}"}
+        return {
+            "download": {k: v for k, v in record.items() if k != "data"},
+            "content_b64": base64.b64encode(record["data"]).decode("ascii"),
+        }
     if req.action == "screenshot":
         return {}
 
@@ -569,6 +682,21 @@ async def _desktop_step(session: dict, req: DesktopActionRequest) -> dict:
         return {"ok": False, "error": "frame_not_actionable"}
     if await target.is_disabled():
         return {"ok": False, "error": "element_disabled"}
+    if req.action == "upload":
+        if (await target.get_attribute("type") or "").lower() != "file":
+            return {"ok": False, "error": "not_a_file_input"}
+        payloads = [
+            {
+                "name": _display_name(str(f.get("name") or "")),
+                "mimeType": str(f.get("mime_type") or "application/octet-stream"),
+                "buffer": base64.b64decode(f.get("content_b64") or ""),
+            }
+            for f in req.files or []
+        ]
+        if not payloads:
+            return {"ok": False, "error": "files_required"}
+        await target.set_input_files(payloads, timeout=10000)
+        return {"done": "upload", "files": [p["name"] for p in payloads]}
     if req.action == "fill_secret":
         # Exactly the secret's origin, in the main frame, into a password field.
         if not req.secret or not req.origin:
@@ -682,9 +810,7 @@ async def fetch(req: FetchRequest) -> FetchResponse:
         # Server returned a PDF for a non-.pdf URL — use the navigation body.
         if "application/pdf" in ctype:
             pdf_headers = {"User-Agent": _USER_AGENT, **_EXTRA_HEADERS}
-            return await _fetch_pdf(
-                context, req, pdf_headers, diagnostics, nav_response=response
-            )
+            return await _fetch_pdf(context, req, pdf_headers, diagnostics, nav_response=response)
 
         # Best-effort: let the DOM and client-side rendering settle. A JS
         # challenge may auto-solve during these waits; if not, we still return
@@ -711,9 +837,7 @@ async def fetch(req: FetchRequest) -> FetchResponse:
             if not text:
                 # Fallback: visible body text when extraction yields nothing.
                 try:
-                    text = await page.evaluate(
-                        "document.body ? document.body.innerText : ''"
-                    )
+                    text = await page.evaluate("document.body ? document.body.innerText : ''")
                 except Exception:  # noqa: BLE001
                     text = ""
                 diagnostics.append("used_inner_text")

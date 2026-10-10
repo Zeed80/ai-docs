@@ -97,6 +97,8 @@ async def materialize_inputs(
             # Someone else's artifact is indistinguishable from a missing one.
             raise BrokerRefused("artifact_not_found", str(ref.artifact_id))
         artifact: WorkArtifact = row[0]
+        if (artifact.metadata_ or {}).get("revoked_at"):
+            raise BrokerRefused("artifact_revoked", str(ref.artifact_id))
         if not artifact.uri or not artifact.content_hash:
             raise BrokerRefused("artifact_not_materializable", str(ref.artifact_id))
         if artifact.content_hash != ref.sha256:
@@ -123,6 +125,9 @@ async def register_outputs(
     run_id: str,
     outputs: list[dict[str, Any]],
     store: Callable[[bytes, str, str], Any] | None = None,
+    artifact_type: str = "script_output",
+    path_prefix: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> list[WorkArtifact]:
     """Validate every output, then store and register all of them, or none."""
     if store is None:
@@ -153,18 +158,23 @@ async def register_outputs(
     for name, data, digest, content_type in validated:
         # Content-addressed: the same bytes land at the same path, other bytes
         # elsewhere — an artifact is never overwritten.
-        path = f"script-runs/{run_id}/{digest}"
+        path = f"{path_prefix or f'script-runs/{run_id}'}/{digest}"
         store(data, path, content_type)
         row = WorkArtifact(
             work_order_id=work_order_id,
             step_id=step_id,
-            artifact_type="script_output",
+            artifact_type=artifact_type,
             name=name,
             uri=path,
             content_hash=digest,
             content_type=content_type,
             size_bytes=len(data),
-            metadata_={"run_id": run_id, "quarantine": "passed", "executable": False},
+            metadata_={
+                "run_id": run_id,
+                "quarantine": "passed",
+                "executable": False,
+                **(metadata or {}),
+            },
         )
         db.add(row)
         rows.append(row)

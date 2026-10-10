@@ -74,9 +74,21 @@ async def resolve_checked(host: str, port: int) -> str:
     return addresses[0]
 
 
-async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+MAX_RESPONSE_BYTES = int(
+    os.environ.get("BROWSER_EGRESS_MAX_RESPONSE_BYTES", str(100 * 1024 * 1024))
+)
+
+
+async def _pipe(
+    reader: asyncio.StreamReader, writer: asyncio.StreamWriter, limit: int | None = None
+) -> None:
+    sent = 0
     try:
         while data := await reader.read(65536):
+            sent += len(data)
+            if limit is not None and sent > limit:
+                # E35: an endless or oversized response is cut, not stored.
+                break
             writer.write(data)
             await writer.drain()
     except (ConnectionError, asyncio.CancelledError):
@@ -168,12 +180,12 @@ async def _handle(client_reader: asyncio.StreamReader, client_writer: asyncio.St
         if length:
             upstream_writer.write(await client_reader.readexactly(length))
         await upstream_writer.drain()
-        await _pipe(upstream_reader, client_writer)
+        await _pipe(upstream_reader, client_writer, MAX_RESPONSE_BYTES)
         return
 
     await asyncio.gather(
         _pipe(client_reader, upstream_writer),
-        _pipe(upstream_reader, client_writer),
+        _pipe(upstream_reader, client_writer, MAX_RESPONSE_BYTES),
     )
 
 

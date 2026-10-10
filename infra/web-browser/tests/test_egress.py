@@ -138,8 +138,20 @@ def test_rebinding_a_name_that_also_points_inside_is_refused(monkeypatch):
 
 @pytest.mark.parametrize(
     "address",
-    ["127.0.0.2", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1",
-     "::1", "fe80::1", "fc00::1", "::ffff:10.0.0.1", "224.0.0.1", "0.0.0.0"],
+    [
+        "127.0.0.2",
+        "10.1.2.3",
+        "172.16.0.1",
+        "192.168.1.1",
+        "169.254.169.254",
+        "100.64.0.1",
+        "::1",
+        "fe80::1",
+        "fc00::1",
+        "::ffff:10.0.0.1",
+        "224.0.0.1",
+        "0.0.0.0",
+    ],
 )
 def test_internal_ranges_are_closed(address):
     assert not egress.address_allowed(address, 443)

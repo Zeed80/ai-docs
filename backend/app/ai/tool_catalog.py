@@ -33,6 +33,9 @@ _OPERATIONS = {
     "computer_use.desktop_read": ("POST", "/api/computer-use/execute", [], "read", False),
     "computer_use.desktop_navigate": ("POST", "/api/computer-use/execute", [], "interact", False),
     "computer_use.desktop_tabs": ("POST", "/api/computer-use/execute", [], "read", False),
+    "computer_use.desktop_upload": ("POST", "/api/computer-use/execute", [], "interact", False),
+    "computer_use.desktop_downloads": ("POST", "/api/computer-use/execute", [], "read", False),
+    "computer_use.desktop_save_download": ("POST", "/api/computer-use/execute", [], "write", False),
     "computer_use.desktop_fill_secret": (
         "POST",
         "/api/computer-use/execute",

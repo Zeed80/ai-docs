@@ -72,9 +72,7 @@ def test_bob_cannot_read_click_or_close_alices_session_by_its_id(client, site):
 def test_a_new_session_does_not_inherit_cookies(client, site):
     first = _start(client, site, "wo:a")
     context = server._sessions[first["session_id"]]["context"]
-    client.portal.call(
-        context.add_cookies, [{"name": "alice_only", "value": "1", "url": site}]
-    )
+    client.portal.call(context.add_cookies, [{"name": "alice_only", "value": "1", "url": site}])
     second = _start(client, site, "wo:b")
     fresh = server._sessions[second["session_id"]]["context"]
     assert "alice_only" not in {c["name"] for c in client.portal.call(fresh.cookies)}

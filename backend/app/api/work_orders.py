@@ -617,6 +617,9 @@ async def grant_computer_use(
         "desktop_navigate",
         "desktop_tabs",
         "desktop_fill_secret",
+        "desktop_upload",
+        "desktop_downloads",
+        "desktop_save_download",
         "desktop_close",
         "file_read",
         "file_write",
@@ -674,6 +677,45 @@ async def grant_computer_use(
         "actions": grant.actions,
         "expires_at": grant.expires_at,
     }
+
+
+@router.post("/{work_order_id}/artifacts/{artifact_id}/revoke")
+async def revoke_work_artifact(
+    work_order_id: uuid.UUID,
+    artifact_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """E35: an artifact the owner withdrew is no longer an input anywhere.
+
+    The bytes stay (content-addressed, never overwritten); the broker refuses
+    a revoked artifact as an upload or a script input from now on.
+    """
+    from app.db.models import WorkArtifact
+
+    order = await db.get(WorkOrder, work_order_id)
+    artifact = await db.get(WorkArtifact, artifact_id, with_for_update=True)
+    if (
+        order is None
+        or artifact is None
+        or artifact.work_order_id != order.id
+        or order.owner_key != user.sub
+    ):
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    meta = dict(artifact.metadata_ or {})
+    if not meta.get("revoked_at"):
+        meta["revoked_at"] = datetime.now(UTC).isoformat()
+        meta["revoked_by"] = user.sub
+        artifact.metadata_ = meta
+        await append_event(
+            db,
+            order.id,
+            "artifact.revoked",
+            actor=user.sub,
+            payload={"artifact_id": str(artifact.id), "sha256": artifact.content_hash},
+        )
+        await db.commit()
+    return {"id": str(artifact.id), "revoked_at": meta["revoked_at"]}
 
 
 @router.post("/{work_order_id}/computer-grants/{grant_id}/revoke")

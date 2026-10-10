@@ -150,8 +150,9 @@ def test_an_iframe_is_listed_but_not_actionable(client, site):
 def test_a_new_tab_is_listed_and_can_be_switched_to(client, site):
     s = _Session(client, site, "/tabs")
     snap = s.observe()
-    assert s.act("click", ref=s.ref(snap, "Открыть во вкладке"), revision=snap["revision"],
-                 wait_ms=500)["ok"]
+    assert s.act(
+        "click", ref=s.ref(snap, "Открыть во вкладке"), revision=snap["revision"], wait_ms=500
+    )["ok"]
     tabs = s.act("tabs")["tabs"]
     assert len(tabs) == 2 and tabs[1]["url"].endswith("/form")
     switched = s.act("switch_tab", tab=1)
