@@ -897,14 +897,20 @@ async def cancel_order(
         if order.status == "canceled":
             return order
         raise HTTPException(status_code=409, detail=f"Cannot cancel a {order.status} work order")
+    from app.domain.script_runs import kill_script_runs, mark_script_runs_canceled
     from app.domain.work_orders import cancel_work_order
 
     try:
         await cancel_work_order(db, order, actor=user.sub)
     except WorkStateError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    # E29: the order's script runs are canceled in the same commit and their
+    # containers killed after it; nothing here needs a second session.
+    script_runs = await mark_script_runs_canceled(db, order.id)
     await db.commit()
     await db.refresh(order)
+    if script_runs:
+        await kill_script_runs(script_runs, order.owner_key)
     return order
 
 

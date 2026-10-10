@@ -1271,7 +1271,7 @@ blocked verifier как итог в UI, подпись needs_review. Embedding/r
 
 ### E29 — Жизненный цикл ScriptRun
 
-**Статус:** TODO. **После:** E28.
+**Статус:** DONE / DEPLOYED (2026-10-10, выключено флажком до Gate C): намерение до запуска с ключом шага, повтор сверяется с supervisor-ом и не запускает код вслепую, общий журнал и бюджет, выходы только из succeeded и под текущей арендой, отмена убивает контейнер (и предупреждает запуск, ещё не пришедший к supervisor-у), отказ без fallback (`docs/agent-employee-delivery/E29-script-run-lifecycle.md`). **После:** E28.
 **Файлы:** AgentScriptRun, WorkOrder worker, ToolResult, broker/supervisor.
 
 1. State transitions queued/running/succeeded/failed/timed_out/canceled/unknown

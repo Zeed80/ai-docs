@@ -1582,7 +1582,7 @@ async def _execute_claimed_step(
             fence_plan_id=frozen_plan_id,
             fence_plan_revision=frozen_plan_revision,
         )
-        if kind == "capability"
+        if kind in {"capability", "script"}
         else WorkBudgetContext(
             # A synthesis model call uses the proven direct-text boundary,
             # which requires a frozen owner/plan/ledger binding.
@@ -1604,6 +1604,19 @@ async def _execute_claimed_step(
 
             output = await run_durable_chat(
                 work_order_id, step_id, attempt_id, session_factory=factory
+            )
+        elif kind == "script":
+            # E29: isolated code, off until Gate C; journal and budget as usual.
+            from app.domain.script_runs import run_script_step
+
+            output = await run_script_step(
+                factory=factory,
+                work_order_id=work_order_id,
+                step_id=step_id,
+                attempt_id=attempt_id,
+                owner_key=owner_key,
+                input_data=input_data,
+                budget_context=capability_budget_context,
             )
         else:
             output = await _execute_step_kind(

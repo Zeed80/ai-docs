@@ -125,8 +125,37 @@ class Supervisor:
             }
         result = self._execute(request)
         with self._lock:
-            self._runs[request.run_id]["result"] = result
+            entry = self._runs[request.run_id]
+            if entry.get("canceled"):
+                result = {**result, "status": "canceled"}
+            entry["result"] = result
         return result
+
+    def cancel(self, run_id: str, owner_key: str) -> dict[str, Any]:
+        """Kill a run's container; its recorded result becomes "canceled"."""
+        with self._lock:
+            entry = self._runs.get(run_id)
+            if entry is None:
+                # Canceled before the run reached us: a tombstone, so the
+                # request arriving later is answered "canceled", not executed.
+                entry = {"owner_key": owner_key, "result": {"status": "canceled"}}
+                self._runs[run_id] = entry
+        if entry["owner_key"] != owner_key:
+            raise HTTPException(404, "Run not found")
+        killed = 0
+        for container in self.client.containers.list(
+            all=True, filters={"label": f"{LABEL}={run_id}"}
+        ):
+            try:
+                container.kill()
+                killed += 1
+            except (NotFound, DockerException):
+                pass
+        with self._lock:
+            if entry["result"].get("status") == "running":
+                entry["result"] = {"status": "canceled"}
+            entry["canceled"] = True
+        return {"killed": killed, **entry["result"]}
 
     def get(self, run_id: str, owner_key: str) -> dict[str, Any]:
         with self._lock:
@@ -288,3 +317,9 @@ async def create_run(
 def get_run(run_id: str, owner_key: str, x_aiw_signature: str | None = Header(default=None)):
     _verify(f"{run_id}:{owner_key}".encode(), x_aiw_signature)
     return {"run_id": run_id, **supervisor.get(run_id, owner_key)}
+
+
+@app.post("/runs/{run_id}/cancel")
+def cancel_run(run_id: str, owner_key: str, x_aiw_signature: str | None = Header(default=None)):
+    _verify(f"cancel:{run_id}:{owner_key}".encode(), x_aiw_signature)
+    return {"run_id": run_id, **supervisor.cancel(run_id, owner_key)}

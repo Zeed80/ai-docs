@@ -1136,6 +1136,21 @@ async def _settle_abandoned_calls(
     """
     from app.db.models import WorkEffectReceipt
 
+    # A script run is reconciled by the next attempt with the supervisor
+    # (E29): its sandbox has no network and no shared storage, so the dead
+    # worker's call is closed here and the step retried.
+    for script_call in await db.scalars(
+        select(WorkToolCall)
+        .where(
+            WorkToolCall.attempt_id == attempt.id,
+            WorkToolCall.executor == "script",
+            WorkToolCall.status.in_(["prepared", "running"]),
+        )
+        .with_for_update()
+    ):
+        script_call.status = "failed"
+        script_call.finished_at = now
+        script_call.error = {"code": "lease_expired", "reconciled_by": "next_attempt"}
     calls = list(
         await db.scalars(
             select(WorkToolCall)

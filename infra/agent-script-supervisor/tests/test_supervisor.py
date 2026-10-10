@@ -172,3 +172,50 @@ def test_an_unsigned_or_expired_request_is_rejected(client):
     assert client.post("/runs", content=body).status_code == 401
     expired = _run(client, "print(1)\n", expires_at=int(time.time()) - 1)
     assert expired.status_code == 401
+
+
+def test_a_canceled_run_is_killed_and_recorded_as_canceled(client):
+    import threading
+
+    run_id = uuid.uuid4().hex
+    holder = {}
+    worker = threading.Thread(
+        target=lambda: holder.update(
+            response=_run(client, "import time\ntime.sleep(60)\n", run_id=run_id)
+        )
+    )
+    worker.start()
+    engine = docker.from_env()
+    for _ in range(100):
+        if engine.containers.list(filters={"label": f"{supervisor_app.LABEL}={run_id}"}):
+            break
+        time.sleep(0.1)
+    path = f"cancel:{run_id}:owner-a".encode()
+    canceled = client.post(
+        f"/runs/{run_id}/cancel",
+        params={"owner_key": "owner-a"},
+        headers={"X-AIW-Signature": _sign(path)},
+    )
+    assert canceled.status_code == 200, canceled.text
+    worker.join(timeout=30)
+    assert holder["response"].json()["status"] == "canceled"
+    foreign = client.post(
+        f"/runs/{run_id}/cancel",
+        params={"owner_key": "owner-b"},
+        headers={"X-AIW-Signature": _sign(f"cancel:{run_id}:owner-b".encode())},
+    )
+    assert foreign.status_code == 404
+
+
+def test_a_cancel_before_the_run_arrives_prevents_it(client):
+    run_id = uuid.uuid4().hex
+    path = f"cancel:{run_id}:owner-a".encode()
+    early = client.post(
+        f"/runs/{run_id}/cancel",
+        params={"owner_key": "owner-a"},
+        headers={"X-AIW-Signature": _sign(path)},
+    )
+    assert early.status_code == 200
+    late = _run(client, "open('/tmp/out/x','w').write('ran')\n", run_id=run_id).json()
+    assert late["status"] == "canceled"
+    assert "output_artifacts" not in late

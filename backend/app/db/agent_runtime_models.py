@@ -291,6 +291,15 @@ class AgentOutbox(UUIDPrimaryKey, TimestampMixin, Base):
 
 
 class AgentScriptRun(UUIDPrimaryKey, TimestampMixin, Base):
+    """E29: one isolated script run, from intent to result.
+
+    The row is committed ("queued") before the supervisor is called, keyed by
+    the step's logical key, so a retried attempt finds the run instead of
+    starting a second job. status: queued, running, succeeded, failed,
+    timed_out, canceled, refused, unknown — the run's own outcome, apart
+    from whether the user's task succeeded.
+    """
+
     __tablename__ = "agent_script_runs"
 
     owner_key: Mapped[str] = mapped_column(String(200), index=True)
@@ -298,3 +307,14 @@ class AgentScriptRun(UUIDPrimaryKey, TimestampMixin, Base):
     code: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(40), default="prepared")
     evidence: Mapped[dict] = mapped_column(JSON, default=dict)
+    logical_key: Mapped[str | None] = mapped_column(String(300), unique=True)
+    step_id: Mapped[str | None] = mapped_column(String(64))
+    attempt_id: Mapped[str | None] = mapped_column(String(64))
+    code_sha256: Mapped[str | None] = mapped_column(String(64))
+    runtime: Mapped[str | None] = mapped_column(String(60))
+    inputs: Mapped[list | None] = mapped_column(JSON)
+    timeout_seconds: Mapped[int | None] = mapped_column()
+    result: Mapped[dict | None] = mapped_column(JSON)
+    output_artifact_ids: Mapped[list | None] = mapped_column(JSON)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

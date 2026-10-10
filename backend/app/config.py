@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     # The company's clock for "today"/"tomorrow" in plans (users.timezone is
     # mostly unset; the mail deploy defaults to the same zone).
     default_timezone: str = "Europe/Moscow"
+    # E29: isolated script runs. Off until Gate C (E30 review); the planner
+    # cannot emit "script" steps, so only an owner-built plan reaches them.
+    script_runs_enabled: bool = False
+    script_supervisor_url: str = "http://agent-script-supervisor:8078"
+    script_supervisor_key: str = ""
     app_log_level: str = "INFO"
 
     # Postgres
