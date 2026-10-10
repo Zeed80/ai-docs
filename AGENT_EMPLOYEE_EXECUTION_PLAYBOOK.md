@@ -1509,7 +1509,7 @@ DocumentChunk, embeddings, documents/mail/artifacts и существующие 
 
 ### E45 — Единая страница работы
 
-**Статус:** TODO. **После:** E44.
+**Статус:** DONE (2026-10-10): `display_status` и `available_actions` от сервера, кнопки строго по ним; панели бюджета линии, приёмки и истории решений; защита от запоздалых ответов и ответов неожиданной формы; e2e поручений и журнала чата починены (были сломаны с 6.10 проверкой сессии) (`docs/agent-employee-delivery/E45-work-page.md`). **После:** E44.
 **Файлы:** `frontend/app/work-orders/page.tsx`, chat journal, соответствующие APIs.
 
 1. Показать objective, текущую ревизию/шаг, channel, owner, budgets, blocker,

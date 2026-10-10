@@ -1,4 +1,11 @@
 import { expect, test } from "@playwright/test";
+import { mockEmptyApi } from "./helpers/mock-api";
+
+// The app checks the session (/api/auth/me) on every page; without a backend
+// it went to the login page. Registered first, so each test's own routes win.
+test.beforeEach(async ({ page }) => {
+  await mockEmptyApi(page);
+});
 
 test("operator creates and inspects a durable work order", async ({
   context,
@@ -75,7 +82,9 @@ test("operator creates and inspects a durable work order", async ({
         id,
         objective: payload.objective,
         description: payload.description,
-        status: "planning",
+        status: "ready",
+        display_status: "ready",
+        available_actions: ["cancel", "instructions", "pause", "run"],
         priority: 50,
         risk_level: "low",
         plan_revision: 0,
@@ -240,4 +249,96 @@ test("operator sees tool-call evidence and approves a gated step inline", async 
   await approveButton.click();
   await expect.poll(() => decideRequests.length).toBeGreaterThan(0);
   expect(decideRequests[0]).toEqual({ status: "approved" });
+});
+
+
+test("one page shows budget, acceptance, decisions and only the allowed actions", async ({
+  context,
+  page,
+}) => {
+  await context.addCookies([
+    { name: "access_token", value: "e2e-token", domain: "127.0.0.1", path: "/" },
+  ]);
+  const now = new Date().toISOString();
+  const base = {
+    priority: 50,
+    risk_level: "low",
+    plan_revision: 2,
+    created_at: now,
+    updated_at: now,
+    owner_key: "owner-1",
+    source: "api",
+  };
+  const orders = [
+    {
+      ...base,
+      id: "o-paused",
+      objective: "Сверить счета",
+      status: "running",
+      display_status: "pause_requested",
+      available_actions: ["cancel", "instructions", "unpause"],
+      metadata: { pause: { requested_at: now } },
+    },
+    {
+      ...base,
+      id: "o-done",
+      objective: "Готовое поручение",
+      status: "completed",
+      display_status: "completed",
+      available_actions: [],
+    },
+  ];
+  await page.route("**/api/approvals/pending**", (route) =>
+    route.fulfill({ json: { items: [], total: 0 } }),
+  );
+  await page.route("**/api/work-orders**", async (route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    if (path.endsWith("/metrics"))
+      return route.fulfill({ json: { window_hours: 24, status_counts: {}, step_durations: {} } });
+    if (path.endsWith("/plan")) return route.fulfill({ json: { steps: [] } });
+    if (path.endsWith("/tool-calls")) return route.fulfill({ json: [] });
+    if (path.endsWith("/learning")) return route.fulfill({ status: 404, json: {} });
+    if (path.endsWith("/budget"))
+      return route.fulfill({
+        json: {
+          ledger: "l1",
+          dimensions: {
+            tool_attempts: { limit: 200, used: 12 },
+            cost_usd: { limit: null, used: 0 },
+          },
+        },
+      });
+    if (path.endsWith("/criteria"))
+      return route.fulfill({
+        json: [
+          { id: "c1", criterion_key: "k", description: "Итог совпадает с SQL", kind: "semantic",
+            required: true, status: "passed", verified_by: "verifier" },
+        ],
+      });
+    if (path.endsWith("/events"))
+      return route.fulfill({
+        json: [
+          { sequence: 1, event_type: "work.created", actor: "owner-1", payload: {}, created_at: now },
+          { sequence: 2, event_type: "work.instruction_added", actor: "owner-1", payload: {}, created_at: now },
+        ],
+      });
+    if (path === "/api/work-orders") return route.fulfill({ json: orders });
+    return route.fulfill({ json: {} });
+  });
+
+  await page.goto("/work-orders");
+  await page.getByRole("button", { name: /Сверить счета/ }).click();
+  await expect(page.getByText("пауза запрошена").first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Продолжить" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Пауза", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Форсировать/ })).toHaveCount(0);
+  await expect(page.getByText("12 / 200")).toBeVisible();
+  await expect(page.getByText("Итог совпадает с SQL")).toBeVisible();
+  await expect(page.getByText(/work\.instruction_added · owner-1/)).toBeVisible();
+
+  await page.getByRole("button", { name: /Готовое поручение/ }).click();
+  await expect(page.getByText("принято и завершено").first()).toBeVisible();
+  await expect(page.getByText("Поручение закрыто — действий нет")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Отменить", exact: true })).toHaveCount(0);
 });

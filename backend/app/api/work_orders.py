@@ -150,8 +150,29 @@ class WorkOrderOut(BaseModel):
     metadata_: dict = Field(serialization_alias="metadata")
     created_at: datetime
     updated_at: datetime
+    # E45: computed by the server; the UI shows these, not its own guess.
+    display_status: str = ""
+    available_actions: list[str] = Field(default_factory=list)
 
     model_config = {"from_attributes": True, "populate_by_name": True}
+
+    @model_validator(mode="after")
+    def _owner_view(self) -> WorkOrderOut:
+        from app.domain.work_orders import available_actions, display_status
+
+        view = _OrderView(self)
+        self.display_status = display_status(view)
+        self.available_actions = available_actions(view)
+        return self
+
+
+class _OrderView:
+    """Just the fields the transition rules read, from a WorkOrderOut."""
+
+    def __init__(self, out: WorkOrderOut) -> None:
+        self.status = out.status
+        self.source = out.source
+        self.metadata_ = out.metadata_
 
 
 class WorkLearningOut(BaseModel):
@@ -363,6 +384,43 @@ async def get_order(
     user: UserInfo = Depends(get_current_user),
 ) -> WorkOrder:
     return await _get_owned_order(db, work_order_id, user)
+
+
+@router.get("/{work_order_id}/budget")
+async def get_work_order_budget(
+    work_order_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """E45: the shared budget of this order's line — limits and what is used.
+
+    "used" counts charged units and still-open reservations, the same sum
+    the ledger checks before every new reservation; a limit of null is no
+    limit, and a dimension never measured reads as unknown, not zero.
+    """
+    from app.db.work_budget_models import WorkBudgetLedger
+    from app.domain.work_budget_ledger import DIMENSION_LIMITS, _usage
+
+    order = await _get_owned_order(db, work_order_id, user)
+    ledger_id = getattr(order, "budget_ledger_id", None)
+    ledger = await db.get(WorkBudgetLedger, ledger_id) if ledger_id else None
+    if ledger is None:
+        return {"work_order_id": str(order.id), "ledger": None, "dimensions": {}}
+    dimensions = {}
+    for dimension, limit_field in DIMENSION_LIMITS.items():
+        limit = getattr(ledger, limit_field)
+        used = await _usage(db, ledger.id, dimension)
+        dimensions[dimension] = {
+            "limit": None if limit is None else float(limit),
+            "used": float(used),
+        }
+    return {
+        "work_order_id": str(order.id),
+        "ledger": str(ledger.id),
+        "root_work_order_id": str(ledger.root_work_order_id),
+        "blocker": ledger.blocker,
+        "dimensions": dimensions,
+    }
 
 
 @router.get("/{work_order_id}/learning", response_model=WorkLearningOut)

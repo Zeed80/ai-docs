@@ -2353,3 +2353,36 @@ async def cancel_work_order(db: AsyncSession, order: WorkOrder, *, actor: str) -
         canceled.append(str(child.id))
         canceled.extend(await cancel_work_order(db, child, actor=actor))
     return canceled
+
+
+# ── E45: what the owner can do now, decided by the server ───────────────────
+
+
+def display_status(order: WorkOrder) -> str:
+    """The status a person should read: a requested pause is not "running"."""
+    if order.status != "paused" and pause_requested(order):
+        return "pause_requested"
+    return order.status
+
+
+def available_actions(order: WorkOrder) -> list[str]:
+    """Transitions the API would accept now — the UI shows exactly these.
+
+    Mirrors the checks of the endpoints (run, pause, unpause, cancel,
+    instructions); an endpoint still re-checks, this only spares the owner
+    buttons that would answer 409.
+    """
+    if order.status in TERMINAL_WORK_STATUSES:
+        return []
+    actions = ["cancel"]
+    durable_chat = order.source == "durable_chat"
+    paused = order.status == "paused" or pause_requested(order)
+    if paused:
+        actions.append("unpause")
+    else:
+        actions.append("pause")
+        if order.status in {"ready", "running"} and not durable_chat:
+            actions.append("run")
+    if not durable_chat:
+        actions.append("instructions")
+    return sorted(actions)

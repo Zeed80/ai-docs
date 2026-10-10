@@ -23,8 +23,73 @@ type WorkOrder = {
   metadata?: { pause?: { requested_at?: string; acknowledged_at?: string } } | null;
   created_at: string;
   updated_at: string;
+  owner_key?: string;
+  source?: string;
+  // E45: computed by the server — the UI shows these, not its own guess.
+  display_status?: string;
+  available_actions?: string[];
 };
-const TERMINAL = new Set(["completed", "blocked", "failed", "canceled"]);
+type Budget = {
+  ledger: string | null;
+  blocker?: Record<string, unknown> | null;
+  dimensions: Record<string, { limit: number | null; used: number }>;
+};
+type Criterion = {
+  id: string;
+  criterion_key: string;
+  description: string;
+  kind: string;
+  required: boolean;
+  status: string;
+  verdict?: Record<string, unknown> | null;
+  verified_by?: string | null;
+};
+
+// E45: what a person reads. A requested pause is not "running", and a chat
+// that said "done" is not a completed order until the order is accepted.
+const STATUS_LABEL: Record<string, string> = {
+  received: "принято",
+  planning: "планируется",
+  replanning: "перепланируется",
+  ready: "готово к шагу",
+  running: "выполняется",
+  pause_requested: "пауза запрошена",
+  paused: "на паузе",
+  waiting_approval: "ждёт решения",
+  waiting_input: "ждёт данных",
+  blocked: "остановлено",
+  failed: "не выполнено",
+  completed: "принято и завершено",
+  canceled: "отменено",
+};
+const statusOf = (order: WorkOrder) => order.display_status || order.status;
+// Long subject ids (hashes) read as noise; the full value stays in the title.
+const shortId = (value?: string | null) =>
+  !value ? "—" : value.length > 16 ? `${value.slice(0, 12)}…` : value;
+const labelOf = (status: string) => STATUS_LABEL[status] ?? status;
+const DIMENSION_LABEL: Record<string, string> = {
+  active_seconds: "активное время, с",
+  tool_attempts: "вызовы инструментов",
+  llm_calls: "вызовы модели",
+  replans: "перепланирования",
+  tokens: "токены",
+  cost_usd: "стоимость, $",
+};
+// Owner decisions and verdicts in the event log — the history of who decided.
+const DECISION_EVENTS = new Set([
+  "work.instruction_added",
+  "work.pause_requested",
+  "work.pause_withdrawn",
+  "computer_use.granted",
+  "computer_use.revoked",
+  "criterion.verified",
+  "artifact.revoked",
+  "chat.continuation_decided",
+]);
+const isDecision = (e: { event_type: string }) =>
+  DECISION_EVENTS.has(e.event_type) ||
+  e.event_type.includes("approval") ||
+  e.event_type.includes("reconcil");
 type WorkStep = {
   id: string;
   step_key: string;
@@ -95,6 +160,8 @@ const statusClass: Record<string, string> = {
   replanning: "bg-violet-950/60 text-violet-300",
   ready: "bg-slate-700 text-slate-200",
   paused: "bg-cyan-950/60 text-cyan-300",
+  pause_requested: "bg-cyan-950/60 text-cyan-300",
+  canceled: "bg-slate-800 text-slate-400",
 };
 // Б13.4: a lightweight stand-in for a real DAG widget — steps at the same
 // dependency depth share a color band, so the reader can see "these run in
@@ -154,6 +221,12 @@ export default function WorkOrdersPage() {
   const [toolCalls, setToolCalls] = useState<ToolCall[]>([]);
   const [events, setEvents] = useState<Event[]>([]);
   const [learning, setLearning] = useState<WorkLearning | null>(null);
+  const [budget, setBudget] = useState<Budget | null>(null);
+  const [criteria, setCriteria] = useState<Criterion[]>([]);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  // E45: a slow answer for the previous selection must not paint over the
+  // current one.
+  const selectedRef = useRef<string | null>(null);
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>(
     [],
   );
@@ -179,25 +252,53 @@ export default function WorkOrdersPage() {
     if (response.ok) setMetrics(await response.json());
   }, []);
   const loadDetail = useCallback(async (id: string) => {
+    let responses: Response[];
+    try {
+      responses = await Promise.all([
+        api(`/api/work-orders/${id}/plan`),
+        api(`/api/work-orders/${id}/events?limit=100`),
+        api(`/api/work-orders/${id}/learning`),
+        api(`/api/work-orders/${id}/tool-calls`),
+        // Б13.3: scoped client-side — /api/approvals has no entity_id filter,
+        // so pull the pending queue and keep only this work order's rows.
+        api(`/api/approvals/pending?action_type=agent_tool_call&limit=200`),
+        api(`/api/work-orders/${id}/budget`),
+        api(`/api/work-orders/${id}/criteria`),
+      ]);
+    } catch {
+      if (selectedRef.current === id) setDetailError("Нет связи с сервером");
+      return;
+    }
+    if (selectedRef.current !== id) return; // a late answer for another order
     const [
       planResponse,
       eventResponse,
       learningResponse,
       toolCallResponse,
       approvalResponse,
-    ] = await Promise.all([
-      api(`/api/work-orders/${id}/plan`),
-      api(`/api/work-orders/${id}/events?limit=100`),
-      api(`/api/work-orders/${id}/learning`),
-      api(`/api/work-orders/${id}/tool-calls`),
-      // Б13.3: scoped client-side — /api/approvals has no entity_id filter,
-      // so pull the pending queue and keep only this work order's rows.
-      api(`/api/approvals/pending?action_type=agent_tool_call&limit=200`),
-    ]);
-    setSteps(planResponse.ok ? (await planResponse.json()).steps : []);
-    setEvents(eventResponse.ok ? await eventResponse.json() : []);
+      budgetResponse,
+      criteriaResponse,
+    ] = responses;
+    // An order canceled or blocked before planning has no plan: 404 is an
+    // answer, not a failure to load.
+    setDetailError(
+      planResponse.ok || planResponse.status === 404
+        ? null
+        : httpDetail(planResponse.status, planResponse.statusText),
+    );
+    // Shapes are checked, not assumed: a partial or odd answer leaves the
+    // panel empty instead of taking the whole page down.
+    const budgetBody = budgetResponse.ok ? await budgetResponse.json() : null;
+    setBudget(budgetBody && typeof budgetBody.dimensions === "object" ? budgetBody : null);
+    const criteriaBody = criteriaResponse.ok ? await criteriaResponse.json() : [];
+    setCriteria(Array.isArray(criteriaBody) ? criteriaBody : []);
+    const planBody = planResponse.ok ? await planResponse.json() : null;
+    setSteps(Array.isArray(planBody?.steps) ? planBody.steps : []);
+    const eventBody = eventResponse.ok ? await eventResponse.json() : [];
+    setEvents(Array.isArray(eventBody) ? eventBody : []);
     setLearning(learningResponse.ok ? await learningResponse.json() : null);
-    setToolCalls(toolCallResponse.ok ? await toolCallResponse.json() : []);
+    const callBody = toolCallResponse.ok ? await toolCallResponse.json() : [];
+    setToolCalls(Array.isArray(callBody) ? callBody : []);
     if (approvalResponse.ok) {
       const body = await approvalResponse.json();
       const items: PendingApproval[] = body.items ?? [];
@@ -218,6 +319,7 @@ export default function WorkOrdersPage() {
     return () => clearInterval(timer);
   }, [loadMetrics]);
   useEffect(() => {
+    selectedRef.current = selected;
     if (!selected) return;
     loadDetail(selected);
     const timer = setInterval(() => loadDetail(selected), 5000);
@@ -269,10 +371,13 @@ export default function WorkOrdersPage() {
   }
   async function act(action: "run" | "cancel" | "pause" | "unpause") {
     if (!selected) return;
-    await api(`/api/work-orders/${selected}/${action}`, {
+    const response = await api(`/api/work-orders/${selected}/${action}`, {
       method: "POST",
       body: "{}",
     });
+    if (!response.ok) {
+      notifyError("Действие не выполнено", httpDetail(response.status, response.statusText));
+    }
     await Promise.all([loadOrders(), loadDetail(selected)]);
   }
   // E23: until the owner says whether an unknown-outcome effect happened, the
@@ -330,9 +435,14 @@ export default function WorkOrdersPage() {
   }
 
   const current = orders.find((order) => order.id === selected);
+  const can = (action: string) => (current?.available_actions ?? []).includes(action);
+  const currentStep = steps.find((step) =>
+    ["running", "waiting_approval", "ready"].includes(step.state),
+  );
+  const decisions = events.filter(isDecision);
   return (
-    <div className="p-6 max-w-7xl mx-auto text-slate-100">
-      <div className="flex items-end justify-between mb-5">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto text-slate-100">
+      <div className="flex flex-wrap gap-2 items-end justify-between mb-5">
         <div>
           <h1 className="text-2xl font-semibold">Поручения</h1>
           <p className="text-sm text-slate-400">
@@ -400,9 +510,9 @@ export default function WorkOrdersPage() {
                     {order.objective}
                   </span>
                   <span
-                    className={`h-fit shrink-0 px-2 py-0.5 rounded text-[10px] ${statusClass[order.status] || "bg-slate-700"}`}
+                    className={`h-fit shrink-0 px-2 py-0.5 rounded text-[10px] ${statusClass[statusOf(order)] || "bg-slate-700"}`}
                   >
-                    {order.status}
+                    {labelOf(statusOf(order))}
                   </span>
                 </div>
                 <div className="mt-2 text-[11px] text-slate-400">
@@ -422,18 +532,24 @@ export default function WorkOrdersPage() {
             <div className="space-y-4">
               <div className="bg-slate-900 border border-slate-700 rounded-xl p-5">
                 <div className="flex justify-between gap-3">
-                  <div>
-                    <h2 className="text-lg font-semibold">
+                  <div className="min-w-0">
+                    <h2 className="text-lg font-semibold break-words">
                       {current.objective}
                     </h2>
-                    <p className="text-sm text-slate-400 mt-1">
+                    <p className="text-sm text-slate-400 mt-1 break-words">
                       {current.description}
+                    </p>
+                    <p className="text-xs text-slate-500 mt-1 break-words">
+                      канал {current.source ?? "—"} · владелец{" "}
+                      <span title={current.owner_key}>{shortId(current.owner_key)}</span> · ревизия{" "}
+                      {current.plan_revision}
+                      {currentStep && <> · сейчас: {currentStep.title}</>}
                     </p>
                   </div>
                   <span
-                    className={`h-fit px-2 py-1 rounded text-xs ${statusClass[current.status] || "bg-slate-700"}`}
+                    className={`h-fit shrink-0 px-2 py-1 rounded text-xs ${statusClass[statusOf(current)] || "bg-slate-700"}`}
                   >
-                    {current.status}
+                    {labelOf(statusOf(current))}
                   </span>
                 </div>
                 {pauseLabel(current) && (
@@ -456,73 +572,153 @@ export default function WorkOrdersPage() {
                 is a manual override for debugging/unsticking, not the normal path.
                 Labelled and gated behind a confirm so it reads as an escape hatch,
                 not "how you make things happen here". */}
-                <div className="flex gap-2 mt-4">
-                  {confirmForceRun ? (
-                    <>
-                      <span className="text-xs text-amber-300 self-center">
-                        Обычно шаги идут сами (автономный dispatcher).
-                        Форсировать сейчас?
-                      </span>
-                      <button
-                        onClick={() => {
-                          setConfirmForceRun(false);
-                          act("run");
-                        }}
-                        className="px-3 py-1.5 rounded bg-amber-700 text-xs"
-                      >
-                        Да, форсировать
-                      </button>
-                      <button
-                        onClick={() => setConfirmForceRun(false)}
-                        className="px-3 py-1.5 rounded bg-slate-700 text-xs"
-                      >
-                        Отмена
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      onClick={() => setConfirmForceRun(true)}
-                      className="px-3 py-1.5 rounded bg-slate-700 text-slate-300 text-xs"
-                    >
-                      Форсировать шаг вручную (debug)
-                    </button>
-                  )}
-                  {!TERMINAL.has(current.status) &&
-                    (current.status === "paused" || current.metadata?.pause ? (
-                      <button
-                        onClick={() => act("unpause")}
-                        className="px-3 py-1.5 rounded bg-cyan-900 text-cyan-200 text-xs"
-                      >
-                        Продолжить
-                      </button>
+                <div className="flex flex-wrap gap-2 mt-4">
+                  {can("run") &&
+                    (confirmForceRun ? (
+                      <>
+                        <span className="text-xs text-amber-300 self-center">
+                          Обычно шаги идут сами (автономный dispatcher).
+                          Форсировать сейчас?
+                        </span>
+                        <button
+                          onClick={() => {
+                            setConfirmForceRun(false);
+                            act("run");
+                          }}
+                          className="px-3 py-1.5 rounded bg-amber-700 text-xs"
+                        >
+                          Да, форсировать
+                        </button>
+                        <button
+                          onClick={() => setConfirmForceRun(false)}
+                          className="px-3 py-1.5 rounded bg-slate-700 text-xs"
+                        >
+                          Отмена
+                        </button>
+                      </>
                     ) : (
                       <button
-                        onClick={() => act("pause")}
-                        className="px-3 py-1.5 rounded bg-slate-700 text-slate-200 text-xs"
+                        onClick={() => setConfirmForceRun(true)}
+                        className="px-3 py-1.5 rounded bg-slate-700 text-slate-300 text-xs"
                       >
-                        Пауза
+                        Форсировать шаг вручную (debug)
                       </button>
                     ))}
-                  <button
-                    onClick={() => act("cancel")}
-                    className="px-3 py-1.5 rounded bg-red-950 text-red-300 text-xs"
-                  >
-                    Отменить
-                  </button>
+                  {can("unpause") && (
+                    <button
+                      onClick={() => act("unpause")}
+                      className="px-3 py-1.5 rounded bg-cyan-900 text-cyan-200 text-xs"
+                    >
+                      Продолжить
+                    </button>
+                  )}
+                  {can("pause") && (
+                    <button
+                      onClick={() => act("pause")}
+                      className="px-3 py-1.5 rounded bg-slate-700 text-slate-200 text-xs"
+                    >
+                      Пауза
+                    </button>
+                  )}
+                  {can("cancel") && (
+                    <button
+                      onClick={() => act("cancel")}
+                      className="px-3 py-1.5 rounded bg-red-950 text-red-300 text-xs"
+                    >
+                      Отменить
+                    </button>
+                  )}
+                  {(current.available_actions ?? []).length === 0 && (
+                    <span className="text-xs text-slate-500 self-center">
+                      Поручение закрыто — действий нет
+                    </span>
+                  )}
                 </div>
-                <div className="flex gap-2 mt-3">
-                  <input
-                    value={instruction}
-                    onChange={(e) => setInstruction(e.target.value)}
-                    placeholder="Уточнить поручение и перепланировать"
-                    className="flex-1 bg-slate-800 border border-slate-600 rounded px-3 py-1.5 text-sm"
-                  />
-                  <button
-                    onClick={addInstruction}
-                    className="px-3 rounded bg-violet-700 text-xs"
-                  >
-                    Добавить
-                  </button>
+                {can("instructions") && (
+                  <div className="flex gap-2 mt-3">
+                    <input
+                      value={instruction}
+                      onChange={(e) => setInstruction(e.target.value)}
+                      aria-label="Уточнение поручения"
+                      placeholder="Уточнить поручение и перепланировать"
+                      className="min-w-0 flex-1 bg-slate-800 border border-slate-600 rounded px-3 py-1.5 text-sm"
+                    />
+                    <button
+                      onClick={addInstruction}
+                      className="px-3 rounded bg-violet-700 text-xs"
+                    >
+                      Добавить
+                    </button>
+                  </div>
+                )}
+              </div>
+              {detailError && (
+                <div role="alert" className="text-sm text-red-300 bg-red-950/30 rounded-xl p-3">
+                  Подробности не загрузились: {detailError}
+                </div>
+              )}
+              <div className="grid grid-cols-[repeat(auto-fit,minmax(15rem,1fr))] gap-4">
+                <div className="bg-slate-900 border border-slate-700 rounded-xl p-4">
+                  <h3 className="font-medium mb-2">Бюджет линии</h3>
+                  {!budget?.ledger ? (
+                    <p className="text-xs text-slate-500">Бюджет не заведён</p>
+                  ) : (
+                    <ul className="space-y-1 text-xs">
+                      {Object.entries(budget.dimensions).map(([key, d]) => (
+                        <li key={key} className="flex justify-between gap-2">
+                          <span className="text-slate-400 min-w-0">{DIMENSION_LABEL[key] ?? key}</span>
+                          <span
+                            className={`shrink-0 tabular-nums ${d.limit != null && d.used >= d.limit ? "text-red-300" : ""}`}
+                          >
+                            {d.used} / {d.limit ?? "без предела"}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <div className="bg-slate-900 border border-slate-700 rounded-xl p-4">
+                  <h3 className="font-medium mb-2">Приёмка</h3>
+                  {criteria.length === 0 ? (
+                    <p className="text-xs text-slate-500">Критериев нет</p>
+                  ) : (
+                    <ul className="space-y-1 text-xs">
+                      {criteria.map((c) => (
+                        <li key={c.id} className="break-words">
+                          <span
+                            className={
+                              c.status === "passed"
+                                ? "text-emerald-300"
+                                : c.status === "failed"
+                                  ? "text-red-300"
+                                  : "text-amber-300"
+                            }
+                          >
+                            {c.status === "passed" ? "✓" : c.status === "failed" ? "✗" : "…"}
+                          </span>{" "}
+                          {c.description}
+                          {c.verified_by && <span className="text-slate-500"> · {c.verified_by}</span>}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <div className="bg-slate-900 border border-slate-700 rounded-xl p-4">
+                  <h3 className="font-medium mb-2">Решения</h3>
+                  {decisions.length === 0 ? (
+                    <p className="text-xs text-slate-500">Решений пока не было</p>
+                  ) : (
+                    <ul className="space-y-1 text-xs max-h-48 overflow-auto">
+                      {decisions.map((e) => (
+                        <li key={e.sequence} className="break-words">
+                          <span className="text-slate-500">
+                            {new Date(e.created_at).toLocaleString("ru-RU", { timeZone: tz() })}
+                          </span>{" "}
+                          {e.event_type} · <span title={e.actor}>{shortId(e.actor)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
               </div>
               <div className="bg-slate-900 border border-slate-700 rounded-xl p-4">

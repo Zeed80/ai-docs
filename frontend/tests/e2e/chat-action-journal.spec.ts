@@ -17,7 +17,8 @@ test("наблюдение сохраняется после reload, но не �
   const writes: string[] = [];
   await context.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
-    if (route.request().method() === "POST") writes.push(path);
+    // Session keep-alive (SessionKeeper) is not an action of the journal.
+    if (route.request().method() === "POST" && path !== "/api/auth/refresh") writes.push(path);
     if (path === "/api/auth/me") return route.fulfill({json: {sub: "test-user", name: "Test", roles: ["admin"], groups: [], sections: []}});
     if (path === "/api/chat/sessions") return route.fulfill({json: [{id: runId, title: "Журнал", created_at: "2026-09-14T00:00:00Z"}]});
     if (path.endsWith("/messages")) return route.fulfill({json: []});
@@ -54,7 +55,7 @@ test("текущая сверка видна и делает только GET б
   const verificationCalls: string[] = [];
   await context.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
-    if (route.request().method() !== "GET") writes.push(path);
+    if (route.request().method() !== "GET" && path !== "/api/auth/refresh") writes.push(path);
     if (path === "/api/auth/me") return route.fulfill({json: {sub: "test-user", name: "Test", roles: ["admin"], groups: [], sections: []}});
     if (path === "/api/chat/sessions") return route.fulfill({json: [{id: runId, title: "Журнал", created_at: "2026-09-15T00:00:00Z"}]});
     if (path.endsWith("/messages")) return route.fulfill({json: []});
@@ -87,7 +88,7 @@ test("предыдущие наблюдения загружаются толь�
   const observationReads: string[] = [];
   await context.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
-    if (route.request().method() !== "GET") writes.push(path);
+    if (route.request().method() !== "GET" && path !== "/api/auth/refresh") writes.push(path);
     if (path === "/api/auth/me") return route.fulfill({json: {sub: "test-user", name: "Test", roles: ["admin"], groups: [], sections: []}});
     if (path === "/api/chat/sessions") return route.fulfill({json: [{id: runId, title: "Журнал", created_at: "2026-09-15T00:00:00Z"}]});
     if (path.endsWith("/messages")) return route.fulfill({json: []});
