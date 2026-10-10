@@ -12,6 +12,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.service import log_action
+from app.auth.acting import get_effective_user
+from app.auth.models import UserInfo
 from app.db.models import (
     Document,
     DocumentChunk,
@@ -39,6 +41,7 @@ from app.domain.graph import (
     KnowledgeNodeCreate,
     KnowledgeNodeOut,
 )
+from app.domain.graph_access import GraphAccess
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -48,6 +51,7 @@ logger = structlog.get_logger()
 async def create_node(
     payload: KnowledgeNodeCreate,
     db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_effective_user),
 ):
     """Skill: graph.node_create — Create a graph memory node."""
     existing = None
@@ -59,8 +63,13 @@ async def create_node(
             )
         )
         existing = result.scalar_one_or_none()
+    access = GraphAccess(db, user)
     if existing:
+        if not await access.node_visible(existing):
+            raise HTTPException(404, "Entity not found")
         return existing
+    if not await access.entity_visible(payload.entity_type, payload.entity_id):
+        raise HTTPException(404, "Entity not found")
 
     node = KnowledgeNode(**payload.model_dump(by_alias=False))
     db.add(node)
@@ -78,10 +87,15 @@ async def create_node(
 
 
 @router.get("/nodes/{node_id}", response_model=KnowledgeNodeOut)
-async def get_node(node_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def get_node(
+    node_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_effective_user),
+):
     """Skill: graph.node_get — Get a graph memory node."""
     node = await db.get(KnowledgeNode, node_id)
-    if not node:
+    # A node the user may not see answers exactly like a missing one.
+    if not node or not await GraphAccess(db, user).node_visible(node):
         raise HTTPException(404, "Knowledge node not found")
     return node
 
@@ -90,16 +104,30 @@ async def get_node(node_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
 async def create_edge(
     payload: KnowledgeEdgeCreate,
     db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_effective_user),
 ):
     """Skill: graph.edge_create — Link two graph memory nodes."""
+    access = GraphAccess(db, user)
     source = await db.get(KnowledgeNode, payload.source_node_id)
     target = await db.get(KnowledgeNode, payload.target_node_id)
-    if not source or not target:
+    if (
+        not source
+        or not target
+        or not await access.visible_nodes([source, target])
+        >= {
+            source.id,
+            target.id,
+        }
+    ):
         raise HTTPException(404, "Source or target node not found")
-    if payload.source_document_id and not await db.get(Document, payload.source_document_id):
+    if payload.source_document_id and not (
+        await access.visible_documents([payload.source_document_id])
+    ):
         raise HTTPException(404, "Source document not found")
-    if payload.evidence_span_id and not await db.get(EvidenceSpan, payload.evidence_span_id):
-        raise HTTPException(404, "Evidence span not found")
+    if payload.evidence_span_id:
+        span = await db.get(EvidenceSpan, payload.evidence_span_id)
+        if not span or not await access.document_visible(span.document_id):
+            raise HTTPException(404, "Evidence span not found")
 
     edge = KnowledgeEdge(**payload.model_dump(by_alias=False))
     db.add(edge)
@@ -126,14 +154,16 @@ async def get_neighborhood(
     depth: int = Query(1, ge=1, le=3),
     edge_type: str | None = None,
     db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_effective_user),
 ):
     """Skill: graph.neighborhood — Get connected graph memory around a node."""
+    access = GraphAccess(db, user)
     center = await db.get(KnowledgeNode, node_id)
-    if not center:
+    if not center or not await access.node_visible(center):
         raise HTTPException(404, "Knowledge node not found")
 
     node_ids = {node_id}
-    edge_ids: set[uuid.UUID] = set()
+    edges_seen: dict[uuid.UUID, KnowledgeEdge] = {}
     frontier = {node_id}
 
     for _ in range(depth):
@@ -143,11 +173,12 @@ async def get_neighborhood(
         )
         if edge_type:
             query = query.where(KnowledgeEdge.edge_type == edge_type)
-        result = await db.execute(query)
-        edges = result.scalars().all()
+        # Only visible edges to visible neighbours are walked: a hidden node
+        # is neither shown nor a bridge to what lies behind it.
+        edges = await access.visible_edges((await db.execute(query)).scalars().all())
         next_frontier: set[uuid.UUID] = set()
         for edge in edges:
-            edge_ids.add(edge.id)
+            edges_seen[edge.id] = edge
             for nid in (edge.source_node_id, edge.target_node_id):
                 if nid not in node_ids:
                     node_ids.add(nid)
@@ -157,11 +188,10 @@ async def get_neighborhood(
         frontier = next_frontier
 
     nodes_result = await db.execute(select(KnowledgeNode).where(KnowledgeNode.id.in_(node_ids)))
-    edges_result = await db.execute(select(KnowledgeEdge).where(KnowledgeEdge.id.in_(edge_ids)))
     return GraphNeighborhoodResponse(
         center=center,
         nodes=list(nodes_result.scalars().all()),
-        edges=list(edges_result.scalars().all()),
+        edges=list(edges_seen.values()),
     )
 
 
@@ -171,11 +201,21 @@ async def find_path(
     target_node_id: uuid.UUID,
     max_depth: int = Query(4, ge=1, le=8),
     db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_effective_user),
 ):
     """Skill: graph.path — Find a short relationship path between two nodes."""
+    access = GraphAccess(db, user)
     source = await db.get(KnowledgeNode, source_node_id)
     target = await db.get(KnowledgeNode, target_node_id)
-    if not source or not target:
+    if (
+        not source
+        or not target
+        or not await access.visible_nodes([source, target])
+        >= {
+            source.id,
+            target.id,
+        }
+    ):
         raise HTTPException(404, "Source or target node not found")
 
     queue = deque([(source_node_id, [], [source_node_id])])
@@ -193,7 +233,8 @@ async def find_path(
                 | (KnowledgeEdge.target_node_id == current_id)
             )
         )
-        for edge in result.scalars().all():
+        # A path may only run through what the user can see.
+        for edge in await access.visible_edges(result.scalars().all()):
             neighbor_id = (
                 edge.target_node_id if edge.source_node_id == current_id else edge.source_node_id
             )
@@ -237,9 +278,10 @@ async def find_path(
 async def create_chunk(
     payload: DocumentChunkCreate,
     db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_effective_user),
 ):
     """Skill: graph.chunk_create — Create a memory chunk for a document."""
-    if not await db.get(Document, payload.document_id):
+    if not await GraphAccess(db, user).visible_documents([payload.document_id]):
         raise HTTPException(404, "Document not found")
     chunk = DocumentChunk(**payload.model_dump(by_alias=False))
     db.add(chunk)
@@ -252,9 +294,10 @@ async def create_chunk(
 async def create_evidence(
     payload: EvidenceSpanCreate,
     db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_effective_user),
 ):
     """Skill: graph.evidence_create — Create source evidence span."""
-    if not await db.get(Document, payload.document_id):
+    if not await GraphAccess(db, user).visible_documents([payload.document_id]):
         raise HTTPException(404, "Document not found")
     if payload.chunk_id and not await db.get(DocumentChunk, payload.chunk_id):
         raise HTTPException(404, "Document chunk not found")
@@ -269,14 +312,18 @@ async def create_evidence(
 async def create_mention(
     payload: EntityMentionCreate,
     db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_effective_user),
 ):
     """Skill: graph.mention_create — Create a document entity mention."""
-    if not await db.get(Document, payload.document_id):
+    access = GraphAccess(db, user)
+    if not await access.visible_documents([payload.document_id]):
         raise HTTPException(404, "Document not found")
     if payload.chunk_id and not await db.get(DocumentChunk, payload.chunk_id):
         raise HTTPException(404, "Document chunk not found")
-    if payload.node_id and not await db.get(KnowledgeNode, payload.node_id):
-        raise HTTPException(404, "Knowledge node not found")
+    if payload.node_id:
+        node = await db.get(KnowledgeNode, payload.node_id)
+        if not node or not await access.node_visible(node):
+            raise HTTPException(404, "Knowledge node not found")
     if payload.evidence_span_id and not await db.get(EvidenceSpan, payload.evidence_span_id):
         raise HTTPException(404, "Evidence span not found")
     mention = EntityMention(**payload.model_dump(by_alias=False))
@@ -292,11 +339,19 @@ async def list_review_items(
     document_id: uuid.UUID | None = None,
     limit: int = Query(100, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_effective_user),
 ):
     """Skill: graph.review_list — List graph memory links that need review."""
     query = select(GraphReviewItem).where(GraphReviewItem.status == status)
     if document_id:
         query = query.where(GraphReviewItem.document_id == document_id)
+    clause = await GraphAccess(db, user).document_clause()
+    if clause is not None:
+        # Review items quote the document's links: as visible as the document.
+        visible_docs = select(Document.id).where(clause)
+        query = query.where(
+            GraphReviewItem.document_id.is_(None) | GraphReviewItem.document_id.in_(visible_docs)
+        )
     result = await db.execute(query.order_by(GraphReviewItem.created_at.desc()).limit(limit))
     items = list(result.scalars().all())
     return GraphReviewListResponse(items=items, total=len(items))
@@ -307,10 +362,11 @@ async def decide_review_item(
     item_id: uuid.UUID,
     payload: GraphReviewDecision,
     db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_effective_user),
 ):
     """Skill: graph.review_decide — Approve or reject a graph memory suggestion."""
     item = await db.get(GraphReviewItem, item_id)
-    if not item:
+    if not item or not await GraphAccess(db, user).document_visible(item.document_id):
         raise HTTPException(404, "Graph review item not found")
     if item.status != "pending":
         raise HTTPException(400, "Graph review item already decided")

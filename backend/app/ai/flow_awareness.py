@@ -105,10 +105,16 @@ async def get_flow_snapshot(config, *, use_cache: bool = True) -> dict | None:
     quarantine_count, unread_emails, overdue_payments (may be absent).
     Cached in Redis for ``_CACHE_TTL`` seconds; failures are non-fatal.
     """
-    r = _redis() if use_cache else None
+    # Per acting user (E39): the dashboard counts follow that user's rights
+    # (personal mail, other departments' documents). No user, no cache.
+    from app.ai.actor_context import cache_scope
+
+    scope = cache_scope()
+    cache_key = f"{_CACHE_KEY}:{scope}" if scope else None
+    r = _redis() if use_cache and cache_key else None
     if r is not None:
         try:
-            cached = r.get(_CACHE_KEY)
+            cached = r.get(cache_key)
             if cached:
                 raw = cached if isinstance(cached, str) else cached.decode("utf-8")
                 return json.loads(raw)
@@ -158,7 +164,7 @@ async def get_flow_snapshot(config, *, use_cache: bool = True) -> dict | None:
         snapshot["overdue_payments"] = overdue
     if r is not None:
         try:
-            r.setex(_CACHE_KEY, _CACHE_TTL, json.dumps(snapshot, ensure_ascii=False))
+            r.setex(cache_key, _CACHE_TTL, json.dumps(snapshot, ensure_ascii=False))
         except Exception:
             pass
     return snapshot

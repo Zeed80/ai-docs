@@ -28,6 +28,7 @@ from app.db.models import (
 )
 from app.db.session import get_db
 from app.db.text_search import text_search_condition, text_search_rank
+from app.domain.access import document_visible_to, path_object_guard  # noqa: E402
 from app.domain.ntd import (
     NormativeClauseCreate,
     NormativeClauseOut,
@@ -52,7 +53,10 @@ from app.domain.ntd import (
 from app.domain.ntd_checker import build_ntd_findings, build_semantic_ntd_findings
 from app.domain.ntd_parser import detect_normative_metadata, parse_normative_text
 
-router = APIRouter()
+# /{id} routes check the row's visibility first (E40).
+router = APIRouter(
+    dependencies=[Depends(path_object_guard("document_id", document_visible_to, "Document"))]
+)
 
 
 def _doc_out(doc: NormativeDocument) -> NormativeDocumentOut:

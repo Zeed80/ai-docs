@@ -39,3 +39,18 @@ def set_acting_user(sub: str | None) -> None:
 
 def get_acting_user() -> str | None:
     return _acting_user.get()
+
+
+def cache_scope() -> str | None:
+    """Key part for a cache of data the acting user may see (E39).
+
+    What one user may see is not what another may: a count, a snapshot or a
+    tool result cached for one must never be served to the next. None — no
+    human bound — means "do not cache", never a shared entry.
+    """
+    sub = _acting_user.get()
+    if not sub:
+        return None
+    import hashlib
+
+    return "u:" + hashlib.sha256(sub.encode()).hexdigest()[:24]

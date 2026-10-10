@@ -26,7 +26,7 @@ from app.db.models import (
     WarehouseReceiptLine,
 )
 from app.db.session import get_db
-from app.domain.access import visibility_filter
+from app.domain.access import document_visibility_filter
 from app.domain.invoices import (
     InvoiceApproveRequest,
     InvoiceDeleteRequest,
@@ -48,7 +48,12 @@ from app.domain.invoices import (
 if TYPE_CHECKING:
     from app.domain.documents import EmailSourceOut
 
-router = APIRouter()
+from app.domain.access import invoice_visible_to, path_object_guard  # noqa: E402
+
+# Every /{invoice_id} route checks the row's visibility first (E40).
+router = APIRouter(
+    dependencies=[Depends(path_object_guard("invoice_id", invoice_visible_to, "Invoice"))]
+)
 logger = structlog.get_logger()
 
 
@@ -79,12 +84,7 @@ async def list_invoices(
     # Row-level visibility: an invoice inherits the visibility of its source document
     # (owner_sub/department_id). Invoices without a document (legacy/unowned) stay
     # visible to all — the outer join yields NULL columns, caught by the legacy clause.
-    clause = await visibility_filter(
-        db,
-        current_user,
-        owner_col=Document.owner_sub,
-        department_col=Document.department_id,
-    )
+    clause = await document_visibility_filter(db, current_user)
     if clause is not None:
         query = query.outerjoin(Document, Invoice.document_id == Document.id).where(clause)
 

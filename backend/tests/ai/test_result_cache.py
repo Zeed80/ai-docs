@@ -27,9 +27,16 @@ def test_cache_roundtrip_with_fake_redis(monkeypatch):
             store[k] = v
 
     monkeypatch.setattr(result_cache, "_redis", lambda: _Fake())
-    assert result_cache.cache_get("x") is None
-    result_cache.cache_set("x", "answer")
-    assert result_cache.cache_get("x") == "answer"
+    # Entries belong to the acting user (E39); without one nothing is cached.
+    from app.ai.actor_context import set_acting_user
+
+    set_acting_user("u1")
+    try:
+        assert result_cache.cache_get("x") is None
+        result_cache.cache_set("x", "answer")
+        assert result_cache.cache_get("x") == "answer"
+    finally:
+        set_acting_user(None)
 
 
 @pytest.mark.asyncio

@@ -1424,7 +1424,7 @@ DocumentChunk, embeddings, documents/mail/artifacts и существующие 
 
 ### E39 — SQL и кэши
 
-**Статус:** SQL — DONE (2026-10-10): Postgres RLS на ролях агента, пользователь транзакции в `agent_sql_actors` (не `set_config` — его перепишет SQL модели), личное — только владельцу, производное — как источник, тест покрытия таблиц; `visibility_filter` больше не открывает всем строки с владельцем без отдела (`docs/agent-employee-delivery/E39-sql-row-security.md`). Кэши — остаток. **После:** REVIEWED E38.
+**Статус:** SQL — DONE (2026-10-10): Postgres RLS на ролях агента, пользователь транзакции в `agent_sql_actors` (не `set_config` — его перепишет SQL модели), личное — только владельцу, производное — как источник, тест покрытия таблиц; `visibility_filter` больше не открывает всем строки с владельцем без отдела (`docs/agent-employee-delivery/E39-sql-row-security.md`). Кэши — DONE (2026-10-10): ключи `result_cache`/`flow_awareness`/`skill_cache` по пользователю, без пользователя — без кэша (`docs/agent-employee-delivery/E40-graph-access.md`). **После:** REVIEWED E38.
 **Файлы:** `api/memory.py`, `ai/memory_manager.py`, реальные callers, scope tests.
 
 1. Вынести согласованные SQL predicates без изменения смысла доменных прав.
@@ -1438,7 +1438,7 @@ DocumentChunk, embeddings, documents/mail/artifacts и существующие 
 
 ### E40 — Графовые обходы
 
-**Статус:** TODO. **После:** E39.
+**Статус:** DONE (2026-10-10): `app/domain/graph_access.py` — узел по документу и сущности, узел из упоминаний — через видимый упоминающий документ, ребро — концы, документ и evidence; окрестность/путь/зависимости обходят только видимое; то же в RLS. Аудит нашёл IDOR: `/documents|invoices|cases/{id}` (и НТД, экспорт, платежи) не проверяли права — закрыто `path_object_guard`. Каталоги поставщиков — общие (`SHARED_DOCUMENT_TYPES`); черновики писем в RLS — как `may_access_draft` (`docs/agent-employee-delivery/E40-graph-access.md`). **После:** E39.
 **Файлы:** `domain/memory_builder.py`, `tasks/graph_memory.py`, `test_graph_memory.py`.
 
 1. Проверять доступ к стартовому узлу, каждому ребру, соседу и evidence source.

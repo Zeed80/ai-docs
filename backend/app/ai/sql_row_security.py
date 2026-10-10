@@ -45,7 +45,7 @@ _DOC = "aiw_rls_document"
 # table -> USING expression, evaluated as the reader for every row.
 RULES: dict[str, str] = {
     # Documents and what is derived from them.
-    "documents": "aiw_rls_can_see(owner_sub, department_id)",
+    "documents": "aiw_rls_can_see(owner_sub, department_id) OR aiw_rls_shared_type(doc_type::text)",
     "document_artifacts": f"{_DOC}(document_id)",
     "document_chunks": f"{_DOC}(document_id)",
     "document_extractions": f"{_DOC}(document_id)",
@@ -53,7 +53,7 @@ RULES: dict[str, str] = {
     "document_processing_jobs": f"{_DOC}(document_id)",
     "document_versions": f"{_DOC}(document_id)",
     "evidence_spans": f"{_DOC}(document_id)",
-    "entity_mentions": f"{_DOC}(document_id)",
+    "entity_mentions": f"{_DOC}(document_id) AND aiw_rls_node(node_id)",
     "graph_build_statuses": f"{_DOC}(document_id)",
     "graph_review_items": f"{_DOC}(document_id)",
     "memory_embedding_records": f"{_DOC}(document_id)",
@@ -62,8 +62,11 @@ RULES: dict[str, str] = {
     "quarantine_entries": f"{_DOC}(document_id)",
     "supplier_contracts": f"{_DOC}(document_id)",
     "extraction_fields": "aiw_rls_extraction(extraction_id)",
-    "knowledge_nodes": (f"{_DOC}(source_document_id) AND aiw_rls_entity(entity_type, entity_id)"),
-    "knowledge_edges": f"{_DOC}(source_document_id)",
+    "knowledge_nodes": "aiw_rls_node(id)",
+    "knowledge_edges": (
+        f"aiw_rls_node(source_node_id) AND aiw_rls_node(target_node_id)"
+        f" AND {_DOC}(source_document_id) AND aiw_rls_evidence(evidence_span_id)"
+    ),
     # Drawings, BOMs, process plans: as their document.
     "drawings": f"{_DOC}(document_id)",
     "drawing_assembly_boms": "aiw_rls_drawing(drawing_id)",
@@ -105,7 +108,14 @@ RULES: dict[str, str] = {
     "audit_logs": "aiw_rls_entity(entity_type, entity_id)",
     "audit_timeline_events": "aiw_rls_entity(entity_type, entity_id)",
     "comments": "aiw_rls_entity(entity_type, entity_id)",
-    "draft_actions": "aiw_rls_entity(entity_type, entity_id)",
+    # An e-mail draft is its author's or its mailbox's (email_access.may_access_draft).
+    "draft_actions": (
+        "(action_type NOT LIKE 'email.%' OR coalesce("
+        "draft_data::jsonb ->> 'created_by_sub' = aiw_rls_sub()"
+        " OR (draft_data::jsonb ->> 'mailbox' IS NOT NULL"
+        " AND aiw_rls_mailbox(draft_data::jsonb ->> 'mailbox')), false))"
+        " AND aiw_rls_entity(entity_type, entity_id)"
+    ),
     "export_jobs": "aiw_rls_entity(entity_type, entity_id)",
     "handovers": "aiw_rls_entity(entity_type, entity_id)",
     "engineering_projections": "aiw_rls_entity(entity_type, entity_id)",
@@ -256,9 +266,15 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
   SELECT owner IS NULL OR aiw_rls_own(owner)
 $$;
 
+CREATE OR REPLACE FUNCTION aiw_rls_shared_type(kind text) RETURNS boolean
+LANGUAGE sql IMMUTABLE AS $$
+  -- app.domain.access.SHARED_DOCUMENT_TYPES: company reference material.
+  SELECT coalesce(kind IN ('supplier_catalog'), false)
+$$;
 CREATE OR REPLACE FUNCTION aiw_rls_document(doc uuid) RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
   SELECT doc IS NULL OR coalesce((SELECT aiw_rls_can_see(d.owner_sub, d.department_id)
+                                         OR aiw_rls_shared_type(d.doc_type::text)
                                     FROM documents d WHERE d.id = doc), false)
 $$;
 CREATE OR REPLACE FUNCTION aiw_rls_invoice(inv uuid) RETURNS boolean
@@ -396,7 +412,16 @@ BEGIN
       RETURN coalesce((SELECT aiw_rls_invoice(p.invoice_id)
                          FROM payment_schedules p WHERE p.id = eid), false);
     WHEN 'warehouse_receipt' THEN RETURN aiw_rls_receipt(eid);
-    WHEN 'email', 'email_message' THEN RETURN aiw_rls_email(eid);
+    WHEN 'email', 'email_message' THEN
+      IF EXISTS (SELECT 1 FROM email_messages e WHERE e.id = eid) THEN
+        RETURN aiw_rls_email(eid);
+      END IF;
+      -- An approval to send refers to its draft (email_access.may_access_draft).
+      RETURN coalesce((
+        SELECT d.draft_data::jsonb ->> 'created_by_sub' = aiw_rls_sub()
+               OR (d.draft_data::jsonb ->> 'mailbox' IS NOT NULL
+                   AND aiw_rls_mailbox(d.draft_data::jsonb ->> 'mailbox'))
+          FROM draft_actions d WHERE d.id = eid), false);
     WHEN 'email_thread' THEN RETURN aiw_rls_thread(eid);
     WHEN 'mailbox' THEN RETURN aiw_rls_mailbox_id(eid);
     WHEN 'drawing' THEN RETURN aiw_rls_drawing(eid);
@@ -425,6 +450,41 @@ BEGIN
       RETURN true;
   END CASE;
 END
+$$;
+
+CREATE OR REPLACE FUNCTION aiw_rls_evidence(sid uuid) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
+  SELECT sid IS NULL OR coalesce((SELECT aiw_rls_document(e.document_id)
+                                    FROM evidence_spans e WHERE e.id = sid), false)
+$$;
+
+CREATE OR REPLACE FUNCTION aiw_rls_node(nid uuid) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
+  -- E40, as app.domain.graph_access: a node of a document or an entity follows
+  -- them; a node built only from mentions is visible through at least one
+  -- visible document that mentions it, or is company data when none does.
+  SELECT nid IS NULL OR coalesce((
+    SELECT CASE
+      WHEN n.source_document_id IS NOT NULL OR n.entity_id IS NOT NULL
+        THEN aiw_rls_document(n.source_document_id)
+             AND aiw_rls_entity(n.entity_type, n.entity_id)
+      ELSE NOT EXISTS (
+             SELECT 1 FROM entity_mentions m WHERE m.node_id = n.id AND m.document_id IS NOT NULL
+             UNION ALL
+             SELECT 1 FROM knowledge_edges k
+              WHERE (k.source_node_id = n.id OR k.target_node_id = n.id)
+                AND k.source_document_id IS NOT NULL)
+        OR EXISTS (
+             SELECT 1 FROM entity_mentions m
+              WHERE m.node_id = n.id AND aiw_rls_document(m.document_id)
+                AND m.document_id IS NOT NULL
+             UNION ALL
+             SELECT 1 FROM knowledge_edges k
+              WHERE (k.source_node_id = n.id OR k.target_node_id = n.id)
+                AND k.source_document_id IS NOT NULL
+                AND aiw_rls_document(k.source_document_id))
+    END
+    FROM knowledge_nodes n WHERE n.id = nid), false)
 $$;
 """
 

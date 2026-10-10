@@ -18,8 +18,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.audit.service import add_timeline_event, log_action
 from app.db.models import CalendarEvent, Invoice, Party, PaymentSchedule, Reminder
 from app.db.session import get_db
+from app.domain.access import invoice_visible_to, path_object_guard  # noqa: E402
 
-router = APIRouter()
+# /{id} routes check the row's visibility first (E40).
+router = APIRouter(
+    dependencies=[Depends(path_object_guard("invoice_id", invoice_visible_to, "Invoice"))]
+)
 logger = structlog.get_logger()
 
 

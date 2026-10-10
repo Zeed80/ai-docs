@@ -389,22 +389,34 @@ async def search_memory(
 async def _drop_invisible_document_hits(
     db: AsyncSession, user: UserInfo, hits: list[MemorySearchHit]
 ) -> list[MemorySearchHit]:
-    """Keep only hits whose source document this user may see (E39)."""
-    from app.db.models import Document
-    from app.domain.access import visibility_filter
+    """Keep only hits this user may see (E39, E40).
 
-    document_ids = {hit.source_document_id for hit in hits if hit.source_document_id}
-    if not document_ids:
-        return hits
-    clause = await visibility_filter(
-        db, user, owner_col=Document.owner_sub, department_col=Document.department_id
+    A hit's source document and its evidence document must be visible; a
+    graph node must pass the graph policy (entity, mention-only nodes), so a
+    node titled with an INN from another department's invoice is not found.
+    """
+    from app.domain.graph_access import GraphAccess
+
+    access = GraphAccess(db, user)
+    documents = await access.visible_documents(
+        [hit.source_document_id for hit in hits]
+        + [hit.evidence.document_id for hit in hits if hit.evidence is not None]
     )
-    if clause is None:
-        return hits  # admin / manager see every document
-    visible = set(
-        await db.scalars(select(Document.id).where(Document.id.in_(document_ids), clause))
-    )
-    return [hit for hit in hits if not hit.source_document_id or hit.source_document_id in visible]
+    node_ids = [hit.id for hit in hits if hit.kind == "node"]
+    visible_nodes: set = set()
+    if node_ids:
+        nodes = list(await db.scalars(select(KnowledgeNode).where(KnowledgeNode.id.in_(node_ids))))
+        visible_nodes = await access.visible_nodes(nodes)
+    kept = []
+    for hit in hits:
+        if hit.source_document_id and hit.source_document_id not in documents:
+            continue
+        if hit.evidence is not None and hit.evidence.document_id not in documents:
+            continue
+        if hit.kind == "node" and hit.id not in visible_nodes:
+            continue
+        kept.append(hit)
+    return kept
 
 
 @router.post("/chat-turn", response_model=MemoryFactOut)

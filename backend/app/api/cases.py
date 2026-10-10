@@ -22,8 +22,14 @@ from app.db.models import (
     WorkCase,
 )
 from app.db.session import get_db
+from app.domain.access import case_visible_to, path_object_guard  # noqa: E402
 
-router = APIRouter(prefix="/api/cases", tags=["cases"])
+# Every /{case_id} route checks the row's visibility first (E40).
+router = APIRouter(
+    prefix="/api/cases",
+    tags=["cases"],
+    dependencies=[Depends(path_object_guard("case_id", case_visible_to, "Case"))],
+)
 
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────────

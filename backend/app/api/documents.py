@@ -39,7 +39,11 @@ from app.db.models import (
     QuarantineEntry,
 )
 from app.db.session import get_db
-from app.domain.access import apply_visibility
+from app.domain.access import (
+    document_visibility_filter,
+    document_visible_to,
+    path_object_guard,
+)  # noqa: E402
 from app.domain.document_deletion import (
     hard_delete_document,
     hard_delete_documents,
@@ -76,7 +80,10 @@ from app.domain.documents import (
     WarehousePurgeResponse,
 )
 
-router = APIRouter()
+# Every /{document_id} route checks the row's visibility first (E40).
+router = APIRouter(
+    dependencies=[Depends(path_object_guard("document_id", document_visible_to, "Document"))]
+)
 logger = structlog.get_logger()
 
 # Unambiguous vector/CAD formats that auto-route to the drawing-analysis pipeline
@@ -1043,13 +1050,9 @@ async def list_documents(
         query = query.where(Document.file_name.ilike(f"%{search}%"))
 
     # Row-level visibility: hide other departments' owned documents from non-managers.
-    query = await apply_visibility(
-        db,
-        current_user,
-        query,
-        owner_col=Document.owner_sub,
-        department_col=Document.department_id,
-    )
+    clause = await document_visibility_filter(db, current_user)
+    if clause is not None:
+        query = query.where(clause)
 
     # Count
     count_query = select(func.count()).select_from(query.subquery())
@@ -1098,13 +1101,9 @@ async def list_document_workspace(
             )
         )
 
-    query = await apply_visibility(
-        db,
-        current_user,
-        query,
-        owner_col=Document.owner_sub,
-        department_col=Document.department_id,
-    )
+    clause = await document_visibility_filter(db, current_user)
+    if clause is not None:
+        query = query.where(clause)
 
     total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar() or 0
 
@@ -1817,13 +1816,17 @@ async def get_document_dependencies(
     depth: int = Query(1, ge=1, le=3),
     limit: int = Query(100, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
 ):
     """Skill: doc.dependencies — Search explicit links and graph dependencies for a document."""
+    from app.domain.graph_access import GraphAccess
+
+    access = GraphAccess(db, current_user)
     result = await db.execute(
         select(Document).where(Document.id == document_id).options(selectinload(Document.links))
     )
     doc = result.scalar_one_or_none()
-    if not doc:
+    if not doc or not await access.document_visible(doc.id):
         raise HTTPException(status_code=404, detail="Document not found")
 
     pattern = f"%{query.strip()}%" if query and query.strip() else None
@@ -1862,7 +1865,9 @@ async def get_document_dependencies(
                 )
             )
         edge_result = await db.execute(edge_query.limit(limit))
-        found_edges = list(edge_result.scalars().all())
+        # The walk leaves this document through shared nodes: only what the
+        # user may see is followed (E40).
+        found_edges = await access.visible_edges(edge_result.scalars().all())
         next_frontier: set[uuid.UUID] = set()
         for edge in found_edges:
             if edge.id in edge_ids:
@@ -1883,6 +1888,8 @@ async def get_document_dependencies(
     if node_ids:
         nodes_result = await db.execute(select(KnowledgeNode).where(KnowledgeNode.id.in_(node_ids)))
         nodes = list(nodes_result.scalars().all())
+        visible = await access.visible_nodes(nodes)
+        nodes = [node for node in nodes if node.id in visible]
 
     return DocumentDependenciesResponse(
         document_id=document_id,

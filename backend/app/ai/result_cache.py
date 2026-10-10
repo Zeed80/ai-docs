@@ -4,6 +4,10 @@ Speeds up repeated deterministic questions ("сколько счетов") on we
 models by skipping the backend round-trip when the same answer was produced a
 few seconds ago. Redis-backed, best-effort: any failure degrades to a miss, so
 correctness never depends on the cache.
+
+Entries belong to the acting user (``cache_scope``): a count is computed under
+that user's row rights, and serving it to another user leaked how many
+documents, invoices or mails they could not see. No acting user — no cache.
 """
 
 from __future__ import annotations
@@ -25,15 +29,25 @@ def _redis():
         return None
 
 
+def _scoped(key: str) -> str | None:
+    from app.ai.actor_context import cache_scope
+
+    scope = cache_scope()
+    if not key or scope is None:
+        return None
+    return f"{_PREFIX}{scope}:{key}"
+
+
 def cache_get(key: str) -> str | None:
     """Return the cached string for *key*, or None on miss / no Redis."""
-    if not key:
+    full_key = _scoped(key)
+    if full_key is None:
         return None
     r = _redis()
     if r is None:
         return None
     try:
-        raw = r.get(_PREFIX + key)
+        raw = r.get(full_key)
         if raw is None:
             return None
         return raw if isinstance(raw, str) else raw.decode("utf-8")
@@ -43,12 +57,13 @@ def cache_get(key: str) -> str | None:
 
 def cache_set(key: str, value: str, ttl: int = _DEFAULT_TTL) -> None:
     """Best-effort store of *value* under *key* with a short TTL."""
-    if not key or value is None:
+    full_key = _scoped(key)
+    if full_key is None or value is None:
         return
     r = _redis()
     if r is None:
         return
     try:
-        r.setex(_PREFIX + key, ttl, value)
+        r.setex(full_key, ttl, value)
     except Exception:
         pass

@@ -79,10 +79,18 @@ def _ttl_for(skill_name: str) -> int:
     return _DEFAULT_TTL
 
 
-def _cache_key(skill_name: str, args: dict[str, Any]) -> str:
-    """Stable cache key from skill name and canonical args."""
+def _cache_key(skill_name: str, args: dict[str, Any]) -> str | None:
+    """Stable cache key from the acting user, skill name and canonical args.
+
+    Results are what the acting user may see (E39); no acting user, no key.
+    """
+    from app.ai.actor_context import cache_scope
+
+    scope = cache_scope()
+    if scope is None:
+        return None
     canonical = json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
-    payload = f"{skill_name}:{canonical}"
+    payload = f"{scope}:{skill_name}:{canonical}"
     return "skill_cache:" + hashlib.sha256(payload.encode()).hexdigest()[:32]
 
 
@@ -97,6 +105,8 @@ async def get_cached(skill_name: str, args: dict[str, Any]) -> dict | None:
         from app.utils.redis_client import get_async_redis
 
         key = _cache_key(skill_name, args)
+        if key is None:
+            return None
         raw = await get_async_redis().get(key)
         if raw:
             result = json.loads(raw)
@@ -124,6 +134,8 @@ async def set_cached(
         from app.utils.redis_client import get_async_redis
 
         key = _cache_key(skill_name, args)
+        if key is None:
+            return
         effective_ttl = ttl if ttl is not None else _ttl_for(skill_name)
         payload = json.dumps(result, ensure_ascii=False, default=str)
         await get_async_redis().setex(key, effective_ttl, payload)

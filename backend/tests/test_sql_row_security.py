@@ -283,3 +283,70 @@ async def test_install_is_skipped_when_current(world, factory):
     async with factory() as db:
         assert await install_row_security(db) is False
         await db.rollback()
+
+
+@pytest.mark.asyncio
+async def test_a_mention_only_graph_node_follows_the_documents_that_mention_it(
+    world, factory, monkeypatch
+):
+    """E40 in SQL: the INN node from Bob's document is Bob's, not Alice's."""
+    from app.db.models import EntityMention, KnowledgeNode
+
+    t = world["tag"]
+    async with factory() as db:
+        doc_b = await db.scalar(
+            text("SELECT id FROM documents WHERE file_name = :n"), {"n": f"rls-{t}-b"}
+        )
+        node = KnowledgeNode(node_type="inn", title=f"rls-{t}-inn")
+        db.add(node)
+        await db.flush()
+        db.add(
+            EntityMention(
+                document_id=doc_b, node_id=node.id, mention_text="7700", entity_type="inn"
+            )
+        )
+        await db.commit()
+        node_id = node.id
+    sql = f"SELECT title FROM knowledge_nodes WHERE title = 'rls-{t}-inn'"
+    try:
+        assert await _query(sql, world["alice"], full=True, monkeypatch=monkeypatch) == []
+        assert await _query(sql, world["bob"], full=True, monkeypatch=monkeypatch) == [
+            f"rls-{t}-inn"
+        ]
+    finally:
+        async with factory() as db:
+            await db.execute(text("DELETE FROM entity_mentions WHERE node_id = :i"), {"i": node_id})
+            await db.execute(text("DELETE FROM knowledge_nodes WHERE id = :i"), {"i": node_id})
+            await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_an_email_draft_in_a_personal_mailbox_is_its_owners(world, factory, monkeypatch):
+    from app.db.models import DraftAction
+
+    t, bob = world["tag"], world["bob"]
+    async with factory() as db:
+        draft = DraftAction(
+            action_type="email.send",
+            entity_type="email",
+            draft_data={
+                "subject": f"rls-{t}-draft",
+                "mailbox": f"bob-box-{t}",
+                "created_by_sub": bob,
+            },
+        )
+        db.add(draft)
+        await db.commit()
+        draft_id = draft.id
+    sql = (
+        "SELECT draft_data::jsonb ->> 'subject' AS s FROM draft_actions "
+        f"WHERE draft_data::jsonb ->> 'subject' = 'rls-{t}-draft'"
+    )
+    try:
+        assert await _query(sql, world["alice"], full=True, monkeypatch=monkeypatch) == []
+        assert await _query(sql, world["boss"], full=True, monkeypatch=monkeypatch) == []
+        assert await _query(sql, bob, full=True, monkeypatch=monkeypatch) == [f"rls-{t}-draft"]
+    finally:
+        async with factory() as db:
+            await db.execute(text("DELETE FROM draft_actions WHERE id = :i"), {"i": draft_id})
+            await db.commit()
