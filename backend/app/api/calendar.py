@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.acting import get_effective_user
 from app.auth.models import UserInfo
-from app.db.models import CalendarEvent, Document, Invoice, Reminder, SupplierProfile
+from app.db.models import CalendarEvent, Document, Invoice, Party, Reminder, SupplierProfile
 from app.db.session import get_db
 from app.domain.calendar import (
     CalendarEventCreate,
@@ -240,9 +240,15 @@ async def upcoming(
 # well-known model here are validated; an unrecognised entity_type is
 # passed through as-is rather than rejected (the reminder subsystem isn't
 # the place to maintain an exhaustive entity_type registry).
+# A supplier is the contractor (Party): suppliers.search/get/list, invoices and
+# the supplier page all use its id. This checked SupplierProfile instead, so
+# the id the agent had just found was "not found", the reminder went in
+# unattached, and a second one followed once a profile id turned up — two
+# reminders for one request (live 2026-10-10). A profile id is still accepted
+# and stored as its party's id.
 _REMINDER_ENTITY_MODELS: dict[str, type] = {
     "invoice": Invoice,
-    "supplier": SupplierProfile,
+    "supplier": Party,
     "document": Document,
 }
 
@@ -260,10 +266,16 @@ async def create_reminder(
     UUID previously passed silently, producing a reminder permanently
     unreachable from wherever that entity is expected to be joined against.
     """
-    if payload.entity_type and payload.entity_id:
+    entity_id = payload.entity_id
+    if payload.entity_type and entity_id:
         model = _REMINDER_ENTITY_MODELS.get(payload.entity_type)
         if model is not None:
-            exists = await db.scalar(select(model.id).where(model.id == payload.entity_id))
+            exists = await db.scalar(select(model.id).where(model.id == entity_id))
+            if exists is None and payload.entity_type == "supplier":
+                exists = await db.scalar(
+                    select(SupplierProfile.party_id).where(SupplierProfile.id == entity_id)
+                )
+                entity_id = exists or entity_id
             if exists is None:
                 raise HTTPException(
                     404,
@@ -273,7 +285,7 @@ async def create_reminder(
     reminder = Reminder(
         calendar_event_id=payload.calendar_event_id,
         entity_type=payload.entity_type,
-        entity_id=payload.entity_id,
+        entity_id=entity_id,
         remind_at=payload.remind_at,
         message=payload.message,
     )

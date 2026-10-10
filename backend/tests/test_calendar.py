@@ -221,3 +221,43 @@ async def test_create_reminder_rejects_nonexistent_entity(client: AsyncClient):
         },
     )
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_supplier_reminder_uses_the_contractor_id(client: AsyncClient, db_session):
+    """suppliers.search returns the Party id; the reminder checked
+    SupplierProfile, answered "not found" and the agent created two reminders
+    for one request (live 2026-10-10). A profile id is stored as its party's."""
+    from app.db.models import Party, SupplierProfile
+
+    party = Party(name="Напоминаемый поставщик", inn=str(uuid.uuid4().int)[:12])
+    db_session.add(party)
+    await db_session.flush()
+    profile = SupplierProfile(party_id=party.id)
+    db_session.add(profile)
+    await db_session.flush()
+    when = (datetime.now(UTC) + timedelta(days=1)).isoformat()
+
+    by_party = await client.post(
+        "/api/calendar/reminders",
+        json={
+            "entity_type": "supplier",
+            "entity_id": str(party.id),
+            "remind_at": when,
+            "message": "по контрагенту",
+        },
+    )
+    by_profile = await client.post(
+        "/api/calendar/reminders",
+        json={
+            "entity_type": "supplier",
+            "entity_id": str(profile.id),
+            "remind_at": when,
+            "message": "по профилю",
+        },
+    )
+
+    assert by_party.status_code == 200, by_party.text
+    assert by_party.json()["entity_id"] == str(party.id)
+    assert by_profile.status_code == 200, by_profile.text
+    assert by_profile.json()["entity_id"] == str(party.id)
