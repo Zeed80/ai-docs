@@ -277,3 +277,86 @@ async def test_old_job_gains_new_pipeline_stages_as_pending(db_session, supplier
     assert steps["parse"]["status"] == "done"
     assert steps["parse"]["rows_parsed"] == 42
     assert steps["entries"]["created"] == 42
+
+
+# ── owners (E38) ────────────────────────────────────────────────────────────
+# An ownerless document is visible to everyone, and so is everything derived
+# from it; a catalog belongs to whoever brought it in.
+
+
+@pytest.mark.asyncio
+async def test_an_uploaded_catalog_belongs_to_the_uploader(
+    client: AsyncClient, db_session, supplier
+):
+    with (
+        patch("app.tasks.catalog_ingest.ingest_catalog_document.delay", lambda *a, **k: _Task()),
+        patch("app.storage.upload_file", lambda *a, **k: "tool-catalogs/x"),
+    ):
+        resp = await client.post(
+            f"/api/tool-catalog/suppliers/{supplier.id}/catalog",
+            files={"file": ("owned.csv", b"name,price\nsverlo,5\n", "text/csv")},
+        )
+    assert resp.status_code == 200, resp.text
+    me = (await client.get("/api/auth/me")).json()
+    doc = await db_session.get(Document, __import__("uuid").UUID(resp.json()["document_id"]))
+    assert doc.owner_sub and doc.owner_sub == me["sub"]
+
+
+@pytest.mark.asyncio
+async def test_a_catalog_fetched_by_url_belongs_to_the_requester(
+    client: AsyncClient, db_session, supplier, monkeypatch
+):
+    import httpx
+
+    from app.tasks.catalog_ingest import _ingest_url_async
+
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, content=b"%PDF-1.4 x"))
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: real_client(transport=transport))
+    with (
+        patch("app.tasks.catalog_ingest.ingest_catalog_document.delay", lambda *a, **k: _Task()),
+        patch("app.storage.upload_file", lambda *a, **k: "tool-catalogs/x"),
+    ):
+        result = await _ingest_url_async(
+            str(supplier.id), "https://example.test/cat.pdf", None, owner_sub="alice"
+        )
+    doc = await db_session.get(Document, __import__("uuid").UUID(result["document_id"]))
+    assert doc.owner_sub == "alice" and doc.source_channel == "web"
+
+
+@pytest.mark.asyncio
+async def test_archive_members_keep_the_archives_owner_and_department(
+    client: AsyncClient, db_session, supplier
+):
+    from app.db.models import Department
+    from app.tasks.catalog_archive import _unpack_async
+
+    department = Department(name="Отдел снабжения", code="e38-supply")
+    db_session.add(department)
+    await db_session.flush()
+    archive = _zip({"a.csv": b"name,price\nfreza,1\n", "b.csv": b"name,price\nmetchik,2\n"})
+    with (
+        patch("app.tasks.catalog_ingest.ingest_catalog_document.delay", lambda *a, **k: _Task()),
+        patch("app.storage.upload_file", lambda *a, **k: "tool-catalogs/x"),
+    ):
+        from app.domain.catalog_documents import register_catalog_document
+
+        parent = (
+            await register_catalog_document(
+                db_session,
+                supplier=supplier,
+                file_bytes=archive,
+                filename="cats.zip",
+                owner_sub="bob",
+                department_id=department.id,
+            )
+        ).document
+        await db_session.commit()
+        with patch("app.storage.download_file", lambda *a, **k: archive):
+            result = await _unpack_async(str(parent.id))
+    assert result["registered"] == 2, result
+    children = (
+        await db_session.scalars(select(Document).where(Document.source_channel == "archive"))
+    ).all()
+    assert len(children) == 2
+    assert {(c.owner_sub, c.department_id) for c in children} == {("bob", department.id)}

@@ -17,6 +17,8 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.auth.jwt import get_current_user
+from app.auth.models import UserInfo
 from app.db.models import (
     CatalogPage,
     Document,
@@ -259,6 +261,7 @@ async def _accept_catalog_upload(
     filename: str,
     *,
     party_id: uuid.UUID | None = None,
+    owner_sub: str | None = None,
 ) -> CatalogImportResult:
     """Shared body of both upload endpoints: Document → links → job → queue."""
     from app.domain.catalog_documents import register_catalog_document
@@ -271,6 +274,7 @@ async def _accept_catalog_upload(
             file_bytes=file_bytes,
             filename=filename,
             party_id=party_id,
+            owner_sub=owner_sub,
         )
     except HTTPException:
         raise
@@ -324,12 +328,19 @@ async def upload_catalog(
     supplier_id: uuid.UUID,
     file: Annotated[UploadFile, File(description="PDF, Excel (.xlsx), CSV, or JSON catalog")],
     db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
 ) -> CatalogImportResult:
     supplier = await db.get(ToolSupplier, supplier_id)
     if not supplier:
         raise HTTPException(status_code=404, detail="Поставщик не найден")
 
-    return await _accept_catalog_upload(db, supplier, await file.read(), file.filename or "catalog")
+    return await _accept_catalog_upload(
+        db,
+        supplier,
+        await file.read(),
+        file.filename or "catalog",
+        owner_sub=current_user.sub,
+    )
 
 
 @router.get(
@@ -1023,6 +1034,7 @@ async def upload_catalog_for_party(
     party_id: uuid.UUID,
     file: Annotated[UploadFile, File(description="PDF, Excel (.xlsx), CSV, or JSON catalog")],
     db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
 ) -> CatalogImportResult:
     from app.db.models import Party
 
@@ -1038,6 +1050,7 @@ async def upload_catalog_for_party(
         await file.read(),
         file.filename or "catalog",
         party_id=party_id,
+        owner_sub=current_user.sub,
     )
 
 
@@ -1320,6 +1333,7 @@ async def resolve_supplier_endpoint(
 async def attach_web_catalog(
     payload: AttachWebCatalogRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
 ) -> AttachWebCatalogResult:
     """One call for "найди каталоги на сайте и прикрепи к поставщику".
 
@@ -1477,7 +1491,7 @@ async def attach_web_catalog(
             # reporting success. Pages keep the text/LLM path.
             task_ids = [
                 (
-                    ingest_catalog_url.delay(str(supplier.id), url)
+                    ingest_catalog_url.delay(str(supplier.id), url, owner_sub=current_user.sub)
                     if looks_like_catalog_file_url(url)
                     else ingest_web_catalog_sources.delay(
                         str(supplier.id), [url], payload.max_pages, payload.max_chunks

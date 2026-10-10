@@ -348,7 +348,13 @@ def looks_like_catalog_file_url(url: str) -> bool:
     soft_time_limit=3600,
     time_limit=3660,
 )
-def ingest_catalog_url(self, supplier_id: str, url: str, title: str | None = None) -> dict:
+def ingest_catalog_url(
+    self,
+    supplier_id: str,
+    url: str,
+    title: str | None = None,
+    owner_sub: str | None = None,
+) -> dict:
     """Download a catalog FILE from the web and run the document pipeline on it.
 
     Web pages go through the text/LLM path, but a PDF or Excel catalog must not:
@@ -359,10 +365,12 @@ def ingest_catalog_url(self, supplier_id: str, url: str, title: str | None = Non
     """
     from app.tasks.drawing_analysis import run_async
 
-    return run_async(_ingest_url_async(supplier_id, url, title))
+    return run_async(_ingest_url_async(supplier_id, url, title, owner_sub))
 
 
-async def _ingest_url_async(supplier_id: str, url: str, title: str | None) -> dict:
+async def _ingest_url_async(
+    supplier_id: str, url: str, title: str | None, owner_sub: str | None = None
+) -> dict:
     import uuid as _uuid
     from urllib.parse import unquote, urlparse
 
@@ -396,6 +404,8 @@ async def _ingest_url_async(supplier_id: str, url: str, title: str | None) -> di
             file_bytes=payload,
             filename=filename,
             source_channel="web",
+            # The person who asked for the catalog owns it, like an upload.
+            owner_sub=owner_sub,
             metadata={"source_url": url, "title": title} if title else {"source_url": url},
         )
         await db.commit()

@@ -267,6 +267,8 @@ async def _unpack_async(document_id: str) -> dict:
             )
         ).scalar_one_or_none()
         storage_path, filename = doc.storage_path, doc.file_name
+        # Members are the archive's contents: same owner, same department.
+        owner_sub, department_id = doc.owner_sub, doc.department_id
 
         try:
             data = download_file(storage_path)
@@ -296,6 +298,8 @@ async def _unpack_async(document_id: str) -> dict:
                     file_bytes=member.data,
                     filename=member.name,
                     source_channel="archive",
+                    owner_sub=owner_sub,
+                    department_id=department_id,
                     parent_document_id=doc_uuid,
                     metadata={"archive_name": filename},
                 )

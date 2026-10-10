@@ -84,6 +84,7 @@ async def register_catalog_document(
     party_id: uuid.UUID | None = None,
     source_channel: str = "upload",
     owner_sub: str | None = None,
+    department_id: uuid.UUID | None = None,
     parent_document_id: uuid.UUID | None = None,
     metadata: dict | None = None,
     reuse_duplicate: bool = True,
@@ -115,6 +116,7 @@ async def register_catalog_document(
         status=DocumentStatus.ingested,
         source_channel=source_channel,
         owner_sub=owner_sub,
+        department_id=department_id,
         metadata_={
             "supplier_catalog": True,
             "tool_supplier_id": str(supplier.id),
