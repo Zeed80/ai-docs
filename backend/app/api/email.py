@@ -108,6 +108,10 @@ async def fetch_new_emails(
     ):
         raise HTTPException(404, "Mailbox not found")
 
+    from app.auth.effect_fence import fence_effect
+
+    # E24: no commit here, so the fence is checked before the task is queued.
+    await fence_effect(db)
     task = run_triage.delay(payload.mailbox)
     logger.info("email_triage_triggered", mailbox=payload.mailbox, task_id=task.id)
 
@@ -2915,8 +2919,11 @@ async def process_email_attachment(
         )
 
     if payload.target == "document":
+        from app.auth.effect_fence import fence_effect
         from app.tasks.extraction import process_document
 
+        # E24: no commit before this queueing; check the attempt first.
+        await fence_effect(db)
         task = process_document.delay(str(doc.id), force=True)
         logger.info(
             "email_attachment_reprocess_document", document_id=str(doc.id), user=current_user.sub

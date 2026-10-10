@@ -1376,6 +1376,10 @@ async def attach_web_catalog(
         # request, so the site walk is started alongside them.
         site_pages = [c for c in discovered.candidates if c.kind == "page" and c.on_supplier_site]
         if urls and site_pages and discovered.website:
+            from app.auth.effect_fence import fence_effect
+
+            # E24: a queued crawl cannot be taken back; check the attempt first.
+            await fence_effect(db)
             try:
                 from app.tasks.catalog_crawl import crawl_supplier_site
 
@@ -1450,6 +1454,12 @@ async def attach_web_catalog(
                 message="Поставлен в очередь загрузки.",
             )
         task_id: str | None = None
+        from app.auth.effect_fence import fence_effect
+
+        # E24: a queued ingest cannot be taken back (a redelivered one doubled a
+        # catalog); check the attempt before queueing, outside the try below so
+        # a refusal stays a 409 instead of becoming "enqueue failed, retry".
+        await fence_effect(db)
         try:
             from app.tasks.catalog_ingest import (
                 ingest_catalog_url,
@@ -2028,6 +2038,10 @@ async def crawl_supplier_site_endpoint(
     if "//" not in start_url:
         start_url = f"https://{start_url}"
 
+    from app.auth.effect_fence import fence_effect
+
+    # E24: a queued crawl cannot be taken back; check the attempt first.
+    await fence_effect(db)
     try:
         from app.tasks.catalog_crawl import crawl_supplier_site
 

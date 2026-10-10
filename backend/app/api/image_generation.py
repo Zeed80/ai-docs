@@ -4573,6 +4573,11 @@ async def techdraw(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(422, f"Не удалось построить чертёж: {exc}")
 
+    from app.auth.effect_fence import fence_effect
+
+    # E24: files uploaded for a refused attempt would be orphans; check the
+    # attempt before anything is written or uploaded.
+    await fence_effect(db)
     gen = ImageGeneration(
         owner_sub=user.sub,
         operation="techdraw",

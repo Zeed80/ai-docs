@@ -267,3 +267,19 @@ def _check_and_record(sync_session, bound: _RequestFence) -> None:
     )
     sync_session.flush()
     bound.receipt_written = True
+
+
+async def fence_effect(db) -> None:
+    """Check the fence now, before an effect outside the database.
+
+    For a handler whose effect is not a commit of its own — queueing a Celery
+    task, uploading to MinIO — the before_commit fence would come too late or
+    never. Called right before that effect: it locks the order, checks the
+    attempt and commits the receipt; a refusal raises EffectFenceRejected
+    (409) before anything left. Without a fence on the request it does nothing.
+    """
+    bound = _request_fence.get()
+    if bound is None or bound.receipt_written:
+        return
+    await db.run_sync(lambda sync_session: _check_and_record(sync_session, bound))
+    await db.commit()

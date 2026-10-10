@@ -284,3 +284,54 @@ async def test_a_second_commit_of_the_same_request_is_not_refused(factory):
         ef._request_fence.reset(reset)
     assert await _effects(factory, first) == 1
     assert await _effects(factory, second) == 1
+
+
+@pytest.mark.asyncio
+async def test_fence_effect_checks_before_an_effect_outside_the_database(factory):
+    """Queueing a Celery task or uploading to MinIO has no commit of its own;
+    fence_effect checks the attempt (and records the receipt) right before."""
+    order_id, plan_id, step_id, attempt_id = await _claimed(factory)
+    key = f"tool:{attempt_id}:p1:post:queue"
+    bound = ef._RequestFence(
+        fence=ef.verify_effect_fence(_token(order_id, plan_id, step_id, attempt_id, key=key)),
+        method="POST",
+        path="/api/tool-catalog/crawl-site",
+    )
+    reset = ef._request_fence.set(bound)
+    try:
+        async with factory() as db:
+            await ef.fence_effect(db)
+            await ef.fence_effect(db)  # once per request
+        async with factory() as db:
+            receipts = await db.scalar(
+                select(func.count())
+                .select_from(WorkEffectReceipt)
+                .where(WorkEffectReceipt.operation_key == key)
+            )
+        assert receipts == 1
+    finally:
+        ef._request_fence.reset(reset)
+
+    async with factory() as db:
+        step = await db.get(WorkStep, step_id)
+        step.lease_expires_at = utcnow() - timedelta(seconds=1)
+        await db.commit()
+    stale = ef._RequestFence(
+        fence=ef.verify_effect_fence(_token(order_id, plan_id, step_id, attempt_id)),
+        method="POST",
+        path="/api/tool-catalog/crawl-site",
+    )
+    reset = ef._request_fence.set(stale)
+    try:
+        async with factory() as db:
+            with pytest.raises(ef.EffectFenceRejected, match="attempt_lease_lost"):
+                await ef.fence_effect(db)
+    finally:
+        ef._request_fence.reset(reset)
+
+
+@pytest.mark.asyncio
+async def test_fence_effect_without_a_fence_does_nothing(factory):
+    async with factory() as db:
+        await ef.fence_effect(db)
+        assert not db.in_transaction()
