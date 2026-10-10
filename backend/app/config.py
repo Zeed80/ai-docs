@@ -6,6 +6,9 @@ class Settings(BaseSettings):
     app_env: str = "development"
     app_debug: bool = False
     app_secret_key: str = "dev-secret-key"
+    # The company's clock for "today"/"tomorrow" in plans (users.timezone is
+    # mostly unset; the mail deploy defaults to the same zone).
+    default_timezone: str = "Europe/Moscow"
     app_log_level: str = "INFO"
 
     # Postgres

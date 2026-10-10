@@ -233,6 +233,21 @@ def _planner_catalog() -> list[dict[str, Any]]:
     ]
 
 
+def _planner_now() -> str:
+    """Current local time with its offset and weekday, for date arithmetic."""
+    from datetime import UTC, datetime
+    from zoneinfo import ZoneInfo
+
+    from app.config import settings
+
+    try:
+        zone = ZoneInfo(settings.default_timezone)
+    except Exception:  # noqa: BLE001 — a bad setting falls back to UTC, said so
+        zone = UTC
+    now = datetime.now(UTC).astimezone(zone)
+    return f"{now.isoformat(timespec='minutes')} ({now.strftime('%A')}, {zone})"
+
+
 async def generate_capability_plan(
     order: WorkOrder | PlannerSnapshot,
     *,
@@ -260,6 +275,10 @@ async def generate_capability_plan(
         resolved_connector_hints = await find_connector_hints(order.objective)
     prompt = json.dumps(
         {
+            # Without it "tomorrow" became remind_at="tomorrow" or an invented
+            # ${runtime.current_date_plus_1_day_iso}: three plans in a row
+            # failed with 422 on a reminder (live 2026-10-10).
+            "now": _planner_now(),
             "objective": order.objective,
             "description": order.description,
             "constraints": order.constraints,
@@ -282,7 +301,9 @@ operation is one capability step. Step kinds are "capability", "decompose" and "
 there is no free-form agent_turn step. When the objective needs a written answer, end with one
 "synthesize" step (input {"instruction": what to write}, depends_on the steps it summarizes):
 it writes the final text from completed step results, without tools. Pass data between steps with exact references like
-${steps.lookup.output.result.items}. Never repeat completed work during replanning.
+${steps.lookup.output.result.items}; no other ${...} reference exists. Dates and times go
+into inputs as concrete ISO 8601 values computed from "now" (with its UTC offset), never as
+words like "tomorrow". Never repeat completed work during replanning.
 Schema: {assumptions:[string], steps:[{step_key,title,kind,capability?,action?,input,
 depends_on,success_predicate,risk_level,max_attempts,timeout_seconds}],
 verification_plan:{mode,checks}}. Gated actions must be high risk."""
@@ -930,10 +951,16 @@ async def resolve_step_input(
     return resolved_input, provenance
 
 
+# Any ${name.path} placeholder: the planner invented ${runtime.…} references
+# that are not dataflow, and the literal string reached the tool (live
+# 2026-10-10). Only ${steps.…} is resolved; anything left over is a failure.
+_PLACEHOLDER = re.compile(r"\$\{[A-Za-z_][\w.\[\]-]*\}")
+
+
 def _unresolved_refs(value: Any) -> set[str]:
     found: set[str] = set()
     if isinstance(value, str):
-        if "${steps." in value:
+        if "${steps." in value or _PLACEHOLDER.search(value):
             found.add(value[:120])
     elif isinstance(value, list):
         for item in value:
