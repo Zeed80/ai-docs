@@ -1241,7 +1241,7 @@ blocked verifier как итог в UI, подпись needs_review. Embedding/r
 
 ### E27 — Изолированный supervisor
 
-**Статус:** TODO. **После:** REVIEWED E26.
+**Статус:** DONE (2026-10-10): `infra/agent-script-supervisor/` — один запуск = свежий контейнер по образу из allowlist по ID (сеть none, read-only, tmpfs 512 МБ, 1 ГБ, 1 CPU, 64 PID, uid 65534, без capabilities), вход stdin-tar, выход одной рамкой в логе, дедлайн и kill через Docker API, подписанные HMAC запросы, run_id привязан к владельцу, очистка сирот при старте, отказ без fallback; 12 тестов на настоящем Docker (`cd infra/agent-script-supervisor && python3 -m pytest tests -q`); сервис под профилем `scripts`, вызова из агента нет. **После:** REVIEWED E26.
 **Создать:** `infra/agent-script-supervisor/` и явно ограниченный API-клиент;
 не расширять старый runner «разрешёнными» shell-командами.
 

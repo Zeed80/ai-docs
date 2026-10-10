@@ -917,6 +917,24 @@ services:
   # cpu/mem/pids limits, no DB/storage credentials in the environment.
   # Anything a generated skill needs must go through the backend HTTP API,
   # where normal auth applies.
+  # E27: one fresh container per agent script run; holds the Docker socket,
+  # so it is off by default (profile "scripts") and nothing calls it yet.
+  agent-script-supervisor:
+    build:
+      context: ./agent-script-supervisor
+      dockerfile: Dockerfile
+    profiles: ["scripts"]
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      SCRIPT_SUPERVISOR_KEY: ${SCRIPT_SUPERVISOR_KEY:-}
+      SCRIPT_RUNTIMES: ${SCRIPT_RUNTIMES:-{}}
+      SCRIPT_OCI_RUNTIME: ${SCRIPT_OCI_RUNTIME:-runc}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
   skill-runner:
     build:
       context: ./skill-runner
