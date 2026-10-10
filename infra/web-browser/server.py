@@ -198,10 +198,74 @@ class DesktopCloseOwnerRequest(BaseModel):
 class DesktopActionRequest(BaseModel):
     session_id: str
     owner: str = Field(min_length=1, max_length=200)
-    action: str = Field(pattern="^(click|type|read|screenshot|close)$")
-    selector: str | None = Field(default=None, max_length=2000)
+    action: str = Field(
+        pattern="^(observe|click|type|read|screenshot|navigate|tabs|switch_tab|close)$"
+    )
+    # E32: click/type address an element by the ref an observe returned,
+    # under that observe's revision — never a model-written CSS selector
+    # or a coordinate.
+    ref: str | None = Field(default=None, max_length=40)
+    revision: int | None = Field(default=None, ge=1)
     text: str | None = Field(default=None, max_length=200000)
+    url: str | None = Field(default=None, max_length=2048)
+    tab: int | None = Field(default=None, ge=0, le=20)
     wait_ms: int = Field(0, ge=0, le=15000)
+
+
+# E32: what an observe sees. Interactive elements of the active tab's main
+# frame get a ref "<revision>:<n>" written into the DOM; a MutationObserver
+# marks the page dirty on any structural change after that, so an action under
+# an old revision is refused instead of hitting whatever is there now.
+# Elements inside iframes are listed as the frame only — not addressable.
+_OBSERVE_JS = """
+(rev) => {
+  // State lives in the DOM: page.evaluate may run in an isolated world that
+  // does not keep window properties between calls.
+  if (window.__aiwObserver) window.__aiwObserver.disconnect();
+  document.querySelectorAll('[data-aiw-ref]').forEach(e => e.removeAttribute('data-aiw-ref'));
+  const sel = 'a[href],button,input,select,textarea,[role=button],[role=link],' +
+    '[role=checkbox],[role=tab],[role=menuitem],[contenteditable=true],iframe';
+  const visible = e => { const r = e.getBoundingClientRect(); const st = getComputedStyle(e);
+    return st.visibility !== 'hidden' && st.display !== 'none' && (r.width > 0 || r.height > 0); };
+  const roles = {A: 'link', BUTTON: 'button', SELECT: 'combobox', TEXTAREA: 'textbox', IFRAME: 'frame'};
+  const els = Array.from(document.querySelectorAll(sel)).filter(visible).slice(0, 300);
+  const out = els.map((e, i) => {
+    const ref = rev + ':' + (i + 1);
+    e.setAttribute('data-aiw-ref', ref);
+    let role = e.getAttribute('role') || roles[e.tagName];
+    if (!role && e.tagName === 'INPUT') {
+      role = ['checkbox', 'radio'].includes(e.type) ? e.type
+        : ['submit', 'button', 'reset'].includes(e.type) ? 'button' : 'textbox';
+    }
+    const name = (e.getAttribute('aria-label') || (e.innerText || '').trim() || e.value ||
+      e.getAttribute('placeholder') || e.getAttribute('title') || e.getAttribute('name') || '')
+      .toString().trim().slice(0, 200);
+    return {ref, role: role || e.tagName.toLowerCase(), name, tag: e.tagName.toLowerCase(),
+      disabled: !!(e.disabled || e.getAttribute('aria-disabled') === 'true'),
+      type: e.type || null,
+      value: (e.tagName === 'INPUT' && e.type === 'password') ? null
+        : (e.value !== undefined && e.tagName !== 'BUTTON' ? String(e.value).slice(0, 200) : null),
+      href: e.href || null};
+  });
+  const root = document.documentElement;
+  root.setAttribute('data-aiw-rev', String(rev));
+  const obs = new MutationObserver(muts => {
+    const onlyStyle = m => m.type === 'childList' &&
+      [...m.addedNodes, ...m.removedNodes].every(n => n.nodeName === 'STYLE');
+    for (const m of muts) {
+      if (m.type === 'attributes' && (m.attributeName || '').startsWith('data-aiw-')) continue;
+      // The screenshot's caret/animation style is injected by the browser
+      // driver, not a change of the page the agent saw.
+      if (onlyStyle(m)) continue;
+      root.removeAttribute('data-aiw-rev'); return;
+    }
+  });
+  obs.observe(document.documentElement,
+    {subtree: true, childList: true, attributes: true, characterData: true});
+  window.__aiwObserver = obs;
+  return {elements: out, text: document.body ? document.body.innerText.slice(0, 20000) : ''};
+}
+"""
 
 
 def _session_host_allowed(url: str, hosts: list[str]) -> bool:
@@ -335,7 +399,7 @@ async def desktop_start(req: DesktopStartRequest) -> dict:
         "created": now,
         "last_used": now,
     }
-    shot = await page.screenshot(type="png", animations="disabled", caret="hide")
+    shot = await page.screenshot(type="png", animations="disabled", caret="initial")
     return {
         "ok": True,
         "session_id": session_id,
@@ -360,35 +424,95 @@ async def desktop_action(req: DesktopActionRequest) -> dict:
             # Closed (by owner, revoke or sweep) while this action waited.
             return {"ok": False, "error": "session_not_found"}
         session["last_used"] = time.monotonic()
-        page = session["page"]
         if req.action == "close":
             await _close_session(req.session_id)
             return {"ok": True, "closed": True}
-        if req.action in {"click", "type"} and not req.selector:
-            return {"ok": False, "error": "selector_required"}
         try:
-            if req.action == "click":
-                await page.locator(req.selector).click(timeout=15000)
-            elif req.action == "type":
-                await page.locator(req.selector).fill(req.text or "", timeout=15000)
-            if req.wait_ms:
-                await page.wait_for_timeout(req.wait_ms)
+            result = await _desktop_step(session, req)
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": f"action_failed:{str(exc)[:300]}"}
+        if result.get("ok") is False:
+            return result
+        page = session["page"]
         if not _session_host_allowed(page.url, session["allowed_hosts"]):
             await _close_session(req.session_id)
             return {"ok": False, "error": "navigation_left_allowlist"}
-        text = ""
-        if req.action == "read":
-            text = await page.locator("body").inner_text(timeout=15000)
-        shot = await page.screenshot(type="png", animations="disabled", caret="hide")
+        shot = await page.screenshot(type="png", animations="disabled", caret="initial")
         return {
             "ok": True,
             "url": page.url,
             "title": await page.title(),
-            "text": text[:200000],
+            "tab": session["context"].pages.index(page),
+            # E32: what the page says is data from the site, never an
+            # instruction to the agent or a change of its owner or rights.
+            "content_trust": "untrusted_page",
+            **result,
             "screenshot_b64": base64.b64encode(shot).decode("ascii"),
         }
+
+
+async def _desktop_step(session: dict, req: DesktopActionRequest) -> dict:
+    context = session["context"]
+    page = session["page"]
+    if page.is_closed():
+        page = session["page"] = context.pages[-1] if context.pages else await context.new_page()
+
+    if req.action == "observe":
+        session["revision"] = session.get("revision", 0) + 1
+        snap = await page.evaluate(_OBSERVE_JS, session["revision"])
+        return {
+            "revision": session["revision"],
+            "elements": snap["elements"],
+            "text": snap["text"],
+            "frames": len(page.frames) - 1,
+        }
+    if req.action == "tabs":
+        return {
+            "tabs": [
+                {"index": i, "url": p.url, "active": p is page}
+                for i, p in enumerate(context.pages)
+            ]
+        }
+    if req.action == "switch_tab":
+        if req.tab is None or req.tab >= len(context.pages):
+            return {"ok": False, "error": "tab_not_found"}
+        session["page"] = context.pages[req.tab]
+        await session["page"].bring_to_front()
+        return {"switched": req.tab}
+    if req.action == "navigate":
+        if not req.url or not _session_host_allowed(req.url, session["allowed_hosts"]):
+            return {"ok": False, "error": "host_not_allowed"}
+        response = await page.goto(req.url, wait_until="domcontentloaded", timeout=30000)
+        return {"status": response.status if response else None}
+    if req.action == "read":
+        return {"text": (await page.locator("body").inner_text(timeout=15000))[:200000]}
+    if req.action == "screenshot":
+        return {}
+
+    # click / type: the element the observe named, on the page it saw.
+    if not req.ref or req.revision is None:
+        return {"ok": False, "error": "ref_and_revision_required"}
+    if req.revision != session.get("revision"):
+        return {"ok": False, "error": "stale_revision"}
+    seen = await page.evaluate("() => document.documentElement.getAttribute('data-aiw-rev')")
+    if seen != str(req.revision):
+        # The page changed (or navigated) since that observe.
+        return {"ok": False, "error": "stale_revision"}
+    target = page.locator(f'[data-aiw-ref="{req.ref}"]')
+    if await target.count() != 1:
+        return {"ok": False, "error": "stale_ref"}
+    if await target.evaluate("e => e.tagName") == "IFRAME":
+        return {"ok": False, "error": "frame_not_actionable"}
+    if await target.is_disabled():
+        return {"ok": False, "error": "element_disabled"}
+    if req.action == "click":
+        await target.click(timeout=10000)
+    else:
+        await target.fill(req.text or "", timeout=10000)
+    if req.wait_ms:
+        await page.wait_for_timeout(req.wait_ms)
+    # A new tab the click opened becomes visible to the next "tabs".
+    return {"done": req.action}
 
 
 @app.post("/desktop/close-owner")

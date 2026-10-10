@@ -28,7 +28,7 @@ router = APIRouter()
 
 class ComputerActionIn(BaseModel):
     action: str = Field(
-        pattern="^(browser_fetch|desktop_snapshot|desktop_start|desktop_click|desktop_type|desktop_read|desktop_close|file_read|file_write|shell)$"
+        pattern="^(browser_fetch|desktop_snapshot|desktop_start|desktop_observe|desktop_click|desktop_type|desktop_read|desktop_navigate|desktop_tabs|desktop_close|file_read|file_write|shell)$"
     )
     work_order_id: uuid.UUID
     step_id: uuid.UUID | None = None
@@ -65,6 +65,13 @@ def _host_allowed(url: str, hosts: list[str]) -> bool:
     return any(
         host == allowed.casefold() or host.endswith("." + allowed.casefold()) for allowed in hosts
     )
+
+
+def _browser_action(action: str, body: dict) -> str:
+    name = action.removeprefix("desktop_")
+    if name == "tabs" and body.get("tab") is not None:
+        return "switch_tab"
+    return name
 
 
 def browser_session_owner(work_order_id: uuid.UUID) -> str:
@@ -136,12 +143,21 @@ async def _perform(
             else {
                 "session_id": target,
                 "owner": owner,
-                "action": action.removeprefix("desktop_"),
-                "selector": body.get("selector"),
+                "action": _browser_action(action, body),
+                # E32: click/type name the element an observe returned (ref)
+                # under that observe's revision; no CSS selectors.
+                "ref": body.get("ref"),
+                "revision": body.get("revision"),
                 "text": body.get("text"),
+                "url": body.get("url"),
+                "tab": body.get("tab"),
                 "wait_ms": min(int(body.get("wait_ms", 0)), 15000),
             }
         )
+        if action == "desktop_navigate" and not _host_allowed(
+            str(body.get("url") or ""), list(grant.allowed_hosts or [])
+        ):
+            raise HTTPException(status_code=403, detail="Host is outside granted allowlist")
         async with httpx.AsyncClient(timeout=60) as client:
             response = await client.post(
                 get_config().browser_url.rstrip("/") + endpoint, json=payload

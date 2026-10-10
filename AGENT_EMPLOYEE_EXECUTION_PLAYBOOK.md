@@ -1317,7 +1317,7 @@ blocked verifier как итог в UI, подпись needs_review. Embedding/r
 
 ### E32 — DOM/accessibility и адресуемые действия
 
-**Статус:** TODO. **После:** E31.
+**Статус:** DONE (2026-10-10): `desktop_observe` (ревизия + элементы с `ref`), click/type только по `ref`+`revision`, конфликты `stale_revision`/`stale_ref`/`element_disabled`/`frame_not_actionable` вместо клика мимо; вкладки и навигация явными действиями; текст страницы — `untrusted_page` (`docs/agent-employee-delivery/E32-addressable-browser-actions.md`). **После:** E31.
 **Файлы:** browser service/API, явный catalog contract.
 
 1. Снимок страницы содержит ограниченное accessibility/DOM представление с revision.
