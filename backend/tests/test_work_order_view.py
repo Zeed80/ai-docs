@@ -38,3 +38,93 @@ async def test_budget_shows_limits_and_use(client):
         "tokens",
         "cost_usd",
     }
+
+
+@pytest.mark.asyncio
+async def test_ops_signals_answer_what_is_stuck(client):
+    ops = (await client.get("/api/work-orders/metrics")).json()["ops"]
+    assert set(ops) >= {
+        "queue_oldest_ready_age_seconds",
+        "unknown_effect_calls",
+        "awaiting_human_steps",
+        "expired_leases",
+        "failed_checks",
+        "budget_blocked_ledgers",
+        "outbox_pending",
+        "outbox_dead_or_unknown",
+    }
+    assert all(v is None or v >= 0 for v in ops.values())
+
+
+@pytest.mark.asyncio
+async def test_usage_counts_unknown_as_unknown(client, db_session):
+    """A call whose receipt does not know its tokens or price is not zero."""
+    import uuid as _uuid
+    from decimal import Decimal
+
+    from app.db.models import WorkEvent, WorkOrder
+    from app.db.work_budget_models import WorkBudgetReservation
+    from app.domain.work_budget_usage import LLM_USAGE_EVENT_TYPE
+
+    order = (await client.post("/api/work-orders", json={"objective": "Usage"})).json()
+    row = await db_session.get(WorkOrder, _uuid.UUID(order["id"]))
+    known = WorkBudgetReservation(
+        ledger_id=row.budget_ledger_id,
+        work_order_id=row.id,
+        operation_key="llm:a",
+        dimension="llm_calls",
+        reserved_units=Decimal(1),
+        request_digest="a" * 64,
+        binding_digest="b" * 64,
+        state="charged",
+        actual_units=Decimal(1),
+    )
+    unknown = WorkBudgetReservation(
+        ledger_id=row.budget_ledger_id,
+        work_order_id=row.id,
+        operation_key="llm:b",
+        dimension="llm_calls",
+        reserved_units=Decimal(1),
+        request_digest="c" * 64,
+        binding_digest="d" * 64,
+        state="charged",
+        actual_units=Decimal(1),
+    )
+    db_session.add_all([known, unknown])
+    fence = WorkBudgetReservation(
+        ledger_id=row.budget_ledger_id,
+        work_order_id=row.id,
+        operation_key="plan:x:once",
+        dimension="llm_calls",
+        reserved_units=Decimal(0),
+        request_digest="e" * 64,
+        binding_digest="f" * 64,
+        state="reserved",
+    )
+    db_session.add(fence)  # an execution fence, not a call
+    await db_session.flush()
+    for reservation, tokens in (
+        (known, {"status": "known", "units": 120}),
+        (unknown, {"status": "unknown"}),
+    ):
+        db_session.add(
+            WorkEvent(
+                work_order_id=row.id,
+                sequence=1000 + len(tokens),
+                event_type=LLM_USAGE_EVENT_TYPE,
+                actor="worker",
+                payload={
+                    "reservation_id": str(reservation.id),
+                    "provider": "ollama",
+                    "outcome": "response_observed",
+                    "tokens": {"total": tokens},
+                    "cost": {"status": "unknown"},
+                },
+            )
+        )
+    await db_session.commit()
+
+    usage = (await client.get(f"/api/work-orders/{order['id']}/usage")).json()
+    ollama = usage["llm_calls"]["ollama"]
+    assert (ollama["calls"], ollama["tokens_known"], ollama["tokens_unknown_calls"]) == (2, 120, 1)
+    assert usage["cost"] == {"status": "unknown", "usd": None}

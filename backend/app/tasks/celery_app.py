@@ -7,6 +7,10 @@ from celery import Celery
 from celery.schedules import crontab
 
 from app.config import settings
+from app.core.logging_setup import configure_logging
+
+# E47: workers log with the same redaction as the API.
+configure_logging(debug=settings.app_debug, level=settings.app_log_level)
 
 celery_app = Celery(
     "ai_workspace",

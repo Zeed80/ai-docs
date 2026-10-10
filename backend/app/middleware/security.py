@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 import uuid
 
@@ -24,11 +25,15 @@ logger = structlog.get_logger()
 # looser policy that both changes with every ComfyUI frontend release and
 # never guarantees full coverage of what its bundlers happen to need.
 _CSP_EXEMPT_PATH_PREFIXES = ("/api/comfyui-proxy/",)
+_REQUEST_ID = re.compile(r"[A-Za-z0-9._-]{8,64}")
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
-        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+        # A caller-supplied id is kept only if it looks like an id (E47):
+        # it goes into every log line of the request.
+        incoming = request.headers.get("X-Request-ID") or ""
+        request_id = incoming if _REQUEST_ID.fullmatch(incoming) else str(uuid.uuid4())
 
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(request_id=request_id)

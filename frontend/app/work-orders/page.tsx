@@ -75,6 +75,18 @@ const DIMENSION_LABEL: Record<string, string> = {
   tokens: "токены",
   cost_usd: "стоимость, $",
 };
+// E47: what is stuck, waiting or unknown now. Non-zero ones are highlighted.
+const OPS_LABEL: Record<string, string> = {
+  unknown_effect_calls: "исход неизвестен",
+  awaiting_human_steps: "ждут человека",
+  expired_leases: "истёкшие аренды",
+  failed_checks: "проваленные проверки",
+  budget_blocked_ledgers: "упёрлись в бюджет",
+  outbox_pending: "в очереди отправки",
+  outbox_dead_or_unknown: "отправка сорвалась",
+  queue_oldest_ready_age_seconds: "ждёт в очереди, с",
+  outbox_oldest_age_seconds: "старейшая отправка, с",
+};
 // Owner decisions and verdicts in the event log — the history of who decided.
 const DECISION_EVENTS = new Set([
   "work.instruction_added",
@@ -142,6 +154,7 @@ type PendingApproval = {
 };
 // Б14: aggregate operator-facing observability shown in the page header.
 type Metrics = {
+  ops?: Record<string, number | null>;
   window_hours: number;
   status_counts: Record<string, number>;
   step_durations: Record<
@@ -456,6 +469,21 @@ export default function WorkOrdersPage() {
       </div>
       {metrics && (
         <div className="mb-5 flex flex-wrap gap-3 text-xs">
+          {metrics.ops &&
+            Object.entries(metrics.ops)
+              .filter(([, value]) => value != null)
+              .map(([key, value]) => (
+                <span
+                  key={key}
+                  className={`px-2 py-0.5 rounded ${
+                    value && !key.endsWith("_seconds") && key !== "outbox_pending"
+                      ? "bg-amber-950/60 text-amber-300"
+                      : "bg-slate-800 text-slate-400"
+                  }`}
+                >
+                  {OPS_LABEL[key] ?? key}: {value}
+                </span>
+              ))}
           <span className="text-slate-400">за {metrics.window_hours}ч:</span>
           {Object.entries(metrics.status_counts).map(([status, count]) => (
             <span

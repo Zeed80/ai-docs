@@ -1539,7 +1539,7 @@ DocumentChunk, embeddings, documents/mail/artifacts и существующие 
 
 ### E47 — Расходы и эксплуатационные сигналы
 
-**Статус:** TODO. **После:** E46, E21.
+**Статус:** ЧАСТИЧНО (2026-10-10): сигналы `ops` (очередь, неизвестные исходы, ждут человека, истёкшие аренды, провалы проверок, бюджетные блоки, outbox) в метриках и шапке; расход линии `/usage` с явным «неизвестно»; логи без содержимого и секретов для API и воркеров. Остаток — версионированные тарифы (ROADMAP §20 T4) (`docs/agent-employee-delivery/E47-ops-signals.md`). **После:** E46, E21.
 **Файлы:** budget ledger, provider adapters, works UI, metrics endpoints.
 
 1. Usage по provider/model/request/attempt, включая failed/retried requests.

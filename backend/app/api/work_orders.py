@@ -374,6 +374,114 @@ async def get_work_order_metrics(
         "window_hours": hours,
         "status_counts": dict(status_rows),
         "step_durations": durations,
+        "ops": await _ops_signals(db, user, since),
+    }
+
+
+async def _ops_signals(db: AsyncSession, user: UserInfo, since: datetime) -> dict:
+    """E47: what is stuck, waiting or unknown right now — from the journal.
+
+    Each number is a query over durable state, so "why is nothing moving"
+    is answered by the record, not by a guess. Non-admins see their own.
+    """
+    from app.db.agent_runtime_models import AgentOutbox
+    from app.db.models import WorkAcceptanceCriterion, WorkToolCall
+    from app.db.work_budget_models import WorkBudgetLedger
+    from app.domain.work_orders import UNRESOLVED_EFFECT_STATUSES
+
+    now = datetime.now(UTC)
+    own = None if _is_admin(user) else user.sub
+
+    def scoped(query, owner_col):
+        return query if own is None else query.where(owner_col == own)
+
+    oldest_ready = await db.scalar(
+        scoped(
+            select(func.min(WorkStep.updated_at))
+            .join(WorkOrder, WorkOrder.id == WorkStep.work_order_id)
+            .where(WorkStep.state == "ready", WorkOrder.status.in_(["ready", "running"])),
+            WorkOrder.owner_key,
+        )
+    )
+
+    async def count(query, owner_col) -> int:
+        return int(await db.scalar(scoped(query, owner_col)) or 0)
+
+    unknown_effects = await count(
+        select(func.count())
+        .select_from(WorkToolCall)
+        .join(WorkOrder, WorkOrder.id == WorkToolCall.work_order_id)
+        .where(WorkToolCall.status.in_(UNRESOLVED_EFFECT_STATUSES)),
+        WorkOrder.owner_key,
+    )
+    awaiting_human = await count(
+        select(func.count())
+        .select_from(WorkStep)
+        .join(WorkOrder, WorkOrder.id == WorkStep.work_order_id)
+        .where(WorkStep.state == "waiting_approval"),
+        WorkOrder.owner_key,
+    )
+    expired_leases = await count(
+        select(func.count())
+        .select_from(WorkStep)
+        .join(WorkOrder, WorkOrder.id == WorkStep.work_order_id)
+        .where(WorkStep.state == "running", WorkStep.lease_expires_at < now),
+        WorkOrder.owner_key,
+    )
+    failed_checks = await count(
+        select(func.count())
+        .select_from(WorkAcceptanceCriterion)
+        .join(WorkOrder, WorkOrder.id == WorkAcceptanceCriterion.work_order_id)
+        .where(
+            WorkAcceptanceCriterion.status == "failed",
+            WorkAcceptanceCriterion.verified_at >= since,
+        ),
+        WorkOrder.owner_key,
+    )
+    budget_blocked = await count(
+        select(func.count())
+        .select_from(WorkBudgetLedger)
+        .where(WorkBudgetLedger.blocker.is_not(None)),
+        WorkBudgetLedger.owner_key,
+    )
+    outbox_pending = await count(
+        select(func.count())
+        .select_from(AgentOutbox)
+        .where(AgentOutbox.delivery_state.in_(["pending", "leased", "sending"])),
+        AgentOutbox.owner_key,
+    )
+    outbox_oldest = await db.scalar(
+        scoped(
+            select(func.min(AgentOutbox.created_at)).where(
+                AgentOutbox.delivery_state.in_(["pending", "leased", "sending"])
+            ),
+            AgentOutbox.owner_key,
+        )
+    )
+    outbox_dead = await count(
+        select(func.count())
+        .select_from(AgentOutbox)
+        .where(AgentOutbox.delivery_state.in_(["dead_letter", "unknown"])),
+        AgentOutbox.owner_key,
+    )
+
+    def age(moment: datetime | None) -> float | None:
+        if moment is None:
+            return None
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=UTC)
+        return round((now - moment).total_seconds(), 1)
+
+    return {
+        "queue_oldest_ready_age_seconds": age(oldest_ready),
+        "unknown_effect_calls": unknown_effects,
+        "awaiting_human_steps": awaiting_human,
+        "expired_leases": expired_leases,
+        "failed_checks": failed_checks,
+        "budget_blocked_ledgers": budget_blocked,
+        "outbox_pending": outbox_pending,
+        "outbox_oldest_age_seconds": age(outbox_oldest),
+        "outbox_dead_or_unknown": outbox_dead,
     }
 
 
@@ -420,6 +528,91 @@ async def get_work_order_budget(
         "root_work_order_id": str(ledger.root_work_order_id),
         "blocker": ledger.blocker,
         "dimensions": dimensions,
+    }
+
+
+@router.get("/{work_order_id}/usage")
+async def get_work_order_usage(
+    work_order_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    """E47: model calls of this order's line, by provider and outcome.
+
+    From the ledger's reservations and their usage receipts, child orders
+    included (they share the line). Tokens are summed only where a receipt
+    knows them, the rest is counted as unknown; cost is known only when every
+    call has a known price — otherwise unknown, never a quiet zero.
+    """
+    from app.db.models import WorkEvent
+    from app.db.work_budget_models import WorkBudgetReservation
+    from app.domain.work_budget_usage import LLM_USAGE_EVENT_TYPE
+
+    order = await _get_owned_order(db, work_order_id, user)
+    ledger_id = getattr(order, "budget_ledger_id", None)
+    if ledger_id is None:
+        return {"work_order_id": str(order.id), "ledger": None, "llm_calls": {}}
+    reservations = list(
+        await db.scalars(
+            select(WorkBudgetReservation).where(
+                WorkBudgetReservation.ledger_id == ledger_id,
+                WorkBudgetReservation.dimension == "llm_calls",
+                # Zero-unit rows are execution fences (plan/verify/execution
+                # "once" claims), not provider calls.
+                WorkBudgetReservation.reserved_units > 0,
+            )
+        )
+    )
+    order_ids = {r.work_order_id for r in reservations} | {order.id}
+    receipts = {
+        str((e.payload or {}).get("reservation_id")): e.payload or {}
+        for e in await db.scalars(
+            select(WorkEvent).where(
+                WorkEvent.event_type == LLM_USAGE_EVENT_TYPE,
+                WorkEvent.work_order_id.in_(order_ids),
+            )
+        )
+    }
+    by_provider: dict[str, dict] = {}
+    cost_known = True
+    cost_usd = 0.0
+    for reservation in reservations:
+        receipt = receipts.get(str(reservation.id))
+        provider = str((receipt or {}).get("provider") or "без квитанции")
+        row = by_provider.setdefault(
+            provider,
+            {
+                "calls": 0,
+                "by_state": {},
+                "by_outcome": {},
+                "tokens_known": 0,
+                "tokens_unknown_calls": 0,
+            },
+        )
+        row["calls"] += 1
+        row["by_state"][reservation.state] = row["by_state"].get(reservation.state, 0) + 1
+        outcome = str((receipt or {}).get("outcome") or "unknown")
+        row["by_outcome"][outcome] = row["by_outcome"].get(outcome, 0) + 1
+        total = ((receipt or {}).get("tokens") or {}).get("total") or {}
+        if total.get("status") == "known":
+            row["tokens_known"] += int(total.get("units") or 0)
+        else:
+            row["tokens_unknown_calls"] += 1
+        cost = (receipt or {}).get("cost") or {}
+        if cost.get("status") == "known":
+            cost_usd += float(cost.get("amount") or 0)
+        else:
+            cost_known = False
+    return {
+        "work_order_id": str(order.id),
+        "ledger": str(ledger_id),
+        "orders_in_line": len(order_ids),
+        "llm_calls": by_provider,
+        "cost": (
+            {"status": "known", "usd": round(cost_usd, 6)}
+            if cost_known and reservations
+            else {"status": "unknown" if reservations else "none", "usd": None}
+        ),
     }
 
 

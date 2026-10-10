@@ -1,5 +1,4 @@
 import asyncio
-import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -117,27 +116,14 @@ from app.api import updates as updates_api
 from app.api.capability_router import router as capability_router
 from app.auth.jwt import get_current_user as _get_current_user
 from app.config import settings
+from app.core.logging_setup import configure_logging  # noqa: E402
 from app.db.session import engine  # lazy proxy
 from app.middleware.csrf import CSRFMiddleware
 from app.middleware.prometheus import PrometheusMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.security import SecurityHeadersMiddleware
 
-structlog.configure(
-    processors=[
-        structlog.contextvars.merge_contextvars,
-        structlog.processors.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso"),
-        (
-            structlog.dev.ConsoleRenderer()
-            if settings.app_debug
-            else structlog.processors.JSONRenderer()
-        ),
-    ],
-    wrapper_class=structlog.make_filtering_bound_logger(
-        logging.getLevelName(settings.app_log_level.upper())
-    ),
-)
+configure_logging(debug=settings.app_debug, level=settings.app_log_level)
 
 logger = structlog.get_logger()
 
