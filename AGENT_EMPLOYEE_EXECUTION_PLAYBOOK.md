@@ -1407,7 +1407,7 @@ blocked verifier как итог в UI, подпись needs_review. Embedding/r
 
 ### E38 — Единый ACL contract
 
-**Статус:** TODO. **После:** E37.
+**Статус:** ADR (2026-10-10, Gate E1 — владелец): матрица прав и точки применения (`docs/agent-employee-delivery/E38-acl-contract.md`); попутно исправлено — поиск памяти отдавал чанки/узлы документов других отделов (фильтр по исходному документу до подсчёта); пробелы: SQL агента без строковых прав (решение: рекомендована RLS), узлы графа по сущности, legacy без владельца. **После:** E37.
 **Читать:** memory API/manager/builder, models MemoryFact/KnowledgeNode/KnowledgeEdge,
 DocumentChunk, embeddings, documents/mail/artifacts и существующие scope tests.
 

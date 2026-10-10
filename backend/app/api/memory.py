@@ -357,6 +357,10 @@ async def search_memory(
     if payload.retrieval_mode != "auto_hybrid":
         diagnostics.append(f"retrieval_mode_deprecated:{payload.retrieval_mode}")
 
+    # Before counts and paging: a chunk, evidence span or graph node carries
+    # its source document's text, so it is visible only to whoever may see
+    # that document (E39). Search returned other departments' snippets.
+    hits = await _drop_invisible_document_hits(db, user, hits)
     hits = _rrf_fuse(hits)
 
     if hits:
@@ -380,6 +384,27 @@ async def search_memory(
         coverage="complete" if next_cursor is None else "paged",
         diagnostics=diagnostics,
     )
+
+
+async def _drop_invisible_document_hits(
+    db: AsyncSession, user: UserInfo, hits: list[MemorySearchHit]
+) -> list[MemorySearchHit]:
+    """Keep only hits whose source document this user may see (E39)."""
+    from app.db.models import Document
+    from app.domain.access import visibility_filter
+
+    document_ids = {hit.source_document_id for hit in hits if hit.source_document_id}
+    if not document_ids:
+        return hits
+    clause = await visibility_filter(
+        db, user, owner_col=Document.owner_sub, department_col=Document.department_id
+    )
+    if clause is None:
+        return hits  # admin / manager see every document
+    visible = set(
+        await db.scalars(select(Document.id).where(Document.id.in_(document_ids), clause))
+    )
+    return [hit for hit in hits if not hit.source_document_id or hit.source_document_id in visible]
 
 
 @router.post("/chat-turn", response_model=MemoryFactOut)
