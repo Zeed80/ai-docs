@@ -1451,7 +1451,7 @@ DocumentChunk, embeddings, documents/mail/artifacts и существующие 
 
 ### E41 — Vector retrieval и reindex
 
-**Статус:** TODO. **После:** E40.
+**Статус:** DONE (2026-10-10): payload `acl` у всех точек документов, фильтр в Qdrant для ограниченных пользователей плюс перепроверка по БД, точки без `acl` — карантин, синхронизация по событию ORM, на старте и ночью с удалением сирот. Аудит нашёл: spec-таблицы агента отдавали счета/документы/аномалии всех отделов — добавлен неснимаемый фильтр строк; удаление документа не чистило профильные коллекции (308 сирот) (`docs/agent-employee-delivery/E41-vector-acl.md`). **После:** E40.
 **Файлы:** embeddings modules/tasks/backfill; реальные vector client callers.
 
 1. Данные индекса имеют owner/provenance/version payload; фильтр на стороне поиска

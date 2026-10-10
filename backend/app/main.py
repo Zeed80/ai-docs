@@ -289,6 +289,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         logger.error("sql_row_security_install_failed", error=str(exc))
 
+    # E41: document rights in the vector index — capture changes, and restamp
+    # every document once (points written before acl existed are quarantined
+    # for restricted users until then).
+    try:
+        from app.vector.acl import install_change_capture
+
+        install_change_capture()
+        from app.tasks.vector_acl import sync_document_acl_task
+
+        sync_document_acl_task.delay(None)
+    except Exception as exc:
+        logger.warning("vector_acl_startup_failed", error=str(exc))
+
     # Warm the pinned orchestrator model so the agent has an instant first
     # response; other models load on demand and free VRAM when idle.
     # Strata running ⇔ the GPU is Strata's; the container state is the truth

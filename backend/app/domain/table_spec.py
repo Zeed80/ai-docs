@@ -17,6 +17,7 @@ model never writes SQL.
 from __future__ import annotations
 
 import re
+import uuid
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from datetime import date, datetime, timedelta
@@ -1512,7 +1513,9 @@ def _finalize_virtual(spec: TableSpec, all_rows: list[dict]) -> TableResult:
     )
 
 
-async def _execute_vector_search(db: AsyncSession, spec: TableSpec) -> TableResult:
+async def _execute_vector_search(
+    db: AsyncSession, spec: TableSpec, viewer: UserInfo | None = None
+) -> TableResult:
     """Semantic search over the document vector store, as a table."""
     query = _filter_value(spec, "query")
     if not query:
@@ -1525,11 +1528,21 @@ async def _execute_vector_search(db: AsyncSession, spec: TableSpec) -> TableResu
     doc_type = _filter_value(spec, "doc_type")
     cap = min(spec.limit or 50, MAX_ROWS)
     try:
+        from app.vector.acl import acl_filter
+
         vector = await embed_text(query, task_type="query")  # confidential=local
-        hits = search_similar(vector, limit=cap, doc_type=doc_type)
+        acl = await acl_filter(db, _viewer_or_nobody(viewer))
+        hits = search_similar(vector, limit=cap, doc_type=doc_type, acl=acl)
     except Exception as exc:  # Qdrant/embedding unavailable — degrade, don't crash
         logger.warning("vector_search_failed", error=str(exc))
         raise ValueError(f"Семантический поиск недоступен: {exc}") from exc
+    # Only documents the viewer may see — before a snippet reaches the table.
+    from app.domain.graph_access import GraphAccess
+
+    visible = await GraphAccess(db, _viewer_or_nobody(viewer)).visible_documents(
+        _as_uuid(h.get("doc_id")) for h in hits
+    )
+    hits = [h for h in hits if _as_uuid(h.get("doc_id")) in visible]
     rows = [
         {
             "score": round(float(h.get("score") or 0.0), 3),
@@ -1547,7 +1560,9 @@ async def _execute_vector_search(db: AsyncSession, spec: TableSpec) -> TableResu
     return _finalize_virtual(spec, rows)
 
 
-async def _execute_graph_query(db: AsyncSession, spec: TableSpec) -> TableResult:
+async def _execute_graph_query(
+    db: AsyncSession, spec: TableSpec, viewer: UserInfo | None = None
+) -> TableResult:
     """Relationships around an entity in the knowledge graph, as a table."""
     start = _filter_value(spec, "start_node")
     if not start:
@@ -1555,20 +1570,27 @@ async def _execute_graph_query(db: AsyncSession, spec: TableSpec) -> TableResult
             "graph_query требует фильтр {field: start_node, op: contains, value: '<сущность>'}"
         )
     from app.db.models import KnowledgeEdge, KnowledgeNode
+    from app.domain.graph_access import GraphAccess
 
-    center = (
-        await db.execute(
-            select(KnowledgeNode)
-            .where(
-                or_(
-                    KnowledgeNode.title.ilike(f"%{start}%"),
-                    KnowledgeNode.canonical_key.ilike(f"%{start}%"),
+    access = GraphAccess(db, _viewer_or_nobody(viewer))
+    candidates = list(
+        (
+            await db.execute(
+                select(KnowledgeNode)
+                .where(
+                    or_(
+                        KnowledgeNode.title.ilike(f"%{start}%"),
+                        KnowledgeNode.canonical_key.ilike(f"%{start}%"),
+                    )
                 )
+                .order_by(KnowledgeNode.confidence.desc())
+                .limit(50)
             )
-            .order_by(KnowledgeNode.confidence.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
+        ).scalars()
+    )
+    # The best match the viewer may see (E40), not the best match overall.
+    visible_candidates = await access.visible_nodes(candidates)
+    center = next((n for n in candidates if n.id in visible_candidates), None)
     if center is None:
         return _finalize_virtual(spec, [])
 
@@ -1586,6 +1608,7 @@ async def _execute_graph_query(db: AsyncSession, spec: TableSpec) -> TableResult
         .scalars()
         .all()
     )
+    edges = await access.visible_edges(edges)
     node_ids = {center.id}
     for e in edges:
         node_ids.add(e.source_node_id)
@@ -1698,6 +1721,64 @@ async def _execute_grouped(
     )
 
 
+def _as_uuid(value: Any) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _viewer_or_nobody(viewer: UserInfo | None) -> UserInfo:
+    """No viewer (headless) sees what nobody owns, never everything."""
+    if viewer is not None:
+        return viewer
+    from app.auth.models import UserInfo as _UserInfo
+
+    return _UserInfo(sub="", email="", name="", preferred_username="", roles=[])
+
+
+async def _row_scope(db: AsyncSession, source_key: str, viewer: UserInfo | None) -> list[Any]:
+    """Row rights the spec cannot ask away (E41 audit).
+
+    The API filtered documents, invoices and cases by their document's owner
+    and department, but a spec table compiled straight to SQL: every source
+    but e-mail returned all departments' rows to whoever asked the agent.
+    Invoices, their lines and payments, drawings and anomalies follow their
+    document, as in app.domain.access; suppliers, stock and catalogs are
+    company data.
+    """
+    from app.domain.access import document_visibility_filter
+
+    clause = await document_visibility_filter(db, _viewer_or_nobody(viewer))
+    if clause is None:
+        return []
+    visible_docs = select(Document.id).where(clause)
+    visible_invoices = select(Invoice.id).where(
+        or_(Invoice.document_id.is_(None), Invoice.document_id.in_(visible_docs))
+    )
+    if source_key == "documents":
+        return [clause]
+    if source_key in {"invoices", "invoice_items", "payments"}:
+        return [or_(Invoice.document_id.is_(None), Invoice.document_id.in_(visible_docs))]
+    if source_key == "drawings":
+        return [or_(Drawing.document_id.is_(None), Drawing.document_id.in_(visible_docs))]
+    if source_key == "anomalies":
+        return [
+            or_(
+                AnomalyCard.entity_type.notin_(["invoice", "document"]),
+                and_(
+                    AnomalyCard.entity_type == "document",
+                    AnomalyCard.entity_id.in_(visible_docs),
+                ),
+                and_(
+                    AnomalyCard.entity_type == "invoice",
+                    AnomalyCard.entity_id.in_(visible_invoices),
+                ),
+            )
+        ]
+    return []
+
+
 async def execute_spec(
     db: AsyncSession, spec: TableSpec, *, viewer: UserInfo | None = None
 ) -> TableResult:
@@ -1719,7 +1800,7 @@ async def execute_spec(
     source = SOURCES[spec.source]
 
     if spec.source in VIRTUAL_SOURCES:
-        return await _VIRTUAL_PROVIDERS[spec.source](db, spec)
+        return await _VIRTUAL_PROVIDERS[spec.source](db, spec, viewer)
 
     columns = list(spec.columns) or [ColumnSpec(field=f) for f in source.default_columns]
     # Ensure group_by fields are visible columns (so the grouping is legible),
@@ -1782,6 +1863,7 @@ async def execute_spec(
         scope = await mailbox_filter(db, viewer, mailbox_col=EmailMessage.mailbox)
         if scope is not None:
             where_conds.append(scope)
+    where_conds.extend(await _row_scope(db, spec.source, viewer))
 
     # Aggregating group_by: collapse to ONE row per group — the group key plus,
     # for each other column, a string_agg of distinct text values (e.g. all of a

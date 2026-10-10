@@ -1073,7 +1073,14 @@ async def test_anomalies_source(db_session):
         ],
         filters=[ts.FilterSpec(field="status", op="eq", value="open")],
     )
-    result = await ts.execute_spec(db_session, spec)
+    # The anomaly points at an invoice that does not exist: only a viewer
+    # who sees every document sees it (E41 row scope).
+    from app.auth.models import UserInfo, UserRole
+
+    manager = UserInfo(
+        sub="m", email="m@x", name="m", preferred_username="m", roles=[UserRole.manager]
+    )
+    result = await ts.execute_spec(db_session, spec, viewer=manager)
     assert result.total == 1
     assert result.rows[0]["severity"] == "critical"
 

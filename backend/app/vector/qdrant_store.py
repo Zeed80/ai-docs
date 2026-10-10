@@ -549,6 +549,7 @@ def upsert_document(
     source_channel: str | None = None,
     collection_name: str = COLLECTION,
     embedding_model: str | None = None,
+    extra_payload: dict | None = None,
 ) -> None:
     """Upsert document embedding into Qdrant."""
     client = get_client()
@@ -565,6 +566,7 @@ def upsert_document(
                     "status": status,
                     "source_channel": source_channel or "",
                     "embedding_model": embedding_model or "",
+                    **(extra_payload or {}),
                 },
             )
         ],
@@ -600,6 +602,7 @@ def search_similar(
     content_types: list[str] | None = None,
     score_threshold: float = 0.0,
     collection_name: str = COLLECTION,
+    acl: Filter | None = None,
 ) -> list[dict]:
     """Search Qdrant for similar points. Returns list of {doc_id, score, payload}.
 
@@ -620,6 +623,9 @@ def search_similar(
     if content_types:
         must.append(FieldCondition(key="content_type", match=MatchAny(any=content_types)))
 
+    if acl is not None:
+        # E41: the user's document rights, applied inside the search.
+        must.append(acl)
     query_filter = Filter(must=must) if must else None
 
     response = client.query_points(
@@ -682,13 +688,23 @@ def delete_tool_catalog_by_supplier(supplier_id: str) -> None:
 
 
 def delete_document(doc_id: str) -> None:
-    from qdrant_client.models import PointIdsList
+    """Remove every point of a document: its vector, chunks and evidence.
+
+    Only the legacy "documents" collection was cleaned before, by one point
+    id; the per-profile "documents__*" collections kept the vectors and
+    chunk texts of every deleted document (308 such points found live).
+    """
+    from app.vector.acl import _document_collections
 
     client = get_client()
-    client.delete(
-        collection_name=COLLECTION,
-        points_selector=PointIdsList(points=[_uuid_to_uint64(doc_id)]),
+    selector = Filter(
+        should=[
+            FieldCondition(key="doc_id", match=MatchValue(value=doc_id)),
+            FieldCondition(key="document_id", match=MatchValue(value=doc_id)),
+        ]
     )
+    for name in _document_collections(client):
+        client.delete(collection_name=name, points_selector=selector)
 
 
 def collection_count() -> int:

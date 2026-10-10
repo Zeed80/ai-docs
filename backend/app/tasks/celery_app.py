@@ -85,6 +85,12 @@ celery_app.conf.update(
 _imap_cron = timedelta(minutes=max(1, settings.imap_poll_interval_minutes))
 
 celery_app.conf.beat_schedule = {
+    # E41: restamp document rights in the vector index (backstop for a missed
+    # change event; the change itself enqueues a sync after commit).
+    "vector-acl-nightly": {
+        "task": "vector.sync_document_acl",
+        "schedule": crontab(hour=3, minute=40),
+    },
     # Сводка вместо потока: проверяем ежечасно, кому сейчас пора (час выбирает
     # сам человек в настройках уведомлений).
     "notification-daily-digest": {
@@ -275,6 +281,19 @@ celery_app.autodiscover_tasks(
     ]
 )
 
+# E41: a change of a document's owner, department or type restamps its vectors.
+# Installed when a worker process starts, not on import: tests import this
+# module and run tasks eagerly.
+from celery.signals import worker_process_init  # noqa: E402
+
+
+@worker_process_init.connect
+def _install_vector_acl_capture(**_kwargs) -> None:
+    from app.vector.acl import install_change_capture
+
+    install_change_capture()
+
+
 # Flat module — not discovered by autodiscover_tasks(related_name="tasks").
 from app.tasks import agent_cron as _agent_cron  # noqa: F401
 from app.tasks import agent_outbox as _agent_outbox  # noqa: F401
@@ -299,4 +318,5 @@ from app.tasks import proactive as _proactive  # noqa: F401
 from app.tasks import saved_query_alerts as _saved_query_alerts  # noqa: F401
 from app.tasks import skill_evolution as _skill_evolution  # noqa: F401
 from app.tasks import tp_generation as _tp_generation  # noqa: F401
+from app.tasks import vector_acl as _vector_acl  # noqa: F401
 from app.tasks import work_orders as _work_orders  # noqa: F401

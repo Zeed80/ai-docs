@@ -78,6 +78,23 @@ async def test_vector_search_requires_query(db_session):
 @pytest.mark.asyncio
 async def test_vector_search_maps_hits(db_session, monkeypatch):
     """vector_search projects Qdrant hits into table rows (engine mocked)."""
+    import uuid
+
+    from app.db.models import Document
+
+    # Hits are rechecked against the documents table (E41): they must exist.
+    ids = {}
+    for name in ("d1", "d2"):
+        doc = Document(
+            file_name=f"{name}.pdf",
+            file_hash=uuid.uuid4().hex,
+            file_size=1,
+            mime_type="application/pdf",
+            storage_path=f"/{name}",
+        )
+        db_session.add(doc)
+        await db_session.flush()
+        ids[name] = str(doc.id)
 
     async def fake_embed(text, task_type="passage"):
         return [0.1, 0.2, 0.3]
@@ -85,7 +102,7 @@ async def test_vector_search_maps_hits(db_session, monkeypatch):
     def fake_search(vector, *, limit=20, doc_type=None, **kw):
         return [
             {
-                "doc_id": "d1",
+                "doc_id": ids["d1"],
                 "score": 0.91,
                 "file_name": "act.pdf",
                 "doc_type": "act",
@@ -93,7 +110,7 @@ async def test_vector_search_maps_hits(db_session, monkeypatch):
                 "payload": {"text": "акт фрезы"},
             },
             {
-                "doc_id": "d2",
+                "doc_id": ids["d2"],
                 "score": 0.72,
                 "file_name": "inv.pdf",
                 "doc_type": "invoice",

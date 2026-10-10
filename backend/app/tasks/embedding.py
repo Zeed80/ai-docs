@@ -37,6 +37,7 @@ async def _embed_document(document_id: str) -> dict:
     from app.ai.embeddings import build_document_text, embed_text, get_active_embedding_profile
     from app.db.models import Document, DocumentExtraction, DocumentProcessingJob
     from app.db.session import _get_engine, _get_session_factory
+    from app.vector.acl import document_acl_payload
     from app.vector.qdrant_store import ensure_collection, upsert_document
 
     profile = get_active_embedding_profile()
@@ -129,6 +130,7 @@ async def _embed_document(document_id: str) -> dict:
                 source_channel=doc.source_channel,
                 collection_name=profile.collection_name,
                 embedding_model=profile.model_key,
+                extra_payload=document_acl_payload(doc),
             )
         except Exception as exc:
             if job:
@@ -155,6 +157,7 @@ async def _embed_document(document_id: str) -> dict:
         # (_embedding_record_for_chunk) so reindex/index-active stay idempotent.
         try:
             from app.db.models import DocumentChunk
+            from app.vector.acl import document_acl_payload
             from app.vector.qdrant_store import upsert_memory_embedding
 
             chunks = (
@@ -185,6 +188,7 @@ async def _embed_document(document_id: str) -> dict:
                         # Project/object tags for metadata-filtered vector recall.
                         **({"project_id": str(doc.project_id)} if doc.project_id else {}),
                         **({"object_id": str(doc.object_id)} if doc.object_id else {}),
+                        **document_acl_payload(doc),
                     },
                 )
             if chunks:

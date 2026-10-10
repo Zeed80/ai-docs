@@ -348,7 +348,7 @@ async def search_memory(
         hits.extend(await _search_graph_nodes(db, query_payload, pattern))
         hits.extend(await _search_sql_memory(db, query_payload, pattern, remaining=internal_limit))
 
-    vector_hits = await _search_vector_memory(db, search_payload, limit=internal_limit)
+    vector_hits = await _search_vector_memory(db, search_payload, limit=internal_limit, user=user)
     if vector_hits:
         hits.extend(vector_hits)
     else:
@@ -1172,9 +1172,11 @@ async def _search_vector_memory(
     payload: MemorySearchRequest,
     *,
     limit: int,
+    user: UserInfo | None = None,
 ) -> list[MemorySearchHit]:
     try:
         from app.ai.embeddings import embed_text, get_active_embedding_profile
+        from app.vector.acl import acl_filter
         from app.vector.qdrant_store import collection_count_for, search_similar
 
         profile = get_active_embedding_profile()
@@ -1190,6 +1192,9 @@ async def _search_vector_memory(
             # chunk/evidence hits anyway).
             content_types=["document_chunk", "evidence_span"],
             score_threshold=_VECTOR_SCORE_THRESHOLD,
+            # E41: other departments' fragments neither take the top-k slots
+            # nor reach the reranker; the database check below stays.
+            acl=await acl_filter(db, user) if user is not None else None,
         )
     except Exception:
         return []
@@ -1872,6 +1877,9 @@ async def index_active_memory_embeddings(
             continue
         try:
             vector = await embed_text(text, profile)
+            from app.vector.acl import acl_payload, document_acl_payload
+
+            source_doc = await db.get(Document, record.document_id) if record.document_id else None
             upsert_memory_embedding(
                 point_id=record.point_id,
                 vector=vector,
@@ -1885,6 +1893,11 @@ async def index_active_memory_embeddings(
                     ),
                     "embedding_model": profile.model_key,
                     "text_preview": text[:500],
+                    **(
+                        document_acl_payload(source_doc)
+                        if source_doc is not None
+                        else acl_payload(None, None, None)
+                    ),
                 },
             )
             record.status = "indexed"
