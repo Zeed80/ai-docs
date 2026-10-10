@@ -69,6 +69,11 @@ class DelegationCreate(BaseModel):
                 or definition.effect not in {"write", "delete", "external"}
             ):
                 raise ValueError(f"Action cannot be delegated: {action}")
+        # E46: every constraint must be a field the action really carries,
+        # of its type, an exact value — the server does not trust the form.
+        from app.domain.delegations import check_constraints
+
+        check_constraints(self.actions, self.constraints)
         return self
 
 
@@ -90,12 +95,26 @@ def describe(grant: DelegationGrant) -> dict:
 
 @router.get("/actions")
 async def delegation_actions(user: UserInfo = Depends(human_owner)):
-    items = [
-        {"name": tool.name, "effect": tool.effect}
-        for tool in TOOLS.values()
-        if not tool.admin_only and tool.effect in {"write", "delete", "external"}
-    ]
-    items.append({"name": "agent.cron.run", "effect": "execute"})
+    from app.domain.delegations import delegation_fields
+
+    items = []
+    for tool in TOOLS.values():
+        if tool.admin_only or tool.effect not in {"write", "delete", "external"}:
+            continue
+        fields = delegation_fields(tool.name)
+        # An action with nothing exact to pin cannot be scoped: not offered.
+        if fields:
+            items.append({"name": tool.name, "effect": tool.effect, "fields": fields})
+    items.append(
+        {
+            "name": "agent.cron.run",
+            "effect": "execute",
+            "fields": [
+                {"name": "schedule", "type": "string", "format": None, "required": True},
+                {"name": "prompt_sha256", "type": "string", "format": "sha256", "required": True},
+            ],
+        }
+    )
     return {"items": items}
 
 

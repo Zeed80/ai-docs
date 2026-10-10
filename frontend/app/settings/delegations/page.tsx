@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { mutFetch } from "@/lib/auth";
@@ -16,7 +16,34 @@ interface Grant {
   revoked_at: string | null;
 }
 
+interface Field {
+  name: string;
+  type: "string" | "integer" | "number" | "boolean";
+  format: string | null;
+  required: boolean;
+}
+interface DelegableAction {
+  name: string;
+  effect: string;
+  fields: Field[];
+}
+
 const API = getApiBaseUrl();
+
+// E46: a value typed as the field says; "" means "not pinned".
+function typedValue(field: Field, raw: string): unknown {
+  if (raw.trim() === "") return undefined;
+  if (field.type === "boolean") return raw === "true";
+  if (field.type === "integer") return Number.parseInt(raw, 10);
+  if (field.type === "number") return Number(raw);
+  return raw.trim();
+}
+
+function fieldHint(field: Field): string {
+  if (field.format === "uuid") return "идентификатор (UUID)";
+  if (field.format === "sha256") return "SHA-256, 64 hex";
+  return { string: "текст", integer: "целое число", number: "число", boolean: "да/нет" }[field.type];
+}
 const DELEGATIONS = `${API}/api/agent/delegations`;
 
 async function checked(response: Response) {
@@ -27,10 +54,10 @@ async function checked(response: Response) {
 
 export default function DelegationsPage() {
   const [grants, setGrants] = useState<Grant[]>([]);
-  const [actions, setActions] = useState<{ name: string; effect: string }[]>([]);
+  const [actions, setActions] = useState<DelegableAction[]>([]);
   const [action, setAction] = useState("");
   const [title, setTitle] = useState("");
-  const [constraints, setConstraints] = useState("{}");
+  const [values, setValues] = useState<Record<string, string>>({});
   const [limit, setLimit] = useState(20);
   const [hours, setHours] = useState(2);
   const [error, setError] = useState("");
@@ -49,21 +76,42 @@ export default function DelegationsPage() {
     ]).catch(e => setError(String(e.message ?? e))).finally(() => setLoading(false));
   }, [reload]);
 
+  const selected = actions.find((item) => item.name === action);
+  const scope = useMemo(() => {
+    const out: Record<string, unknown> = {};
+    for (const field of selected?.fields ?? []) {
+      const value = typedValue(field, values[field.name] ?? "");
+      if (value !== undefined && !(typeof value === "number" && Number.isNaN(value))) {
+        out[field.name] = value;
+      }
+    }
+    return out;
+  }, [selected, values]);
+  const until = new Date(Date.now() + hours * 3600_000).toLocaleString("ru-RU");
+  const summary = selected
+    ? `Агент сможет выполнить «${selected.name}» без повторного подтверждения, только если ` +
+      (Object.keys(scope).length
+        ? Object.entries(scope).map(([k, v]) => `${k} = ${JSON.stringify(v)}`).join(" и ")
+        : "…(укажите хотя бы одно поле)") +
+      `; не больше ${limit} раз, до ${until}.`
+    : "";
+
   async function create(event: FormEvent) {
     event.preventDefault();
     setError("");
     setBusy(true);
     try {
-      const scope = JSON.parse(constraints);
-      if (!scope || Array.isArray(scope) || typeof scope !== "object" || !Object.keys(scope).length) {
-        throw new Error("Укажите непустой JSON-объект с точными значениями аргументов.");
+      if (!Object.keys(scope).length) {
+        throw new Error("Укажите хотя бы одно поле: без точного ограничения разрешение не выдаётся.");
       }
+      // The server checks the names, types and values again (E46).
       await checked(await mutFetch(DELEGATIONS, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title, actions: [action], constraints: scope, max_actions: limit, duration_hours: hours }),
       }));
       await reload();
       setTitle("");
+      setValues({});
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setBusy(false); }
@@ -95,17 +143,34 @@ export default function DelegationsPage() {
         </label>
         <label className="block">Действие
           <select className="block w-full border rounded p-2 bg-background" required value={action}
-            onChange={e => setAction(e.target.value)}>
+            onChange={e => { setAction(e.target.value); setValues({}); }}>
             <option value="">Выберите действие</option>
             {actions.map(item => <option key={item.name} value={item.name}>{item.name} ({item.effect})</option>)}
           </select>
         </label>
-        <label className="block">Точные ограничения аргументов (JSON)
-          <textarea className="block w-full border rounded p-2 bg-transparent font-mono" rows={4} required
-            aria-describedby="scope-help" value={constraints} onChange={e => setConstraints(e.target.value)} />
-        </label>
-        <p id="scope-help" className="text-sm">Например: {`{"invoice_id":"UUID конкретного счёта"}`}.
-          Поля должны совпадать с аргументами выбранного действия. Шаблоны и исполняемые выражения не поддерживаются.</p>
+        {selected && <fieldset className="border rounded p-3 space-y-3">
+          <legend className="px-1">Точные значения аргументов</legend>
+          <p id="scope-help" className="text-sm">Заполните поля, которые нужно закрепить; пустое поле не ограничивает.
+            Значение сравнивается целиком — шаблоны и «любой» не поддерживаются.</p>
+          {selected.fields.map(field => <label key={field.name} className="block">
+            {field.name} <span className="text-sm opacity-70">— {fieldHint(field)}</span>
+            {field.type === "boolean"
+              ? <select className="block w-full border rounded p-2 bg-background" aria-describedby="scope-help"
+                  value={values[field.name] ?? ""}
+                  onChange={e => setValues(v => ({ ...v, [field.name]: e.target.value }))}>
+                  <option value="">не ограничивать</option>
+                  <option value="true">да</option>
+                  <option value="false">нет</option>
+                </select>
+              : <input className="block w-full border rounded p-2 bg-transparent font-mono" aria-describedby="scope-help"
+                  inputMode={field.type === "string" ? "text" : "decimal"}
+                  pattern={field.format === "uuid"
+                    ? "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+                    : field.type === "integer" ? "-?[0-9]+" : undefined}
+                  value={values[field.name] ?? ""}
+                  onChange={e => setValues(v => ({ ...v, [field.name]: e.target.value }))} />}
+          </label>)}
+        </fieldset>}
         <label className="block">Максимум попыток (1–200)
           <input className="block border rounded p-2 bg-transparent" type="number" min={1} max={200} required
             value={limit} onChange={e => setLimit(Number(e.target.value))} />
@@ -114,7 +179,14 @@ export default function DelegationsPage() {
           <input className="block border rounded p-2 bg-transparent" type="number" min={1} max={168} required
             value={hours} onChange={e => setHours(Number(e.target.value))} />
         </label>
-        <button className="border rounded px-4 py-2 disabled:opacity-50" disabled={busy || !actions.length}>
+        {selected && <div className="space-y-2" aria-live="polite">
+          <p className="text-sm">{summary}</p>
+          <pre className="text-xs whitespace-pre-wrap break-all border rounded p-2" aria-label="Итоговое разрешение">
+            {JSON.stringify({ actions: [action], constraints: scope, max_actions: limit, duration_hours: hours }, null, 2)}
+          </pre>
+        </div>}
+        <button className="border rounded px-4 py-2 disabled:opacity-50"
+          disabled={busy || !actions.length || !selected || !Object.keys(scope).length}>
           Выдать разрешение на указанных условиях
         </button>
       </form>
