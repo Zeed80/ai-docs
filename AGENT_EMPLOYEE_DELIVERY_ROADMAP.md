@@ -85,8 +85,9 @@ E24a выпущен: получатель проверяет текущую по
 перед эффектами вне БД, отзыв `ComputerUseGrant`, дочерний не наследует grant;
 неподдержанные получатели перечислены. E25 выпущен частично: стенд с настоящим
 SIGKILL воркера, reclaim разбирает вызов в полёте по квитанции — эффект не
-повторяется (`docs/agent-employee-delivery/E25-crash-harness.md`); остаток —
-точки входа Telegram/cron и решение человека.
+повторяется (`docs/agent-employee-delivery/E25-crash-harness.md`); точки входа
+устойчивы одной транзакцией. Пакет P1 (E21–E25) закрыт, кроме осознанно
+отложенных pre-dispatch token bounds; следующее — P2 (E26: ScriptRun).
 Остаются как минимум:
 
 - остальные AIRouter/headless/provider paths;

@@ -1205,7 +1205,7 @@ blocked verifier как итог в UI, подпись needs_review. Embedding/r
 
 ### E25 — Аварийная приёмка runtime
 
-**Статус:** PARTIAL / DEPLOYED (2026-10-10): стенд с настоящим SIGKILL воркера (before_dispatch, after_response, before_result_commit, запоздалый commit) и исправление reclaim — вызов в полёте разбирается по квитанции E24, повтора эффекта нет (`docs/agent-employee-delivery/E25-crash-harness.md`); остаток — точки входа Telegram/cron, решение человека, подтверждение уведомления. **После:** E24.
+**Статус:** DONE / DEPLOYED (2026-10-10): стенд с настоящим SIGKILL воркера (before_dispatch, after_response, before_result_commit, запоздалый commit) и исправление reclaim — вызов в полёте разбирается по квитанции E24, эффект не повторяется, неизвестное остаётся неизвестным; точки входа cron/Telegram, решение человека и закрытый UI устойчивы одной транзакцией (`docs/agent-employee-delivery/E25-crash-harness.md`). **Gate B2** — снятие ограничений пилота за владельцем. **После:** E24.
 **Создать:** изолированный crash harness в `backend/tests/` или `tests/integration/`
 с отдельным Compose project и синтетическим recipient.
 
