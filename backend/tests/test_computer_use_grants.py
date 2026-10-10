@@ -201,3 +201,36 @@ async def test_desktop_actions_carry_the_work_order_as_owner(client, monkeypatch
     )
     assert revoked.status_code == 200
     assert service.calls[-1] == ("desktop/close-owner", {"owner": f"wo:{order_id}"})
+
+
+@pytest.mark.asyncio
+async def test_a_click_needs_the_card_it_was_approved_for(client, monkeypatch):
+    """E36: no card, no click; the card goes to the browser for the re-check."""
+    service = _BrowserService()
+    service.install(monkeypatch)
+    order_id = (await client.post("/api/work-orders", json={"objective": "Order"})).json()["id"]
+    await client.post(
+        f"/api/work-orders/{order_id}/computer-grants",
+        json={
+            "actions": ["desktop_prepare_submit", "desktop_click"],
+            "allowed_hosts": ["example.com"],
+            "reason": "test",
+        },
+    )
+
+    def execute(action, body):
+        return client.post(
+            "/api/computer-use/execute",
+            json={"action": action, "work_order_id": order_id, "target": "s-1", "arguments": body},
+        )
+
+    assert (
+        await execute("desktop_prepare_submit", {"ref": "1:3", "revision": 1})
+    ).status_code == 200
+    assert service.calls[-1][1]["action"] == "describe"
+    assert (await execute("desktop_click", {"ref": "1:3", "revision": 1})).status_code == 422
+    card = {"origin": "https://example.com", "card_hash": "x"}
+    assert (
+        await execute("desktop_click", {"ref": "1:3", "revision": 1, "card": card})
+    ).status_code == 200
+    assert service.calls[-1][1]["card"] == card

@@ -28,7 +28,7 @@ router = APIRouter()
 
 class ComputerActionIn(BaseModel):
     action: str = Field(
-        pattern="^(browser_fetch|desktop_snapshot|desktop_start|desktop_observe|desktop_click|desktop_type|desktop_read|desktop_navigate|desktop_tabs|desktop_fill_secret|desktop_upload|desktop_downloads|desktop_save_download|desktop_close|file_read|file_write|shell)$"
+        pattern="^(browser_fetch|desktop_snapshot|desktop_start|desktop_observe|desktop_prepare_submit|desktop_click|desktop_type|desktop_read|desktop_navigate|desktop_tabs|desktop_fill_secret|desktop_upload|desktop_downloads|desktop_save_download|desktop_close|file_read|file_write|shell)$"
     )
     work_order_id: uuid.UUID
     step_id: uuid.UUID | None = None
@@ -171,6 +171,8 @@ def _browser_action(action: str, body: dict) -> str:
     name = action.removeprefix("desktop_")
     if name == "save_download":
         return "take_download"
+    if name == "prepare_submit":
+        return "describe"
     if name == "tabs" and body.get("tab") is not None:
         return "switch_tab"
     return name
@@ -253,9 +255,17 @@ async def _perform(
                 "text": body.get("text"),
                 "url": body.get("url"),
                 "tab": body.get("tab"),
+                "card": body.get("card"),
                 "wait_ms": min(int(body.get("wait_ms", 0)), 15000),
             }
         )
+        if action == "desktop_click" and not isinstance(body.get("card"), dict):
+            # E36: an approval is given for a card — what the click would send
+            # and where; the browser re-checks the live form against it.
+            raise HTTPException(
+                status_code=422,
+                detail="desktop_click needs the card from desktop_prepare_submit",
+            )
         if action == "desktop_fill_secret":
             payload.update(await _secret_for_fill(body, grant))
         if action == "desktop_upload":

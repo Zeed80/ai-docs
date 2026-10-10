@@ -611,6 +611,7 @@ async def grant_computer_use(
         "desktop_snapshot",
         "desktop_start",
         "desktop_observe",
+        "desktop_prepare_submit",
         "desktop_click",
         "desktop_type",
         "desktop_read",

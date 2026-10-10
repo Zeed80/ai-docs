@@ -28,6 +28,13 @@ _OPERATIONS = {
     "computer_use.desktop_snapshot": ("POST", "/api/computer-use/execute", [], "read", False),
     "computer_use.desktop_start": ("POST", "/api/computer-use/execute", [], "interact", False),
     "computer_use.desktop_observe": ("POST", "/api/computer-use/execute", [], "read", False),
+    "computer_use.desktop_prepare_submit": (
+        "POST",
+        "/api/computer-use/execute",
+        [],
+        "read",
+        False,
+    ),
     "computer_use.desktop_click": ("POST", "/api/computer-use/execute", [], "interact", False),
     "computer_use.desktop_type": ("POST", "/api/computer-use/execute", [], "interact", False),
     "computer_use.desktop_read": ("POST", "/api/computer-use/execute", [], "read", False),

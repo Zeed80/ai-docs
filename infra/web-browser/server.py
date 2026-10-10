@@ -312,7 +312,7 @@ class DesktopActionRequest(BaseModel):
     session_id: str
     owner: str = Field(min_length=1, max_length=200)
     action: str = Field(
-        pattern="^(observe|click|type|fill_secret|upload|read|screenshot|navigate|tabs|switch_tab|downloads|take_download|close)$"
+        pattern="^(observe|describe|click|type|fill_secret|upload|read|screenshot|navigate|tabs|switch_tab|downloads|take_download|close)$"
     )
     # E32: click/type address an element by the ref an observe returned,
     # under that observe's revision — never a model-written CSS selector
@@ -329,6 +329,9 @@ class DesktopActionRequest(BaseModel):
     # E35: upload — in-memory files from the backend's artifact broker; no
     # host path ever reaches the browser. take_download — this session's id.
     files: list[dict] | None = Field(default=None, max_length=5)
+    # E36: the action card an approval was given for; a click under it runs
+    # only if the live form still describes to the same card.
+    card: dict | None = None
     download_id: str | None = Field(default=None, max_length=40)
 
 
@@ -337,6 +340,46 @@ class DesktopActionRequest(BaseModel):
 # marks the page dirty on any structural change after that, so an action under
 # an old revision is refused instead of hitting whatever is there now.
 # Elements inside iframes are listed as the frame only — not addressable.
+# E36: what a click would send: the element and its form, values normalized.
+_DESCRIBE_JS = """
+(el) => {
+  const form = el.form || el.closest('form');
+  const fields = form ? Array.from(form.elements).filter(f => f.name).map(f => {
+    const type = (f.type || f.tagName).toLowerCase();
+    let value;
+    if (type === 'password') value = f.value ? '(set)' : '(empty)';
+    else if (type === 'checkbox' || type === 'radio') value = f.checked ? (f.value || 'on') : null;
+    else if (type === 'file') value = Array.from(f.files || []).map(x => x.name + ':' + x.size);
+    else value = f.value === undefined ? null : String(f.value);
+    return {name: f.name, type, value};
+  }) : [];
+  return {
+    element: {tag: el.tagName.toLowerCase(), type: el.type || null,
+      name: (el.getAttribute('aria-label') || (el.innerText || '').trim() || el.value || '')
+        .toString().trim().slice(0, 200)},
+    form: form ? {action: form.action || null, method: (form.method || 'get').toLowerCase(),
+      fields} : null,
+  };
+}
+"""
+
+
+def _card_hash(card: dict) -> str:
+    import json as _json
+
+    body = {k: v for k, v in card.items() if k != "card_hash"}
+    return hashlib.sha256(
+        _json.dumps(body, sort_keys=True, ensure_ascii=False).encode()
+    ).hexdigest()
+
+
+async def _describe(page, target) -> dict:
+    described = await target.evaluate(_DESCRIBE_JS)
+    card = {"origin": _page_origin(page.url), "url": page.url, **described}
+    card["card_hash"] = _card_hash(card)
+    return card
+
+
 _OBSERVE_JS = """
 (rev) => {
   // State lives in the DOM: page.evaluate may run in an isolated world that
@@ -682,6 +725,13 @@ async def _desktop_step(session: dict, req: DesktopActionRequest) -> dict:
         return {"ok": False, "error": "frame_not_actionable"}
     if await target.is_disabled():
         return {"ok": False, "error": "element_disabled"}
+    if req.action == "describe":
+        return {"card": await _describe(page, target)}
+    if req.action == "click" and req.card is not None:
+        live = await _describe(page, target)
+        if live["card_hash"] != _card_hash(req.card):
+            # The approval was for another form state, origin or element.
+            return {"ok": False, "error": "form_changed"}
     if req.action == "upload":
         if (await target.get_attribute("type") or "").lower() != "file":
             return {"ok": False, "error": "not_a_file_input"}

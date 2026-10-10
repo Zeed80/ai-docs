@@ -76,6 +76,7 @@ def test_browser_script_mcp_allowlist_matches_reviewed_catalog_inventory():
             "computer_use.desktop_snapshot",
             "computer_use.desktop_start",
             "computer_use.desktop_observe",
+            "computer_use.desktop_prepare_submit",
             "computer_use.desktop_click",
             "computer_use.desktop_type",
             "computer_use.desktop_read",

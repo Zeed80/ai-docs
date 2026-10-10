@@ -31,6 +31,7 @@ BROWSER_SCRIPT_MCP_OPERATIONS = frozenset(
         "computer_use.desktop_snapshot",
         "computer_use.desktop_start",
         "computer_use.desktop_observe",
+        "computer_use.desktop_prepare_submit",
         "computer_use.desktop_click",
         "computer_use.desktop_type",
         "computer_use.desktop_read",
