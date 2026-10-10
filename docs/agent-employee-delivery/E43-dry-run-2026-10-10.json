@@ -1,0 +1,1187 @@
+{
+  "rule_version": "e43-v1",
+  "generated_at": "2026-10-10T13:42:51.032715+00:00",
+  "counts": {
+    "ambiguous": 86,
+    "derived": 5,
+    "proven_shared": 8,
+    "system_state": 2
+  },
+  "decisions": [
+    {
+      "fact_id": "002a8327-517b-44a9-9e61-b3cfd978ec5e",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "1fead9f9-6658-4d93-8650-14a709299c64"
+      ],
+      "fact_hash": "7074afbcad507e520fe9e2abcb69f76b62eeee4d7b838cc07c059e19d1084c2e"
+    },
+    {
+      "fact_id": "004eae5c-bed3-4209-935d-492ba43362d8",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "ea6b3f52-2100-4222-a6ba-233f8219cb79"
+      ],
+      "fact_hash": "d44bb4268601973b7d46782111d78969a158b02f7a8d5b5b5b83592e10508a71"
+    },
+    {
+      "fact_id": "02ba8ee4-7722-40fb-9ee5-a96945f17593",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "a17c53a1-4e2c-4161-95fa-45bf101a774c"
+      ],
+      "fact_hash": "166559a9b2512bc50637e266699db9e803141887d42f1dd7468d4396ebc0c1d2"
+    },
+    {
+      "fact_id": "0710a276-e733-4fda-b2c9-f613b431d8e0",
+      "kind": "web_source",
+      "scope": "project",
+      "category": "proven_shared",
+      "rule": "web_source_registry",
+      "target_scope": null,
+      "source_ids": [],
+      "fact_hash": "ede75a8214c2c60790273bf51c622a01cb326ef3247cadfaa5ea7abbd84cca77"
+    },
+    {
+      "fact_id": "07fd05b4-832a-46b9-8ef1-8ed62c74c3cb",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "d3c1b4f6-c358-4fc6-8dbd-890847a381df"
+      ],
+      "fact_hash": "c98363e93e9a940c9f25fff3f43523ed87e32fe4a8a43e8f6494f8be2368168b"
+    },
+    {
+      "fact_id": "0994f83b-0490-4086-b1bd-181becb17145",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "d3097e05-f4a8-44ba-932d-080a6f29cb1d"
+      ],
+      "fact_hash": "51a269c920ee0f34603c3f6178fa7e039476532ccbdd8f77d7ee9d3aedfa428d"
+    },
+    {
+      "fact_id": "0a5d2693-11b8-44a6-b979-c55fb619da73",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "4fa75e64-ec40-4915-8ce7-d56f50dd4dac"
+      ],
+      "fact_hash": "417bf5d5259e0694a7ab0dd2dc846a5b389ae55d23e003e586c5d421afd4667d"
+    },
+    {
+      "fact_id": "0aad11ce-e53c-42c4-8c90-cdf72bdb5967",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "a8b56e5c-f6cc-42fc-896e-94487f1e5c9d"
+      ],
+      "fact_hash": "e02596e9632ba75bb1e8bcd8aa48058f7d0b324c9019b22653000c81b8b1401a"
+    },
+    {
+      "fact_id": "0f0e812f-aa3b-4c7b-9aa1-cc9702c399f0",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "a8b56e5c-f6cc-42fc-896e-94487f1e5c9d"
+      ],
+      "fact_hash": "82d741d60531df840f2d8ddd528c46d582c9d8ed16e14fe52f15c5a3a4f86629"
+    },
+    {
+      "fact_id": "162c8473-e701-4d87-847e-97fc72f84098",
+      "kind": "pinned_fact",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "no_provenance",
+      "target_scope": "quarantine:project",
+      "source_ids": [],
+      "fact_hash": "2c4dec94d5f9ad2ee90539d9f0bd226ce7dc76642313bc41d89bda007f86d2e7"
+    },
+    {
+      "fact_id": "1ae8a70a-764c-43de-ba7d-8d5a64830c87",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "d3c1b4f6-c358-4fc6-8dbd-890847a381df"
+      ],
+      "fact_hash": "f5350c0c8a0913fa0cfaccb0a078a9a03b4261023a4304aaef1c3a93581bb58d"
+    },
+    {
+      "fact_id": "1fcff05f-1521-4cd0-9196-b6043ed6b6d4",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "d3c1b4f6-c358-4fc6-8dbd-890847a381df"
+      ],
+      "fact_hash": "bc7762274b263ca9371771deb90f2970ce28f51ec45c17783d4cc353888e209d"
+    },
+    {
+      "fact_id": "206d0eb1-258f-414b-9927-a37aa543c687",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "7018d271-ff15-4f64-b8e1-374885470d15"
+      ],
+      "fact_hash": "5edd2fa7cf97e02e8c103e03a181d755f9e08928d3aca427250371fd46805759"
+    },
+    {
+      "fact_id": "21ab1af0-c781-4439-a5b1-9854ae25c9ae",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "d3097e05-f4a8-44ba-932d-080a6f29cb1d"
+      ],
+      "fact_hash": "edaf5f7721b42f12d42a440ccaece1ad952b3f0a1e6cfc23c929c514616024bc"
+    },
+    {
+      "fact_id": "2233c31e-f2e1-40af-af28-692f03da2d4c",
+      "kind": "graph_insight",
+      "scope": "project",
+      "category": "derived",
+      "rule": "graph_insight_quotes_documents",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "b8438a8e-ff2b-4c3a-837b-076f81bc0d9c",
+        "b6a100ba-65ff-4de6-8d03-f0e836fed158",
+        "3f0f0187-633f-422a-bf22-fd548f210d71",
+        "c69b6247-2837-473f-bbe8-a3da1aba9fe4",
+        "8c41465b-8109-46f9-a51d-faa4d2687a80",
+        "0a60b5c9-be97-40ad-9f77-590fe5048bb9",
+        "4ae8ef9b-908c-4007-a429-796139fc2767",
+        "79148ad9-8dc8-4167-ad73-6f09e69b8716"
+      ],
+      "fact_hash": "78488f2e9d2b958f17b7f1acc6dc9a3a101753b8efab5d184c1bf51e3922a3c3"
+    },
+    {
+      "fact_id": "226ee5ef-32c3-4d14-9e38-a80aca58303a",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "5e6e531a-edff-41ae-9074-2500218c867e"
+      ],
+      "fact_hash": "63f2dc6e742f92404b5c89f808b41bea763ae2e88c84912c9062d52deeafc6e1"
+    },
+    {
+      "fact_id": "241b7601-7d09-4d7e-bf76-3bbdbc131386",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "366773fa-2894-455a-a5e1-0cf6b303ed2e"
+      ],
+      "fact_hash": "1ab6e479b012f8846d0fd13b4e629083468fadb30a924339cf83be745be4cf56"
+    },
+    {
+      "fact_id": "2439771d-f8b8-40f2-bf17-132b498faf77",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "40608d10-6365-4d3e-a531-093c515a6aca"
+      ],
+      "fact_hash": "53e0eb3c316bd00464e8d936921b9a79b98aadca37eb146ab99554b7e6d0178a"
+    },
+    {
+      "fact_id": "26023ba3-dc41-4cf7-ad11-b4cf7e738798",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "32e5bea5-1cad-4608-b649-464ba1feb731"
+      ],
+      "fact_hash": "6be5c7e32cce7d989bc7da4237078a9e451ac93bc8740b350c61bdbe70e140d8"
+    },
+    {
+      "fact_id": "2622ef4b-7c3e-470e-92ec-b36de9efe580",
+      "kind": "graph_insight",
+      "scope": "project",
+      "category": "derived",
+      "rule": "graph_insight_quotes_documents",
+      "target_scope": "quarantine:project",
+      "source_ids": [],
+      "fact_hash": "3f704197edc8c6eb5598db27dbc369dcd0203aaf1a3c2cf5e3f634bac0f2ce25"
+    },
+    {
+      "fact_id": "267b488d-4d6f-4516-9e4e-28fe73bab555",
+      "kind": "pinned_fact",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "no_provenance",
+      "target_scope": "quarantine:project",
+      "source_ids": [],
+      "fact_hash": "bf9defbd674213c28b6e236f7e249e4cbcd13c5d2df7150abe71cadff3e94f54"
+    },
+    {
+      "fact_id": "2e0a2e62-9fe7-48c7-8937-cffd1fbf3e66",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "a9a1643e-60db-4a2e-973a-f19e6ec11286"
+      ],
+      "fact_hash": "c1576a23e0757101d6c42312a4257922029af039a778a5e6a168c2c8b93385c0"
+    },
+    {
+      "fact_id": "2f66d86a-40ac-4754-9be0-56a38b4b0865",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "4fa75e64-ec40-4915-8ce7-d56f50dd4dac"
+      ],
+      "fact_hash": "540e7ef0287fc2e6b4094602d6857c698db3a005e011289f68239b588e9615a1"
+    },
+    {
+      "fact_id": "30431cf0-f807-4405-83a3-bea4a845615e",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "c961b0b5-64f4-4c67-af9f-c39a3f09c9c4"
+      ],
+      "fact_hash": "c325bb1e40ff4ed4e67ec10b6d957d96a0d34e7bf326c8b3ad0ca31745724b95"
+    },
+    {
+      "fact_id": "320dd5b3-e98c-4f1a-b1ea-88b773c71484",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "9f90d65f-6449-45a9-80ab-ce53a0c8d4c9"
+      ],
+      "fact_hash": "b4384adff4531c02425b5b4d9d2508eca1213853727f04ba7491e79fd6d192da"
+    },
+    {
+      "fact_id": "38c19a42-5a6f-41df-84b4-dc566acb9940",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "39fc1a61-5fd8-477a-ba78-02ea49fd0391"
+      ],
+      "fact_hash": "e08fb722baf59bc88f087b4e71bc396d43c2e775b51f6e26dc719ca00842a6b3"
+    },
+    {
+      "fact_id": "412a0c49-b856-4017-bb89-3853eb4a0eac",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "6e7baa00-311b-4f0f-af90-f4d963bd157c"
+      ],
+      "fact_hash": "c7df7e0602d572fde5c18848fb53095c58791b86d7eee758168a97ddd2e1b871"
+    },
+    {
+      "fact_id": "413fdef6-a929-4c5b-ac43-dc6f064ce098",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "5170abec-7a74-481a-97a5-35d2f3600932"
+      ],
+      "fact_hash": "4d6f0e1296eb8075833c08baa68306a6998853bd18367753a7d3e58f71a2c70d"
+    },
+    {
+      "fact_id": "42815f94-d92a-47e3-886b-9dd289cfe3e4",
+      "kind": "pinned_fact",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "no_provenance",
+      "target_scope": "quarantine:project",
+      "source_ids": [],
+      "fact_hash": "a3555d6f92f225d3b387ec0a04e54d828370ac92812a41ee0a969fb6bf427d02"
+    },
+    {
+      "fact_id": "4289ddbc-7b52-4e23-8c60-52dac323d4e3",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "b91eb0cb-e487-4dae-a3c7-823979489b5f"
+      ],
+      "fact_hash": "eaa794e67bfbec62d06e9c59885ddc338ef0e8fbbf94e01c6cc04fa69886130c"
+    },
+    {
+      "fact_id": "43976508-4df3-4059-ac90-fe5c1c4a999e",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "d3097e05-f4a8-44ba-932d-080a6f29cb1d"
+      ],
+      "fact_hash": "c1121d85995532284a454956d167ec7d9aeb21cff9a9ae5ef0f9326bf0c049e5"
+    },
+    {
+      "fact_id": "4534303c-73b8-49fb-8209-507450002556",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "4fa75e64-ec40-4915-8ce7-d56f50dd4dac"
+      ],
+      "fact_hash": "a03f28ddef57d41346794d678fce0505501007630abe483eced409216b4be0a8"
+    },
+    {
+      "fact_id": "471b9608-19cf-438a-a3bd-4e5e51436ca6",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "5e6e531a-edff-41ae-9074-2500218c867e"
+      ],
+      "fact_hash": "1fc7d8742e368e4c15c38025c79c1c3bd1d2c127e9a566fefae8fd6a170d149f"
+    },
+    {
+      "fact_id": "4e2a6308-b752-4f7d-bd73-0469747f4997",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "66319481-fcae-4a65-9e78-a2de008a8217"
+      ],
+      "fact_hash": "9c2a35f80fef85f66b6f1e715a5062a29b6d1fe2e7ff6daaa0d62265decd6353"
+    },
+    {
+      "fact_id": "52384592-c169-48a1-b902-1342fa9d6096",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "5e6e531a-edff-41ae-9074-2500218c867e"
+      ],
+      "fact_hash": "00ee25531d0a98286dc4113ed350fa37de9d3a85d8f0453f0b27248d04bf8f71"
+    },
+    {
+      "fact_id": "54572fd6-968e-45df-9b17-4bccd29e4e0b",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "ba59821c-b7e4-468c-85e1-1fa03dab571c"
+      ],
+      "fact_hash": "6351a952cff620702a95f07a4cbb555c0ff9a82143b1627ffea07df7d43cc49c"
+    },
+    {
+      "fact_id": "55fcc5d2-a7d2-40d9-b552-db5ce07097e3",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "0a64cb3f-2b02-40b2-9510-0d1b59f6f156"
+      ],
+      "fact_hash": "e2b373ccc95fcd997ba753e75c55a5613a185a7e786ab093491602d6666ca664"
+    },
+    {
+      "fact_id": "57a57c2e-ee8e-46b8-9094-293f3d44e12f",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "d3097e05-f4a8-44ba-932d-080a6f29cb1d"
+      ],
+      "fact_hash": "865bad5eec93c9724867e00050cc8d59edd0ba335a666adcb9b0bc4c1ff1d70e"
+    },
+    {
+      "fact_id": "5a953a1f-de37-413e-92fe-446a76d2af19",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "9f90d65f-6449-45a9-80ab-ce53a0c8d4c9"
+      ],
+      "fact_hash": "8abeb7d63e816f5367fedc1963ec61616bf27e4780aa5a4cf9488751762092ab"
+    },
+    {
+      "fact_id": "5f67279a-960f-4be4-832a-503a166bc837",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "c26adfc0-e2e3-4edd-b09e-e19c0a3203a9"
+      ],
+      "fact_hash": "00e2d18e8686f8e4e64a77ba867bc1ea8f60b2b0a2117dc8611fec0a13cad436"
+    },
+    {
+      "fact_id": "6019436f-47ea-456b-9f2c-4455609cb0d8",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "2130c591-5bfd-4738-929d-189ae14b1c7f"
+      ],
+      "fact_hash": "136b4e18edd97e793241684abdf43b97a2ec2a4946f9f8d150530a110f306099"
+    },
+    {
+      "fact_id": "661285cc-73ba-4f41-b429-7c57096e4bfe",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "1fe88c29-4fbd-415f-8ecc-19e85cad4f45"
+      ],
+      "fact_hash": "8fa1542329e92a0e88f6f10d5b2d419d10d7f96d6881fb2073daec25b2ad41a4"
+    },
+    {
+      "fact_id": "66763ced-8813-4ace-8740-97d6907a680a",
+      "kind": "web_source",
+      "scope": "project",
+      "category": "proven_shared",
+      "rule": "web_source_registry",
+      "target_scope": null,
+      "source_ids": [],
+      "fact_hash": "b2a5089ed36da6d3a6bff1fa88062f30f4ec614443b6425d96fed5a93c70620d"
+    },
+    {
+      "fact_id": "668b29ba-5175-4af5-b463-ff1e07720c52",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "no_provenance",
+      "target_scope": "quarantine:project",
+      "source_ids": [],
+      "fact_hash": "c1637939cd95ddd248df82d3c8baa2243fe799f6209fbcfd76ae67cd66b1ee45"
+    },
+    {
+      "fact_id": "67af5549-9f65-4e2e-b292-7e0a40df2b9c",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "39bc77b3-cced-4a0b-92e0-b7a7e7be5fe7"
+      ],
+      "fact_hash": "6abcf6ad3cb06ccbdb7997d97843a9abaecc40e4a6ada5128152640393832870"
+    },
+    {
+      "fact_id": "6cc5ba3b-aa75-4ff9-acbc-a35034a149a0",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "no_provenance",
+      "target_scope": "quarantine:project",
+      "source_ids": [],
+      "fact_hash": "4ccf02fa0a25e9f1711cae9fd4dab205ff7c6b09b6e08fabe0a1cdbbde7c0c47"
+    },
+    {
+      "fact_id": "6cfb4358-7c32-4ca2-b18e-143fcabc599c",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "f023a959-5302-4e6f-a915-047e70480b6e"
+      ],
+      "fact_hash": "b66b36e13d9c34b88562e39278076412dae5756b0dbebd4be6cd5047264d08d8"
+    },
+    {
+      "fact_id": "780995fb-c594-4967-8a37-355f3d77b4d7",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "8f4f9dc8-59a7-400b-8be1-03c70d304217"
+      ],
+      "fact_hash": "38e658462052426dce372611fd5be6c994ef39eb40eb3d50caf76506bdf4ceda"
+    },
+    {
+      "fact_id": "7cac76fd-3159-4380-b999-24ca82340c3c",
+      "kind": "verified_fact",
+      "scope": "project",
+      "category": "proven_shared",
+      "rule": "approved_promotion",
+      "target_scope": null,
+      "source_ids": [],
+      "fact_hash": "61a33d28cd6d7f60ded78b34557fe0d5c3d05cd0a84968903e9a29b409a612ab"
+    },
+    {
+      "fact_id": "7fc5d21d-c5c9-48c7-9622-fd2305da3a1f",
+      "kind": "graph_insight",
+      "scope": "project",
+      "category": "derived",
+      "rule": "graph_insight_quotes_documents",
+      "target_scope": "quarantine:project",
+      "source_ids": [],
+      "fact_hash": "a7f647acd0b43cea4dc5b42fcb324067f78fd6c2fb645ea63e4088f41bc9e224"
+    },
+    {
+      "fact_id": "7fe55e8e-6dc4-41c8-a0fb-a4f2b9e99611",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "1fead9f9-6658-4d93-8650-14a709299c64"
+      ],
+      "fact_hash": "01e3d3004f1b711d3fefca735165ad3e363ce75c3776291d5d7fe77bdd2c5278"
+    },
+    {
+      "fact_id": "816a9fc7-f78f-499a-99dc-f79326c3656f",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "6e7baa00-311b-4f0f-af90-f4d963bd157c"
+      ],
+      "fact_hash": "1300cbe0a238d77dd40211da6a32662976dc6c433465dc41a408ec949ee4e4ce"
+    },
+    {
+      "fact_id": "81c494d3-95d0-4eed-b194-4b1c966890c0",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "2fbb9922-e8d6-45c0-9f22-dfe6479831d4"
+      ],
+      "fact_hash": "a404deaa98a4ba897a06dd2fc5406dfc724394fec8de34ea4d5e35f35158b144"
+    },
+    {
+      "fact_id": "822fdf90-f3e1-4828-81db-bb277cd11822",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "76d0c080-5839-4ff5-9fb1-f111e33cf9cf"
+      ],
+      "fact_hash": "dc8e92612c04ebe028a9ab128a7ebecf3b1f6960a2e63281c7b72c39f08a1d69"
+    },
+    {
+      "fact_id": "82be12c3-e340-4eea-aa69-62014d658223",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "f023a959-5302-4e6f-a915-047e70480b6e"
+      ],
+      "fact_hash": "556c1e2c20e4c7f169090de73c4425513422b36075df8b8cf7780b4302259d14"
+    },
+    {
+      "fact_id": "85759cb4-fa97-43a3-aefd-a582a5ca3e64",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "5e6e531a-edff-41ae-9074-2500218c867e"
+      ],
+      "fact_hash": "9b0f092c4c30c2f9227a02d7802f3bf8fe9bad5595bfd4e2d5ada524b99c29d2"
+    },
+    {
+      "fact_id": "85faf964-8d5c-4b62-97cb-4f5a56714251",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "0de1dfbd-b9c5-40ec-9544-f25e274169a0"
+      ],
+      "fact_hash": "cac5aaf1ca4f717492a53a730820e6e4a12d70d9a2001aa4007073cf304e54ae"
+    },
+    {
+      "fact_id": "8ce392e2-c115-43fb-8f04-487495f9b572",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "1a7a7f68-3335-4010-9694-3f2731cf7f94"
+      ],
+      "fact_hash": "8d0c0e6b9b1efe4384b20da3d5fce4bbca2b620792994d3c6dbceb6061303c43"
+    },
+    {
+      "fact_id": "91975e79-40ec-45b9-9130-2677837575a6",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "d3c1b4f6-c358-4fc6-8dbd-890847a381df"
+      ],
+      "fact_hash": "ce0c31bb0b88ae00e02cd83f70b6442939f00008bbe9a34835eaadc0bb869eb9"
+    },
+    {
+      "fact_id": "9231a65f-467e-4160-aa43-e62da330949c",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "66319481-fcae-4a65-9e78-a2de008a8217"
+      ],
+      "fact_hash": "d1e7023d54a916444e53a6f64bf102bf686692a10a67f189b96ba77418b83c0e"
+    },
+    {
+      "fact_id": "9278c148-2013-4451-b541-58acf049a17c",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "f41ad5cd-18e9-4fa8-b4a0-866106292ab7"
+      ],
+      "fact_hash": "0b480193e490d035783859a1a6049c19fe39fc9f5a6645af8b69d4a16717010b"
+    },
+    {
+      "fact_id": "933aa999-95e3-44e1-9412-724eba74afdd",
+      "kind": "idle_reflection_state",
+      "scope": "project",
+      "category": "system_state",
+      "rule": "job_bookkeeping",
+      "target_scope": null,
+      "source_ids": [],
+      "fact_hash": "7ad67c3c96f50b860d86d2c1ab55a585c1889c4e7a132b924ac050c2c78a64b6"
+    },
+    {
+      "fact_id": "9563fe30-c032-453e-baa4-b720066a3c1c",
+      "kind": "web_source",
+      "scope": "project",
+      "category": "proven_shared",
+      "rule": "web_source_registry",
+      "target_scope": null,
+      "source_ids": [],
+      "fact_hash": "4d4f610560d5be50642183d9015555841380fb110561d2155a2c3cedd4deb838"
+    },
+    {
+      "fact_id": "a32bee7c-68e2-4f41-8361-d8c609aab809",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "409ab538-481f-4d26-b006-cbddfc3640b7"
+      ],
+      "fact_hash": "6b26625d21b0c61ec377704dba9d46659a7ecdb9a6c5517579614b19ecc45899"
+    },
+    {
+      "fact_id": "a349cd9a-c31d-4821-8a76-b2b98633b135",
+      "kind": "verified_fact",
+      "scope": "project",
+      "category": "proven_shared",
+      "rule": "approved_promotion",
+      "target_scope": null,
+      "source_ids": [],
+      "fact_hash": "ddf9811721b2f5ae8b0a2910b4a1d5cd052d4d9cf0456ca09c91898067e322ec"
+    },
+    {
+      "fact_id": "a356a284-11af-4a8f-b8cf-b26096686450",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "e55a044d-7fed-41f5-9beb-3ff6332ed3d5"
+      ],
+      "fact_hash": "61f12c7a3096edb3e09311fe919f2c391532765e04437eae9d069c8cbfadbcc9"
+    },
+    {
+      "fact_id": "a66c7ee9-b8c5-4df7-a6fa-c8d6ef65a918",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "1fe88c29-4fbd-415f-8ecc-19e85cad4f45"
+      ],
+      "fact_hash": "e83e394a3e7190fb5691cfcdfc61fe2b31770cf2fa742f92002e95fda7ca077d"
+    },
+    {
+      "fact_id": "aa52c40d-d26a-4589-a368-901590d1a0df",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "2fbb9922-e8d6-45c0-9f22-dfe6479831d4"
+      ],
+      "fact_hash": "ae92fae44078a9d0091d2fce137c1e443e06b8083ab0bdba7c79caab05e3405c"
+    },
+    {
+      "fact_id": "ab608219-1d25-454a-9dfb-f0477821c86e",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "a17c53a1-4e2c-4161-95fa-45bf101a774c"
+      ],
+      "fact_hash": "932bf50771ec967aff428877e62ad04eeb2324931e1767dfb13080b99b025a4d"
+    },
+    {
+      "fact_id": "aeddb03a-4701-4ac8-8722-cfd04e92f4ab",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "d3c1b4f6-c358-4fc6-8dbd-890847a381df"
+      ],
+      "fact_hash": "8bcfe975046f12e6bb1e49c61712f281af4a84579985c32806d8375ac520cb3a"
+    },
+    {
+      "fact_id": "af8255e2-4ae6-45bb-9237-59987386b1e6",
+      "kind": "pinned_fact",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "no_provenance",
+      "target_scope": "quarantine:project",
+      "source_ids": [],
+      "fact_hash": "bf9defbd674213c28b6e236f7e249e4cbcd13c5d2df7150abe71cadff3e94f54"
+    },
+    {
+      "fact_id": "b007e54b-be3e-4ca4-b5a1-27327733c10e",
+      "kind": "graph_insight",
+      "scope": "project",
+      "category": "derived",
+      "rule": "graph_insight_quotes_documents",
+      "target_scope": "quarantine:project",
+      "source_ids": [],
+      "fact_hash": "380cf5b5fc322fc50881900750e2859c2a720c5166f2942e8a8deebb599272d8"
+    },
+    {
+      "fact_id": "b0ca831f-57ea-40d8-a397-b9134145bfff",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "5e6e531a-edff-41ae-9074-2500218c867e"
+      ],
+      "fact_hash": "08b06d62798b56542251953075b1055691d36bfc8a5cb50eeccb51b1905830f8"
+    },
+    {
+      "fact_id": "b7629b81-d4c6-4e6a-a5b8-e84ac1b43420",
+      "kind": "graph_analytics_state",
+      "scope": "project",
+      "category": "system_state",
+      "rule": "job_bookkeeping",
+      "target_scope": null,
+      "source_ids": [],
+      "fact_hash": "e84f06d6f9ac320bc41a7fe1192a1498521e2fbc68bba719a6bac0028e6052b5"
+    },
+    {
+      "fact_id": "bd85c8fa-2f7d-4491-aeac-4072154f7dbd",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "d3097e05-f4a8-44ba-932d-080a6f29cb1d"
+      ],
+      "fact_hash": "e417162c62d96f619de67142daa91e80170e6200a320055929b147bb98a9c5e7"
+    },
+    {
+      "fact_id": "bd8a397c-12ab-470d-96a9-cd58433d9352",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "1fe88c29-4fbd-415f-8ecc-19e85cad4f45"
+      ],
+      "fact_hash": "14cff70c6da56e86df34d26f4476ee34c91c76fdfde1ee82c79f6b6ee9948bbf"
+    },
+    {
+      "fact_id": "beb6d39b-ae9c-40e2-9cc3-d7dff1ada4d7",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "8f4f9dc8-59a7-400b-8be1-03c70d304217"
+      ],
+      "fact_hash": "c994917d99dcab2553275e9dcc9c3bcc2ebdf9479677a9b11ef0676aeebe8537"
+    },
+    {
+      "fact_id": "bffcb65b-ae98-432f-8af5-6933b98ea90f",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "66319481-fcae-4a65-9e78-a2de008a8217"
+      ],
+      "fact_hash": "1aa692978cf82833972b5c5f47becd4a09a285eb5780ff0e71f7acf43f15be52"
+    },
+    {
+      "fact_id": "c0d6ddd5-5e34-4403-8b91-32b02d056eb0",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "45c21abf-5d9b-4a60-93c6-eedac27043c4"
+      ],
+      "fact_hash": "4f187743d992b061f8b14eb754ffc4265bdeffcf4fd4102866e23525658ef892"
+    },
+    {
+      "fact_id": "c95e3e91-72af-4da4-98a2-7c3e1ae79642",
+      "kind": "verified_fact",
+      "scope": "project",
+      "category": "proven_shared",
+      "rule": "approved_promotion",
+      "target_scope": null,
+      "source_ids": [],
+      "fact_hash": "c585238160d255be9538a2ede50e09fdfb54e3ef28595a595dc493b27c805709"
+    },
+    {
+      "fact_id": "d24c4aa8-b62b-421a-810c-68440029541e",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "no_provenance",
+      "target_scope": "quarantine:project",
+      "source_ids": [],
+      "fact_hash": "285303caf50f6009cbdf91c3b2c9750411fa0c247ecbee720c82608cb94f7f65"
+    },
+    {
+      "fact_id": "d3cc0114-6db1-49e9-a33d-f1721453bcb0",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "1fe88c29-4fbd-415f-8ecc-19e85cad4f45"
+      ],
+      "fact_hash": "f1a36097e5c321cd7e395680919148a4938fe503667706dfb5fe646a1c896e47"
+    },
+    {
+      "fact_id": "d53f73c4-9e6d-4c3f-a1d8-afbdc03f36c4",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "9f60caeb-b8e2-4304-90c3-ff600fd103ca"
+      ],
+      "fact_hash": "1235f14cdc2315c6f5d3acac8ab1aa90ce6e4f378223253e8adba086e5f10842"
+    },
+    {
+      "fact_id": "d5d4ad12-7361-4773-bde1-09b21ee1458b",
+      "kind": "web_source",
+      "scope": "project",
+      "category": "proven_shared",
+      "rule": "web_source_registry",
+      "target_scope": null,
+      "source_ids": [],
+      "fact_hash": "f27ff1f2da56c3e945942616148b72036d2ef9a192e37049c3d4dac6bd76d3b7"
+    },
+    {
+      "fact_id": "d70d86a5-e7b5-496b-abd6-e51ba22dc69c",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "0de1dfbd-b9c5-40ec-9544-f25e274169a0"
+      ],
+      "fact_hash": "4758771eb35cc4fde5b5c7adb00cde4a7e3b0a520197099d8c990b4196f2159c"
+    },
+    {
+      "fact_id": "d945eb75-6e0c-4988-beac-5102eb241f8e",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "6e7baa00-311b-4f0f-af90-f4d963bd157c"
+      ],
+      "fact_hash": "89962d79c15b097eab8fb1a8f106b0489d4eb05c1a3e638b63a4c320de407074"
+    },
+    {
+      "fact_id": "d9a31490-49ad-4ce2-a163-b88b76762077",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "6e7baa00-311b-4f0f-af90-f4d963bd157c"
+      ],
+      "fact_hash": "7b0c3bada649dc358f41aedf4c17b67f7da60973fe3514cb9a4b138f91c9eb90"
+    },
+    {
+      "fact_id": "dba62adf-5074-4e53-8dcc-fa5b2dabc04f",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "d3097e05-f4a8-44ba-932d-080a6f29cb1d"
+      ],
+      "fact_hash": "b0af65c8861360b2eeff5fb869cd922fadb31b136a0ff3644deedcccc26e7cf4"
+    },
+    {
+      "fact_id": "dc3ec8d2-594a-4773-bbb9-1a049adb735c",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "8602b314-51cd-4b8f-9ea5-c6e64f038f40"
+      ],
+      "fact_hash": "3f1b0da221137bb47015752cbef8a897d6edeadf1a7ffdc238a8adebbb488894"
+    },
+    {
+      "fact_id": "e63d9006-df25-436f-8ae7-6921ad8b1d22",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "4b01a900-21ac-40b4-9f4b-7867eed1bfd8"
+      ],
+      "fact_hash": "f701c1586dbd0c64f91631045ed1e3f7e37a938762c4c58bbe48dc1d1a1ea25f"
+    },
+    {
+      "fact_id": "e78fbb78-4d58-458e-824e-03d255f56a53",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "6ee5df3f-a1d2-4f25-bf32-301dd78d7779"
+      ],
+      "fact_hash": "0dbc8362d7a5c9103ba8cdabf49516d877fb155c13ef44dd1e88bc775ddb392c"
+    },
+    {
+      "fact_id": "eae4c6c3-9d96-4d4b-9163-ecc0c0a6f001",
+      "kind": "pinned_fact",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "no_provenance",
+      "target_scope": "quarantine:project",
+      "source_ids": [],
+      "fact_hash": "6c9f527755e3c6e08aeac31862d32cd02c40810696400952030d33e0616fefe1"
+    },
+    {
+      "fact_id": "eb8aa6ab-a399-48d9-ac41-5db2b85d9534",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "5e6e531a-edff-41ae-9074-2500218c867e"
+      ],
+      "fact_hash": "56c183b14c0d4fd7fad99e50aab8f6fb52565216092b0fc8733621bf1e212b27"
+    },
+    {
+      "fact_id": "ec625cf2-56c3-481e-960a-f89f740af5f0",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "1de48860-da2b-43ec-bba6-81c603ced104"
+      ],
+      "fact_hash": "e656b6e10ed05a9ef608c758f144f912c024ba2df353b9181b4eee52aa38e461"
+    },
+    {
+      "fact_id": "ef67a26c-0593-40ed-b2af-a4ae897c3ebd",
+      "kind": "graph_insight",
+      "scope": "project",
+      "category": "derived",
+      "rule": "graph_insight_quotes_documents",
+      "target_scope": "quarantine:project",
+      "source_ids": [],
+      "fact_hash": "fcc373e37948355b5427f704df036f532723cb0c3b4b39bdbb94b5296570d3e5"
+    },
+    {
+      "fact_id": "f190f57f-6d5c-4d30-adee-bf826d49d66b",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "ae9ddcdf-8e99-4a72-a392-e3ca98edbc37"
+      ],
+      "fact_hash": "4af466fd3c018600cfe53c3d355bda52613e3021041c60eaab14dabb44fa616f"
+    },
+    {
+      "fact_id": "f2547772-8348-4d8a-a678-cf5386175dc3",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "9f60caeb-b8e2-4304-90c3-ff600fd103ca"
+      ],
+      "fact_hash": "8d22f4bf1efc9870a04809bd9b8db9fdcd9b0d8a04db6fd6b4f5e195cf0590a5"
+    },
+    {
+      "fact_id": "f8ce3ef3-5fb7-4a56-9047-f4752b41380e",
+      "kind": "web_source",
+      "scope": "project",
+      "category": "proven_shared",
+      "rule": "web_source_registry",
+      "target_scope": null,
+      "source_ids": [],
+      "fact_hash": "b3d9e656644fb9cff6adb08981fdde9bb3abb180c6fd42d443f81b57ef084211"
+    },
+    {
+      "fact_id": "fa40850e-c2df-4493-8600-2c70a975fe0d",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "40608d10-6365-4d3e-a531-093c515a6aca"
+      ],
+      "fact_hash": "3035e11eeb1b026ea62ea0e886374b1f761e44179691954aa05ddf4fc0db3479"
+    },
+    {
+      "fact_id": "fa4369cc-bfb5-4f63-8e63-cb51e1877ee4",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "7a5728c8-63ac-46bc-8791-2030af53f44c"
+      ],
+      "fact_hash": "39e337e02968a2fa64a14dd72a11cf2667d933260af17dc9c148ea50e1e78831"
+    },
+    {
+      "fact_id": "fa866d03-9940-4b45-9708-a9fb61b8ca84",
+      "kind": "chat_turn",
+      "scope": "project",
+      "category": "ambiguous",
+      "rule": "session_id_not_found",
+      "target_scope": "quarantine:project",
+      "source_ids": [
+        "39bc77b3-cced-4a0b-92e0-b7a7e7be5fe7"
+      ],
+      "fact_hash": "f626ba69dd7422ad209a3154ba1c937b7330ac7cf9c0acc485f9717bf2e41723"
+    }
+  ]
+}

@@ -1479,7 +1479,7 @@ DocumentChunk, embeddings, documents/mail/artifacts и существующие 
 
 ### E43 — Перенос старой общей памяти
 
-**Статус:** TODO. **После:** E42.
+**Статус:** ИНСТРУМЕНТ ГОТОВ, ПЕРЕНОС ЖДЁТ РЕШЕНИЯ (2026-10-10): `app/domain/memory_migration.py` + CLI, dry-run на стенде: 86 неоднозначных (81 реплика чатов без доказуемого владельца), 5 производных, 8 общих, 2 служебных, доказанных владельцев нет. Найдено: аналитика графа писала инсайты с названиями документов всех отделов в `project` — теперь `system:graph_analytics` (`docs/agent-employee-delivery/E43-memory-migration.md`). **После:** E42.
 **Создать:** dry-run migration tool + отчёт по категориям provenance.
 
 1. Инвентаризация без удаления: доказанный owner, доказанный shared, ambiguous.

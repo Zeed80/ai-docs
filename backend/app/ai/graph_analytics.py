@@ -34,6 +34,10 @@ logger = structlog.get_logger()
 _STATE_KIND = "graph_analytics_state"
 _STATE_TITLE = "graph_analytics_state"
 _INSIGHT_KIND = "graph_insight"
+# E43: insights are computed over the whole graph and quote titles of every
+# department's documents. In "project" scope memory search showed them to
+# everyone; the admin panel (/admin/graph/insights) reads them by kind.
+INSIGHT_SCOPE = "system:graph_analytics"
 
 _SETTINGS_REDIS_KEY = "graph_analytics_settings"
 _DEFAULT_INTERVAL_SECONDS = 86_400
@@ -216,7 +220,7 @@ def _god_nodes_fact(god_nodes: list[dict[str, Any]]) -> MemoryFact | None:
         return None
     lines = [f"- {n['title']} (связей: {n['degree']})" for n in god_nodes]
     return MemoryFact(
-        scope="project",
+        scope=INSIGHT_SCOPE,
         kind=_INSIGHT_KIND,
         title="Самые связанные узлы графа памяти",
         summary="Узлы с наибольшим числом связей — кандидаты на приоритетное внимание:\n"
@@ -233,7 +237,7 @@ def _cluster_facts(clusters: list[list[str]]) -> list[MemoryFact]:
     for idx, titles in enumerate(clusters, start=1):
         facts.append(
             MemoryFact(
-                scope="project",
+                scope=INSIGHT_SCOPE,
                 kind=_INSIGHT_KIND,
                 title=f"Кластер графа памяти #{idx}",
                 summary=f"Группа взаимосвязанных узлов ({len(titles)}): " + ", ".join(titles),
@@ -251,7 +255,7 @@ def _surprising_facts(surprising: list[dict[str, Any]]) -> list[MemoryFact]:
     for item in surprising:
         facts.append(
             MemoryFact(
-                scope="project",
+                scope=INSIGHT_SCOPE,
                 kind=_INSIGHT_KIND,
                 title=f"Неожиданная связь: {item['source_title']} ↔ {item['target_title']}",
                 summary=(
