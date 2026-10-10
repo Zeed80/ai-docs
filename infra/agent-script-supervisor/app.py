@@ -131,6 +131,10 @@ class Supervisor:
             entry["result"] = result
         return result
 
+    def _canceled(self, run_id: str) -> bool:
+        with self._lock:
+            return bool((self._runs.get(run_id) or {}).get("canceled"))
+
     def cancel(self, run_id: str, owner_key: str) -> dict[str, Any]:
         """Kill a run's container; its recorded result becomes "canceled"."""
         with self._lock:
@@ -217,10 +221,17 @@ class Supervisor:
             host_config=host_config,
         )
         container = self.client.containers.get(created["Id"])
+        if self._canceled(request.run_id):
+            # Canceled while the container was being created: a cancel
+            # earlier found nothing to kill.
+            container.remove(force=True)
+            return {"status": "canceled"}
         started = time.time()
         try:
             stdin = container.attach_socket(params={"stdin": 1, "stream": 1})
             container.start()
+            if self._canceled(request.run_id):
+                container.kill()
             raw = getattr(stdin, "_sock", stdin)
             raw.sendall(archive.getvalue())
             raw.shutdown(socket.SHUT_WR)

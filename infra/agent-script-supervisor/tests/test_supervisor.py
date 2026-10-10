@@ -219,3 +219,27 @@ def test_a_cancel_before_the_run_arrives_prevents_it(client):
     late = _run(client, "open('/tmp/out/x','w').write('ran')\n", run_id=run_id).json()
     assert late["status"] == "canceled"
     assert "output_artifacts" not in late
+
+
+def test_a_cancel_while_the_container_is_being_created_still_stops_it(client, monkeypatch):
+    """The cancel found no container yet and only set the flag; the run then
+    created one and slept its full time (seen in the E29 suite)."""
+    from docker.models.containers import ContainerCollection
+
+    sup = supervisor_app.supervisor
+    real_get = ContainerCollection.get
+    run_id = uuid.uuid4().hex
+
+    def get_then_cancel(self, container_id):
+        container = real_get(self, container_id)
+        with sup._lock:
+            if run_id in sup._runs:
+                sup._runs[run_id]["canceled"] = True
+        return container
+
+    # The SDK builds a new collection on every access: patch the class.
+    monkeypatch.setattr(ContainerCollection, "get", get_then_cancel)
+    started = time.time()
+    result = _run(client, "import time\ntime.sleep(60)\n", run_id=run_id).json()
+    assert result["status"] == "canceled"
+    assert time.time() - started < 20
