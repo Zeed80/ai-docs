@@ -111,7 +111,11 @@ async def _robots_checker(base_url: str):
     parser = RobotFileParser()
     robots_url = urljoin(base_url, "/robots.txt")
     try:
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+        from app.config import settings
+
+        async with httpx.AsyncClient(
+            timeout=10.0, follow_redirects=True, proxy=settings.egress_proxy_url
+        ) as client:
             resp = await client.get(robots_url)
         if resp.status_code == 200:
             parser.parse(resp.text.splitlines())

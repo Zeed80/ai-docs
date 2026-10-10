@@ -382,7 +382,13 @@ async def _ingest_url_async(
 
     filename = Path(unquote(urlparse(url).path)).name or "catalog.pdf"
     try:
-        async with httpx.AsyncClient(timeout=180.0, follow_redirects=True) as client:
+        from app.config import settings
+
+        # E33: through the egress proxy — a link or a redirect into the
+        # internal network (qdrant, minio, …) reaches nothing.
+        async with httpx.AsyncClient(
+            timeout=180.0, follow_redirects=True, proxy=settings.egress_proxy_url
+        ) as client:
             response = await client.get(url)
             response.raise_for_status()
             payload = response.content

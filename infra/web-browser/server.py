@@ -22,6 +22,8 @@ import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+
+import egress
 from patchright.async_api import async_playwright
 from pydantic import BaseModel, Field
 from urllib.parse import urlparse
@@ -71,6 +73,8 @@ class _Browser:
     def __init__(self) -> None:
         self._pw = None
         self._browser = None
+        self._proxy = None
+        self.proxy_port: int | None = None
         self._lock = asyncio.Lock()
 
     async def ensure(self):
@@ -78,10 +82,19 @@ class _Browser:
             if self._browser is None or not self._browser.is_connected():
                 if self._pw is None:
                     self._pw = await async_playwright().start()
+                if self._proxy is None:
+                    # E33: every request leaves through the egress proxy.
+                    await self.start_proxy()
                 self._browser = await self._pw.chromium.launch(
-                    headless=True, args=_LAUNCH_ARGS
+                    headless=True,
+                    args=[*_LAUNCH_ARGS, "--proxy-bypass-list=<-loopback>"],
+                    proxy={"server": f"http://127.0.0.1:{self.proxy_port}"},
                 )
             return self._browser
+
+    async def start_proxy(self) -> None:
+        if self._proxy is None:
+            self._proxy, self.proxy_port = await egress.start_proxy()
 
     async def close(self) -> None:
         if self._browser is not None:
@@ -90,6 +103,9 @@ class _Browser:
         if self._pw is not None:
             await self._pw.stop()
             self._pw = None
+        if self._proxy is not None:
+            self._proxy.close()
+            self._proxy = None
 
 
 _engine = _Browser()
@@ -142,6 +158,8 @@ async def _sweeper() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # The proxy serves the backend's workers too, before any browsing.
+    await _engine.start_proxy()
     sweeper = asyncio.create_task(_sweeper())
     yield
     sweeper.cancel()
@@ -280,6 +298,8 @@ def _session_host_allowed(url: str, hosts: list[str]) -> bool:
 async def _new_browser_context():
     browser = await _engine.ensure()
     return await browser.new_context(
+        # E33: a service worker would fetch outside page routing and outlive it.
+        service_workers="block",
         user_agent=_USER_AGENT,
         viewport=_VIEWPORT,
         locale=_LOCALE,

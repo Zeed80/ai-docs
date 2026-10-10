@@ -14,7 +14,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt \
     # patchright ships its own patched Chromium download
     && patchright install chromium
 
-COPY server.py /app/server.py
+COPY server.py egress.py /app/
 
 # The base image already provides the non-root "pwuser".
 RUN chown -R pwuser:pwuser /app

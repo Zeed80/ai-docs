@@ -360,3 +360,29 @@ async def test_archive_members_keep_the_archives_owner_and_department(
     ).all()
     assert len(children) == 2
     assert {(c.owner_sub, c.department_id) for c in children} == {("bob", department.id)}
+
+
+@pytest.mark.asyncio
+async def test_a_catalog_url_is_fetched_only_through_the_egress_proxy(monkeypatch, supplier):
+    """E33: a model-chosen URL never leaves the worker directly."""
+    import httpx
+
+    from app.config import settings
+    from app.tasks.catalog_ingest import _ingest_url_async
+
+    seen: dict = {}
+
+    class _Client:
+        def __init__(self, *a, **k):
+            seen.update(k)
+
+        async def __aenter__(self):
+            raise httpx.ConnectError("stop here")
+
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    result = await _ingest_url_async(str(supplier.id), "http://qdrant:6333/collections", None)
+    assert seen["proxy"] == settings.egress_proxy_url
+    assert "error" in result

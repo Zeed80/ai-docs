@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     default_timezone: str = "Europe/Moscow"
     # E29: isolated script runs. Off until Gate C (E30 review); the planner
     # cannot emit "script" steps, so only an owner-built plan reaches them.
+    # E33: model-chosen URLs leave only through the browser service's egress
+    # proxy (public unicast only, connection pinned to the checked address).
+    egress_proxy_url: str = "http://web-browser:8094"
     script_runs_enabled: bool = False
     script_supervisor_url: str = "http://agent-script-supervisor:8078"
     script_supervisor_key: str = ""

@@ -34,6 +34,7 @@ x-backend-env: &backend-env
   WEB_SEARCH_FALLBACK_ENDPOINT: ${WEB_SEARCH_FALLBACK_ENDPOINT:-}
   WEB_SEARCH_FALLBACK_API_KEY: ${WEB_SEARCH_FALLBACK_API_KEY:-}
   WEB_BROWSER_URL: ${WEB_BROWSER_URL:-http://web-browser:8093}
+  EGRESS_PROXY_URL: ${EGRESS_PROXY_URL:-http://web-browser:8094}
   OLLAMA_MODEL_REASONING: ${OLLAMA_MODEL_REASONING:-qwen3.5:9b}
   OLLAMA_MODEL_OCR: ${OLLAMA_MODEL_OCR:-qwen3.5:9b}
   APP_ENV: ${APP_ENV:-development}
@@ -465,6 +466,11 @@ services:
     cpus: 2.0
     pids_limit: 512
     shm_size: 1g
+    environment:
+      # E33: the egress proxy (public unicast only, pinned to the checked IP)
+      # also serves the workers' direct downloads of model-chosen URLs.
+      BROWSER_EGRESS_PROXY_HOST: 0.0.0.0
+      BROWSER_EGRESS_PROXY_PORT: "8094"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8093/health', timeout=3).status==200 else 1)\""]
       interval: 30s

@@ -1332,7 +1332,7 @@ blocked verifier как итог в UI, подпись needs_review. Embedding/r
 
 ### E33 — SSRF и сетевой выход браузера
 
-**Статус:** TODO. **После:** E32.
+**Статус:** DONE (2026-10-10), Gate D1 — review владельца: весь трафик Chromium и загрузки воркеров по ссылкам модели идут через прокси сервиса браузера — резолв и проверка всех адресов, соединение с проверенным IP, только глобальный unicast на веб-портах, service workers заблокированы; тесты меряют соединения на «внутреннем» сервере — ноль (`docs/agent-employee-delivery/E33-browser-egress.md`). **После:** E32.
 **Файлы:** browser service, networking/Compose; создать network security тесты.
 
 1. Проверять не только стартовый URL, но redirects, subresources, XHR/fetch,
