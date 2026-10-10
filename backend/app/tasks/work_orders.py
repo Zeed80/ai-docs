@@ -319,8 +319,12 @@ async def _execute_capability(
                     },
                 )
                 headers.update(budget_context.effect_fence_headers(operation_key))
+            from app.utils.crash_barrier import crash_barrier
+
+            crash_barrier("before_dispatch")
             try:
                 response = await client.post(url, json=payload, headers=headers)
+                crash_barrier("after_response")
             except BaseException as exc:
                 if budget_context is not None and operation_key is not None:
                     settlement_ok = await budget_context.charge_tool_attempt(
@@ -2212,6 +2216,9 @@ async def _execute_claimed_step(
             call_row.status = "succeeded"
             call_row.output = output
             call_row.finished_at = utcnow()
+        from app.utils.crash_barrier import crash_barrier
+
+        crash_barrier("before_result_commit")
         await db.commit()
     if schedule_verification:
         verify_work_step.apply_async(args=[str(step_id)], queue="scheduler")

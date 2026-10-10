@@ -437,6 +437,11 @@ def _summarize_step_output(step: WorkStep) -> Any:
     return {"_truncated_output": serialized[:_MAX_STEP_OUTPUT_CHARS] + "...[truncated]"}
 
 
+def _reconciliation_basis(call) -> str:
+    reconciliation = (call.error or {}).get("reconciliation") or {}
+    return str(reconciliation.get("basis") or "owner_statement")
+
+
 def _planner_digest(payload: dict[str, Any]) -> str:
     return hashlib.sha256(
         json.dumps(
@@ -494,7 +499,12 @@ async def _read_planner_snapshot(
             "step_key": step.step_key,
             "title": step.title,
             "output": {
-                "owner_confirmed_effect": True,
+                # Done work for the plan: do not repeat it. The basis says
+                # who knows: the owner's statement, or the recipient's own
+                # effect receipt left by a worker that died after it (E25).
+                "effect_happened": True,
+                "basis": _reconciliation_basis(call),
+                "owner_confirmed_effect": _reconciliation_basis(call) == "owner_statement",
                 "capability": call.capability,
                 "action": call.action,
                 "arguments": call.arguments,

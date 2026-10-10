@@ -1037,6 +1037,10 @@ async def reclaim_expired_leases(db: AsyncSession, *, actor: str = "scheduler") 
             )
         ).scalar_one_or_none()
         error = {"code": "lease_expired", "message": "Worker heartbeat expired"}
+        # The order lock first: a recipient's effect fence takes it too, so
+        # its commit either landed before this (its receipt is visible below)
+        # or will see this attempt abandoned and refuse.
+        order = await db.get(WorkOrder, step.work_order_id, with_for_update=True)
         if attempt is not None:
             attempt.status = "abandoned"
             attempt.error = error
@@ -1044,11 +1048,18 @@ async def reclaim_expired_leases(db: AsyncSession, *, actor: str = "scheduler") 
         step.last_error = error
         step.lease_owner = None
         step.lease_expires_at = None
-        order = await db.get(WorkOrder, step.work_order_id, with_for_update=True)
         if order is None:
             continue
         order.lease_owner = None
         order.lease_expires_at = None
+        settled = await _settle_abandoned_calls(db, attempt, now=now) if attempt else None
+        if settled is not None:
+            # The dead worker's call has an effect on record, or one that may
+            # exist: retrying the step would repeat it (E25).
+            await transition_step(db, step, "failed", actor=actor, payload={"error": settled})
+            order.blocker = {**settled, "step_id": str(step.id)}
+            await _replan_or_block(db, order, actor=actor, guarded=True)
+            continue
         if step.attempt_count < step.max_attempts:
             await transition_step(db, step, "retry_wait", actor=actor, payload={"error": error})
             step.next_attempt_at = now
@@ -1074,6 +1085,109 @@ async def reclaim_expired_leases(db: AsyncSession, *, actor: str = "scheduler") 
             await _replan_or_block(db, order, actor=actor, guarded=True)
     await db.flush()
     return len(steps)
+
+
+# Operations whose every effect passes the E24 fence under the work order
+# lock, so a missing receipt after the attempt was abandoned proves the effect
+# did not and will not happen: reviewed one-commit recipients, queue
+# acceptance that commits first, email.send's first commit, and handlers that
+# call fence_effect before their effect outside the database.
+_FENCE_BEFORE_EFFECT_OPERATIONS = frozenset(
+    {
+        "email.send",
+        "email.fetch_new",
+        "email.process_attachment",
+        "image_studio.techdraw",
+        "tool_catalog.attach_web_catalog",
+        "tool_catalog.crawl_site",
+    }
+)
+
+
+def _absent_receipt_proves_no_effect(capability: str | None, action: str | None) -> bool:
+    from app.ai.tool_catalog import get_tool
+    from app.ai.tool_transport import ASYNC_JOB_OPERATIONS, ONE_DB_COMMIT_OPERATIONS
+
+    if not capability or not action:
+        return False
+    tool = get_tool(capability, action)
+    if tool is None:
+        return False
+    if tool.effect == "read":
+        return True
+    name = f"{capability}.{action}"
+    return (
+        name in ONE_DB_COMMIT_OPERATIONS
+        or name in ASYNC_JOB_OPERATIONS
+        or name in _FENCE_BEFORE_EFFECT_OPERATIONS
+    )
+
+
+async def _settle_abandoned_calls(
+    db: AsyncSession, attempt: WorkStepAttempt, *, now
+) -> dict[str, Any] | None:
+    """Settle the capability calls a dead worker left in flight (E25).
+
+    A receipt proves the effect committed: the call is recorded as happened
+    (basis ``effect_receipt``) and the step must not run again. No receipt for
+    a fenced operation proves no effect: the step may be retried. Otherwise
+    the outcome is unknown and the order waits for reconciliation (E23a).
+    Returns the blocker to fail the step with, or None when a retry is safe.
+    """
+    from app.db.models import WorkEffectReceipt
+
+    calls = list(
+        await db.scalars(
+            select(WorkToolCall)
+            .where(
+                WorkToolCall.attempt_id == attempt.id,
+                WorkToolCall.executor == "capability",
+                WorkToolCall.status.in_(["prepared", "running"]),
+            )
+            .with_for_update()
+        )
+    )
+    if not calls:
+        return None
+    receipts = list(
+        await db.scalars(
+            select(WorkEffectReceipt.operation_key).where(
+                WorkEffectReceipt.attempt_id == attempt.id
+            )
+        )
+    )
+    happened: list[str] = []
+    unknown: list[str] = []
+    for call in calls:
+        call.finished_at = now
+        if receipts:
+            call.status = "reconciled_happened"
+            call.error = {
+                "code": "lease_expired",
+                "reconciliation": {
+                    "outcome": "happened",
+                    "basis": "effect_receipt",
+                    "receipts": receipts,
+                    "at": now.isoformat(),
+                },
+            }
+            happened.append(str(call.id))
+        elif _absent_receipt_proves_no_effect(call.capability, call.action):
+            call.status = "failed"
+            call.error = {
+                "code": "lease_expired",
+                "effect": "not_committed",
+                "basis": "no_receipt_under_effect_fence",
+            }
+        else:
+            call.status = "outcome_unknown"
+            call.error = {"code": "lease_expired", "effect": "unknown"}
+            unknown.append(str(call.id))
+    if happened:
+        return {"code": "effect_recorded_without_result", "tool_call_ids": happened}
+    if unknown:
+        return {"code": "lease_expired_outcome_unknown", "tool_call_ids": unknown}
+    return None
 
 
 def attempt_owns_lease(step: WorkStep, attempt: WorkStepAttempt) -> bool:
