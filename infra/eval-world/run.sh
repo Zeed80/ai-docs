@@ -19,11 +19,15 @@ REV=$(git rev-parse --short HEAD)$(git diff --quiet HEAD -- backend aiagent || e
 
 # EVAL_KEEP_WORLD=1 leaves the world up for inspection (down it yourself:
 # docker compose -f infra/eval-world/docker-compose.yml down -v).
+# Results are saved before the world goes: a run stopped midway (E52 was
+# killed at 72/363 on host memory) lost everything but its log.
 cleanup() {
+  docker cp aiw-eval-eval-backend-1:/tmp/results.jsonl "$OUT_DIR/$STAMP.jsonl" >/dev/null 2>&1 || true
   [ "${EVAL_KEEP_WORLD:-0}" = "1" ] && return
   "${COMPOSE[@]}" down -v >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
+trap 'exit 130' INT TERM
 
 export STRATA_API_KEY
 STRATA_API_KEY=$(docker exec infra-backend-1 printenv STRATA_API_KEY || true)
