@@ -104,3 +104,24 @@ async def test_list_collections(client: AsyncClient):
     resp = await client.get("/api/collections")
     assert resp.status_code == 200
     assert len(resp.json()) >= 2
+
+
+@pytest.mark.asyncio
+async def test_collection_answers_after_commit_in_a_fresh_session(
+    client: AsyncClient, sample_doc, db_session
+):
+    """T6: answers built from an object refreshed after commit must not read an
+    unloaded relationship lazily (invoices did, and answered 500)."""
+    resp = await client.post("/api/collections", json={"name": "Свежая сессия"})
+    coll_id = resp.json()["id"]
+    db_session.expunge_all()
+    resp = await client.post(
+        f"/api/collections/{coll_id}/items",
+        json={"entity_type": "document", "entity_id": str(sample_doc.id)},
+    )
+    assert resp.status_code == 200, resp.text
+    assert len(resp.json()["items"]) == 1
+    db_session.expunge_all()
+    resp = await client.post(f"/api/collections/{coll_id}/close")
+    assert resp.status_code == 200, resp.text
+    assert len(resp.json()["items"]) == 1

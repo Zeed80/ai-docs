@@ -165,6 +165,7 @@ async def prepare_proposal_receipt(db, key, user, payload, schema):
         if args.pop("action") != "task_propose":
             raise ValueError()
         args.pop("reason", None)
+        args.pop("target_match", None)  # the agent's own mark, never sent on
         for nested in ("filters", "body"):
             if isinstance(args.get(nested), dict):
                 args.update(args.pop(nested))
@@ -270,6 +271,7 @@ async def prepare_warehouse_update_receipt(db, key, user, item_id, payload):
         args = dict(args) if isinstance(args, dict) else json.loads(args)
         operation = args.pop("action", None)
         args.pop("reason", None)
+        args.pop("target_match", None)  # the agent's own mark, never sent on
         # The capability takes its fields under "body", as the model sends
         # them; the HTTP payload is flat. Compare the two the way the
         # proposal receipt does (E49 live run: every agent update_item was

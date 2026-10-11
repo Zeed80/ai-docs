@@ -200,10 +200,21 @@ async def extract_dates(
 # ── calendar.upcoming ────────────────────────────────────────────────────
 
 
+# Reminders made by the system (due dates, payment schedules) carry this
+# shared owner and stay visible to everyone; a reminder a person asked for is
+# theirs alone.
+SHARED_REMINDER_OWNER = "user"
+
+
+def _visible_reminders(user: UserInfo):
+    return Reminder.user_id.in_([user.sub, SHARED_REMINDER_OWNER])
+
+
 @router.get("/upcoming", response_model=UpcomingResponse)
 async def upcoming(
     days: int = Query(7, le=90),
     db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_effective_user),
 ):
     """Skill: calendar.upcoming — Get upcoming events and pending reminders."""
     now = datetime.now(UTC)
@@ -225,6 +236,7 @@ async def upcoming(
         .where(
             Reminder.is_sent == False,
             Reminder.remind_at <= horizon,
+            _visible_reminders(user),
         )
         .order_by(Reminder.remind_at.asc())
         .limit(50)
@@ -257,6 +269,7 @@ _REMINDER_ENTITY_MODELS: dict[str, type] = {
 async def create_reminder(
     payload: ReminderCreate,
     db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_effective_user),
 ):
     """Skill: calendar.create_reminder — Create a reminder.
 
@@ -288,6 +301,10 @@ async def create_reminder(
         entity_id=entity_id,
         remind_at=payload.remind_at,
         message=payload.message,
+        # "Напомни мне" is the caller's: left at the shared default, the
+        # dispatcher broadcast it to every open browser and notified nobody
+        # in person, and every user's list showed everyone's (E50 live run).
+        user_id=user.sub,
     )
     db.add(reminder)
     await db.commit()
@@ -304,9 +321,10 @@ async def list_reminders(
     entity_id: uuid.UUID | None = None,
     limit: int = Query(50, le=200),
     db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_effective_user),
 ):
     """Skill: calendar.list_reminders — List reminders."""
-    query = select(Reminder)
+    query = select(Reminder).where(_visible_reminders(user))
     if is_sent is not None:
         query = query.where(Reminder.is_sent == is_sent)
     if entity_id:
@@ -326,7 +344,9 @@ async def generate_followup_draft(
     db: AsyncSession = Depends(get_db),
 ):
     """Skill: calendar.generate_followup — Create a follow-up draft email for an invoice reminder."""
-    result = await db.execute(select(Reminder).where(Reminder.id == reminder_id))
+    result = await db.execute(
+        select(Reminder).where(Reminder.id == reminder_id, _visible_reminders(user))
+    )
     reminder = result.scalar_one_or_none()
     if not reminder:
         raise HTTPException(404, "Reminder not found")
@@ -368,9 +388,12 @@ async def generate_followup_draft(
 async def mark_sent(
     reminder_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_effective_user),
 ):
     """Skill: calendar.mark_sent — Mark a reminder as sent."""
-    result = await db.execute(select(Reminder).where(Reminder.id == reminder_id))
+    result = await db.execute(
+        select(Reminder).where(Reminder.id == reminder_id, _visible_reminders(user))
+    )
     reminder = result.scalar_one_or_none()
     if not reminder:
         raise HTTPException(404, "Reminder not found")

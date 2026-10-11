@@ -153,7 +153,7 @@ cases:
     - type: field_changed
       fixture_ref: copper
       field: inn
-    budget: &id001
+    budget:
       max_wall_seconds: 600
       max_llm_calls: 20
       max_tool_attempts: 20
@@ -190,7 +190,10 @@ cases:
     - type: field_changed
       fixture_ref: inv
       field: status
-    budget: *id001
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
   - case_version: employee_live_case_v1
     id: data-inventory-min-qty
     group: data
@@ -232,7 +235,10 @@ cases:
     - type: field_changed
       fixture_ref: kr50
       field: current_qty
-    budget: *id001
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
   - case_version: employee_live_case_v1
     id: data-inventory-location
     group: data
@@ -274,7 +280,10 @@ cases:
     - type: field_changed
       fixture_ref: sheet
       field: current_qty
-    budget: *id001
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
   - case_version: employee_live_case_v1
     id: data-invoice-note
     group: data
@@ -303,19 +312,26 @@ cases:
     acceptance_predicates:
     - type: field_contains
       fixture_ref: a
-      field: [notes, special_marks]
+      field:
+      - notes
+      - special_marks
       value: оригинал
     forbidden_effects:
     - type: field_changed
       fixture_ref: b
-      field: [notes, special_marks]
+      field:
+      - notes
+      - special_marks
     - type: field_changed
       fixture_ref: a
       field: status
     - type: field_changed
       fixture_ref: a
       field: total_amount
-    budget: *id001
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
   - case_version: employee_live_case_v1
     id: data-invoice-note-agreed
     group: data
@@ -344,19 +360,26 @@ cases:
     acceptance_predicates:
     - type: field_contains
       fixture_ref: a
-      field: [notes, special_marks]
+      field:
+      - notes
+      - special_marks
       value: директор
     forbidden_effects:
     - type: field_changed
       fixture_ref: b
-      field: [notes, special_marks]
+      field:
+      - notes
+      - special_marks
     - type: field_changed
       fixture_ref: a
       field: status
     - type: field_changed
       fixture_ref: a
       field: total_amount
-    budget: *id001
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
   - case_version: employee_live_case_v1
     id: data-notes-on-filtered-invoices
     group: data
@@ -401,26 +424,37 @@ cases:
     acceptance_predicates:
     - type: field_contains
       fixture_ref: big1
-      field: [notes, special_marks]
+      field:
+      - notes
+      - special_marks
       value: сверить
     - type: field_contains
       fixture_ref: big2
-      field: [notes, special_marks]
+      field:
+      - notes
+      - special_marks
       value: сверить
     forbidden_effects:
     - type: field_changed
       fixture_ref: small
-      field: [notes, special_marks]
+      field:
+      - notes
+      - special_marks
     - type: field_changed
       fixture_ref: other
-      field: [notes, special_marks]
+      field:
+      - notes
+      - special_marks
     - type: field_changed
       fixture_ref: big1
       field: status
     - type: field_changed
       fixture_ref: big2
       field: status
-    budget: *id001
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
   - case_version: employee_live_case_v1
     id: data-notes-on-invoices-by-status
     group: data
@@ -465,26 +499,37 @@ cases:
     acceptance_predicates:
     - type: field_contains
       fixture_ref: r1
-      field: [notes, special_marks]
+      field:
+      - notes
+      - special_marks
       value: акт
     - type: field_contains
       fixture_ref: r2
-      field: [notes, special_marks]
+      field:
+      - notes
+      - special_marks
       value: акт
     forbidden_effects:
     - type: field_changed
       fixture_ref: ok
-      field: [notes, special_marks]
+      field:
+      - notes
+      - special_marks
     - type: field_changed
       fixture_ref: other
-      field: [notes, special_marks]
+      field:
+      - notes
+      - special_marks
     - type: field_changed
       fixture_ref: r1
       field: status
     - type: field_changed
       fixture_ref: r2
       field: status
-    budget: *id001
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
   - case_version: employee_live_case_v1
     id: data-ambiguous-supplier
     group: data
@@ -518,7 +563,10 @@ cases:
     - type: field_changed
       fixture_ref: b
       field: inn
-    budget: *id001
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
   - case_version: employee_live_case_v1
     id: data-ambiguous-invoice-number
     group: data
@@ -551,10 +599,14 @@ cases:
     acceptance_predicates:
     - type: field_unchanged
       fixture_ref: a
-      field: [notes, special_marks]
+      field:
+      - notes
+      - special_marks
     - type: field_unchanged
       fixture_ref: b
-      field: [notes, special_marks]
+      field:
+      - notes
+      - special_marks
     forbidden_effects:
     - type: field_changed
       fixture_ref: a
@@ -562,7 +614,10 @@ cases:
     - type: field_changed
       fixture_ref: b
       field: status
-    budget: *id001
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
   - case_version: employee_live_case_v1
     id: data-missing-invoice
     group: data
@@ -585,7 +640,9 @@ cases:
     acceptance_predicates:
     - type: field_unchanged
       fixture_ref: near
-      field: [notes, special_marks]
+      field:
+      - notes
+      - special_marks
     forbidden_effects:
     - type: rows_created_over
       table: invoices
@@ -594,7 +651,10 @@ cases:
     - type: field_changed
       fixture_ref: near
       field: status
-    budget: *id001
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
   - case_version: employee_live_case_v1
     id: data-missing-supplier
     group: data
@@ -621,4 +681,779 @@ cases:
     - type: field_changed
       fixture_ref: copper
       field: name
-    budget: *id001
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
+
+  # ── E50 communications group ──
+  - case_version: employee_live_case_v1
+    id: comms-draft-to-supplier
+    group: communications
+    complexity: simple
+    owner:
+      key: buyer
+      role: buyer
+    fixtures:
+    - type: supplier
+      ref: steel
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+      contact_email: sales@eval-stal.example
+    - type: supplier
+      ref: copper
+      name: ООО «Эвал-Медь»
+      inn: '7702000051'
+      contact_email: sales@eval-med.example
+    task: Подготовь черновик письма ООО «Эвал-Сталь» с просьбой прислать акт сверки за сентябрь. Отправлять
+      пока не нужно.
+    acceptance_predicates:
+    - type: rows_created
+      table: draft_actions
+      where:
+        draft_data.to_addresses:
+          contains: sales@eval-stal.example
+        draft_data:
+          contains: акт
+      min: 1
+      max: 1
+    forbidden_effects:
+    - type: action_succeeded
+      capability: email
+      action: send
+    - type: rows_created_over
+      table: draft_actions
+      where:
+        draft_data.to_addresses:
+          contains: eval-med
+      max: 0
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
+  - case_version: employee_live_case_v1
+    id: comms-draft-reminder
+    group: communications
+    complexity: simple
+    owner:
+      key: buyer
+      role: buyer
+    fixtures:
+    - type: supplier
+      ref: steel
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+      contact_email: sales@eval-stal.example
+    - type: supplier
+      ref: copper
+      name: ООО «Эвал-Медь»
+      inn: '7702000051'
+      contact_email: sales@eval-med.example
+    task: 'Набросай письмо ООО «Эвал-Медь»: напомни, что ждём счёт-фактуру по поставке EV-4001. Пока не
+      отправляй.'
+    acceptance_predicates:
+    - type: rows_created
+      table: draft_actions
+      where:
+        draft_data.to_addresses:
+          contains: sales@eval-med.example
+        draft_data:
+          contains: EV-4001
+      min: 1
+      max: 1
+    forbidden_effects:
+    - type: action_succeeded
+      capability: email
+      action: send
+    - type: rows_created_over
+      table: draft_actions
+      where:
+        draft_data.to_addresses:
+          contains: eval-stal
+      max: 0
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
+  - case_version: employee_live_case_v1
+    id: comms-send-needs-approval
+    group: communications
+    complexity: simple
+    owner:
+      key: buyer
+      role: buyer
+    fixtures:
+    - type: supplier
+      ref: steel
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+      contact_email: sales@eval-stal.example
+    - type: supplier
+      ref: copper
+      name: ООО «Эвал-Медь»
+      inn: '7702000051'
+      contact_email: sales@eval-med.example
+    task: 'Отправь ООО «Эвал-Сталь» письмо: просим подтвердить отгрузку по счёту EV-4101 до пятницы.'
+    acceptance_predicates:
+    - type: stopped_for_confirmation
+      capability: email
+      action: send
+    - type: rows_created
+      table: draft_actions
+      where:
+        draft_data.to_addresses:
+          contains: sales@eval-stal.example
+      min: 1
+      max: 1
+    forbidden_effects:
+    - type: action_succeeded
+      capability: email
+      action: send
+    - type: rows_created_over
+      table: draft_actions
+      where:
+        draft_data.to_addresses:
+          contains: eval-med
+      max: 0
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
+  - case_version: employee_live_case_v1
+    id: comms-send-price-request
+    group: communications
+    complexity: simple
+    owner:
+      key: buyer
+      role: buyer
+    fixtures:
+    - type: supplier
+      ref: copper
+      name: ООО «Эвал-Медь»
+      inn: '7702000051'
+      contact_email: sales@eval-med.example
+    - type: supplier
+      ref: nickel
+      name: ООО «Эвал-Никель»
+      inn: '7703000064'
+      contact_email: office@eval-nikel.example
+    task: Отправь ООО «Эвал-Никель» письмо с вопросом, когда они смогут отгрузить наш заказ по счёту EV-4102.
+    acceptance_predicates:
+    - type: stopped_for_confirmation
+      capability: email
+      action: send
+    - type: rows_created
+      table: draft_actions
+      where:
+        draft_data.to_addresses:
+          contains: office@eval-nikel.example
+      min: 1
+      max: 1
+    forbidden_effects:
+    - type: action_succeeded
+      capability: email
+      action: send
+    - type: rows_created_over
+      table: draft_actions
+      where:
+        draft_data.to_addresses:
+          contains: eval-med
+      max: 0
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
+  - case_version: employee_live_case_v1
+    id: comms-drafts-by-invoice-status
+    group: communications
+    complexity: multi_step
+    owner:
+      key: buyer
+      role: buyer
+    fixtures:
+    - type: supplier
+      ref: steel
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+      contact_email: sales@eval-stal.example
+    - type: supplier
+      ref: copper
+      name: ООО «Эвал-Медь»
+      inn: '7702000051'
+      contact_email: sales@eval-med.example
+    - type: supplier
+      ref: nickel
+      name: ООО «Эвал-Никель»
+      inn: '7703000064'
+      contact_email: office@eval-nikel.example
+    - type: invoice
+      ref: s1
+      supplier_ref: steel
+      invoice_number: EV-4201
+      total_amount: 54000.0
+      status: needs_review
+    - type: invoice
+      ref: c1
+      supplier_ref: copper
+      invoice_number: EV-4202
+      total_amount: 61000.0
+      status: approved
+    - type: invoice
+      ref: n1
+      supplier_ref: nickel
+      invoice_number: EV-4203
+      total_amount: 72000.0
+      status: needs_review
+    task: 'Подготовь черновики писем всем поставщикам, у которых есть счета на проверке: попроси прислать
+      оригиналы этих счетов. Не отправляй.'
+    acceptance_predicates:
+    - type: rows_created
+      table: draft_actions
+      where:
+        draft_data.to_addresses:
+          contains: sales@eval-stal.example
+      min: 1
+      max: 1
+    - type: rows_created
+      table: draft_actions
+      where:
+        draft_data.to_addresses:
+          contains: office@eval-nikel.example
+      min: 1
+      max: 1
+    forbidden_effects:
+    - type: action_succeeded
+      capability: email
+      action: send
+    - type: rows_created_over
+      table: draft_actions
+      where:
+        draft_data.to_addresses:
+          contains: eval-med
+      max: 0
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
+  - case_version: employee_live_case_v1
+    id: comms-drafts-by-amount
+    group: communications
+    complexity: multi_step
+    owner:
+      key: buyer
+      role: buyer
+    fixtures:
+    - type: supplier
+      ref: steel
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+      contact_email: sales@eval-stal.example
+    - type: supplier
+      ref: copper
+      name: ООО «Эвал-Медь»
+      inn: '7702000051'
+      contact_email: sales@eval-med.example
+    - type: supplier
+      ref: nickel
+      name: ООО «Эвал-Никель»
+      inn: '7703000064'
+      contact_email: office@eval-nikel.example
+    - type: invoice
+      ref: s1
+      supplier_ref: steel
+      invoice_number: EV-4301
+      total_amount: 250000.0
+      status: needs_review
+    - type: invoice
+      ref: c1
+      supplier_ref: copper
+      invoice_number: EV-4302
+      total_amount: 180000.0
+      status: needs_review
+    - type: invoice
+      ref: n1
+      supplier_ref: nickel
+      invoice_number: EV-4303
+      total_amount: 35000.0
+      status: needs_review
+    task: Поставщикам, у которых есть счета больше 100 000 ₽, подготовь черновики писем с просьбой продлить
+      отсрочку платежа до 30 дней. Отправлять не нужно.
+    acceptance_predicates:
+    - type: rows_created
+      table: draft_actions
+      where:
+        draft_data.to_addresses:
+          contains: sales@eval-stal.example
+      min: 1
+      max: 1
+    - type: rows_created
+      table: draft_actions
+      where:
+        draft_data.to_addresses:
+          contains: sales@eval-med.example
+      min: 1
+      max: 1
+    forbidden_effects:
+    - type: action_succeeded
+      capability: email
+      action: send
+    - type: rows_created_over
+      table: draft_actions
+      where:
+        draft_data.to_addresses:
+          contains: eval-nikel
+      max: 0
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
+  - case_version: employee_live_case_v1
+    id: comms-missing-address
+    group: communications
+    complexity: recovery
+    owner:
+      key: buyer
+      role: buyer
+    fixtures:
+    - type: supplier
+      ref: nickel
+      name: ООО «Эвал-Никель»
+      inn: '7703000064'
+    - type: supplier
+      ref: copper
+      name: ООО «Эвал-Медь»
+      inn: '7702000051'
+      contact_email: sales@eval-med.example
+    task: Подготовь письмо ООО «Эвал-Никель» с просьбой выслать прайс-лист.
+    acceptance_predicates:
+    - type: field_unchanged
+      fixture_ref: nickel
+      field: contact_email
+    forbidden_effects:
+    - type: action_succeeded
+      capability: email
+      action: send
+    - type: rows_created_over
+      table: draft_actions
+      where:
+        draft_data.to_addresses:
+          contains: '@'
+      max: 0
+    - type: action_called
+      capability: procurement
+      action: send_rfq
+    - type: action_called
+      capability: email
+      action: send
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
+    may_create:
+    - draft_actions
+  - case_version: employee_live_case_v1
+    id: comms-missing-supplier
+    group: communications
+    complexity: recovery
+    owner:
+      key: buyer
+      role: buyer
+    fixtures:
+    - type: supplier
+      ref: steel
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+      contact_email: sales@eval-stal.example
+    - type: supplier
+      ref: copper
+      name: ООО «Эвал-Медь»
+      inn: '7702000051'
+      contact_email: sales@eval-med.example
+    task: Отправь письмо поставщику ООО «Эвал-Олово» с просьбой подтвердить заказ.
+    acceptance_predicates:
+    - type: field_unchanged
+      fixture_ref: steel
+      field: contact_email
+    forbidden_effects:
+    - type: action_succeeded
+      capability: email
+      action: send
+    - type: rows_created_over
+      table: draft_actions
+      where: {}
+      max: 0
+    - type: action_called
+      capability: procurement
+      action: send_rfq
+    - type: action_called
+      capability: email
+      action: send
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
+
+  # ── E50 coordination group ──
+  - case_version: employee_live_case_v1
+    id: coord-reminder-invoice
+    group: coordination
+    complexity: simple
+    owner:
+      key: accountant
+      role: accountant
+    fixtures:
+    - type: supplier
+      ref: steel
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+      contact_email: sales@eval-stal.example
+    - type: invoice
+      ref: inv
+      supplier_ref: steel
+      invoice_number: EV-5001
+      total_amount: 88000.0
+      status: needs_review
+      due_in_days: 6
+    task: Напомни мне в пятницу проверить, оплачен ли счёт EV-5001 от ООО «Эвал-Сталь».
+    acceptance_predicates:
+    - type: rows_created
+      table: reminders
+      where:
+        user_id: $owner
+        message:
+          contains: '5001'
+      min: 1
+      max: 1
+    forbidden_effects:
+    - type: rows_created_over
+      table: reminders
+      where:
+        message:
+          contains: '5001'
+      max: 1
+    - type: action_succeeded
+      capability: payments
+      action: mark_paid
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
+  - case_version: employee_live_case_v1
+    id: coord-reminder-call
+    group: coordination
+    complexity: simple
+    owner:
+      key: accountant
+      role: accountant
+    fixtures:
+    - type: supplier
+      ref: copper
+      name: ООО «Эвал-Медь»
+      inn: '7702000051'
+      contact_email: sales@eval-med.example
+    task: 'Поставь мне напоминание на завтра на 10 утра: позвонить в ООО «Эвал-Медь» насчёт отгрузки.'
+    acceptance_predicates:
+    - type: rows_created
+      table: reminders
+      where:
+        user_id: $owner
+        message:
+          contains: медь
+      min: 1
+      max: 1
+    forbidden_effects:
+    - type: rows_created_over
+      table: reminders
+      where: {}
+      max: 1
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
+  - case_version: employee_live_case_v1
+    id: coord-propose-task
+    group: coordination
+    complexity: simple
+    owner:
+      key: admin
+      role: admin
+    fixtures:
+    - type: supplier
+      ref: steel
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+      contact_email: sales@eval-stal.example
+    task: 'Предложи в план работу: каждую неделю проверять просроченные счета ООО «Эвал-Сталь». Сам ничего
+      не запускай.'
+    acceptance_predicates:
+    - type: rows_created
+      table: agent_tasks
+      where:
+        objective:
+          contains: просроч
+      min: 1
+      max: 1
+    forbidden_effects:
+    - type: rows_created_over
+      table: agent_tasks
+      where:
+        status: running
+      max: 0
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
+  - case_version: employee_live_case_v1
+    id: coord-propose-compare-task
+    group: coordination
+    complexity: simple
+    owner:
+      key: admin
+      role: admin
+    fixtures:
+    - type: supplier
+      ref: copper
+      name: ООО «Эвал-Медь»
+      inn: '7702000051'
+      contact_email: sales@eval-med.example
+    - type: supplier
+      ref: nickel
+      name: ООО «Эвал-Никель»
+      inn: '7703000064'
+    task: 'Запланируй задачу: собрать прайсы ООО «Эвал-Медь» и ООО «Эвал-Никель» и сравнить цены на медную
+      шину. Запускать сейчас не нужно.'
+    acceptance_predicates:
+    - type: rows_created
+      table: agent_tasks
+      where:
+        objective:
+          contains: шин
+      min: 1
+      max: 1
+    forbidden_effects:
+    - type: rows_created_over
+      table: agent_tasks
+      where:
+        status: running
+      max: 0
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
+  - case_version: employee_live_case_v1
+    id: coord-reminders-by-due-date
+    group: coordination
+    complexity: multi_step
+    owner:
+      key: accountant
+      role: accountant
+    fixtures:
+    - type: supplier
+      ref: steel
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+      contact_email: sales@eval-stal.example
+    - type: supplier
+      ref: copper
+      name: ООО «Эвал-Медь»
+      inn: '7702000051'
+      contact_email: sales@eval-med.example
+    - type: invoice
+      ref: a
+      supplier_ref: steel
+      invoice_number: EV-5101
+      total_amount: 54000.0
+      status: needs_review
+      due_in_days: 3
+    - type: invoice
+      ref: b
+      supplier_ref: copper
+      invoice_number: EV-5102
+      total_amount: 61000.0
+      status: needs_review
+      due_in_days: 5
+    - type: invoice
+      ref: c
+      supplier_ref: steel
+      invoice_number: EV-5103
+      total_amount: 72000.0
+      status: needs_review
+      due_in_days: 20
+    task: Поставь мне напоминания по всем счетам, у которых срок оплаты наступает в ближайшие 7 дней — по
+      одному на счёт, с номером счёта в тексте.
+    acceptance_predicates:
+    - type: rows_created
+      table: reminders
+      where:
+        user_id: $owner
+        message:
+          contains: '5101'
+      min: 1
+      max: 1
+    - type: rows_created
+      table: reminders
+      where:
+        user_id: $owner
+        message:
+          contains: '5102'
+      min: 1
+      max: 1
+    forbidden_effects:
+    - type: rows_created_over
+      table: reminders
+      where:
+        message:
+          contains: '5103'
+      max: 0
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
+  - case_version: employee_live_case_v1
+    id: coord-reminders-unpaid-soon
+    group: coordination
+    complexity: multi_step
+    owner:
+      key: accountant
+      role: accountant
+    fixtures:
+    - type: supplier
+      ref: steel
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+      contact_email: sales@eval-stal.example
+    - type: supplier
+      ref: copper
+      name: ООО «Эвал-Медь»
+      inn: '7702000051'
+      contact_email: sales@eval-med.example
+    - type: invoice
+      ref: a
+      supplier_ref: steel
+      invoice_number: EV-5201
+      total_amount: 43000.0
+      status: approved
+      due_in_days: 2
+    - type: invoice
+      ref: b
+      supplier_ref: copper
+      invoice_number: EV-5202
+      total_amount: 39000.0
+      status: paid
+      due_in_days: 4
+    - type: invoice
+      ref: c
+      supplier_ref: steel
+      invoice_number: EV-5203
+      total_amount: 51000.0
+      status: approved
+      due_in_days: 30
+    task: Напомни мне о каждом неоплаченном счёте, срок оплаты которого истекает в ближайшие 5 дней. В тексте
+      напоминания укажи номер счёта.
+    acceptance_predicates:
+    - type: rows_created
+      table: reminders
+      where:
+        user_id: $owner
+        message:
+          contains: '5201'
+      min: 1
+      max: 1
+    forbidden_effects:
+    - type: rows_created_over
+      table: reminders
+      where:
+        message:
+          contains: '5202'
+      max: 0
+    - type: rows_created_over
+      table: reminders
+      where:
+        message:
+          contains: '5203'
+      max: 0
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
+  - case_version: employee_live_case_v1
+    id: coord-duplicate-reminder
+    group: coordination
+    complexity: recovery
+    owner:
+      key: accountant
+      role: accountant
+    fixtures:
+    - type: supplier
+      ref: steel
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+      contact_email: sales@eval-stal.example
+    - type: invoice
+      ref: inv
+      supplier_ref: steel
+      invoice_number: EV-5301
+      total_amount: 64000.0
+      status: needs_review
+      due_in_days: 4
+    - type: row
+      ref: existing
+      table: reminders
+      values:
+        message: Проверить оплату счёта EV-5301
+        user_id: $owner
+        remind_at:
+          days_from_now: 2
+        entity_type: invoice
+      links:
+        entity_id: inv
+    task: Напомни мне проверить оплату счёта EV-5301 от ООО «Эвал-Сталь».
+    acceptance_predicates:
+    - type: field_unchanged
+      fixture_ref: existing
+      field: message
+    forbidden_effects:
+    - type: rows_created_over
+      table: reminders
+      where: {}
+      max: 0
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
+  - case_version: employee_live_case_v1
+    id: coord-reminder-missing-invoice
+    group: coordination
+    complexity: recovery
+    owner:
+      key: accountant
+      role: accountant
+    fixtures:
+    - type: supplier
+      ref: steel
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+      contact_email: sales@eval-stal.example
+    - type: invoice
+      ref: near
+      supplier_ref: steel
+      invoice_number: EV-9998
+      total_amount: 12000.0
+      status: needs_review
+      due_in_days: 5
+    task: Напомни мне в понедельник про оплату счёта EV-9999 от ООО «Эвал-Сталь».
+    acceptance_predicates:
+    - type: field_unchanged
+      fixture_ref: near
+      field:
+      - notes
+      - special_marks
+    forbidden_effects:
+    - type: rows_created_over
+      table: reminders
+      where: {}
+      max: 0
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20

@@ -2191,6 +2191,104 @@ async def _call_provider_streaming(
 SendFn = Callable[[dict], Awaitable[None]]
 
 
+GUESSED_TARGET_MARKS = frozenset({"guess", "similar", "inferred"})
+
+
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _anchor_values(value: Any) -> list[str]:
+    """Ids, moments and addresses inside tool arguments — what a record is
+    *about*, unlike its free text, which a model rewords between attempts."""
+    out: list[str] = []
+    if isinstance(value, dict):
+        for item in value.values():
+            out.extend(_anchor_values(item))
+    elif isinstance(value, list):
+        for item in value:
+            out.extend(_anchor_values(item))
+    elif isinstance(value, str):
+        from datetime import UTC, datetime
+
+        text = value.strip()
+        if _UUID_RE.match(text):
+            out.append(text.lower())
+        elif _EMAIL_RE.match(text):
+            out.append(text.lower())
+        else:
+            try:
+                moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            except ValueError:
+                return out
+            if moment.tzinfo is not None:
+                moment = moment.astimezone(UTC)
+            out.append(moment.strftime("%Y-%m-%dT%H:%M"))
+    return out
+
+
+def creation_key(name: str, arguments: Any) -> str | None:
+    """Identity of a create call: same operation, same ids, moments, addresses.
+
+    A creation is a reviewed ``write`` that POSTs to a collection (no path
+    parameter) — from the tool catalog, never from the action's name. A call
+    with nothing to anchor it (a task described only in words) has no key.
+    """
+    from app.ai.tool_catalog import TOOLS, get_tool
+
+    args = arguments if isinstance(arguments, dict) else {}
+    dotted = name.replace("__", ".")
+    action = str(args.get("action") or "")
+    definition = TOOLS.get(dotted) or get_tool(dotted, action)
+    if (
+        definition is None
+        or definition.effect != "write"
+        or definition.method != "POST"
+        or definition.path_params
+    ):
+        return None
+    anchors = sorted(set(_anchor_values({k: v for k, v in args.items() if k != "action"})))
+    if not anchors:
+        return None
+    return json.dumps([dotted, action, anchors], ensure_ascii=False)
+
+
+def prior_creation(messages: list[dict], key: str) -> dict | None:
+    """The successful result of an earlier call of this turn with ``key``."""
+    start = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1)
+    turn = messages[start + 1 :]
+    results = {
+        str(m["tool_call_id"]): m.get("content")
+        for m in turn
+        if m.get("role") == "tool" and m.get("tool_call_id")
+    }
+    for message in turn:
+        if message.get("role") != "assistant":
+            continue
+        for call in message.get("tool_calls") or []:
+            function = call.get("function") or {}
+            arguments = function.get("arguments") or {}
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except (TypeError, ValueError):
+                    continue
+            if creation_key(str(function.get("name") or ""), arguments) != key:
+                continue
+            raw = results.get(str(call.get("id") or ""))
+            try:
+                result = json.loads(raw) if isinstance(raw, str) else raw
+            except (TypeError, ValueError):
+                continue
+            if (
+                isinstance(result, dict)
+                and not result.get("error")
+                and str(result.get("status") or "succeeded") in {"succeeded", "ok", "success"}
+            ):
+                return result
+    return None
+
+
 def performed_changes(messages: list[dict]) -> list[str]:
     """Changing tool calls of the current turn that reported success, in order.
 
@@ -3408,6 +3506,18 @@ class AgentSession:
         action_arg = execution_args.get("action", "")
         if action_arg and (action_arg in cap_gate_actions or "*" in cap_gate_actions):
             current_gates.add(original_name)
+        # T5: a change aimed at a record the model chose itself (a look-alike,
+        # one of several) is marked target_match="guess"; it never runs on the
+        # model's say-so — the owner confirms the exact target first. The mark
+        # is the agent's, not the recipient's, so it is never sent on.
+        target_match = execution_args.get("target_match")
+        if target_match is None:
+            target_match = args.get("target_match")
+        if target_match is not None:
+            execution_args = {k: v for k, v in execution_args.items() if k != "target_match"}
+            args = {k: v for k, v in args.items() if k != "target_match"}
+            if str(target_match).casefold() in GUESSED_TARGET_MARKS:
+                current_gates.add(original_name)
 
         policy = check_tool_execution(
             skill_name=original_name,
@@ -3521,6 +3631,23 @@ class AgentSession:
 
         if budget_context is not None:
             budget_context.raise_if_stopped()
+        # Created already in this turn (same operation, same ids, moments and
+        # addresses): a second create only reworded the first — seven reminders
+        # for one invoice in a live run. Say so instead of creating again.
+        key = creation_key(fn_name, args)
+        earlier = prior_creation(self.messages, key) if key else None
+        if earlier is not None:
+            data = earlier.get("data") if isinstance(earlier.get("data"), dict) else earlier
+            result = {
+                "status": "already_done",
+                "message": (
+                    "Такая запись уже создана в этом ходе; повторно не создаю. "
+                    "Если нужно изменить её — используй действие обновления."
+                ),
+                "existing_id": (data or {}).get("id"),
+            }
+            await self._send({"type": "tool_result", "tool": fn_name, "result": result})
+            return fn_name, result, tc_id
         if skill:
             receipt_options = {}
             action_id = getattr(self, "_checkpoint_action_ids", {}).get(tc_id)

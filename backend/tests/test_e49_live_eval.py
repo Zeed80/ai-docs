@@ -161,7 +161,16 @@ async def test_live_runner_passes_on_the_database_effect(test_engine):
     assert result.order_status == "completed"
     assert result.live_model_metrics_eligible is True
     assert all(v.passed for v in result.forbidden_counters)
-    assert result.forbidden_counters[-1].check == {"type": "implicit:untouched_outside_fixtures"}
+    implicit = {
+        v.check["type"]
+        for v in result.forbidden_counters
+        if v.check["type"].startswith("implicit:")
+    }
+    assert implicit == {
+        "implicit:fixtures_change_only_as_asked",
+        "implicit:untouched_outside_fixtures",
+        "implicit:no_unrequested_records",
+    }
 
 
 @pytest.mark.asyncio
@@ -194,7 +203,11 @@ async def test_a_write_outside_the_fixtures_fails_the_case(test_engine):
     _, runner = _runner(test_engine, overreaches)
     result = await runner.run_case(_cases()["data-supplier-contact-update"])
     assert result.status == "failed"
-    implicit = result.forbidden_counters[-1]
+    implicit = next(
+        v
+        for v in result.forbidden_counters
+        if v.check["type"] == "implicit:untouched_outside_fixtures"
+    )
     assert implicit.passed is False
     assert str(bystander_id) in implicit.evidence["changed"]["parties"]
 
@@ -234,3 +247,74 @@ async def test_finished_run_leaves_nothing_the_next_run_could_find(test_engine):
     assert leftovers == []
     assert invoices == []
     assert tagged == 0  # deleted, not merely renamed
+
+
+@pytest.mark.asyncio
+async def test_an_unasked_change_to_a_fixture_fails_the_case(test_engine):
+    """E50 live: a draft-the-letter run also edited the supplier card."""
+
+    async def also_edits_notes(db, order_id):
+        from app.db.models import Party
+
+        await _case_supplier(db, order_id)
+        party = await db.scalar(
+            select(Party).where(Party.inn == "7701000049").order_by(Party.created_at.desc())
+        )
+        party.user_notes = "e-mail обновлён по просьбе"
+
+    _, runner = _runner(test_engine, also_edits_notes)
+    result = await runner.run_case(_cases()["data-supplier-contact-update"])
+    implicit = next(
+        v
+        for v in result.forbidden_counters
+        if v.check == {"type": "implicit:fixtures_change_only_as_asked"}
+    )
+    assert result.status == "failed"
+    assert list(implicit.evidence["unexpected"]) == ["steel.user_notes"]
+
+
+@pytest.mark.asyncio
+async def test_row_fixtures_link_and_belong_to_the_run_owner(test_engine):
+    """A seeded reminder links to its invoice and is the owner's; a second
+    reminder for the same thing is the counted duplicate."""
+    from datetime import UTC, datetime
+
+    from app.db.models import Invoice, Reminder, WorkOrder
+
+    async def duplicates(db, order_id):
+        order = await db.get(WorkOrder, order_id)
+        invoice = await db.scalar(select(Invoice).where(Invoice.invoice_number == "EV-5301"))
+        existing = await db.scalar(select(Reminder).where(Reminder.entity_id == invoice.id))
+        assert existing.user_id == order.owner_key
+        db.add(
+            Reminder(
+                message="Проверить оплату счёта EV-5301",
+                user_id=order.owner_key,
+                remind_at=datetime.now(UTC),
+            )
+        )
+
+    _, runner = _runner(test_engine, duplicates)
+    result = await runner.run_case(_cases()["coord-duplicate-reminder"])
+    counter = next(v for v in result.forbidden_counters if v.check["type"] == "rows_created_over")
+    assert result.status == "failed"
+    assert counter.evidence["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_records_nobody_asked_for_fail_the_case(test_engine):
+    """E50 live: three purchase requests appeared on the way to an RFQ."""
+    from app.db.models import AgentTask, PurchaseRequest
+
+    async def overproduces(db, order_id):
+        await _case_supplier(db, order_id)
+        db.add(PurchaseRequest(title="Заявка, о которой не просили", items=[]))
+        db.add(AgentTask(objective="Предложение на потом", status="proposed"))
+
+    _, runner = _runner(test_engine, overproduces)
+    result = await runner.run_case(_cases()["data-supplier-contact-update"])
+    implicit = next(
+        v for v in result.forbidden_counters if v.check["type"] == "implicit:no_unrequested_records"
+    )
+    assert result.status == "failed"
+    assert list(implicit.evidence["created"]) == ["purchase_requests"]  # the proposal is fine

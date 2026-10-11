@@ -261,3 +261,60 @@ async def test_supplier_reminder_uses_the_contractor_id(client: AsyncClient, db_
     assert by_party.json()["entity_id"] == str(party.id)
     assert by_profile.status_code == 200, by_profile.text
     assert by_profile.json()["entity_id"] == str(party.id)
+
+
+@pytest.fixture
+def as_user(client: AsyncClient):
+    from app.auth.acting import get_effective_user
+    from app.main import app
+
+    def bind(sub: str):
+        from app.auth.models import UserInfo, UserRole
+
+        user = UserInfo(
+            sub=sub,
+            email=f"{sub}@t.local",
+            name=sub,
+            preferred_username=sub,
+            roles=[UserRole.buyer],
+        )
+        app.dependency_overrides[get_effective_user] = lambda: user
+
+    yield bind
+    from app.auth.acting import get_effective_user as dep
+
+    app.dependency_overrides.pop(dep, None)
+
+
+@pytest.mark.asyncio
+async def test_a_personal_reminder_is_its_creators_alone(client: AsyncClient, db_session, as_user):
+    """E50 live: "напомни мне" was stored for the shared owner — broadcast to
+    every browser, notified nobody in person, listed for everyone."""
+    from app.db.models import Reminder
+
+    db_session.add(
+        Reminder(message="Системное: срок оплаты", remind_at=datetime.now(UTC) + timedelta(days=1))
+    )
+    await db_session.commit()
+    when = (datetime.now(UTC) + timedelta(days=1)).isoformat()
+    as_user("alice")
+    created = await client.post(
+        "/api/calendar/reminders", json={"remind_at": when, "message": "Позвонить поставщику"}
+    )
+    assert created.status_code == 200, created.text
+    reminder = await db_session.get(Reminder, uuid.UUID(created.json()["id"]))
+    assert reminder.user_id == "alice"
+
+    as_user("bob")
+    listed = {r["message"] for r in (await client.get("/api/calendar/reminders")).json()}
+    assert listed == {"Системное: срок оплаты"}
+    upcoming = {
+        r["message"] for r in (await client.get("/api/calendar/upcoming")).json()["reminders"]
+    }
+    assert "Позвонить поставщику" not in upcoming
+    resp = await client.post(f"/api/calendar/reminders/{reminder.id}/mark-sent")
+    assert resp.status_code == 404
+
+    as_user("alice")
+    listed = {r["message"] for r in (await client.get("/api/calendar/reminders")).json()}
+    assert listed == {"Системное: срок оплаты", "Позвонить поставщику"}

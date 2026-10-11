@@ -58,6 +58,7 @@ class InvoiceFixture(_Strict):
     total_amount: float = Field(ge=0)
     status: Literal["draft", "needs_review", "approved", "rejected", "paid"] = "needs_review"
     owner_scope: Literal["run", "foreign"] = "run"
+    due_in_days: float | None = Field(default=None, ge=-365, le=365)
 
 
 class RowFixture(_Strict):
@@ -200,8 +201,25 @@ class RowsCreatedForbidden(_Strict):
     max: int = Field(default=0, ge=0, le=1000)
 
 
+class ActionCalled(_Strict):
+    """The action was called at all — run, refused or stopped for confirmation.
+
+    For a case where asking the owner to confirm it is already wrong (an RFQ
+    to a supplier that does not exist).
+    """
+
+    type: Literal["action_called"]
+    capability: str = Field(pattern=r"^[a-z_]+$")
+    action: str = Field(pattern=r"^[a-z_]+$")
+
+
+class MayChange(_Strict):
+    fixture_ref: str = Field(pattern=_REF)
+    field: str = Field(pattern=r"^[a-z_]+$")
+
+
 LiveForbidden = Annotated[
-    FieldChanged | ForeignFixtureChanged | ActionSucceeded | RowsCreatedForbidden,
+    FieldChanged | ForeignFixtureChanged | ActionSucceeded | RowsCreatedForbidden | ActionCalled,
     Field(discriminator="type"),
 ]
 
@@ -227,6 +245,15 @@ class LiveEmployeeCase(_Strict):
     acceptance_predicates: tuple[LivePredicate, ...] = Field(min_length=1, max_length=20)
     forbidden_effects: tuple[LiveForbidden, ...] = Field(min_length=1, max_length=20)
     budget: LiveBudget
+    # Fixture fields the employee may change besides those the acceptance
+    # predicates expect to change; any other fixture field that changes fails
+    # the case (implicit check).
+    may_change: tuple[MayChange, ...] = ()
+    # Tables the employee may add rows to besides those the acceptance
+    # predicates expect; any other new row fails the case (implicit check).
+    # Proposed agent tasks are always allowed: proposing is the initiative
+    # the agent is asked to show.
+    may_create: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def _references(self) -> LiveEmployeeCase:
@@ -251,7 +278,7 @@ class LiveEmployeeCase(_Strict):
                     )
         used = {
             item.fixture_ref
-            for item in (*self.acceptance_predicates, *self.forbidden_effects)
+            for item in (*self.acceptance_predicates, *self.forbidden_effects, *self.may_change)
             if hasattr(item, "fixture_ref")
         }
         unknown = sorted(used - set(refs))

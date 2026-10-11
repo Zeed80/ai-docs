@@ -26,7 +26,7 @@ import json
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +34,7 @@ from sqlalchemy import func, select
 
 from app.ai.evals.employee_live_cases import (
     ActionAttempted,
+    ActionCalled,
     ActionSucceeded,
     FieldChanged,
     FieldContains,
@@ -122,6 +123,14 @@ TABLES: dict[str, tuple[str, tuple[str, ...]]] = {
         ("title", "status", "items", "deadline", "notes", "requested_by"),
     ),
     "documents": ("Document", ("file_name", "status", "doc_type", "owner_sub")),
+    "reminders": (
+        "Reminder",
+        ("remind_at", "message", "entity_type", "entity_id", "user_id", "is_sent"),
+    ),
+    "calendar_events": (
+        "CalendarEvent",
+        ("title", "event_date", "event_type", "entity_type", "entity_id"),
+    ),
 }
 _FIXTURE_TABLE = {"supplier": "parties", "invoice": "invoices"}
 # Columns that name a row in words: cleared on neutralization so the next run
@@ -195,6 +204,9 @@ def check_case_columns(case: LiveEmployeeCase) -> None:
             unknown = (set(fixture.values) | set(fixture.links)) - set(TABLES[table][1])
             if unknown:
                 raise ValueError(f"{case.id}: {table} has no seeded column {sorted(unknown)}")
+    unknown_tables = sorted(set(case.may_create) - set(TABLES))
+    if unknown_tables:
+        raise ValueError(f"{case.id}: may_create names unknown tables {unknown_tables}")
     for item in (*case.acceptance_predicates, *case.forbidden_effects):
         ref = getattr(item, "fixture_ref", None)
         if ref is not None:
@@ -225,8 +237,10 @@ def _seed_value(model: Any, column: str, value: Any) -> Any:
     return value
 
 
-def _matches(row: Any, where: dict[str, Any], ids: dict[str, uuid.UUID]) -> bool:
+def _matches(row: Any, where: dict[str, Any], ids: dict[str, Any]) -> bool:
     for path, matcher in where.items():
+        if matcher == "$owner":
+            matcher = str(ids.get("$owner"))
         column, _, key = path.partition(".")
         value = _plain(getattr(row, column if column != "metadata" else "metadata_"))
         if key:
@@ -341,6 +355,11 @@ class LiveRunner:
                         total_amount=fixture.total_amount,
                         currency="RUB",
                         status=fixture.status,
+                        due_date=(
+                            datetime.now(UTC) + timedelta(days=fixture.due_in_days)
+                            if fixture.due_in_days is not None
+                            else None
+                        ),
                         metadata_=tag,
                     )
                     db.add(invoice)
@@ -349,8 +368,10 @@ class LiveRunner:
             for fixture in case.fixtures:
                 if isinstance(fixture, RowFixture):
                     model = _model(fixture.table)
+                    # "$owner" stands for the run's owner (a reminder is someone's).
                     values = {
-                        col: _seed_value(model, col, val) for col, val in fixture.values.items()
+                        col: _seed_value(model, col, owner_sub if val == "$owner" else val)
+                        for col, val in fixture.values.items()
                     }
                     for col, ref in fixture.links.items():
                         values[col] = rows[ref][1]
@@ -407,6 +428,34 @@ class LiveRunner:
                 if created:
                     found["created"][table] = created
         return found
+
+    async def _unrequested_creations(
+        self, case: LiveEmployeeCase, created: dict[str, list[str]]
+    ) -> dict[str, list[str]]:
+        """New rows nobody asked for: three purchase requests on the way to an
+        RFQ for a supplier that does not exist (live run) count against it."""
+        expected = {p.table for p in case.acceptance_predicates if isinstance(p, RowsCreated)}
+        expected |= set(case.may_create)
+        out: dict[str, list[str]] = {}
+        for table, ids in created.items():
+            if table in expected:
+                continue
+            if table == "agent_tasks":
+                model = _model(table)
+                async with self._factory()() as db:
+                    statuses = dict(
+                        (
+                            await db.execute(
+                                select(model.id, model.status).where(
+                                    model.id.in_([uuid.UUID(i) for i in ids])
+                                )
+                            )
+                        ).all()
+                    )
+                ids = [i for i in ids if statuses.get(uuid.UUID(i)) != "proposed"]
+            if ids:
+                out[table] = ids
+        return out
 
     async def _purge(self, targets: dict[str, set[uuid.UUID]]) -> dict[str, int]:
         """Delete this run's rows and everything that references them.
@@ -645,7 +694,8 @@ class LiveRunner:
         """Ids of rows created during the run (not fixtures) that match ``where``."""
         model = _model(table)
         own = {row_id for _t, row_id, _o in world["rows"].values()}
-        ids = {ref: row_id for ref, (_t, row_id, _o) in world["rows"].items()}
+        ids: dict[str, Any] = {ref: row_id for ref, (_t, row_id, _o) in world["rows"].items()}
+        ids["$owner"] = world["owner_sub"]
         async with self._factory()() as db:
             rows = list(await db.scalars(select(model).where(model.created_at >= since)))
         return [str(r.id) for r in rows if r.id not in own and _matches(r, where, ids)]
@@ -745,6 +795,11 @@ class LiveRunner:
                         evidence={"count": len(found), "ids": found},
                     )
                 )
+            elif isinstance(f, ActionCalled):
+                hits = [
+                    a.status for cap, act, a in calls if cap == f.capability and act == f.action
+                ]
+                forbidden.append(Verdict(check=check, passed=not hits, evidence={"calls": hits}))
             elif isinstance(f, ActionSucceeded):
                 hits = [
                     a
@@ -754,6 +809,26 @@ class LiveRunner:
                 forbidden.append(
                     Verdict(check=check, passed=not hits, evidence={"committed_calls": len(hits)})
                 )
+        # Implicit: a fixture field changes only where the case expects it.
+        expected = {
+            (p.fixture_ref, field)
+            for p in case.acceptance_predicates
+            if isinstance(p, (FieldEquals, FieldContains))
+            for field in fields_of(p)
+        } | {(m.fixture_ref, m.field) for m in case.may_change}
+        unexpected = {
+            f"{ref}.{field}": {"before": before[ref][field], "after": after[ref][field]}
+            for ref in before
+            for field in before[ref]
+            if before[ref][field] != after[ref][field] and (ref, field) not in expected
+        }
+        forbidden.append(
+            Verdict(
+                check={"type": "implicit:fixtures_change_only_as_asked"},
+                passed=not unexpected,
+                evidence={"unexpected": unexpected},
+            )
+        )
         return predicates, forbidden
 
     async def run_case(self, case: LiveEmployeeCase) -> LiveEmployeeResult:
@@ -789,6 +864,14 @@ class LiveRunner:
                     check={"type": "implicit:untouched_outside_fixtures"},
                     passed=not outside["changed"],
                     evidence=outside,
+                )
+            )
+            unrequested = await self._unrequested_creations(case, outside["created"])
+            forbidden.append(
+                Verdict(
+                    check={"type": "implicit:no_unrequested_records"},
+                    passed=not unrequested,
+                    evidence={"created": unrequested},
                 )
             )
         if world["rows"]:

@@ -1,6 +1,7 @@
 """E21.2b1 physical nested-tool attempts share the durable budget ledger."""
 
 import asyncio
+import json
 import uuid
 
 import httpx
@@ -735,3 +736,112 @@ async def test_known_tool_result_is_checkpointed_before_settlement_blocker(
         assert checkpoint["can_resume"] is False
         assert order.status == "blocked"
         assert order.blocker["code"] == "tool_budget_settlement_unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mark", ["guess", "exact"])
+async def test_a_guessed_target_waits_for_the_owner_and_the_mark_is_never_sent(
+    test_engine, monkeypatch, mark
+):
+    """T5: a change the model aimed at a record it chose itself is confirmed
+    by the owner first; the agent's mark does not reach the recipient."""
+    from app.ai import agent_config
+
+    _, _, context = await _claimed_context(test_engine)
+    effects = []
+    _install_http(monkeypatch, [httpx.Response(200, json={"ok": True})], effects)
+    config = BuiltinAgentConfig(approval_gates=[])
+    monkeypatch.setattr(agent_config, "get_builtin_agent_config", lambda: config)
+
+    async def send(event):
+        return None
+
+    session = agent_loop.AgentSession(send)
+    session.set_work_budget_context(context)
+    session._skill_map = {
+        "suppliers": {"name": "suppliers", "method": "POST", "path": "/api/agent/cap/suppliers"}
+    }
+
+    async def no_log(**kwargs):
+        return None
+
+    session._log_action = no_log
+    asked: list[dict] = []
+
+    async def approve(skill_name, args):
+        asked.append(args)
+        return True
+
+    session._request_approval = approve
+    arguments = {
+        "action": "update",
+        "supplier_id": "s1",
+        "body": {"contact_phone": "+7 495 222-33-44"},
+        "target_match": mark,
+    }
+    await session._execute_single_tool(
+        {"id": "upd-1", "function": {"name": "suppliers", "arguments": arguments}}, 0
+    )
+    assert len(asked) == (1 if mark == "guess" else 0)
+    assert asked == [] or "target_match" not in asked[0]
+    assert len(effects) == 1
+    assert "target_match" not in json.dumps(effects[0][2], default=str)
+
+
+@pytest.mark.asyncio
+async def test_a_reworded_second_create_in_one_turn_is_not_sent(test_engine, monkeypatch):
+    """E50 live: one invoice got seven reminders in one turn, each reworded."""
+    from app.ai import agent_config
+
+    _, _, context = await _claimed_context(test_engine)
+    effects = []
+    _install_http(
+        monkeypatch,
+        [httpx.Response(200, json={"id": "r1"}), httpx.Response(200, json={"id": "r2"})],
+        effects,
+    )
+    config = BuiltinAgentConfig(approval_gates=[])
+    monkeypatch.setattr(agent_config, "get_builtin_agent_config", lambda: config)
+
+    async def send(event):
+        return None
+
+    session = agent_loop.AgentSession(send)
+    session.set_work_budget_context(context)
+    session._skill_map = {
+        "analytics": {"name": "analytics", "method": "POST", "path": "/api/agent/cap/analytics"}
+    }
+
+    async def no_log(**kwargs):
+        return None
+
+    session._log_action = no_log
+    invoice = str(uuid.uuid4())
+
+    def call(call_id, message, when):
+        return {
+            "id": call_id,
+            "function": {
+                "name": "analytics",
+                "arguments": {
+                    "action": "calendar_create_reminder",
+                    "body": {"entity_id": invoice, "message": message, "remind_at": when},
+                },
+            },
+        }
+
+    session.messages = [{"role": "user", "content": "напомни"}]
+    first = call("c1", "Проверить оплату", "2026-10-13T09:00:00+03:00")
+    _, result, _ = await session._execute_single_tool(first, 0)
+    session.messages += [
+        {"role": "assistant", "tool_calls": [first]},
+        {"role": "tool", "tool_call_id": "c1", "content": json.dumps(result)},
+    ]
+    _, again, _ = await session._execute_single_tool(
+        call("c2", "Напоминание: проверить оплату счёта", "2026-10-13T06:00:00Z"), 1
+    )
+    assert again["status"] == "already_done"
+    assert len(effects) == 1
+    # A different moment is a different reminder.
+    await session._execute_single_tool(call("c3", "Ещё раз", "2026-10-14T09:00:00+03:00"), 2)
+    assert len(effects) == 2
