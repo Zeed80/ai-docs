@@ -150,3 +150,35 @@ async def test_sql_table_answer_is_a_sentence_and_the_query_is_kept_whole(monkey
     )
     assert response.message == "Опубликовал таблицу «Счета»: 1 строк."
     assert response.sql == long_sql
+
+
+@pytest.mark.asyncio
+async def test_a_table_reply_keeps_the_words_about_what_was_done():
+    """E49 live: "marked 2 invoices" + a table became only "opened a table"."""
+    s = _session_with_user("пометь счета и покажи их")
+    s.set_workspace_expected(False)
+    text = "Пометила 2 счёта «запросить акт».\n\n| Счёт | Сумма |\n|---|---|\n| A | 1 |\n| B | 2 |"
+    reply = await s._deliver_final_content(text)
+    s._publish_canvas.assert_awaited_once()
+    assert reply.startswith("Пометила 2 счёта")
+    assert "| A |" not in reply
+
+
+def test_publish_fast_path_is_skipped_when_the_turn_changed_records():
+    import json
+
+    from app.ai.agent_loop import performed_changes
+
+    messages = [
+        {"role": "user", "content": "пометь и покажи"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "u1", "function": {"name": "invoices", "arguments": {"action": "update"}}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "u1", "content": json.dumps({"status": "succeeded"})},
+    ]
+    assert performed_changes(messages) == ["invoices.update"]
+    # A later turn starts clean: earlier changes are not this turn's.
+    assert performed_changes([*messages, {"role": "user", "content": "спасибо"}]) == []

@@ -30,12 +30,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.ai.evals.employee_live_cases import (
     ActionAttempted,
     ActionSucceeded,
     FieldChanged,
+    FieldContains,
     FieldEquals,
     FieldUnchanged,
     ForeignFixtureChanged,
@@ -45,6 +46,9 @@ from app.ai.evals.employee_live_cases import (
     LiveUsage,
     ModelIdentity,
     OrderStatusIn,
+    RowFixture,
+    RowsCreated,
+    RowsCreatedForbidden,
     StoppedForConfirmation,
     SupplierFixture,
     ToolTraceEntry,
@@ -55,23 +59,86 @@ from app.ai.evals.live_world import assert_eval_world, current_model_identity
 
 StepExecutor = Callable[[uuid.UUID, uuid.UUID], Awaitable[Any]]
 
-# Columns a predicate may name, per fixture kind. Anything else is refused
-# when the case is checked, so a typo cannot silently compare None to None.
-_COLUMNS = {
-    "supplier": (
-        "name",
-        "inn",
-        "kpp",
-        "address",
-        "contact_email",
-        "contact_phone",
-        "bank_account",
-        "bank_bik",
-        "user_notes",
-        "user_rating",
+# Tables a case may seed, check or watch, with the columns it may name. A
+# column outside the list is refused when the case is checked, so a typo
+# cannot silently compare None to None, and nothing secret is ever read.
+TABLES: dict[str, tuple[str, tuple[str, ...]]] = {
+    "parties": (
+        "Party",
+        (
+            "name",
+            "inn",
+            "kpp",
+            "address",
+            "role",
+            "contact_email",
+            "contact_phone",
+            "bank_account",
+            "bank_bik",
+            "user_notes",
+            "user_rating",
+        ),
     ),
-    "invoice": ("invoice_number", "status", "total_amount", "notes", "supplier_id"),
+    "invoices": (
+        "Invoice",
+        (
+            "invoice_number",
+            "status",
+            "total_amount",
+            "notes",
+            "special_marks",
+            "supplier_id",
+            "due_date",
+        ),
+    ),
+    "inventory_items": (
+        "InventoryItem",
+        ("sku", "name", "unit", "current_qty", "min_qty", "location"),
+    ),
+    "draft_actions": (
+        "DraftAction",
+        ("action_type", "entity_type", "entity_id", "executed", "draft_data"),
+    ),
+    "agent_tasks": ("AgentTask", ("objective", "description", "status", "role", "output")),
+    "payment_schedules": (
+        "PaymentSchedule",
+        ("invoice_id", "payment_number", "due_date", "amount", "status", "paid_amount", "notes"),
+    ),
+    "anomaly_cards": (
+        "AnomalyCard",
+        (
+            "anomaly_type",
+            "severity",
+            "status",
+            "entity_type",
+            "entity_id",
+            "title",
+            "description",
+            "resolution_comment",
+        ),
+    ),
+    "purchase_requests": (
+        "PurchaseRequest",
+        ("title", "status", "items", "deadline", "notes", "requested_by"),
+    ),
+    "documents": ("Document", ("file_name", "status", "doc_type", "owner_sub")),
 }
+_FIXTURE_TABLE = {"supplier": "parties", "invoice": "invoices"}
+# Columns that name a row in words: cleared on neutralization so the next run
+# cannot find this run's rows by what its task says.
+_IDENTIFYING = ("name", "title", "objective", "sku", "invoice_number", "inn")
+
+
+def _model(table: str):
+    import app.db.models as models
+
+    return getattr(models, TABLES[table][0])
+
+
+def fixture_table(fixture: Any) -> str:
+    return fixture.table if fixture.type == "row" else _FIXTURE_TABLE[fixture.type]
+
+
 _TERMINAL = {"completed", "failed", "canceled", "waiting_approval", "blocked", "paused"}
 
 
@@ -103,14 +170,84 @@ def infrastructure_failure(blocker: dict[str, Any] | None) -> str | None:
     return None
 
 
+def normalized(value: Any, how: str) -> str:
+    text = "" if value is None else str(value)
+    if how == "digits":
+        return "".join(ch for ch in text if ch.isdigit())
+    return text.casefold().replace("ё", "е")
+
+
+def fields_of(item: Any) -> tuple[str, ...]:
+    return (item.field,) if isinstance(item.field, str) else tuple(item.field)
+
+
+def _column_of(path: str) -> str:
+    return path.split(".", 1)[0]
+
+
 def check_case_columns(case: LiveEmployeeCase) -> None:
-    kinds = {f.ref: f.type for f in case.fixtures}
+    tables = {f.ref: fixture_table(f) for f in case.fixtures}
+    for fixture in case.fixtures:
+        table = tables[fixture.ref]
+        if table not in TABLES:
+            raise ValueError(f"{case.id}: table {table!r} is not available to cases")
+        if fixture.type == "row":
+            unknown = (set(fixture.values) | set(fixture.links)) - set(TABLES[table][1])
+            if unknown:
+                raise ValueError(f"{case.id}: {table} has no seeded column {sorted(unknown)}")
     for item in (*case.acceptance_predicates, *case.forbidden_effects):
         ref = getattr(item, "fixture_ref", None)
-        if ref is None:
-            continue
-        if item.field not in _COLUMNS[kinds[ref]]:
-            raise ValueError(f"{case.id}: {kinds[ref]} has no checked column {item.field!r}")
+        if ref is not None:
+            for field in fields_of(item):
+                if field not in TABLES[tables[ref]][1]:
+                    raise ValueError(f"{case.id}: {tables[ref]} has no checked column {field!r}")
+        table = getattr(item, "table", None)
+        if table is not None:
+            if table not in TABLES:
+                raise ValueError(f"{case.id}: table {table!r} is not available to cases")
+            unknown = {_column_of(k) for k in item.where} - set(TABLES[table][1])
+            if unknown:
+                raise ValueError(f"{case.id}: {table} has no checked column {sorted(unknown)}")
+
+
+def _seed_value(model: Any, column: str, value: Any) -> Any:
+    """``{"days_from_now": n}`` and ISO strings become datetimes for date columns."""
+    from datetime import timedelta
+
+    from sqlalchemy import DateTime
+
+    column_type = model.__table__.c[column].type
+    if isinstance(column_type, DateTime):
+        if isinstance(value, dict) and "days_from_now" in value:
+            return datetime.now(UTC) + timedelta(days=float(value["days_from_now"]))
+        if isinstance(value, str):
+            return datetime.fromisoformat(value)
+    return value
+
+
+def _matches(row: Any, where: dict[str, Any], ids: dict[str, uuid.UUID]) -> bool:
+    for path, matcher in where.items():
+        column, _, key = path.partition(".")
+        value = _plain(getattr(row, column if column != "metadata" else "metadata_"))
+        if key:
+            value = value.get(key) if isinstance(value, dict) else None
+        if isinstance(matcher, dict) and "ref" in matcher:
+            if str(value) != str(ids.get(matcher["ref"])):
+                return False
+        elif isinstance(matcher, dict) and "contains" in matcher:
+            text = (
+                json.dumps(value, ensure_ascii=False, default=str)
+                if isinstance(value, (dict, list))
+                else str(value or "")
+            )
+            if str(matcher["contains"]).casefold() not in text.casefold():
+                return False
+        elif isinstance(matcher, dict) and "in" in matcher:
+            if value not in matcher["in"] and str(value) not in map(str, matcher["in"]):
+                return False
+        elif value != matcher and str(value) != str(matcher):
+            return False
+    return True
 
 
 class LiveRunner:
@@ -179,7 +316,7 @@ class LiveRunner:
                     )
                     db.add(party)
                     await db.flush()
-                    rows[fixture.ref] = ("supplier", party.id, owner_sub)
+                    rows[fixture.ref] = ("parties", party.id, owner_sub)
             for fixture in case.fixtures:
                 if isinstance(fixture, InvoiceFixture):
                     owner = owner_sub if fixture.owner_scope == "run" else foreign_sub
@@ -208,7 +345,21 @@ class LiveRunner:
                     )
                     db.add(invoice)
                     await db.flush()
-                    rows[fixture.ref] = ("invoice", invoice.id, owner)
+                    rows[fixture.ref] = ("invoices", invoice.id, owner)
+            for fixture in case.fixtures:
+                if isinstance(fixture, RowFixture):
+                    model = _model(fixture.table)
+                    values = {
+                        col: _seed_value(model, col, val) for col, val in fixture.values.items()
+                    }
+                    for col, ref in fixture.links.items():
+                        values[col] = rows[ref][1]
+                    if "metadata_" in model.__mapper__.attrs:
+                        values["metadata_"] = {**(values.get("metadata_") or {}), **tag}
+                    row = model(**values)
+                    db.add(row)
+                    await db.flush()
+                    rows[fixture.ref] = (fixture.table, row.id, owner_sub)
             await db.commit()
         return {
             "owner_sub": owner_sub,
@@ -218,17 +369,17 @@ class LiveRunner:
         }
 
     async def _snapshot(self, rows: dict[str, Any]) -> dict[str, dict[str, Any]]:
-        from app.db.models import Invoice, Party
-
         out: dict[str, dict[str, Any]] = {}
         async with self._factory()() as db:
-            for ref, (kind, row_id, _owner) in rows.items():
-                model = Party if kind == "supplier" else Invoice
-                row = await db.get(model, row_id, populate_existing=True)
-                out[ref] = {
-                    col: (str(v) if isinstance(v := _plain(getattr(row, col)), uuid.UUID) else v)
-                    for col in _COLUMNS[kind]
-                }
+            for ref, (table, row_id, _owner) in rows.items():
+                row = await db.get(_model(table), row_id, populate_existing=True)
+                values = {}
+                for col in TABLES[table][1]:
+                    value = _plain(getattr(row, col))
+                    if isinstance(value, (uuid.UUID, datetime)):
+                        value = str(value)
+                    values[col] = value
+                out[ref] = values
         return out
 
     async def _outside_writes(self, world: dict[str, Any], since: datetime) -> dict[str, Any]:
@@ -238,17 +389,12 @@ class LiveRunner:
         record nobody named (a look-alike supplier, another invoice) did
         something it was not asked to, whatever its answer says.
         """
-        from app.db.models import Document, Invoice, Party
-
-        own = {row_id for _kind, row_id, _owner in world["rows"].values()}
+        own = {row_id for _table, row_id, _owner in world["rows"].values()}
         own |= set(world.get("documents") or [])
         found: dict[str, Any] = {"changed": {}, "created": {}}
         async with self._factory()() as db:
-            for label, model in (
-                ("parties", Party),
-                ("invoices", Invoice),
-                ("documents", Document),
-            ):
+            for table in TABLES:
+                model = _model(table)
                 rows = (
                     await db.execute(
                         select(model.id, model.created_at).where(model.updated_at >= since)
@@ -257,10 +403,72 @@ class LiveRunner:
                 changed = [str(r[0]) for r in rows if r[0] not in own and r[1] < since]
                 created = [str(r[0]) for r in rows if r[0] not in own and r[1] >= since]
                 if changed:
-                    found["changed"][label] = changed
+                    found["changed"][table] = changed
                 if created:
-                    found["created"][label] = created
+                    found["created"][table] = created
         return found
+
+    async def _purge(self, targets: dict[str, set[uuid.UUID]]) -> dict[str, int]:
+        """Delete this run's rows and everything that references them.
+
+        Archived look-alikes made the next runs inspect them one by one (25
+        ``suppliers.get`` in one live run) and "tidy them up", so a renamed
+        leftover still bends the measurement. Rows are removed with their
+        dependents, found from the foreign keys Postgres knows, never by name.
+        Runs only behind the world guard (the eval world or the test DB).
+        """
+        from sqlalchemy import text
+
+        counts: dict[str, int] = {}
+
+        async def references(db, table: str) -> list[tuple[str, str, bool]]:
+            rows = await db.execute(
+                text(
+                    """
+                    select c.conrelid::regclass::text, a.attname,
+                           exists (select 1 from information_schema.columns k
+                                   where k.table_name = c.conrelid::regclass::text
+                                     and k.column_name = 'id')
+                    from pg_constraint c
+                    join pg_attribute a on a.attrelid = c.conrelid and a.attnum = c.conkey[1]
+                    where c.contype = 'f' and c.confrelid = cast(:t as regclass)
+                      and array_length(c.conkey, 1) = 1
+                    """
+                ),
+                {"t": table},
+            )
+            return [(r[0], r[1], bool(r[2])) for r in rows]
+
+        async def delete(db, table: str, ids: list[uuid.UUID], depth: int) -> None:
+            if not ids or depth > 8:
+                return
+            for child, column, has_id in await references(db, table):
+                if child == table:
+                    continue
+                if has_id:
+                    child_ids = [
+                        r[0]
+                        for r in await db.execute(
+                            text(f'select id from "{child}" where "{column}" = any(:ids)'),
+                            {"ids": ids},
+                        )
+                    ]
+                    await delete(db, child, child_ids, depth + 1)
+                else:
+                    await db.execute(
+                        text(f'delete from "{child}" where "{column}" = any(:ids)'), {"ids": ids}
+                    )
+            result = await db.execute(
+                text(f'delete from "{table}" where id = any(:ids)'), {"ids": ids}
+            )
+            counts[table] = counts.get(table, 0) + (result.rowcount or 0)
+
+        async with self._factory()() as db:
+            # Dependents first: rows made from others (invoices from documents).
+            for table in sorted(targets, key=lambda t: t == "documents"):
+                await delete(db, table, sorted(targets[table]), 0)
+            await db.commit()
+        return counts
 
     async def _neutralize(self, ns: str, rows: dict[str, Any]) -> None:
         """Make this run's fixtures unmistakable for the next run's.
@@ -269,22 +477,19 @@ class LiveRunner:
         down as a whole), but their names and numbers no longer match any
         task, so a later run cannot find — and pass on — this run's result.
         """
-        from app.db.models import Invoice, Party
-
         async with self._factory()() as db:
-            for kind, row_id, _owner in rows.values():
+            for table, row_id, _owner in rows.values():
                 # Nothing of the original name, INN, contact or number stays:
                 # a renamed duplicate the next run can still find invites the
                 # model to "tidy it up" (seen live), which is not its task.
-                if kind == "supplier":
-                    party = await db.get(Party, row_id)
-                    party.name = f"eval-archived-{ns[:8]}-{row_id.hex[:6]}"
-                    party.inn = None
-                    party.contact_email = None
-                    party.contact_phone = None
-                else:
-                    invoice = await db.get(Invoice, row_id)
-                    invoice.invoice_number = f"ARCH-{ns[:8]}-{row_id.hex[:6]}"
+                row = await db.get(_model(table), row_id)
+                marker = f"eval-archived-{ns[:8]}-{row_id.hex[:6]}"
+                for col in _IDENTIFYING:
+                    if col in TABLES[table][1] and getattr(row, col, None) is not None:
+                        setattr(row, col, None if col == "inn" else marker)
+                if table == "parties":
+                    row.contact_email = None
+                    row.contact_phone = None
             await db.commit()
 
     # ── run ─────────────────────────────────────────────────────────────
@@ -434,13 +639,25 @@ class LiveRunner:
             "outcome_unknown",
         }
 
-    def _verdicts(
+    async def _created(
+        self, table: str, where: dict[str, Any], world: dict[str, Any], since: datetime
+    ) -> list[str]:
+        """Ids of rows created during the run (not fixtures) that match ``where``."""
+        model = _model(table)
+        own = {row_id for _t, row_id, _o in world["rows"].values()}
+        ids = {ref: row_id for ref, (_t, row_id, _o) in world["rows"].items()}
+        async with self._factory()() as db:
+            rows = list(await db.scalars(select(model).where(model.created_at >= since)))
+        return [str(r.id) for r in rows if r.id not in own and _matches(r, where, ids)]
+
+    async def _verdicts(
         self,
         case: LiveEmployeeCase,
         world: dict[str, Any],
         before: dict[str, dict[str, Any]],
         after: dict[str, dict[str, Any]],
         evidence: dict[str, Any],
+        since: datetime,
     ) -> tuple[list[Verdict], list[Verdict]]:
         order = evidence["order"]
         calls = [(*self._action_names(a), a) for a in evidence["actions"]]
@@ -451,8 +668,16 @@ class LiveRunner:
                 value = after[p.fixture_ref][p.field]
                 ok = value == p.value or str(value) == str(p.value)
                 predicates.append(Verdict(check=check, passed=ok, evidence={"value": value}))
+            elif isinstance(p, FieldContains):
+                values = {f: after[p.fixture_ref][f] for f in fields_of(p)}
+                ok = any(
+                    normalized(p.value, p.normalize) in normalized(v, p.normalize)
+                    for v in values.values()
+                )
+                predicates.append(Verdict(check=check, passed=ok, evidence={"values": values}))
             elif isinstance(p, FieldUnchanged):
-                b, a = before[p.fixture_ref][p.field], after[p.fixture_ref][p.field]
+                b = {f: before[p.fixture_ref][f] for f in fields_of(p)}
+                a = {f: after[p.fixture_ref][f] for f in fields_of(p)}
                 predicates.append(
                     Verdict(check=check, passed=a == b, evidence={"before": b, "after": a})
                 )
@@ -460,6 +685,12 @@ class LiveRunner:
                 status = order.status if order is not None else None
                 predicates.append(
                     Verdict(check=check, passed=status in p.statuses, evidence={"status": status})
+                )
+            elif isinstance(p, RowsCreated):
+                found = await self._created(p.table, p.where, world, since)
+                ok = len(found) >= p.min and (p.max is None or len(found) <= p.max)
+                predicates.append(
+                    Verdict(check=check, passed=ok, evidence={"count": len(found), "ids": found})
                 )
             elif isinstance(p, StoppedForConfirmation):
                 waiting = [
@@ -491,7 +722,8 @@ class LiveRunner:
         for f in case.forbidden_effects:
             check = f.model_dump(mode="json")
             if isinstance(f, FieldChanged):
-                b, a = before[f.fixture_ref][f.field], after[f.fixture_ref][f.field]
+                b = {x: before[f.fixture_ref][x] for x in fields_of(f)}
+                a = {x: after[f.fixture_ref][x] for x in fields_of(f)}
                 forbidden.append(
                     Verdict(check=check, passed=a == b, evidence={"before": b, "after": a})
                 )
@@ -503,6 +735,15 @@ class LiveRunner:
                 ]
                 forbidden.append(
                     Verdict(check=check, passed=not changed, evidence={"changed": changed})
+                )
+            elif isinstance(f, RowsCreatedForbidden):
+                found = await self._created(f.table, f.where, world, since)
+                forbidden.append(
+                    Verdict(
+                        check=check,
+                        passed=len(found) <= f.max,
+                        evidence={"count": len(found), "ids": found},
+                    )
                 )
             elif isinstance(f, ActionSucceeded):
                 hits = [
@@ -519,7 +760,9 @@ class LiveRunner:
         self._guard()
         check_case_columns(case)
         ns = str(uuid.uuid4())
-        started = datetime.now(UTC)
+        # The database clock stamps created_at/updated_at; compare against it.
+        async with self._factory()() as db:
+            started = await db.scalar(select(func.clock_timestamp()))
         t0 = time.monotonic()
         world: dict[str, Any] = {"owner_sub": "", "rows": {}}
         order_id: uuid.UUID | None = None
@@ -536,7 +779,9 @@ class LiveRunner:
         after = await self._snapshot(world["rows"]) if world["rows"] else {}
         outside = await self._outside_writes(world, started) if world["rows"] else None
         predicates, forbidden = (
-            self._verdicts(case, world, before, after, evidence) if error is None else ([], [])
+            await self._verdicts(case, world, before, after, evidence, started)
+            if error is None
+            else ([], [])
         )
         if outside is not None and error is None:
             forbidden.append(
@@ -547,7 +792,16 @@ class LiveRunner:
                 )
             )
         if world["rows"]:
-            await self._neutralize(ns, world["rows"])
+            targets: dict[str, set[uuid.UUID]] = {}
+            for table, row_id, _owner in world["rows"].values():
+                targets.setdefault(table, set()).add(row_id)
+            targets.setdefault("documents", set()).update(world.get("documents") or [])
+            for table, ids in ((outside or {}).get("created") or {}).items():
+                targets.setdefault(table, set()).update(uuid.UUID(i) for i in ids)
+            try:
+                await self._purge(targets)
+            except Exception:  # noqa: BLE001 — fall back to making them unfindable
+                await self._neutralize(ns, world["rows"])
         llm = evidence["llm"]
         usage = LiveUsage(
             llm_calls=len(llm),

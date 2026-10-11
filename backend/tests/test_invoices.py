@@ -380,3 +380,36 @@ async def test_bulk_reject(client: AsyncClient, db_session: AsyncSession):
 
     r = await client.get(f"/api/invoices/{inv_id}")
     assert r.json()["status"] == "rejected"
+
+
+async def _create_invoice_with_supplier(db: AsyncSession) -> uuid.UUID:
+    _, invoice_id = await _create_invoice(db)
+    supplier = Party(name="ООО «Поставщик»", inn="7701000049", role=PartyRole.supplier)
+    db.add(supplier)
+    await db.flush()
+    invoice = await db.get(Invoice, invoice_id)
+    invoice.supplier_id = supplier.id
+    await db.commit()
+    db.expunge_all()
+    return invoice_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "suffix", "body", "status"),
+    [
+        ("patch", "", {"notes": "ждём оригинал"}, "needs_review"),
+        ("post", "/approve", {"comment": "ок"}, "approved"),
+        ("post", "/reject", {"reason": "дубль"}, "rejected"),
+    ],
+)
+async def test_changing_an_invoice_with_a_supplier_answers_after_commit(
+    client: AsyncClient, db_session: AsyncSession, method, suffix, body, status
+):
+    """E49 live: the response read an unloaded supplier lazily and failed with
+    500 after the commit, so the agent saw "outcome unknown" for every change."""
+    invoice_id = await _create_invoice_with_supplier(db_session)
+    resp = await getattr(client, method)(f"/api/invoices/{invoice_id}{suffix}", json=body)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == status
+    assert resp.json()["supplier"]["inn"] == "7701000049"

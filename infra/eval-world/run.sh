@@ -16,7 +16,12 @@ OUT_DIR=infra/eval-world/results
 mkdir -p "$OUT_DIR"
 REV=$(git rev-parse --short HEAD)$(git diff --quiet HEAD -- backend aiagent || echo "-dirty")
 
-cleanup() { "${COMPOSE[@]}" down -v >/dev/null 2>&1 || true; }
+# EVAL_KEEP_WORLD=1 leaves the world up for inspection (down it yourself:
+# docker compose -f infra/eval-world/docker-compose.yml down -v).
+cleanup() {
+  [ "${EVAL_KEEP_WORLD:-0}" = "1" ] && return
+  "${COMPOSE[@]}" down -v >/dev/null 2>&1 || true
+}
 trap cleanup EXIT
 
 export STRATA_API_KEY
@@ -27,6 +32,13 @@ until docker exec aiw-eval-eval-backend-1 curl -sf localhost:8000/health >/dev/n
   sleep 3
 done
 
+# Corpus development: EVAL_USE_WORKTREE=1 runs the working tree's eval code
+# and corpus without rebuilding the image (the result says "-dirty").
+if [ "${EVAL_USE_WORKTREE:-0}" = "1" ]; then
+  docker cp backend/app/ai/evals/. aiw-eval-eval-backend-1:/app/app/ai/evals/
+  REV="$REV-worktree"
+fi
+
 SETUP=$(mktemp)
 docker exec -w /app infra-backend-1 python -m app.ai.evals.live_world export > "$SETUP"
 DIGEST=$(docker exec -i -w /app aiw-eval-eval-backend-1 python -m app.ai.evals.live_world import < "$SETUP" 2>/dev/null | tail -1)
@@ -35,6 +47,6 @@ rm -f "$SETUP"
 docker exec -w /app aiw-eval-eval-backend-1 python -m app.ai.evals.live_runner \
   --corpus app/ai/evals/data/employee_live_v1.yaml \
   --out /tmp/results.jsonl --code-revision "$REV" --setup-digest "$DIGEST" "$@" \
-  | grep -E '^[a-z0-9-]+: (passed|failed|error)'
+  | grep -E '^[a-z0-9-]+: (passed|failed|error)' || true
 docker cp aiw-eval-eval-backend-1:/tmp/results.jsonl "$OUT_DIR/$STAMP.jsonl"
 echo "results: $OUT_DIR/$STAMP.jsonl"

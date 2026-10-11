@@ -1597,7 +1597,7 @@ DocumentChunk, embeddings, documents/mail/artifacts и существующие 
 
 ### E50 — 120 синтетических задач
 
-**Статус:** IN_PROGRESS, начальный R0 corpus 10/120 принят в fake scope.
+**Статус:** IN_PROGRESS. Живой корпус `employee_live_v1`: группа «данные» 15/24 (8 типов по два примера), и живой замер по ней нашёл и закрыл четыре дефекта продукта (`docs/agent-employee-delivery/E50-corpus-data.md`); recovery 1/4 — долг T5. R0 fake-scope 10 cases — отдельно.
 **После:** E49; инкрементальное пополнение разрешено delivery roadmap.
 
 1. Пять групп по 24: браузер, файлы, данные, коммуникации, координация.

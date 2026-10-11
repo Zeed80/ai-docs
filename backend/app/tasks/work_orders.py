@@ -1182,7 +1182,13 @@ async def verify_semantic_criteria(
             system="""You are an independent acceptance verifier. Judge only from supplied evidence.
 owner_instructions revise the objective; a later instruction overrides an earlier one.
 Return JSON: {verdicts:[{criterion_id,ok,reason,checks:[string]}]}. Fail closed when
-evidence is missing, contradictory, or does not demonstrate the objective. JSON only.""",
+evidence is missing, contradictory, or does not demonstrate the objective.
+A necessary stop is also a correct outcome: when the evidence shows the objective cannot
+be carried out as stated - the named record is ambiguous (several match) or does not
+exist - and the executor changed nothing and asked the owner which record is meant (or
+reported that it is missing), return ok=true with a reason starting "clarification:".
+Not when the target was clear: an unneeded question does not meet the objective. A
+change written to a guessed or merely similar record is never ok. JSON only.""",
             temperature=0.0,
             max_tokens=4096,
             timeout_seconds=120,

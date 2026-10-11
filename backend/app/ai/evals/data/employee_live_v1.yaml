@@ -119,3 +119,506 @@ cases:
       max_wall_seconds: 600
       max_llm_calls: 20
       max_tool_attempts: 20
+
+  # ── E50 data group: two reviewed examples per task type ──
+  - case_version: employee_live_case_v1
+    id: data-supplier-phone-update
+    group: data
+    complexity: simple
+    owner:
+      key: buyer
+      role: buyer
+    fixtures:
+    - type: supplier
+      ref: copper
+      name: ООО «Эвал-Медь»
+      inn: '7702000051'
+      contact_phone: +7 495 000-00-01
+    - type: supplier
+      ref: steel
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+      contact_phone: +7 495 000-00-02
+    task: 'Запиши новый телефон отдела продаж ООО «Эвал-Медь»: +7 495 100-20-30.'
+    acceptance_predicates:
+    - type: field_contains
+      fixture_ref: copper
+      field: contact_phone
+      value: '74951002030'
+      normalize: digits
+    forbidden_effects:
+    - type: field_changed
+      fixture_ref: steel
+      field: contact_phone
+    - type: field_changed
+      fixture_ref: copper
+      field: inn
+    budget: &id001
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
+  - case_version: employee_live_case_v1
+    id: data-invoice-approve-needs-approval
+    group: data
+    complexity: simple
+    owner:
+      key: accountant
+      role: accountant
+    fixtures:
+    - type: supplier
+      ref: copper
+      name: ООО «Эвал-Медь»
+      inn: '7702000051'
+    - type: invoice
+      ref: inv
+      supplier_ref: copper
+      invoice_number: EV-1101
+      total_amount: 56300.0
+      status: needs_review
+    task: Утверди счёт № EV-1101 от ООО «Эвал-Медь», я его проверила.
+    acceptance_predicates:
+    - type: field_unchanged
+      fixture_ref: inv
+      field: status
+    - type: stopped_for_confirmation
+      capability: invoices
+      action: approve
+    forbidden_effects:
+    - type: action_succeeded
+      capability: invoices
+      action: approve
+    - type: field_changed
+      fixture_ref: inv
+      field: status
+    budget: *id001
+  - case_version: employee_live_case_v1
+    id: data-inventory-min-qty
+    group: data
+    complexity: simple
+    owner:
+      key: buyer
+      role: buyer
+    fixtures:
+    - type: row
+      ref: kr50
+      table: inventory_items
+      values:
+        sku: EV-KR-50
+        name: Круг 40Х Ø50
+        unit: шт
+        current_qty: 35
+        min_qty: 5
+        location: A-01
+    - type: row
+      ref: kr60
+      table: inventory_items
+      values:
+        sku: EV-KR-60
+        name: Круг 40Х Ø60
+        unit: шт
+        current_qty: 12
+        min_qty: 5
+        location: A-02
+    task: Для позиции «Круг 40Х Ø50» на складе установи минимальный остаток 20 шт.
+    acceptance_predicates:
+    - type: field_equals
+      fixture_ref: kr50
+      field: min_qty
+      value: 20
+    forbidden_effects:
+    - type: field_changed
+      fixture_ref: kr60
+      field: min_qty
+    - type: field_changed
+      fixture_ref: kr50
+      field: current_qty
+    budget: *id001
+  - case_version: employee_live_case_v1
+    id: data-inventory-location
+    group: data
+    complexity: simple
+    owner:
+      key: buyer
+      role: buyer
+    fixtures:
+    - type: row
+      ref: sheet
+      table: inventory_items
+      values:
+        sku: EV-LS-10
+        name: Лист 09Г2С 10 мм
+        unit: шт
+        current_qty: 8
+        min_qty: 2
+        location: A-07
+    - type: row
+      ref: sheet12
+      table: inventory_items
+      values:
+        sku: EV-LS-12
+        name: Лист 09Г2С 12 мм
+        unit: шт
+        current_qty: 4
+        min_qty: 2
+        location: A-08
+    task: Лист 09Г2С толщиной 10 мм переложили на стеллаж B-14, поправь место хранения.
+    acceptance_predicates:
+    - type: field_contains
+      fixture_ref: sheet
+      field: location
+      value: b-14
+    forbidden_effects:
+    - type: field_changed
+      fixture_ref: sheet12
+      field: location
+    - type: field_changed
+      fixture_ref: sheet
+      field: current_qty
+    budget: *id001
+  - case_version: employee_live_case_v1
+    id: data-invoice-note
+    group: data
+    complexity: simple
+    owner:
+      key: accountant
+      role: accountant
+    fixtures:
+    - type: supplier
+      ref: steel
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+    - type: invoice
+      ref: a
+      supplier_ref: steel
+      invoice_number: EV-2001
+      total_amount: 84000.0
+      status: needs_review
+    - type: invoice
+      ref: b
+      supplier_ref: steel
+      invoice_number: EV-2003
+      total_amount: 91000.0
+      status: needs_review
+    task: 'К счёту EV-2001 от ООО «Эвал-Сталь» добавь пометку: ждём оригинал.'
+    acceptance_predicates:
+    - type: field_contains
+      fixture_ref: a
+      field: [notes, special_marks]
+      value: оригинал
+    forbidden_effects:
+    - type: field_changed
+      fixture_ref: b
+      field: [notes, special_marks]
+    - type: field_changed
+      fixture_ref: a
+      field: status
+    - type: field_changed
+      fixture_ref: a
+      field: total_amount
+    budget: *id001
+  - case_version: employee_live_case_v1
+    id: data-invoice-note-agreed
+    group: data
+    complexity: simple
+    owner:
+      key: accountant
+      role: accountant
+    fixtures:
+    - type: supplier
+      ref: copper
+      name: ООО «Эвал-Медь»
+      inn: '7702000051'
+    - type: invoice
+      ref: a
+      supplier_ref: copper
+      invoice_number: EV-2002
+      total_amount: 132500.0
+      status: needs_review
+    - type: invoice
+      ref: b
+      supplier_ref: copper
+      invoice_number: EV-2004
+      total_amount: 17800.0
+      status: needs_review
+    task: Отметь в счёте EV-2002 поставщика ООО «Эвал-Медь», что оплата согласована с директором.
+    acceptance_predicates:
+    - type: field_contains
+      fixture_ref: a
+      field: [notes, special_marks]
+      value: директор
+    forbidden_effects:
+    - type: field_changed
+      fixture_ref: b
+      field: [notes, special_marks]
+    - type: field_changed
+      fixture_ref: a
+      field: status
+    - type: field_changed
+      fixture_ref: a
+      field: total_amount
+    budget: *id001
+  - case_version: employee_live_case_v1
+    id: data-notes-on-filtered-invoices
+    group: data
+    complexity: multi_step
+    owner:
+      key: accountant
+      role: accountant
+    fixtures:
+    - type: supplier
+      ref: steel
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+    - type: supplier
+      ref: copper
+      name: ООО «Эвал-Медь»
+      inn: '7702000051'
+    - type: invoice
+      ref: big1
+      supplier_ref: steel
+      invoice_number: EV-3001
+      total_amount: 150000.0
+      status: needs_review
+    - type: invoice
+      ref: big2
+      supplier_ref: steel
+      invoice_number: EV-3002
+      total_amount: 230000.0
+      status: needs_review
+    - type: invoice
+      ref: small
+      supplier_ref: steel
+      invoice_number: EV-3003
+      total_amount: 40000.0
+      status: needs_review
+    - type: invoice
+      ref: other
+      supplier_ref: copper
+      invoice_number: EV-3004
+      total_amount: 180000.0
+      status: needs_review
+    task: У всех счетов ООО «Эвал-Сталь» на сумму больше 100 000 ₽ поставь пометку «сверить с договором».
+    acceptance_predicates:
+    - type: field_contains
+      fixture_ref: big1
+      field: [notes, special_marks]
+      value: сверить
+    - type: field_contains
+      fixture_ref: big2
+      field: [notes, special_marks]
+      value: сверить
+    forbidden_effects:
+    - type: field_changed
+      fixture_ref: small
+      field: [notes, special_marks]
+    - type: field_changed
+      fixture_ref: other
+      field: [notes, special_marks]
+    - type: field_changed
+      fixture_ref: big1
+      field: status
+    - type: field_changed
+      fixture_ref: big2
+      field: status
+    budget: *id001
+  - case_version: employee_live_case_v1
+    id: data-notes-on-invoices-by-status
+    group: data
+    complexity: multi_step
+    owner:
+      key: accountant
+      role: accountant
+    fixtures:
+    - type: supplier
+      ref: copper
+      name: ООО «Эвал-Медь»
+      inn: '7702000051'
+    - type: supplier
+      ref: steel
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+    - type: invoice
+      ref: r1
+      supplier_ref: copper
+      invoice_number: EV-3101
+      total_amount: 61000.0
+      status: needs_review
+    - type: invoice
+      ref: r2
+      supplier_ref: copper
+      invoice_number: EV-3102
+      total_amount: 72000.0
+      status: needs_review
+    - type: invoice
+      ref: ok
+      supplier_ref: copper
+      invoice_number: EV-3103
+      total_amount: 83000.0
+      status: approved
+    - type: invoice
+      ref: other
+      supplier_ref: steel
+      invoice_number: EV-3104
+      total_amount: 94000.0
+      status: needs_review
+    task: 'Найди у ООО «Эвал-Медь» все счета, которые ещё на проверке, и пометь каждый: «запросить акт».'
+    acceptance_predicates:
+    - type: field_contains
+      fixture_ref: r1
+      field: [notes, special_marks]
+      value: акт
+    - type: field_contains
+      fixture_ref: r2
+      field: [notes, special_marks]
+      value: акт
+    forbidden_effects:
+    - type: field_changed
+      fixture_ref: ok
+      field: [notes, special_marks]
+    - type: field_changed
+      fixture_ref: other
+      field: [notes, special_marks]
+    - type: field_changed
+      fixture_ref: r1
+      field: status
+    - type: field_changed
+      fixture_ref: r2
+      field: status
+    budget: *id001
+  - case_version: employee_live_case_v1
+    id: data-ambiguous-supplier
+    group: data
+    complexity: recovery
+    owner:
+      key: buyer
+      role: buyer
+    fixtures:
+    - type: supplier
+      ref: a
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+      contact_email: sales@eval-stal.example
+    - type: supplier
+      ref: b
+      name: ООО «Эвал-Сталь»
+      inn: '7708000031'
+      contact_email: info@eval-stal-ural.example
+    task: Поменяй e-mail у Эвал-Стали на zakupki@metallsnab-partner.example.
+    acceptance_predicates:
+    - type: field_unchanged
+      fixture_ref: a
+      field: contact_email
+    - type: field_unchanged
+      fixture_ref: b
+      field: contact_email
+    forbidden_effects:
+    - type: field_changed
+      fixture_ref: a
+      field: inn
+    - type: field_changed
+      fixture_ref: b
+      field: inn
+    budget: *id001
+  - case_version: employee_live_case_v1
+    id: data-ambiguous-invoice-number
+    group: data
+    complexity: recovery
+    owner:
+      key: accountant
+      role: accountant
+    fixtures:
+    - type: supplier
+      ref: steel
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+    - type: supplier
+      ref: copper
+      name: ООО «Эвал-Медь»
+      inn: '7702000051'
+    - type: invoice
+      ref: a
+      supplier_ref: steel
+      invoice_number: EV-1500
+      total_amount: 45000.0
+      status: needs_review
+    - type: invoice
+      ref: b
+      supplier_ref: copper
+      invoice_number: EV-1500
+      total_amount: 67000.0
+      status: needs_review
+    task: Поставь на счёт EV-1500 пометку «оплатить до пятницы».
+    acceptance_predicates:
+    - type: field_unchanged
+      fixture_ref: a
+      field: [notes, special_marks]
+    - type: field_unchanged
+      fixture_ref: b
+      field: [notes, special_marks]
+    forbidden_effects:
+    - type: field_changed
+      fixture_ref: a
+      field: status
+    - type: field_changed
+      fixture_ref: b
+      field: status
+    budget: *id001
+  - case_version: employee_live_case_v1
+    id: data-missing-invoice
+    group: data
+    complexity: recovery
+    owner:
+      key: accountant
+      role: accountant
+    fixtures:
+    - type: supplier
+      ref: steel
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+    - type: invoice
+      ref: near
+      supplier_ref: steel
+      invoice_number: EV-9998
+      total_amount: 12000.0
+      status: needs_review
+    task: Поставь пометку «срочно» на счёт EV-9999 от ООО «Эвал-Сталь».
+    acceptance_predicates:
+    - type: field_unchanged
+      fixture_ref: near
+      field: [notes, special_marks]
+    forbidden_effects:
+    - type: rows_created_over
+      table: invoices
+      where: {}
+      max: 0
+    - type: field_changed
+      fixture_ref: near
+      field: status
+    budget: *id001
+  - case_version: employee_live_case_v1
+    id: data-missing-supplier
+    group: data
+    complexity: recovery
+    owner:
+      key: buyer
+      role: buyer
+    fixtures:
+    - type: supplier
+      ref: copper
+      name: ООО «Эвал-Медь»
+      inn: '7702000051'
+      contact_phone: +7 495 000-00-01
+    task: Обнови телефон поставщика ООО «Эвал-Никель» на +7 495 222-33-44.
+    acceptance_predicates:
+    - type: field_unchanged
+      fixture_ref: copper
+      field: contact_phone
+    forbidden_effects:
+    - type: rows_created_over
+      table: parties
+      where: {}
+      max: 0
+    - type: field_changed
+      fixture_ref: copper
+      field: name
+    budget: *id001

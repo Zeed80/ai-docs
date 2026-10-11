@@ -2192,7 +2192,7 @@ SendFn = Callable[[dict], Awaitable[None]]
 
 
 def performed_changes(messages: list[dict]) -> list[str]:
-    """Changing tool calls of this turn that reported success, in order.
+    """Changing tool calls of the current turn that reported success, in order.
 
     The effect comes from the reviewed tool catalog (read/write/delete/...),
     never from the name; a call whose result is an error, a refusal or a stop
@@ -2200,6 +2200,9 @@ def performed_changes(messages: list[dict]) -> list[str]:
     """
     from app.ai.tool_catalog import TOOLS, get_tool
 
+    # Only this turn: everything after the latest user message.
+    start = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1)
+    messages = messages[start + 1 :]
     results: dict[str, Any] = {}
     for message in messages:
         if message.get("role") == "tool" and message.get("tool_call_id"):
@@ -3157,7 +3160,10 @@ class AgentSession:
                 # table AND a ready user message — deliver it directly instead of
                 # burning another ~8 s LLM call just to say "таблица готова".
                 publish_reply = self._terminal_publish_reply(results)
-                if publish_reply:
+                # Not when this turn also changed records: the publish message
+                # names the table only, and "marked 2 invoices" vanished from
+                # the reply (E49 live run). The model reports both instead.
+                if publish_reply and not performed_changes(self.messages):
                     await self._deliver_final_content(publish_reply)
                     self._remember_latest_turn(publish_reply)
                     break
@@ -3238,7 +3244,14 @@ class AgentSession:
                 canvas_id=_agent_canvas_id("llm-table"),
                 append=False,
             )
-            summary = f"Открыл таблицу на Рабочем столе: {len(rows)} строк."
+            # Keep the words around the table: "marked 2 invoices, here they
+            # are" lost everything but the row count (E49 live run), so the
+            # owner never learned what had been changed.
+            prose = "\n".join(
+                line for line in text.splitlines() if not line.lstrip().startswith("|")
+            ).strip()
+            pointer = f"Таблицу ({len(rows)} строк) открыл на Рабочем столе."
+            summary = f"{prose}\n\n{pointer}" if prose else pointer
             await self._send({"type": "text", "content": summary})
             return summary
 

@@ -150,6 +150,28 @@ async def get_invoice(
     return out
 
 
+async def _reload_invoice(db: AsyncSession, invoice_id: uuid.UUID) -> Invoice:
+    """The committed invoice with everything ``InvoiceOut`` reads.
+
+    ``refresh`` after a commit leaves ``supplier``/``buyer`` unloaded; reading
+    them while serializing is lazy IO, which async SQLAlchemy refuses — the
+    endpoint answered 500 after its commit, so every agent update, approval
+    and rejection of an invoice with a supplier ended as "outcome unknown"
+    (E49 live run).
+    """
+    result = await db.execute(
+        select(Invoice)
+        .where(Invoice.id == invoice_id)
+        .options(
+            selectinload(Invoice.lines),
+            selectinload(Invoice.supplier),
+            selectinload(Invoice.buyer),
+        )
+        .execution_options(populate_existing=True)
+    )
+    return result.scalar_one()
+
+
 async def _email_source_for_document(db: AsyncSession, document_id) -> "EmailSourceOut | None":
     """Ф6.3 — the letter an invoice came out of.
 
@@ -316,7 +338,7 @@ async def update_invoice(
         actor="user",
     )
     await db.commit()
-    await db.refresh(invoice)
+    invoice = await _reload_invoice(db, invoice.id)
     return invoice
 
 
@@ -428,7 +450,7 @@ async def approve_invoice(
         actor="user",
     )
     await db.commit()
-    await db.refresh(invoice)
+    invoice = await _reload_invoice(db, invoice.id)
     logger.info("invoice_approved", invoice_id=str(invoice_id))
     try:
         from app.core.metrics import invoices_approved_total
@@ -480,7 +502,7 @@ async def reject_invoice(
         actor="user",
     )
     await db.commit()
-    await db.refresh(invoice)
+    invoice = await _reload_invoice(db, invoice.id)
     try:
         from app.core.metrics import invoices_rejected_total
 

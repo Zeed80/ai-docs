@@ -201,10 +201,14 @@ async def test_a_write_outside_the_fixtures_fails_the_case(test_engine):
 
 @pytest.mark.asyncio
 async def test_finished_run_leaves_nothing_the_next_run_could_find(test_engine):
-    from app.db.models import Party
+    from app.db.models import Invoice, Party
 
-    factory, runner = _runner(test_engine, _case_supplier)
-    result = await runner.run_case(_cases()["data-supplier-contact-update"])
+    async def notes_the_invoice(db, order_id):
+        invoice = await db.scalar(select(Invoice).where(Invoice.invoice_number == "EV-2001"))
+        invoice.notes = "ждём оригинал"
+
+    factory, runner = _runner(test_engine, notes_the_invoice)
+    result = await runner.run_case(_cases()["data-invoice-note"])
     async with factory() as db:
         leftovers = list(
             await db.scalars(
@@ -213,5 +217,20 @@ async def test_finished_run_leaves_nothing_the_next_run_could_find(test_engine):
                 )
             )
         )
+        invoices = list(
+            await db.scalars(select(Invoice.id).where(Invoice.invoice_number.like("EV-%")))
+        )
+        from sqlalchemy import text
+
+        tagged = await db.scalar(
+            text(
+                "select (select count(*) from parties where metadata->>'employee_eval_namespace' = :ns)"
+                " + (select count(*) from invoices where metadata->>'employee_eval_namespace' = :ns)"
+                " + (select count(*) from documents where metadata->>'employee_eval_namespace' = :ns)"
+            ),
+            {"ns": result.namespace_id},
+        )
     assert result.status == "passed"
     assert leftovers == []
+    assert invoices == []
+    assert tagged == 0  # deleted, not merely renamed

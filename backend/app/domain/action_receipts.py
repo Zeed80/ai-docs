@@ -264,15 +264,29 @@ async def prepare_warehouse_update_receipt(db, key, user, item_id, payload):
         raise HTTPException(404, "Logical action not found")
     await db.refresh(action)
     try:
+        from app.api.warehouse import InventoryItemUpdate
+
         args = action.request["arguments"]
         args = dict(args) if isinstance(args, dict) else json.loads(args)
-        expected = {"item_id": str(item_id), **payload}
-        actual = {k: v for k, v in args.items() if k not in {"action", "reason"}}
+        operation = args.pop("action", None)
+        args.pop("reason", None)
+        # The capability takes its fields under "body", as the model sends
+        # them; the HTTP payload is flat. Compare the two the way the
+        # proposal receipt does (E49 live run: every agent update_item was
+        # refused with 409 because the nested body never matched).
+        for nested in ("filters", "body"):
+            if isinstance(args.get(nested), dict):
+                args.update(args.pop(nested))
+        journaled_item = str(args.pop("item_id", ""))
+        journaled = InventoryItemUpdate.model_validate(args).model_dump(
+            mode="json", exclude_unset=True
+        )
         if (
             digest(action.request) != action.request_digest
             or action.request.get("name") != "warehouse"
-            or args.get("action") != "update_item"
-            or actual != expected
+            or operation != "update_item"
+            or journaled_item != str(item_id)
+            or journaled != payload
         ):
             raise ValueError()
     except (ValueError, TypeError, KeyError, AttributeError):

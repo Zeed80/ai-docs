@@ -150,7 +150,9 @@ async def deliver(factory, payload, key, user=_DEV_USER):
         return await propose_agent_task_tool(payload, db, user, key)
 
 
-async def warehouse_update_proposal(factory, *, item_id=None, payload=None, user=_DEV_USER):
+async def warehouse_update_proposal(
+    factory, *, item_id=None, payload=None, user=_DEV_USER, nested=False
+):
     """Create one started, journaled warehouse.update_item call."""
     payload = payload or {"location": f"Receipt shelf {uuid.uuid4()}"}
     async with factory() as db:
@@ -181,7 +183,9 @@ async def warehouse_update_proposal(factory, *, item_id=None, payload=None, user
             "function": {
                 "name": "warehouse",
                 "arguments": json.dumps(
-                    {"action": "update_item", "item_id": str(item_id), **payload}
+                    {"action": "update_item", "item_id": str(item_id), "body": payload}
+                    if nested
+                    else {"action": "update_item", "item_id": str(item_id), **payload}
                 ),
             },
         }
@@ -2027,3 +2031,29 @@ async def test_verified_commit_decision_is_atomic_idempotent_and_consumed_by_wor
     with pytest.raises(HTTPException) as conflict:
         await decide(conflicting)
     assert conflict.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_warehouse_receipt_accepts_the_body_the_model_sends(test_engine):
+    """E49 live: the capability nests fields under "body"; every agent call 409'd."""
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    payload, _, _, item_id, key = await warehouse_update_proposal(
+        factory, payload={"min_qty": 20}, nested=True
+    )
+    out = await deliver_warehouse(factory, item_id, payload, key)
+    assert out["min_qty"] == 20
+    async with factory() as db:
+        assert (await db.get(InventoryItem, item_id)).min_qty == 20
+
+
+@pytest.mark.asyncio
+async def test_warehouse_receipt_still_refuses_a_different_body(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    _, _, _, item_id, key = await warehouse_update_proposal(
+        factory, payload={"min_qty": 20}, nested=True
+    )
+    with pytest.raises(HTTPException) as exc:
+        await deliver_warehouse(factory, item_id, {"min_qty": 200}, key)
+    assert exc.value.status_code == 409
+    async with factory() as db:
+        assert (await db.get(InventoryItem, item_id)).min_qty is None

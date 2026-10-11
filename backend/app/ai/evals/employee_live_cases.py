@@ -60,7 +60,21 @@ class InvoiceFixture(_Strict):
     owner_scope: Literal["run", "foreign"] = "run"
 
 
-LiveFixture = Annotated[SupplierFixture | InvoiceFixture, Field(discriminator="type")]
+class RowFixture(_Strict):
+    """A row of a whitelisted table (see ``live_runner.TABLES``).
+
+    ``links`` fills foreign-key columns with the id of another fixture, so a
+    payment schedule can point at a fixture invoice without a fixed UUID.
+    """
+
+    type: Literal["row"]
+    ref: str = Field(min_length=1, max_length=60, pattern=_REF)
+    table: str = Field(pattern=r"^[a-z_]+$")
+    values: dict[str, Any] = Field(default_factory=dict)
+    links: dict[str, str] = Field(default_factory=dict)
+
+
+LiveFixture = Annotated[SupplierFixture | InvoiceFixture | RowFixture, Field(discriminator="type")]
 
 
 # ── acceptance predicates: facts in the database afterwards ─────────────────
@@ -75,10 +89,26 @@ class FieldEquals(_Strict):
     value: Any
 
 
+class FieldContains(_Strict):
+    """A fixture row's text column contains ``value`` after normalization.
+
+    ``digits`` compares only digits (phones, accounts), ``casefold`` ignores
+    case and treats ё as е; the wording around the value is the model's.
+    """
+
+    type: Literal["field_contains"]
+    fixture_ref: str = Field(pattern=_REF)
+    # Several fields: contains = any of them, unchanged/changed = all of them.
+    field: str | tuple[str, ...] = Field(min_length=1)
+    value: str = Field(min_length=1, max_length=500)
+    normalize: Literal["casefold", "digits"] = "casefold"
+
+
 class FieldUnchanged(_Strict):
     type: Literal["field_unchanged"]
     fixture_ref: str = Field(pattern=_REF)
-    field: str = Field(pattern=r"^[a-z_]+$")
+    # Several fields: contains = any of them, unchanged/changed = all of them.
+    field: str | tuple[str, ...] = Field(min_length=1)
 
 
 class OrderStatusIn(_Strict):
@@ -109,8 +139,30 @@ class StoppedForConfirmation(_Strict):
     action: str = Field(pattern=r"^[a-z_]+$")
 
 
+class RowsCreated(_Strict):
+    """Rows of a whitelisted table created during the run that match ``where``.
+
+    ``where`` maps a column (or ``column.key`` inside a JSON column) to a
+    matcher: a plain value (equal), ``{"contains": text}`` (case-insensitive,
+    on the JSON text for lists and objects), ``{"ref": fixture}`` (that
+    fixture's id) or ``{"in": [values]}``.
+    """
+
+    type: Literal["rows_created"]
+    table: str = Field(pattern=r"^[a-z_]+$")
+    where: dict[str, Any] = Field(default_factory=dict)
+    min: int = Field(default=1, ge=0, le=1000)
+    max: int | None = Field(default=None, ge=0, le=1000)
+
+
 LivePredicate = Annotated[
-    FieldEquals | FieldUnchanged | OrderStatusIn | ActionAttempted | StoppedForConfirmation,
+    FieldEquals
+    | FieldContains
+    | FieldUnchanged
+    | OrderStatusIn
+    | ActionAttempted
+    | StoppedForConfirmation
+    | RowsCreated,
     Field(discriminator="type"),
 ]
 
@@ -121,7 +173,8 @@ LivePredicate = Annotated[
 class FieldChanged(_Strict):
     type: Literal["field_changed"]
     fixture_ref: str = Field(pattern=_REF)
-    field: str = Field(pattern=r"^[a-z_]+$")
+    # Several fields: contains = any of them, unchanged/changed = all of them.
+    field: str | tuple[str, ...] = Field(min_length=1)
 
 
 class ForeignFixtureChanged(_Strict):
@@ -138,8 +191,17 @@ class ActionSucceeded(_Strict):
     action: str = Field(pattern=r"^[a-z_]+$")
 
 
+class RowsCreatedForbidden(_Strict):
+    """No more than ``max`` such rows may appear (e.g. a second draft)."""
+
+    type: Literal["rows_created_over"]
+    table: str = Field(pattern=r"^[a-z_]+$")
+    where: dict[str, Any] = Field(default_factory=dict)
+    max: int = Field(default=0, ge=0, le=1000)
+
+
 LiveForbidden = Annotated[
-    FieldChanged | ForeignFixtureChanged | ActionSucceeded,
+    FieldChanged | ForeignFixtureChanged | ActionSucceeded | RowsCreatedForbidden,
     Field(discriminator="type"),
 ]
 
@@ -175,6 +237,18 @@ class LiveEmployeeCase(_Strict):
         for fixture in self.fixtures:
             if isinstance(fixture, InvoiceFixture) and fixture.supplier_ref not in suppliers:
                 raise ValueError(f"unknown supplier_ref: {fixture.supplier_ref}")
+            if isinstance(fixture, RowFixture):
+                # Rows are created after suppliers and invoices, in list order.
+                earlier = {
+                    f.ref
+                    for f in self.fixtures[: self.fixtures.index(fixture)]
+                    if isinstance(f, RowFixture)
+                } | {f.ref for f in self.fixtures if not isinstance(f, RowFixture)}
+                unknown_links = sorted(set(fixture.links.values()) - earlier)
+                if unknown_links:
+                    raise ValueError(
+                        f"{fixture.ref}: links must name earlier fixtures: {unknown_links}"
+                    )
         used = {
             item.fixture_ref
             for item in (*self.acceptance_predicates, *self.forbidden_effects)
