@@ -237,17 +237,39 @@ def validate_capability_plan(
     return plan
 
 
+def _output_shapes() -> dict[str, str]:
+    try:
+        from app.ai.output_shapes import action_output_shapes
+
+        return action_output_shapes()
+    except Exception:  # noqa: BLE001 — without shapes the planner still plans
+        logger.warning("planner_output_shapes_unavailable", exc_info=True)
+        return {}
+
+
 def _planner_catalog() -> list[dict[str, Any]]:
-    return [
-        {
+    shapes = _output_shapes()
+    catalog = []
+    for capability in load_capability_manifest().capabilities:
+        actions = sorted(_action_names(capability))
+        entry = {
             "name": capability.name,
             "description": capability.description[:1400],
-            "actions": sorted(_action_names(capability)),
+            "actions": actions,
             "parameters": capability.parameters,
             "gated_actions": capability.gate_actions,
         }
-        for capability in load_capability_manifest().capabilities
-    ]
+        # T2: what each action answers, so ${steps.X.output.result...} paths
+        # are read, not guessed.
+        outputs = {
+            a: shapes[f"{capability.name}.{a}"]
+            for a in actions
+            if f"{capability.name}.{a}" in shapes
+        }
+        if outputs:
+            entry["outputs"] = outputs
+        catalog.append(entry)
+    return catalog
 
 
 def _planner_now() -> str:
@@ -316,7 +338,9 @@ operation is one capability step. Step kinds are "capability", "decompose" and "
 there is no free-form agent_turn step. When the objective needs a written answer, end with one
 "synthesize" step (input {"instruction": what to write}, depends_on the steps it summarizes):
 it writes the final text from completed step results, without tools. Pass data between steps with exact references like
-${steps.lookup.output.result.items}; no other ${...} reference exists. Dates and times go
+${steps.lookup.output.result.items}; no other ${...} reference exists. "outputs" in the
+catalog shows what each action answers: build paths from it (result.results[0].id,
+result.items[0].invoice_number), never guess field names. Dates and times go
 into inputs as concrete ISO 8601 values computed from "now" (with its UTC offset), never as
 words like "tomorrow". Never repeat completed work during replanning.
 Schema: {assumptions:[string], steps:[{step_key,title,kind,capability?,action?,input,
