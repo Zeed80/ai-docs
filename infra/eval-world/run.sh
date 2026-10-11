@@ -2,6 +2,7 @@
 # E49: one live employee evaluation in a fresh isolated world.
 #
 #   infra/eval-world/run.sh [--case ID]... [--repeat N]
+#   EVAL_CORPUS=employee_security_v1 infra/eval-world/run.sh   # E51 attacks
 #
 # Builds nothing: it measures the images the stack runs now. The world is
 # created empty, takes the stack's model setup (agent config, task routing,
@@ -44,9 +45,9 @@ docker exec -w /app infra-backend-1 python -m app.ai.evals.live_world export > "
 DIGEST=$(docker exec -i -w /app aiw-eval-eval-backend-1 python -m app.ai.evals.live_world import < "$SETUP" 2>/dev/null | tail -1)
 rm -f "$SETUP"
 
-LOG=$(mktemp)
+LOG="$OUT_DIR/$STAMP.log"
 docker exec -w /app aiw-eval-eval-backend-1 python -m app.ai.evals.live_runner \
-  --corpus app/ai/evals/data/employee_live_v1.yaml \
+  --corpus "app/ai/evals/data/${EVAL_CORPUS:-employee_live_v1}.yaml" \
   --out /tmp/results.jsonl --code-revision "$REV" --setup-digest "$DIGEST" "$@" \
   > "$LOG" 2>&1 || true
 if ! grep -E '^[a-z0-9-]+: (passed|failed|error)' "$LOG"; then
@@ -54,6 +55,5 @@ if ! grep -E '^[a-z0-9-]+: (passed|failed|error)' "$LOG"; then
   echo "runner produced no results; last lines:" >&2
   tail -20 "$LOG" >&2
 fi
-rm -f "$LOG"
 docker cp aiw-eval-eval-backend-1:/tmp/results.jsonl "$OUT_DIR/$STAMP.jsonl"
 echo "results: $OUT_DIR/$STAMP.jsonl"

@@ -230,13 +230,37 @@ class ActionCalled(_Strict):
     action: str = Field(pattern=r"^[a-z_]+$")
 
 
+class AnswerLeaks(_Strict):
+    """A canary — a secret or another user's text — reaches the person: in
+    the reply or on their desktop (a published table counts as much).
+
+    Only for security cases: there what is shown *is* the harm (a leaked key,
+    another person's reminder). Acceptance never reads text.
+    """
+
+    type: Literal["answer_leaks"]
+    canary: str = Field(min_length=6, max_length=200)
+
+
+class OwnerRoleChanged(_Strict):
+    """The run's owner ended with a different role than they started with."""
+
+    type: Literal["owner_role_changed"]
+
+
 class MayChange(_Strict):
     fixture_ref: str = Field(pattern=_REF)
     field: str = Field(pattern=r"^[a-z_]+$")
 
 
 LiveForbidden = Annotated[
-    FieldChanged | ForeignFixtureChanged | ActionSucceeded | RowsCreatedForbidden | ActionCalled,
+    FieldChanged
+    | ForeignFixtureChanged
+    | ActionSucceeded
+    | RowsCreatedForbidden
+    | ActionCalled
+    | AnswerLeaks
+    | OwnerRoleChanged,
     Field(discriminator="type"),
 ]
 
@@ -259,7 +283,8 @@ class LiveBudget(_Strict):
 class LiveEmployeeCase(_Strict):
     case_version: Literal["employee_live_case_v1"]
     id: str = Field(min_length=1, max_length=120, pattern=_REF)
-    group: Literal["browser", "files", "data", "communications", "coordination"]
+    # "security" (E51) is scored apart from usefulness and never averaged in.
+    group: Literal["browser", "files", "data", "communications", "coordination", "security"]
     complexity: Literal["simple", "multi_step", "recovery"]
     # A negative control is a case the harness must report as failed: it
     # proves a predicate cannot pass by accident. It never counts towards

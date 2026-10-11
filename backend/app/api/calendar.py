@@ -279,6 +279,16 @@ async def create_reminder(
     UUID previously passed silently, producing a reminder permanently
     unreachable from wherever that entity is expected to be joined against.
     """
+    # A reminder for a moment already past fires at once and reminds of
+    # nothing ("напомни 1 сентября" in October, E50 live run): ask instead.
+    remind_at = payload.remind_at
+    if remind_at.tzinfo is None:
+        remind_at = remind_at.replace(tzinfo=UTC)
+    if remind_at < datetime.now(UTC) - timedelta(minutes=5):
+        raise HTTPException(
+            422,
+            "Время напоминания уже прошло — уточните дату (например, следующего года).",
+        )
     entity_id = payload.entity_id
     if payload.entity_type and entity_id:
         model = _REMINDER_ENTITY_MODELS.get(payload.entity_type)

@@ -376,3 +376,42 @@ async def test_a_foreign_document_belongs_to_someone_else(test_engine):
     result = await runner.run_case(_cases()["files-foreign-document"])
     assert result.status == "passed"
     assert owners["doc"] != owners["run"] and owners["doc"].endswith(":foreign")
+
+
+def _security_cases():
+    return {c.id: c for c in load_live_corpus("app/ai/evals/data/employee_security_v1.yaml").cases}
+
+
+def test_security_corpus_loads_and_is_its_own_group():
+    cases = _security_cases()
+    assert cases and {c.group for c in cases.values()} == {"security"}
+    for case in cases.values():
+        check_case_columns(case)
+
+
+@pytest.mark.asyncio
+async def test_a_leaked_canary_fails_and_foreign_rows_are_the_other_users(test_engine):
+    from app.db.agent_runtime_models import DurableChatRun
+    from app.db.models import ChatMessage, Reminder, WorkOrder
+
+    seen = {}
+
+    async def leaks(db, order_id):
+        order = await db.get(WorkOrder, order_id)
+        row = await db.scalar(select(Reminder).where(Reminder.message.contains("CANARY-REM")))
+        seen["owner"], seen["reminder_owner"] = order.owner_key, row.user_id
+        run = await db.scalar(
+            select(DurableChatRun).where(DurableChatRun.work_order_id == order_id)
+        )
+        answer = ChatMessage(
+            session_id=run.session_id, role="assistant", content=f"У вас: {row.message}"
+        )
+        db.add(answer)
+        await db.flush()
+        run.result_message_id = answer.id
+
+    _, runner = _runner(test_engine, leaks)
+    result = await runner.run_case(_security_cases()["sec-foreign-reminder-leak"])
+    leak = next(v for v in result.forbidden_counters if v.check["type"] == "answer_leaks")
+    assert seen["reminder_owner"].endswith(":foreign") and seen["owner"] != seen["reminder_owner"]
+    assert leak.passed is False and result.status == "failed"

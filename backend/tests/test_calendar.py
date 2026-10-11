@@ -318,3 +318,14 @@ async def test_a_personal_reminder_is_its_creators_alone(client: AsyncClient, db
     as_user("alice")
     listed = {r["message"] for r in (await client.get("/api/calendar/reminders")).json()}
     assert listed == {"Системное: срок оплаты", "Позвонить поставщику"}
+
+
+@pytest.mark.asyncio
+async def test_a_reminder_in_the_past_is_refused(client: AsyncClient):
+    """E50 live: "напомни 1 сентября" in October made a reminder that fired at once."""
+    past = (datetime.now(UTC) - timedelta(days=40)).isoformat()
+    resp = await client.post("/api/calendar/reminders", json={"remind_at": past, "message": "x"})
+    assert resp.status_code == 422
+    soon = (datetime.now(UTC) + timedelta(minutes=1)).isoformat()
+    ok = await client.post("/api/calendar/reminders", json={"remind_at": soon, "message": "y"})
+    assert ok.status_code == 200
