@@ -196,6 +196,11 @@ class _UnavailableFake(OutboxDeliveryAdapter):
         raise OutboxRecipientUnavailable()
 
 
+def _count_for(model, order_id):
+    """Rows of this test's order only: the test DB is shared (T1)."""
+    return select(func.count()).select_from(model).where(model.work_order_id == order_id)
+
+
 @pytest.mark.asyncio
 async def test_producer_writes_event_and_outbox_without_commit(test_engine):
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
@@ -213,8 +218,8 @@ async def test_producer_writes_event_and_outbox_without_commit(test_engine):
         await db.rollback()
 
     async with factory() as db:
-        assert await db.scalar(select(func.count()).select_from(AgentOutbox)) == 0
-        assert await db.scalar(select(func.count()).select_from(WorkEvent)) == 0
+        assert await db.scalar(_count_for(AgentOutbox, order_id)) == 0
+        assert await db.scalar(_count_for(WorkEvent, order_id)) == 0
 
 
 @pytest.mark.asyncio
@@ -226,8 +231,8 @@ async def test_producer_rolls_back_domain_event_and_outbox_together(test_engine)
         await db.rollback()
 
     async with factory() as db:
-        assert await db.scalar(select(func.count()).select_from(WorkEvent)) == 0
-        assert await db.scalar(select(func.count()).select_from(AgentOutbox)) == 0
+        assert await db.scalar(_count_for(WorkEvent, order_id)) == 0
+        assert await db.scalar(_count_for(AgentOutbox, order_id)) == 0
 
 
 @pytest.mark.asyncio
@@ -244,8 +249,8 @@ async def test_concurrent_duplicate_returns_one_persisted_outbox(test_engine):
     first_id, second_id = await asyncio.gather(produce(), produce())
     assert first_id == second_id
     async with factory() as db:
-        assert await db.scalar(select(func.count()).select_from(AgentOutbox)) == 1
-        assert await db.scalar(select(func.count()).select_from(WorkEvent)) == 1
+        assert await db.scalar(_count_for(AgentOutbox, order_id)) == 1
+        assert await db.scalar(_count_for(WorkEvent, order_id)) == 1
 
 
 @pytest.mark.asyncio

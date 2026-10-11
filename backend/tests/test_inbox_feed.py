@@ -113,7 +113,9 @@ async def test_feed_merges_all_three_sources(client: AsyncClient, feed_data):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     kinds = {i["kind"] for i in body["items"]}
-    assert kinds == {"email", "document", "anomaly"}
+    # All three sources reach the feed; other tests' committed rows of the
+    # shared test DB may add more (T1), so this is inclusion, not equality.
+    assert {"email", "document", "anomaly"} <= kinds
     assert body["counts"]["email"] >= 1
 
 

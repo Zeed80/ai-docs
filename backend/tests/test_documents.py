@@ -657,3 +657,49 @@ async def test_ingest_manual_doc_type_override_stored(client: AsyncClient):
     data = resp.json()
     assert data["detected_type"] == "letter"
     assert data["detected_type_source"] == "manual"
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_document_attached_to_chat_case_and_catalog(
+    client: AsyncClient, db_session
+):
+    """NO ACTION keys from chat attachments, cases and catalog pages made the
+    delete fail with 500 (found by the suite's purge-all, E50 T1)."""
+    import uuid as _uuid
+
+    from app.db.models import (
+        CaseDocument,
+        CatalogPage,
+        ChatMessageAttachment,
+        ChatSession,
+        Document,
+        DocumentStatus,
+        WorkCase,
+    )
+
+    doc = Document(
+        file_name="attached.pdf",
+        file_hash=_uuid.uuid4().hex,
+        file_size=1,
+        mime_type="application/pdf",
+        storage_path="t/attached.pdf",
+        status=DocumentStatus.approved,
+    )
+    db_session.add(doc)
+    session = ChatSession(title="t", user_key="dev-user")
+    db_session.add(session)
+    await db_session.flush()
+    attachment = ChatMessageAttachment(
+        session_id=session.id, document_id=doc.id, file_name="attached.pdf"
+    )
+    case = WorkCase(title="Дело", created_by="dev-user")
+    db_session.add_all([attachment, case])
+    await db_session.flush()
+    db_session.add(CaseDocument(case_id=case.id, document_id=doc.id))
+    db_session.add(CatalogPage(document_id=doc.id, page_number=1))
+    await db_session.commit()
+
+    resp = await client.request("DELETE", f"/api/documents/{doc.id}", json={"confirm": True})
+    assert resp.status_code in (200, 204), resp.text
+    await db_session.refresh(attachment)
+    assert attachment.document_id is None and attachment.file_name == "attached.pdf"

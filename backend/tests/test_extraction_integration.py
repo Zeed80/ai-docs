@@ -31,6 +31,9 @@ SAMPLE_INVOICES = [
 ]
 
 
+# A live model run (reachable Ollama is not enough: while Strata holds the GPU
+# the extraction model cannot load) — kept out of the non-live suite (T1).
+@pytest.mark.live
 @pytest.mark.skipif(not OLLAMA_AVAILABLE, reason="Ollama not available")
 @pytest.mark.skipif(not EXAMPLE_DIR.exists(), reason="example-invoices not found")
 class TestExtractionIntegration:

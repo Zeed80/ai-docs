@@ -14,6 +14,9 @@ from app.db.models import (
     AuditLog,
     AuditTimelineEvent,
     BOMLine,
+    CaseDocument,
+    CatalogPage,
+    ChatMessageAttachment,
     CollectionItem,
     Document,
     DocumentArtifact,
@@ -37,6 +40,7 @@ from app.db.models import (
     FeatureToolBinding,
     GraphBuildStatus,
     GraphReviewItem,
+    ImageGeneration,
     InventoryItem,
     Invoice,
     InvoiceLine,
@@ -58,10 +62,12 @@ from app.db.models import (
     PriceHistoryEntry,
     PurchaseRequest,
     QuarantineEntry,
+    RoomMessageAttachment,
     StockMovement,
     SupplierContract,
     SupplierProfile,
     TechnologyCorrection,
+    ToolCatalogEntry,
     WarehouseReceipt,
     WarehouseReceiptLine,
 )
@@ -468,6 +474,27 @@ async def hard_delete_document(
         await remove(DrawingFeatureCorrection, DrawingFeatureCorrection.drawing_id.in_(drawing_ids))
         await remove(DrawingTPLink, DrawingTPLink.drawing_id.in_(drawing_ids))
         await remove(Drawing, Drawing.id.in_(drawing_ids))
+
+    # Keys declared NO ACTION that the cascade above never touched: deleting a
+    # document attached to a chat or room message, filed in a case or parsed
+    # into a catalog failed with 500 (found by the test suite's "purge all",
+    # E50 T1). Case membership and rendered catalog pages go with the
+    # document. A chat or room message keeps its attachment record (the file
+    # name stays in the history) without the pointer; catalog positions and
+    # generated images live on and only lose it.
+    await remove(CaseDocument, CaseDocument.document_id == document_id)
+    await remove(CatalogPage, CatalogPage.document_id == document_id)
+    for model, column in (
+        (ChatMessageAttachment, ChatMessageAttachment.document_id),
+        (RoomMessageAttachment, RoomMessageAttachment.document_id),
+        (ToolCatalogEntry, ToolCatalogEntry.source_document_id),
+        (ImageGeneration, ImageGeneration.source_document_id),
+    ):
+        await db.execute(
+            model.__table__.update()  # type: ignore[attr-defined]
+            .where(column == document_id)
+            .values({column.key: None})
+        )
 
     if version_ids:
         await remove(DocumentVersion, DocumentVersion.id.in_(version_ids))

@@ -65,12 +65,16 @@ async def _names(db_session, user) -> set[str]:
 
 async def test_admin_sees_everything(db_session, docs):
     names = await _names(db_session, _info("u:admin", UserRole.admin))
-    assert names == {"legacy", "ownA", "ownB", "deptA_other", "bob_private", "deptB_unowned"}
+    # Every fixture document is visible; the shared test DB may hold other
+    # tests' committed documents too (T1), so this is inclusion.
+    assert {"legacy", "ownA", "ownB", "deptA_other", "bob_private", "deptB_unowned"} <= names
 
 
 async def test_manager_sees_everything(db_session, docs):
     names = await _names(db_session, _info("u:mgr", UserRole.manager))
-    assert names == {"legacy", "ownA", "ownB", "deptA_other", "bob_private", "deptB_unowned"}
+    # Every fixture document is visible; the shared test DB may hold other
+    # tests' committed documents too (T1), so this is inclusion.
+    assert {"legacy", "ownA", "ownB", "deptA_other", "bob_private", "deptB_unowned"} <= names
 
 
 async def test_user_sees_own_dept_and_legacy_not_other_dept(db_session, docs):

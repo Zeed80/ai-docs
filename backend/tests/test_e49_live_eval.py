@@ -13,7 +13,7 @@ import uuid
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.ai.evals.employee_live_cases import LiveEmployeeCase, load_live_corpus
@@ -247,6 +247,15 @@ async def test_finished_run_leaves_nothing_the_next_run_could_find(test_engine):
     assert leftovers == []
     assert invoices == []
     assert tagged == 0  # deleted, not merely renamed
+    async with factory() as db:
+        from app.db.models import User
+
+        people = await db.scalar(
+            select(func.count())
+            .select_from(User)
+            .where(User.sub.like(f"eval:{result.namespace_id[:8]}:%"))
+        )
+    assert people == 0  # the run's owner and "foreign" user go too (T1)
 
 
 @pytest.mark.asyncio

@@ -397,18 +397,20 @@ class LiveRunner:
         rows: dict[str, Any] = {}
         documents: list[uuid.UUID] = []
         tag = {"employee_eval_namespace": ns}
+        users: list[uuid.UUID] = []
         async with self._factory()() as db:
             for sub, role in ((owner_sub, case.owner.role), (foreign_sub, "viewer")):
-                db.add(
-                    User(
-                        sub=sub,
-                        email=f"{sub.replace(':', '-')}@eval.invalid",
-                        name=f"Eval {sub}",
-                        preferred_username=sub,
-                        role=role,
-                        is_active=True,
-                    )
+                user = User(
+                    sub=sub,
+                    email=f"{sub.replace(':', '-')}@eval.invalid",
+                    name=f"Eval {sub}",
+                    preferred_username=sub,
+                    role=role,
+                    is_active=True,
                 )
+                db.add(user)
+                await db.flush()
+                users.append(user.id)
             for fixture in case.fixtures:
                 if isinstance(fixture, SupplierFixture):
                     party = Party(
@@ -485,6 +487,7 @@ class LiveRunner:
             "foreign_sub": foreign_sub,
             "rows": rows,
             "documents": documents,
+            "users": users,
         }
 
     async def _snapshot(self, rows: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -1055,6 +1058,9 @@ class LiveRunner:
             for table, row_id, _owner in world["rows"].values():
                 targets.setdefault(table, set()).add(row_id)
             targets.setdefault("documents", set()).update(world.get("documents") or [])
+            # The run's people too: an active "buyer" left behind joined every
+            # later role-based assignment in the shared test DB (T1).
+            targets.setdefault("users", set()).update(world.get("users") or [])
             for table, ids in ((outside or {}).get("created") or {}).items():
                 targets.setdefault(table, set()).update(uuid.UUID(i) for i in ids)
             try:
