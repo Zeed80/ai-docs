@@ -21,10 +21,15 @@ x-eval-env: &eval-env
   POSTGRES_PASSWORD: aiw-eval-only
   POSTGRES_DB: aiworkspace_eval
   REDIS_URL: redis://eval-redis:6379/0
-  # Nothing listens here: features that need files or vectors report
-  # themselves unavailable instead of reaching the production stores.
-  MINIO_ENDPOINT: eval-unavailable:9000
-  QDRANT_URL: http://eval-unavailable:6333
+  # The world's own file and vector stores (tmpfs): file and search cases
+  # run against them, never against the production ones.
+  MINIO_ENDPOINT: eval-minio:9000
+  MINIO_ACCESS_KEY: aiw-eval
+  MINIO_SECRET_KEY: aiw-eval-only-secret
+  MINIO_BUCKET: documents
+  QDRANT_URL: http://eval-qdrant:6333
+  QDRANT_API_KEY: ""
+  # Nothing listens here: the browser and web search stay unavailable.
   WEB_BROWSER_URL: http://eval-unavailable:8093
   EGRESS_PROXY_URL: http://eval-unavailable:8094
   WEB_SEARCH_ENDPOINT: http://eval-unavailable:8080/search
@@ -76,6 +81,61 @@ services:
       eval-postgres:
         condition: service_healthy
       eval-redis:
+        condition: service_started
+      eval-minio:
+        condition: service_started
+      eval-qdrant:
+        condition: service_started
+    networks: [eval]
+
+  eval-minio:
+    image: minio/minio:latest
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: aiw-eval
+      MINIO_ROOT_PASSWORD: aiw-eval-only-secret
+    tmpfs:
+      - /data
+    networks: [eval]
+
+  eval-qdrant:
+    image: qdrant/qdrant:latest
+    tmpfs:
+      - /qdrant/storage
+    networks: [eval]
+
+  # Embeddings and reranking on the CPU, as the stack does while Strata holds
+  # the GPU. The model files are the host's, mounted read-only.
+  eval-ollama-cpu:
+    image: ollama/ollama:latest
+    environment:
+      CUDA_VISIBLE_DEVICES: ""
+      OLLAMA_MODELS: /models
+      OLLAMA_MAX_LOADED_MODELS: "2"
+      OLLAMA_NUM_PARALLEL: "2"
+      OLLAMA_KEEP_ALIVE: "30m"
+      OLLAMA_HOST: "0.0.0.0:11434"
+      OLLAMA_NOPRUNE: "1"
+    volumes:
+      - ${OLLAMA_MODELS_DIR:-/home/ollama-models/gpu/models}:/models:ro
+    # Strata keeps ~39 GB of experts in RAM: a hard cap makes a squeeze kill
+    # this container, not the stack.
+    mem_limit: 10g
+    networks: [eval]
+
+  # Document processing (ingest, extraction) in the world, as in the stack.
+  eval-worker:
+    image: infra-celery-worker:latest
+    command: celery -A app.tasks.celery_app worker -l info -c 2 -Q celery,extraction,ingest,scheduler
+    environment:
+      <<: *eval-env
+      SKIP_DB_MIGRATE: "1"
+    volumes:
+      - ../../aiagent:/aiagent:ro
+    extra_hosts:
+      - "host-gateway:host-gateway"
+    depends_on:
+      eval-backend:
         condition: service_started
     networks: [eval]
 

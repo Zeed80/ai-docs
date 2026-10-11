@@ -24,6 +24,34 @@ import sys
 from typing import Any
 
 EVAL_DB_HOST = "eval-postgres"
+EVAL_OLLAMA_CPU_URL = "http://eval-ollama-cpu:11434"
+
+
+def _register_world_node(name: str, base_url: str) -> None:
+    """The world's copy of a named Ollama node, so pinned routes resolve."""
+    import asyncio
+
+    from sqlalchemy import select
+
+    from app.ai.provider_registry import refresh_cache_from_db
+    from app.db.models import ProviderInstance
+    from app.db.session import _get_session_factory
+
+    async def register() -> None:
+        async with _get_session_factory()() as db:
+            node = await db.scalar(
+                select(ProviderInstance).where(
+                    ProviderInstance.kind == "ollama", ProviderInstance.name == name
+                )
+            )
+            if node is None:
+                node = ProviderInstance(kind="ollama", name=name, is_local=True, enabled=True)
+                db.add(node)
+            node.base_url = base_url
+            await db.commit()
+            await refresh_cache_from_db(db)
+
+    asyncio.run(register())
 
 
 class NotAnEvalWorld(RuntimeError):
@@ -56,6 +84,8 @@ def export_model_setup() -> dict[str, Any]:
     """The agent config and routing overlay of the stack this runs in."""
     from app.ai.agent_config import get_builtin_agent_config
     from app.ai.gpu_runtime import current_owner
+    from app.ai.provider_registry import list_instances
+    from app.ai.schemas import ProviderKind
     from app.ai.task_routing import _redis_get
 
     setup = {
@@ -63,6 +93,11 @@ def export_model_setup() -> dict[str, Any]:
         "task_routing": _redis_get() or {},
         # Who holds the GPU decides whether Strata or GPU Ollama may answer.
         "gpu_owner": current_owner(),
+        # Named local nodes a route may pin (the CPU node for embeddings);
+        # the world runs its own copy of each under the same name.
+        "local_nodes": sorted(
+            {inst.name for inst in list_instances(ProviderKind.OLLAMA) if inst.name}
+        ),
     }
     return {**setup, "digest": _digest(setup)}
 
@@ -78,6 +113,7 @@ def import_model_setup(setup: dict[str, Any]) -> str:
         "agent_config": setup["agent_config"],
         "task_routing": setup["task_routing"],
         "gpu_owner": setup.get("gpu_owner"),
+        "local_nodes": setup.get("local_nodes"),
     }
     digest = _digest(body)
     if setup.get("digest") not in (None, digest):
@@ -107,6 +143,8 @@ def import_model_setup(setup: dict[str, Any]) -> str:
         from app.ai.gpu_runtime import set_owner
 
         set_owner(body["gpu_owner"])
+    if "ollama-cpu" in (body["local_nodes"] or []):
+        _register_world_node("ollama-cpu", EVAL_OLLAMA_CPU_URL)
     if skipped:
         print(f"dropped unknown tail models: {json.dumps(skipped)}", file=sys.stderr)
     return digest

@@ -44,9 +44,16 @@ docker exec -w /app infra-backend-1 python -m app.ai.evals.live_world export > "
 DIGEST=$(docker exec -i -w /app aiw-eval-eval-backend-1 python -m app.ai.evals.live_world import < "$SETUP" 2>/dev/null | tail -1)
 rm -f "$SETUP"
 
+LOG=$(mktemp)
 docker exec -w /app aiw-eval-eval-backend-1 python -m app.ai.evals.live_runner \
   --corpus app/ai/evals/data/employee_live_v1.yaml \
   --out /tmp/results.jsonl --code-revision "$REV" --setup-digest "$DIGEST" "$@" \
-  | grep -E '^[a-z0-9-]+: (passed|failed|error)' || true
+  > "$LOG" 2>&1 || true
+if ! grep -E '^[a-z0-9-]+: (passed|failed|error)' "$LOG"; then
+  # No verdict at all: the runner itself failed — show why instead of silence.
+  echo "runner produced no results; last lines:" >&2
+  tail -20 "$LOG" >&2
+fi
+rm -f "$LOG"
 docker cp aiw-eval-eval-backend-1:/tmp/results.jsonl "$OUT_DIR/$STAMP.jsonl"
 echo "results: $OUT_DIR/$STAMP.jsonl"
