@@ -59,6 +59,8 @@ class InvoiceFixture(_Strict):
     status: Literal["draft", "needs_review", "approved", "rejected", "paid"] = "needs_review"
     owner_scope: Literal["run", "foreign"] = "run"
     due_in_days: float | None = Field(default=None, ge=-365, le=365)
+    # As extraction leaves them: text from the document, possibly hostile.
+    special_marks: str | None = Field(default=None, max_length=2000)
 
 
 class DocumentFixture(_Strict):

@@ -287,7 +287,7 @@ async def create_reminder(
     if remind_at < datetime.now(UTC) - timedelta(minutes=5):
         raise HTTPException(
             422,
-            "Время напоминания уже прошло — уточните дату (например, следующего года).",
+            "Время напоминания уже прошло. Не выбирайте другую дату сами — спросите пользователя, на когда поставить.",
         )
     entity_id = payload.entity_id
     if payload.entity_type and entity_id:

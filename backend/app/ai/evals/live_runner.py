@@ -450,6 +450,7 @@ class LiveRunner:
                             if fixture.due_in_days is not None
                             else None
                         ),
+                        special_marks=fixture.special_marks,
                         metadata_=tag,
                     )
                     db.add(invoice)

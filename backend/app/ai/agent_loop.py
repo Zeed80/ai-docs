@@ -2253,9 +2253,10 @@ def creation_key(name: str, arguments: Any) -> str | None:
     return json.dumps([dotted, action, anchors], ensure_ascii=False)
 
 
-def prior_creation(messages: list[dict], key: str) -> dict | None:
+def prior_creation(messages: list[dict], key: str, start: int | None = None) -> dict | None:
     """The successful result of an earlier call of this turn with ``key``."""
-    start = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1)
+    if start is None:
+        start = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1)
     turn = messages[start + 1 :]
     results = {
         str(m["tool_call_id"]): m.get("content")
@@ -2289,7 +2290,7 @@ def prior_creation(messages: list[dict], key: str) -> dict | None:
     return None
 
 
-def performed_changes(messages: list[dict]) -> list[str]:
+def performed_changes(messages: list[dict], start: int | None = None) -> list[str]:
     """Changing tool calls of the current turn that reported success, in order.
 
     The effect comes from the reviewed tool catalog (read/write/delete/...),
@@ -2298,8 +2299,10 @@ def performed_changes(messages: list[dict]) -> list[str]:
     """
     from app.ai.tool_catalog import TOOLS, get_tool
 
-    # Only this turn: everything after the latest user message.
-    start = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1)
+    # Only this turn: from the human message that started it (a correction
+    # retry inside the turn does not start a new one), else the latest user.
+    if start is None:
+        start = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1)
     messages = messages[start + 1 :]
     results: dict[str, Any] = {}
     for message in messages:
@@ -2775,9 +2778,26 @@ class AgentSession:
         # Одобрение действует на ход, а не навсегда: новое сообщение человека
         # начинает новый ход, и прошлое «да» его не покрывает.
         self._granted_approvals.clear()
-        self.messages.append({"role": "user", "content": content})
+        message = {"role": "user", "content": content}
+        self.messages.append(message)
+        if not getattr(self, "_next_is_continuation", False):
+            self._turn_user_message = message
+        self._next_is_continuation = False
         self._trim_history()
         await self._run()
+
+    def begin_continuation(self) -> None:
+        """The next message is the orchestrator's correction within the same
+        human turn, not a new turn: earlier creations of the turn still count."""
+        self._next_is_continuation = True
+
+    def _turn_start(self) -> int:
+        """Index of the human message that started this turn (by identity)."""
+        marker = getattr(self, "_turn_user_message", None)
+        for index, message in enumerate(self.messages):
+            if message is marker:
+                return index
+        return max((i for i, m in enumerate(self.messages) if m.get("role") == "user"), default=-1)
 
     async def resume_checkpoint(self, payload: dict) -> None:
         """Continue only a validated pending batch; never re-submit the user prompt."""
@@ -3261,7 +3281,7 @@ class AgentSession:
                 # Not when this turn also changed records: the publish message
                 # names the table only, and "marked 2 invoices" vanished from
                 # the reply (E49 live run). The model reports both instead.
-                if publish_reply and not performed_changes(self.messages):
+                if publish_reply and not performed_changes(self.messages, self._turn_start()):
                     await self._deliver_final_content(publish_reply)
                     self._remember_latest_turn(publish_reply)
                     break
@@ -3428,7 +3448,7 @@ class AgentSession:
             # The silent model must not hide what already happened: a turn
             # that changed a record and then ran out of steps said only "could
             # not finish" (E49 live run), and the owner had no way to know.
-            done = performed_changes(self.messages)
+            done = performed_changes(self.messages, self._turn_start())
             content = "Не удалось полностью завершить задачу за отведённое число шагов. "
             if done:
                 content += (
@@ -3635,7 +3655,7 @@ class AgentSession:
         # addresses): a second create only reworded the first — seven reminders
         # for one invoice in a live run. Say so instead of creating again.
         key = creation_key(fn_name, args)
-        earlier = prior_creation(self.messages, key) if key else None
+        earlier = prior_creation(self.messages, key, self._turn_start()) if key else None
         if earlier is not None:
             data = earlier.get("data") if isinstance(earlier.get("data"), dict) else earlier
             result = {

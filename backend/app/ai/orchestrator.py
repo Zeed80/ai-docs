@@ -545,6 +545,11 @@ class AgentOrchestrator:
             self._trace = _TurnTrace()
             self._workspace_before = _workspace_updated_at_snapshot()
             self._llm_calls += 1
+            # Same human turn: what the first attempt created still counts
+            # (a retry re-created reminders the first pass had made).
+            begin = getattr(self._executor, "begin_continuation", None)
+            if callable(begin):
+                begin()
             await self._executor.on_user_message(_build_correction_request(plan, audit))
             audit = await self._audit_turn(plan, config)
         # Adaptive-by-risk: a cheap (desktop) turn that STILL has an empty/mismatched

@@ -845,3 +845,40 @@ async def test_a_reworded_second_create_in_one_turn_is_not_sent(test_engine, mon
     # A different moment is a different reminder.
     await session._execute_single_tool(call("c3", "Ещё раз", "2026-10-14T09:00:00+03:00"), 2)
     assert len(effects) == 2
+
+
+def test_a_correction_retry_stays_in_the_same_turn():
+    """E50 live: the orchestrator's correction comes as a new user message; the
+    retry re-created a reminder the first attempt had made."""
+    import json as _json
+
+    from app.ai.agent_loop import AgentSession, creation_key, prior_creation
+
+    async def send(event):
+        return None
+
+    session = AgentSession(send)
+    first_user = {"role": "user", "content": "напомни"}
+    session.messages = [first_user]
+    session._turn_user_message = first_user
+    call = {
+        "id": "c1",
+        "function": {
+            "name": "analytics",
+            "arguments": {
+                "action": "calendar_create_reminder",
+                "body": {"entity_id": str(uuid.uuid4()), "remind_at": "2026-10-13T09:00:00+03:00"},
+            },
+        },
+    }
+    session.messages += [
+        {"role": "assistant", "tool_calls": [call]},
+        {"role": "tool", "tool_call_id": "c1", "content": _json.dumps({"id": "r1"})},
+    ]
+    session.begin_continuation()
+    correction = {"role": "user", "content": "Аудит: исправь"}
+    session.messages.append(correction)  # as on_user_message would, marked continuation
+    key = creation_key("analytics", call["function"]["arguments"])
+    assert prior_creation(session.messages, key, session._turn_start()) is not None
+    # Without the turn marker the correction would have hidden it.
+    assert prior_creation(session.messages, key) is None
