@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+from decimal import Decimal
 from functools import cache
 from typing import Any, Literal
 
@@ -3291,15 +3292,80 @@ class CostRow(BaseModel):
     priced: bool = False
 
 
+class ReceiptCostRow(BaseModel):
+    """Расход по квитанциям вызовов: цена каждой зафиксирована в момент вызова."""
+
+    provider: str
+    model: str | None = None
+    currency: str
+    calls: int
+    priced_calls: int
+    # Сумма по вызовам с известной ценой — строкой, без потери копеек.
+    amount: str
+    # Вызовы без цены по причине: нет тарифа / счётчики токенов неизвестны.
+    unknown: dict[str, int] = {}
+
+
 class CostReportOut(BaseModel):
+    # Оценка ниже — телеметрия по ТЕКУЩЕЙ цене каталога: смена цены
+    # переписывает её прошлое. Точный учёт — receipts.
     total_usd: float
     priced_models: int
     unpriced_models: list[str]
     by_model: list[CostRow]
+    receipts: list[ReceiptCostRow] = []
+
+
+async def _receipt_costs(db: AsyncSession) -> list[ReceiptCostRow]:
+    """Сумма квитанций v2 по провайдеру, модели и валюте (T4)."""
+    from sqlalchemy import text
+
+    from app.domain.work_budget_usage import LLM_USAGE_EVENT_TYPE, LLM_USAGE_SCHEMA_V2
+
+    rows = (
+        await db.execute(
+            text(
+                """
+                SELECT payload->>'provider' AS provider,
+                       payload->>'model' AS model,
+                       payload->'cost'->>'currency' AS currency,
+                       payload->'cost'->>'status' AS status,
+                       payload->'cost'->>'reason' AS reason,
+                       count(*) AS calls,
+                       sum(CASE WHEN payload->'cost'->>'status' = 'known'
+                                THEN (payload->'cost'->>'amount')::numeric END) AS amount
+                FROM work_events
+                WHERE event_type = :event_type AND payload->>'schema' = :schema
+                GROUP BY 1, 2, 3, 4, 5
+                """
+            ),
+            {"event_type": LLM_USAGE_EVENT_TYPE, "schema": LLM_USAGE_SCHEMA_V2},
+        )
+    ).all()
+    out: dict[tuple, ReceiptCostRow] = {}
+    for provider, model, currency, status, reason, calls, amount in rows:
+        row = out.setdefault(
+            (provider, model, currency),
+            ReceiptCostRow(
+                provider=provider,
+                model=model,
+                currency=currency,
+                calls=0,
+                priced_calls=0,
+                amount="0",
+            ),
+        )
+        row.calls += int(calls)
+        if status == "known":
+            row.priced_calls += int(calls)
+            row.amount = format(Decimal(row.amount) + Decimal(amount or 0), "f")
+        else:
+            row.unknown[reason or "unknown"] = row.unknown.get(reason or "unknown", 0) + int(calls)
+    return sorted(out.values(), key=lambda r: (r.provider, r.model or "", r.currency))
 
 
 @router.get("/cost-report", response_model=CostReportOut, dependencies=_admin)
-async def cost_report() -> CostReportOut:
+async def cost_report(db: AsyncSession = Depends(get_db)) -> CostReportOut:
     """Во что обошлись облачные вызовы.
 
     Токены телеметрия копит с самого начала, цена лежит в каталоге — но вместе
@@ -3367,7 +3433,128 @@ async def cost_report() -> CostReportOut:
         priced_models=sum(1 for r in out if r.priced),
         unpriced_models=sorted(unpriced),
         by_model=out,
+        receipts=await _receipt_costs(db),
     )
+
+
+class TariffIn(BaseModel):
+    provider: str
+    model: str
+    currency: str = "USD"
+    input_per_1m: Decimal | None = None
+    output_per_1m: Decimal | None = None
+    free: bool = False
+    source: str
+    effective_from: datetime | None = None
+
+
+class TariffOut(BaseModel):
+    id: str
+    provider: str
+    model: str
+    currency: str
+    input_per_1m: Decimal | None
+    output_per_1m: Decimal | None
+    free: bool
+    source: str
+    effective_from: datetime
+    created_by: str | None
+    created_at: datetime
+
+
+def _tariff_out(row) -> TariffOut:
+    return TariffOut(
+        id=str(row.id),
+        provider=row.provider,
+        model=row.model,
+        currency=row.currency,
+        input_per_1m=row.input_per_1m,
+        output_per_1m=row.output_per_1m,
+        free=row.free,
+        source=row.source,
+        effective_from=row.effective_from,
+        created_by=row.created_by,
+        created_at=row.created_at,
+    )
+
+
+@router.get("/tariffs", response_model=list[TariffOut], dependencies=_admin)
+async def list_tariffs(
+    provider: str | None = None,
+    model: str | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> list[TariffOut]:
+    """Все версии тарифов, новые сверху. Версии не правятся и не удаляются."""
+    from app.db.work_budget_models import LlmTariff
+
+    query = select(LlmTariff)
+    if provider:
+        query = query.where(LlmTariff.provider == provider)
+    if model:
+        query = query.where(LlmTariff.model == model)
+    rows = (
+        await db.scalars(
+            query.order_by(LlmTariff.provider, LlmTariff.model, LlmTariff.effective_from.desc())
+        )
+    ).all()
+    return [_tariff_out(row) for row in rows]
+
+
+@router.post("/tariffs", response_model=TariffOut, status_code=201)
+async def add_tariff(
+    payload: TariffIn,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(require_role(UserRole.admin)),
+) -> TariffOut:
+    """Новая версия цены модели (T4).
+
+    Действует с ``effective_from`` (по умолчанию — сейчас) и не раньше: вызовы,
+    уже сделанные, посчитаны по своей цене. Ноль — только с ``free=true``;
+    пустая цена означает «неизвестно», а не «бесплатно».
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from app.audit.service import log_action
+    from app.domain.llm_tariffs import TariffRejected, add_tariff_version
+
+    try:
+        row = await add_tariff_version(
+            db,
+            provider=payload.provider,
+            model=payload.model,
+            currency=payload.currency,
+            input_per_1m=payload.input_per_1m,
+            output_per_1m=payload.output_per_1m,
+            free=payload.free,
+            source=payload.source,
+            effective_from=payload.effective_from,
+            created_by=user.sub,
+        )
+    except TariffRejected as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Версия с этой датой начала уже есть") from exc
+    await log_action(
+        db,
+        action="settings.llm_tariff.added",
+        entity_type="llm_tariff",
+        entity_id=row.id,
+        user_id=user.sub,
+        details={
+            "provider": row.provider,
+            "model": row.model,
+            "currency": row.currency,
+            "input_per_1m": None if row.input_per_1m is None else str(row.input_per_1m),
+            "output_per_1m": None if row.output_per_1m is None else str(row.output_per_1m),
+            "free": row.free,
+            "source": row.source,
+            "effective_from": row.effective_from.isoformat(),
+        },
+    )
+    await db.commit()
+    await db.refresh(row)
+    return _tariff_out(row)
 
 
 class AssignmentRevisionOut(BaseModel):

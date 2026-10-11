@@ -78,3 +78,31 @@ class WorkBudgetReservation(UUIDPrimaryKey, Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class LlmTariff(UUIDPrimaryKey, Base):
+    """One version of a model's price (T4). Append-only, never backdated.
+
+    A receipt copies the version in force when its call was reserved, so a new
+    price never rewrites what past calls cost. ``free`` is the only way to a
+    zero cost: a missing price stays unknown, not zero.
+    """
+
+    __tablename__ = "llm_tariffs"
+    __table_args__ = (
+        UniqueConstraint("provider", "model", "effective_from", name="uq_llm_tariff_version"),
+        Index("ix_llm_tariffs_lookup", "provider", "model", "effective_from"),
+    )
+
+    provider: Mapped[str] = mapped_column(String(40), nullable=False)
+    model: Mapped[str] = mapped_column(String(255), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    input_per_1m: Mapped[Decimal | None] = mapped_column(Numeric(20, 8))
+    output_per_1m: Mapped[Decimal | None] = mapped_column(Numeric(20, 8))
+    free: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    source: Mapped[str] = mapped_column(String(200), nullable=False)
+    effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

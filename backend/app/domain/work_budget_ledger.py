@@ -617,6 +617,7 @@ async def settle_llm_call_with_usage_receipt(
     deliberately differs from calling ``settle_budget`` followed by
     ``append_event``: that split would permit a charged call with no receipt.
     """
+    from app.domain.llm_tariffs import tariff_in_force
     from app.domain.work_budget_usage import (
         LLM_USAGE_ACTOR,
         LLM_USAGE_EVENT_TYPE,
@@ -669,7 +670,15 @@ async def settle_llm_call_with_usage_receipt(
                 raise BudgetReservationConflict("LLM reservation binding digest is invalid")
 
             receipt_payload = canonical_usage_payload(
-                reservation, evidence, owner_key=expected_owner_key
+                reservation,
+                evidence,
+                owner_key=expected_owner_key,
+                tariff=await tariff_in_force(
+                    db,
+                    provider=evidence.provider,
+                    model=evidence.model,
+                    at=reservation.reserved_at,
+                ),
             )
             receipt_id = usage_event_id(reservation.id)
             existing_event = await db.get(WorkEvent, receipt_id)

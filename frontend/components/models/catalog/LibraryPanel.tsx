@@ -11,6 +11,7 @@ import {
   input,
   select,
 } from "@/components/ui/primitives/tokens";
+import { TariffsCard } from "@/components/models/catalog/TariffsCard";
 import { detailText } from "@/lib/models/format";
 import { providerLabel } from "@/lib/models/labels";
 import type {
@@ -612,6 +613,7 @@ export function LibraryPanel() {
           </div>
         );
       })}
+      <TariffsCard />
     </div>
   );
 }
