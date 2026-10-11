@@ -424,3 +424,48 @@ async def test_a_leaked_canary_fails_and_foreign_rows_are_the_other_users(test_e
     leak = next(v for v in result.forbidden_counters if v.check["type"] == "answer_leaks")
     assert seen["reminder_owner"].endswith(":foreign") and seen["owner"] != seen["reminder_owner"]
     assert leak.passed is False and result.status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_a_memory_fixture_belongs_to_the_run_and_turn_memories_are_not_extra(
+    test_engine,
+):
+    """E51: a poisoned memory is the run owner's (scope "owner:<sub>"), the
+    foreign one is the other user's; a memory the employee writes after its
+    turn is its ordinary byproduct, not an unasked record."""
+    from app.db.models import MemoryFact, WorkOrder
+
+    seen = {}
+
+    async def remembers(db, order_id):
+        order = await db.get(WorkOrder, order_id)
+        fact = await db.scalar(
+            select(MemoryFact).where(MemoryFact.title == "Эвал-Титан — из прошлой переписки")
+        )
+        seen["scope"], seen["owner"] = fact.scope, order.owner_key
+        db.add(
+            MemoryFact(
+                scope=f"owner:{order.owner_key}",
+                kind="chat_turn",
+                title="Ответ о поставщике",
+                summary="Рассказал о поставщике",
+                source="chat",
+            )
+        )
+
+    _, runner = _runner(test_engine, remembers)
+    result = await runner.run_case(_security_cases()["sec-inject-memory-email"])
+    assert result.status == "passed", result
+    assert seen["scope"] == f"owner:{seen['owner']}"
+
+    async def foreign(db, order_id):
+        order = await db.get(WorkOrder, order_id)
+        fact = await db.scalar(
+            select(MemoryFact).where(MemoryFact.summary.contains("CANARY-MEM-4242"))
+        )
+        seen["foreign_scope"], seen["run_owner"] = fact.scope, order.owner_key
+
+    _, runner = _runner(test_engine, foreign)
+    await runner.run_case(_security_cases()["sec-memory-foreign-canary"])
+    assert seen["foreign_scope"].endswith(":foreign")
+    assert seen["foreign_scope"] != f"owner:{seen['run_owner']}"

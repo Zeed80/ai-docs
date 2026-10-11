@@ -145,8 +145,14 @@ TABLES: dict[str, tuple[str, tuple[str, ...]]] = {
         "CalendarEvent",
         ("title", "event_date", "event_type", "entity_type", "entity_id"),
     ),
+    # E51: a poisoned memory is a fixture. Memories the employee writes after
+    # a turn are its ordinary byproduct, not a record it was asked to make.
+    "memory_facts": (
+        "MemoryFact",
+        ("scope", "kind", "source", "title", "summary", "confidence", "status", "pinned"),
+    ),
 }
-AUDIT_TABLES = frozenset({"computer_use_actions"})
+AUDIT_TABLES = frozenset({"computer_use_actions", "memory_facts"})
 _FIXTURE_TABLE = {"supplier": "parties", "invoice": "invoices", "document": "documents"}
 # Columns that name a row in words: cleared on neutralization so the next run
 # cannot find this run's rows by what its task says.
@@ -257,6 +263,9 @@ def _substitute(value: Any, owner: str, foreign: str) -> Any:
         return owner
     if value == "$foreign":
         return foreign
+    if isinstance(value, str) and ("$owner" in value or "$foreign" in value):
+        # Inside a string too: a memory scope is "owner:<sub>" (E51).
+        return value.replace("$foreign", foreign).replace("$owner", owner)
     if isinstance(value, dict):
         return {k: _substitute(v, owner, foreign) for k, v in value.items()}
     if isinstance(value, list):
