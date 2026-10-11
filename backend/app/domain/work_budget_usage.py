@@ -19,6 +19,33 @@ from app.db.work_budget_models import WorkBudgetLedger, WorkBudgetReservation
 
 LLM_USAGE_EVENT_TYPE = "budget.llm_usage_receipt"
 LLM_USAGE_SCHEMA = "llm_usage_receipt.v1"
+# v2 names the provider and model of the call (T4); v1 stays valid as written.
+LLM_USAGE_SCHEMA_V2 = "llm_usage_receipt.v2"
+# Every LLM chat provider kind (``app.ai.schemas.ProviderKind`` minus ComfyUI
+# and the generic cloud placeholder): a cloud call metered inside durable work
+# is receipted under its own name, not as "ollama".
+RECEIPT_PROVIDERS = frozenset(
+    {
+        "ollama",
+        "strata",
+        "openai_compatible",
+        "vllm",
+        "llamacpp",
+        "lmstudio",
+        "anthropic",
+        "openrouter",
+        "deepseek",
+        "gemini",
+        "openai",
+        "ollama_cloud",
+        "moonshot",
+        "minimax",
+        "dashscope",
+        "mistral",
+        "groq",
+        "together",
+    }
+)
 LLM_USAGE_ACTOR = "budget-ledger"
 _USAGE_EVENT_NAMESPACE = uuid.UUID("ea221aef-9ddf-4aa4-a891-7d4c98b689c4")
 
@@ -59,12 +86,19 @@ class TokenComponentEvidence:
 
 @dataclass(frozen=True)
 class OllamaUsageEvidence:
-    """Strict evidence captured from one Ollama HTTP response boundary."""
+    """Strict evidence captured from one provider HTTP response boundary.
+
+    The name is historical: since T4 it also carries OpenAI-compatible
+    providers (Strata). ``provider``/``model`` name what answered; an Ollama
+    receipt without a model keeps the v1 shape exactly.
+    """
 
     outcome: str
     terminal_observed: bool
     input_tokens: TokenComponentEvidence
     output_tokens: TokenComponentEvidence
+    provider: str = "ollama"
+    model: str | None = None
 
 
 def usage_event_id(reservation_id: uuid.UUID) -> uuid.UUID:
@@ -95,7 +129,9 @@ def ollama_usage_from_body(body: Any) -> OllamaUsageEvidence:
     )
 
 
-def unknown_ollama_usage(reason: str) -> OllamaUsageEvidence:
+def unknown_ollama_usage(
+    reason: str, *, provider: str = "ollama", model: str | None = None
+) -> OllamaUsageEvidence:
     """Build an explicit unknown receipt without carrying response/error text."""
     if reason not in _UNKNOWN_REASONS:
         raise ValueError("Unsupported Ollama usage unknown reason")
@@ -106,6 +142,27 @@ def unknown_ollama_usage(reason: str) -> OllamaUsageEvidence:
         terminal_observed=False,
         input_tokens=component,
         output_tokens=component,
+        provider=provider,
+        model=model,
+    )
+
+
+def openai_usage_from_body(body: Any, *, provider: str, model: str | None) -> OllamaUsageEvidence:
+    """Counters of an OpenAI-compatible answer (``usage.prompt_tokens`` /
+    ``completion_tokens``), from the raw body; nothing missing becomes zero."""
+    if not isinstance(body, dict):
+        return unknown_ollama_usage("response_body_invalid", provider=provider, model=model)
+    usage = body.get("usage")
+    usage = usage if isinstance(usage, dict) else {}
+    choices = body.get("choices") if isinstance(body.get("choices"), list) else []
+    terminal = any(isinstance(c, dict) and c.get("finish_reason") for c in choices)
+    return OllamaUsageEvidence(
+        outcome="response_observed",
+        terminal_observed=terminal,
+        input_tokens=_component(usage, "prompt_tokens"),
+        output_tokens=_component(usage, "completion_tokens"),
+        provider=provider,
+        model=model,
     )
 
 
@@ -117,6 +174,8 @@ class OllamaUsageCapture:
         default_factory=lambda: unknown_ollama_usage("response_not_observed")
     )
     observations: int = 0
+    provider: str = "ollama"
+    model: str | None = None
 
 
 _OLLAMA_USAGE_CAPTURE: ContextVar[OllamaUsageCapture | None] = ContextVar(
@@ -125,9 +184,19 @@ _OLLAMA_USAGE_CAPTURE: ContextVar[OllamaUsageCapture | None] = ContextVar(
 
 
 @contextmanager
-def capture_ollama_usage() -> Iterator[OllamaUsageCapture]:
-    """Collect strict raw-body evidence while one budgeted dispatch runs."""
-    capture = OllamaUsageCapture()
+def capture_ollama_usage(
+    *, provider: str = "ollama", model: str | None = None
+) -> Iterator[OllamaUsageCapture]:
+    """Collect strict raw-body evidence while one budgeted dispatch runs.
+
+    ``provider``/``model`` are those of the dispatch: a Strata call that
+    observed nothing used to be receipted as "ollama" (T4).
+    """
+    capture = OllamaUsageCapture(
+        evidence=unknown_ollama_usage("response_not_observed", provider=provider, model=model),
+        provider=provider,
+        model=model,
+    )
     token = _OLLAMA_USAGE_CAPTURE.set(capture)
     try:
         yield capture
@@ -140,10 +209,34 @@ def _record_ollama_evidence(evidence: OllamaUsageEvidence) -> None:
     if capture is None:
         return
     capture.observations += 1
+    if evidence.provider == "ollama" and capture.provider != "ollama":
+        # Ollama-path helpers record without knowing the dispatch; the
+        # capture does.
+        from dataclasses import replace
+
+        evidence = replace(evidence, provider=capture.provider, model=capture.model)
+    elif evidence.model is None and capture.model is not None:
+        from dataclasses import replace
+
+        evidence = replace(evidence, model=capture.model)
     # One reservation covers one POST; a second response cannot be attributed
     # to it, so the receipt degrades to unknown for good.
     capture.evidence = (
-        evidence if capture.observations == 1 else unknown_ollama_usage("response_not_observed")
+        evidence
+        if capture.observations == 1
+        else unknown_ollama_usage(
+            "response_not_observed", provider=capture.provider, model=capture.model
+        )
+    )
+
+
+def record_openai_compatible_body(body: Any) -> None:
+    """Record counters of an OpenAI-compatible answer for the active capture."""
+    capture = _OLLAMA_USAGE_CAPTURE.get()
+    if capture is None:
+        return
+    _record_ollama_evidence(
+        openai_usage_from_body(body, provider=capture.provider, model=capture.model)
     )
 
 
@@ -192,6 +285,10 @@ def _canonical_component(component: TokenComponentEvidence) -> dict[str, Any]:
     return {"status": "unknown", "reason": component.unknown_reason}
 
 
+def _is_v2(evidence: OllamaUsageEvidence) -> bool:
+    return evidence.provider != "ollama" or evidence.model is not None
+
+
 def canonical_usage_payload(
     reservation: WorkBudgetReservation,
     evidence: OllamaUsageEvidence,
@@ -201,6 +298,8 @@ def canonical_usage_payload(
     """Bind canonical evidence to authoritative reservation fields."""
     if evidence.outcome not in _OUTCOMES or not isinstance(evidence.terminal_observed, bool):
         raise ValueError("Unsupported Ollama usage outcome")
+    if evidence.provider not in RECEIPT_PROVIDERS:
+        raise ValueError("Unsupported usage receipt provider")
     input_component = _canonical_component(evidence.input_tokens)
     output_component = _canonical_component(evidence.output_tokens)
     if evidence.outcome != "response_observed" and (
@@ -227,7 +326,7 @@ def canonical_usage_payload(
             ),
         }
     return {
-        "schema": LLM_USAGE_SCHEMA,
+        "schema": LLM_USAGE_SCHEMA_V2 if _is_v2(evidence) else LLM_USAGE_SCHEMA,
         "reservation_id": str(reservation.id),
         "ledger_id": str(reservation.ledger_id),
         "work_order_id": str(reservation.work_order_id),
@@ -235,7 +334,8 @@ def canonical_usage_payload(
         "operation_key": reservation.operation_key,
         "request_digest": reservation.request_digest,
         "binding_digest": reservation.binding_digest,
-        "provider": "ollama",
+        "provider": evidence.provider,
+        **({"model": evidence.model} if _is_v2(evidence) else {}),
         "outcome": evidence.outcome,
         "terminal_observed": evidence.terminal_observed,
         "tokens": {
@@ -260,8 +360,9 @@ def valid_usage_receipt_payload(
 ) -> bool:
     if not isinstance(payload, dict):
         return False
+    v2 = payload.get("schema") == LLM_USAGE_SCHEMA_V2
     expected_identity = {
-        "schema": LLM_USAGE_SCHEMA,
+        "schema": LLM_USAGE_SCHEMA_V2 if v2 else LLM_USAGE_SCHEMA,
         "reservation_id": str(reservation.id),
         "ledger_id": str(reservation.ledger_id),
         "work_order_id": str(reservation.work_order_id),
@@ -269,10 +370,19 @@ def valid_usage_receipt_payload(
         "operation_key": reservation.operation_key,
         "request_digest": reservation.request_digest,
         "binding_digest": reservation.binding_digest,
-        "provider": "ollama",
     }
+    if v2:
+        if payload.get("provider") not in RECEIPT_PROVIDERS:
+            return False
+        model = payload.get("model")
+        if model is not None and not isinstance(model, str):
+            return False
+    elif payload.get("provider") != "ollama":
+        return False
     if set(payload) != {
         *expected_identity,
+        "provider",
+        *(("model",) if v2 else ()),
         "outcome",
         "terminal_observed",
         "tokens",
@@ -338,6 +448,8 @@ def valid_usage_receipt_payload(
             terminal_observed=payload.get("terminal_observed"),
             input_tokens=parsed_components["input"],
             output_tokens=parsed_components["output"],
+            provider=payload.get("provider"),
+            model=payload.get("model"),
         )
         return canonical_usage_payload(reservation, evidence, owner_key=owner_key) == payload
     except (TypeError, ValueError):

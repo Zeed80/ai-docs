@@ -448,17 +448,21 @@ async def test_api_rejects_historic_unbound_parent_without_zero_baseline(client,
         title="Historic",
         input_data={"prompt": "historic"},
     )
+    parent_id = parent.id
     await db_session.commit()
 
     response = await client.post(
         "/api/work-orders",
-        json={"objective": "Child", "parent_id": str(parent.id)},
+        json={"objective": "Child", "parent_id": str(parent_id)},
     )
     assert response.status_code == 409
     assert "baseline" in response.json()["detail"].lower()
     assert (
         await db_session.scalar(
-            select(func.count()).select_from(WorkOrder).where(WorkOrder.objective == "Child")
+            # Scoped to this parent: other tests in the shared DB create "Child" too.
+            select(func.count())
+            .select_from(WorkOrder)
+            .where(WorkOrder.objective == "Child", WorkOrder.parent_id == parent_id)
         )
         == 0
     )

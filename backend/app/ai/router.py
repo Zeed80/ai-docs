@@ -755,7 +755,9 @@ class AIRouter:
                         "request": attempt_request.model_dump(mode="json"),
                     },
                 )
-                with capture_ollama_usage() as usage:
+                with capture_ollama_usage(
+                    provider=model.provider.value, model=model.provider_model
+                ) as usage:
                     try:
                         response = await self._dispatch(provider, attempt_request, model)
                     except BaseException:

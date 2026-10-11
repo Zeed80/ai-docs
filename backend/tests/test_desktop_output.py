@@ -76,12 +76,56 @@ _PUBLISHED_V1 = {
 
 
 def test_publish_fast_path_reads_the_v1_envelope():
-    """status "published" lives under data: the fast path never fired and a
-    second model round retold the table (live 2026-10-07)."""
+    """status "published" lives under data (live 2026-10-07)."""
     reply = AgentSession._terminal_publish_reply([("workspace", _PUBLISHED_V1)])
     assert reply == "Опубликовал таблицу «Письма по отправителям»: 4 строк."
     failed = {**_PUBLISHED_V1, "status": "failed"}
     assert AgentSession._terminal_publish_reply([("workspace", failed)]) is None
+
+
+@pytest.mark.asyncio
+async def test_after_a_publish_the_model_answers_the_whole_request(monkeypatch):
+    """The publish message alone lost "и скажи, что с этим делать" and the
+    verifier blocked the turn (live 2026-10-11): one tool-less call answers."""
+    import app.ai.agent_loop as loop
+
+    seen = {}
+
+    async def _fake(messages, tools, system, config, on_token, **_kw):
+        seen["tools"], seen["last"] = tools, messages[-1]["content"]
+        await on_token("Таблица на столе. Запросите email у трёх поставщиков.")
+        return {}
+
+    monkeypatch.setattr(loop, "_call_provider_streaming", _fake)
+    s = _session_with_user("перечисли поставщиков без email и скажи, что делать")
+    s._effective_system = lambda: ""
+    s._record_assistant_reply = lambda _text: None
+    s._remember_latest_turn = lambda _text: None
+    reply = "Опубликовал таблицу «Поставщики без email»: 3 строк."
+    await s._force_final_answer(
+        instruction=f"Результат уже на рабочем столе: {reply}", fallback=reply
+    )
+    assert seen["tools"] == [] and reply in seen["last"]
+    s._send.assert_awaited_once_with(
+        {"type": "text", "content": "Таблица на столе. Запросите email у трёх поставщиков."}
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_silent_model_after_a_publish_still_gets_the_publish_message(monkeypatch):
+    import app.ai.agent_loop as loop
+
+    async def _silent(*_a, **_kw):
+        return {}
+
+    monkeypatch.setattr(loop, "_call_provider_streaming", _silent)
+    s = _session_with_user("покажи поставщиков без email")
+    s._effective_system = lambda: ""
+    s._record_assistant_reply = lambda _text: None
+    s._remember_latest_turn = lambda _text: None
+    reply = "Опубликовал таблицу «Поставщики без email»: 3 строк."
+    await s._force_final_answer(instruction="…", fallback=reply)
+    s._send.assert_awaited_once_with({"type": "text", "content": reply})
 
 
 @pytest.mark.asyncio

@@ -1666,6 +1666,9 @@ async def _call_openai_streaming(
         payload["max_tokens"] = int(max_tokens)
     if tools:
         payload["tools"] = tools
+    if provider in _USAGE_STREAM_PROVIDERS:
+        # T4: the final chunk then carries the counters (llama.cpp server).
+        payload["stream_options"] = {"include_usage": True}
     _disabled = _thinking_disabled(config, disable_thinking, model_name=model)
     # The knob to control reasoning is provider-specific (per their docs).
     # Sending the wrong one to a strict endpoint returns 400, so dispatch by
@@ -1710,6 +1713,12 @@ async def _call_openai_streaming(
                 except json.JSONDecodeError:
                     continue
 
+                if isinstance(chunk.get("usage"), dict):
+                    from app.domain.work_budget_usage import record_openai_compatible_body
+
+                    record_openai_compatible_body(
+                        {"usage": chunk["usage"], "choices": [{"finish_reason": "stop"}]}
+                    )
                 choice = (chunk.get("choices") or [{}])[0]
                 delta = choice.get("delta", {})
 
@@ -1985,6 +1994,9 @@ async def _call_anthropic_streaming(
 
 # ── Provider dispatcher ───────────────────────────────────────────────────────
 
+# Providers whose streamed answer carries counters in the final chunk when
+# asked (stream_options.include_usage) — receipts name them (T4).
+_USAGE_STREAM_PROVIDERS = frozenset({"strata"})
 _OPENAI_COMPATIBLE_PROVIDERS = frozenset(
     {
         # local OpenAI-compatible servers
@@ -2070,7 +2082,10 @@ async def _call_provider_streaming(
             ollama_path = p == "ollama" or (
                 p not in _OPENAI_COMPATIBLE_PROVIDERS and p != "anthropic"
             )
-            with capture_ollama_usage() as usage:
+            with capture_ollama_usage(
+                provider=p if p in _USAGE_STREAM_PROVIDERS else "ollama",
+                model=model_override or config.worker_model,
+            ) as usage:
                 try:
                     operation_key = None
                     if budget_context is not None:
@@ -2141,7 +2156,9 @@ async def _call_provider_streaming(
                     if operation_key is not None:
                         await budget_context.charge_provider_call(
                             operation_key,
-                            usage_evidence=usage.evidence if ollama_path else None,
+                            usage_evidence=usage.evidence
+                            if ollama_path or p in _USAGE_STREAM_PROVIDERS
+                            else None,
                         )
                     return result
                 except BaseException as exc:
@@ -2150,7 +2167,9 @@ async def _call_provider_streaming(
                     if operation_key is not None:
                         await budget_context.charge_provider_call(
                             operation_key,
-                            usage_evidence=usage.evidence if ollama_path else None,
+                            usage_evidence=usage.evidence
+                            if ollama_path or p in _USAGE_STREAM_PROVIDERS
+                            else None,
                         )
                     if not isinstance(exc, Exception):
                         raise
@@ -3274,16 +3293,24 @@ class AgentSession:
                 if self._contains_nonterminal_v1_result(results):
                     break
 
-                # Fast path: a single Workspace-publish tool already produced the
-                # table AND a ready user message — deliver it directly instead of
-                # burning another ~8 s LLM call just to say "таблица готова".
+                # A desktop publish ends the tool phase: one tool-less call
+                # answers the whole request. Delivering the publish message
+                # itself lost the rest ("и скажи, что с этим делать" — the
+                # verifier blocked the turn), and letting the model keep its
+                # tools republished the table four times and ended on "Теперь
+                # привяжу…" (both live 2026-10-11).
                 publish_reply = self._terminal_publish_reply(results)
-                # Not when this turn also changed records: the publish message
-                # names the table only, and "marked 2 invoices" vanished from
-                # the reply (E49 live run). The model reports both instead.
-                if publish_reply and not performed_changes(self.messages, self._turn_start()):
-                    await self._deliver_final_content(publish_reply)
-                    self._remember_latest_turn(publish_reply)
+                if publish_reply:
+                    await self._force_final_answer(
+                        instruction=(
+                            f"Результат уже на рабочем столе: {publish_reply} "
+                            "Ответь пользователю текстом на весь его запрос: кратко "
+                            "назови опубликованное и ответь на всё остальное, о чём "
+                            "он просил. Таблицу не пересказывай и не повторяй. "
+                            "НЕ вызывай инструменты — только текст."
+                        ),
+                        fallback=publish_reply,
+                    )
                     break
             else:
                 # max_steps exhausted while the model was still calling tools:
@@ -3399,7 +3426,9 @@ class AgentSession:
         await self._send({"type": "text", "content": text})
         return text
 
-    async def _force_final_answer(self) -> None:
+    async def _force_final_answer(
+        self, *, instruction: str | None = None, fallback: str | None = None
+    ) -> None:
         """Produce a final user-facing reply when the step budget is exhausted.
 
         Makes one tool-less LLM call so the model summarises the results it has
@@ -3409,7 +3438,8 @@ class AgentSession:
         self.messages.append(
             {
                 "role": "system",
-                "content": (
+                "content": instruction
+                or (
                     "Достигнут лимит шагов. Сформулируй краткий финальный ответ "
                     "пользователю на основе уже полученных результатов инструментов. "
                     "НЕ вызывай инструменты — только текст."
@@ -3444,6 +3474,9 @@ class AgentSession:
             await self._deliver_final_content(text)
             self._record_assistant_reply(text)
             self._remember_latest_turn(text)
+        elif fallback:
+            await self._deliver_final_content(fallback)
+            self._remember_latest_turn(fallback)
         else:
             # The silent model must not hide what already happened: a turn
             # that changed a record and then ran out of steps said only "could
@@ -3880,11 +3913,7 @@ class AgentSession:
 
     @staticmethod
     def _terminal_publish_reply(results: list[tuple[str, dict]]) -> str | None:
-        """If a single tool published a Workspace block and returned a ready
-        user-facing message, that message IS the answer — no second LLM round
-        trip needed (it just paraphrases "table published"). Returns the message
-        for that fast-path, else None.
-        """
+        """The ready message of a single desktop publish, else None."""
         if len(results) != 1:
             return None
         _fn, res = results[0]

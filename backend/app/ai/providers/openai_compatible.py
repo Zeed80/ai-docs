@@ -281,6 +281,11 @@ class OpenAICompatibleProvider(AIProvider):
             )
             _raise_for_status(response)
             body = response.json()
+        # T4: the raw counters go to the active usage capture (if a budgeted
+        # dispatch opened one), never the coerced AIUsage below.
+        from app.domain.work_budget_usage import record_openai_compatible_body
+
+        record_openai_compatible_body(body)
 
         choice = body.get("choices", [{}])[0]
         message = choice.get("message", {})

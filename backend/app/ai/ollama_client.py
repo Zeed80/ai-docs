@@ -18,6 +18,7 @@ from app.config import settings
 from app.domain.work_budget_usage import (
     OllamaUsageEvidence,
     ollama_usage_from_body,
+    openai_usage_from_body,
     unknown_ollama_usage,
 )
 
@@ -33,17 +34,31 @@ def _ambient_budget_context():
 
 def _capture_budgeted_ollama_response(
     response,
+    *,
+    provider: str = "ollama",
+    model: str | None = None,
 ) -> tuple[Any, OllamaUsageEvidence, Exception | None]:
-    """Capture status/body usage before client close without hiding its error."""
+    """Capture status/body usage before client close without hiding its error.
+
+    Strata and llama.cpp answer in the OpenAI shape (``usage.prompt_tokens``);
+    read as Ollama, the verifier's Strata receipt said "ollama" with unknown
+    counters while the counters were in the body (T4, live 2026-10-11).
+    """
     try:
         response.raise_for_status()
     except Exception as exc:
-        return None, unknown_ollama_usage("http_error"), exc
+        return None, unknown_ollama_usage("http_error", provider=provider, model=model), exc
     try:
         body = response.json()
     except Exception as exc:
-        return None, unknown_ollama_usage("response_body_invalid"), exc
-    return body, ollama_usage_from_body(body), None
+        return (
+            None,
+            unknown_ollama_usage("response_body_invalid", provider=provider, model=model),
+            exc,
+        )
+    if provider == "ollama":
+        return body, ollama_usage_from_body(body), None
+    return body, openai_usage_from_body(body, provider=provider, model=model), None
 
 
 def _strata_structured_output_failed(response) -> str | None:
@@ -774,7 +789,11 @@ async def generate_json(
         try:
             operation_key = None
             dispatched = False
-            usage_evidence = unknown_ollama_usage("response_not_observed")
+            usage_evidence = unknown_ollama_usage(
+                "response_not_observed",
+                provider=provider if (use_strata or use_llamacpp) else "ollama",
+                model=model if (use_strata or use_llamacpp) else None,
+            )
             data = None
             response_error = None
             if ambient_budget_context is not None:
@@ -803,7 +822,9 @@ async def generate_json(
                     elapsed_ms = int((time.time() - start) * 1000)
                     if active_budget_context := budget_context or ambient_budget_context:
                         data, usage_evidence, response_error = _capture_budgeted_ollama_response(
-                            response
+                            response,
+                            provider=provider if (use_strata or use_llamacpp) else "ollama",
+                            model=model if (use_strata or use_llamacpp) else None,
                         )
             finally:
                 if operation_key is not None and dispatched:
@@ -1212,13 +1233,15 @@ async def _strata_reasoning_text(
             provider_attempt=1,
             request={"url": url, "payload": payload},
         )
-    usage_evidence = unknown_ollama_usage("response_not_observed")
+    usage_evidence = unknown_ollama_usage("response_not_observed", provider="strata", model=model)
     data = None
     response_error: Exception | None = None
     try:
         async with httpx.AsyncClient(timeout=float(max_tokens * 0.1 + 120)) as client:
             response = await client.post(url, headers=headers, json=payload)
-            data, usage_evidence, response_error = _capture_budgeted_ollama_response(response)
+            data, usage_evidence, response_error = _capture_budgeted_ollama_response(
+                response, provider="strata", model=model
+            )
     finally:
         if operation_key is not None:
             await budget_context.charge_provider_call(operation_key, usage_evidence=usage_evidence)
@@ -1246,7 +1269,12 @@ async def _metered_cloud_text(budget_context, provider: str, post, *, request: d
         return await post()
     finally:
         await budget_context.charge_provider_call(
-            operation_key, usage_evidence=unknown_ollama_usage("missing")
+            operation_key,
+            usage_evidence=unknown_ollama_usage(
+                "missing",
+                provider=provider,
+                model=request.get("model") or request.get("payload", {}).get("model"),
+            ),
         )
         await budget_context.assert_direct_text_current()
 
