@@ -1574,10 +1574,12 @@ DocumentChunk, embeddings, documents/mail/artifacts и существующие 
 
 ### E49 — Схема приёмочных заданий и runner
 
-**Статус:** IN_PROGRESS, ранний R0 foundation принят в ограниченном fake scope;
-foundation и десять outcome cases: `docs/agent-employee-delivery/R0-eval-foundation.md`,
-`docs/agent-employee-delivery/R0-eval-corpus.md`. Полный multi-capability runner
-и live приёмка остаются впереди.
+**Статус:** DONE (2026-10-11). Живой runner работает в изолированном мире
+`infra/eval-world`: настоящие приём, runtime, модель и capabilities, вердикт по БД
+плюс неявная проверка «ничего вне фикстур». Демонстрация: два кейса pass и
+отрицательный контроль fail, по 2/2 на Strata; `make employee-live-eval`
+(`docs/agent-employee-delivery/E49-live-runner.md`). R0 fake-scope:
+`R0-eval-foundation.md`, `R0-eval-corpus.md`.
 **После:** E48 в исторической очереди; ранний срез разрешён delivery roadmap.
 **Читать:** существующие `ai/evals/`; создать отдельный employee corpus, не смешивать
 его показатели с CAD pixel/geometry метриками или тестами роли.

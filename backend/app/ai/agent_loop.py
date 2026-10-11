@@ -2191,6 +2191,52 @@ async def _call_provider_streaming(
 SendFn = Callable[[dict], Awaitable[None]]
 
 
+def performed_changes(messages: list[dict]) -> list[str]:
+    """Changing tool calls of this turn that reported success, in order.
+
+    The effect comes from the reviewed tool catalog (read/write/delete/...),
+    never from the name; a call whose result is an error, a refusal or a stop
+    for confirmation did not change anything and is not listed.
+    """
+    from app.ai.tool_catalog import TOOLS, get_tool
+
+    results: dict[str, Any] = {}
+    for message in messages:
+        if message.get("role") == "tool" and message.get("tool_call_id"):
+            results[str(message["tool_call_id"])] = message.get("content")
+    done: list[str] = []
+    for message in messages:
+        if message.get("role") != "assistant":
+            continue
+        for call in message.get("tool_calls") or []:
+            function = call.get("function") or {}
+            name = str(function.get("name") or "")
+            arguments = function.get("arguments") or {}
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except (TypeError, ValueError):
+                    arguments = {}
+            action = str(arguments.get("action") or "") if isinstance(arguments, dict) else ""
+            dotted = name.replace("__", ".")
+            definition = TOOLS.get(dotted) or get_tool(dotted, action)
+            if definition is None or definition.effect == "read":
+                continue
+            raw = results.get(str(call.get("id") or ""))
+            try:
+                result = json.loads(raw) if isinstance(raw, str) else raw
+            except (TypeError, ValueError):
+                result = None
+            if not isinstance(result, dict) or result.get("error"):
+                continue
+            if str(result.get("status") or "succeeded") not in {"succeeded", "ok", "success"}:
+                continue
+            label = f"{dotted}.{action}" if action and "." not in dotted else dotted
+            if label not in done:
+                done.append(label)
+    return done
+
+
 class AgentSession:
     """Per-WebSocket-connection agent state.
 
@@ -3268,15 +3314,20 @@ class AgentSession:
             self._record_assistant_reply(text)
             self._remember_latest_turn(text)
         else:
-            await self._send(
-                {
-                    "type": "text",
-                    "content": (
-                        "Не удалось полностью завершить задачу за отведённое число шагов. "
-                        "Уточните запрос или разбейте его на части."
-                    ),
-                }
-            )
+            # The silent model must not hide what already happened: a turn
+            # that changed a record and then ran out of steps said only "could
+            # not finish" (E49 live run), and the owner had no way to know.
+            done = performed_changes(self.messages)
+            content = "Не удалось полностью завершить задачу за отведённое число шагов. "
+            if done:
+                content += (
+                    "При этом уже выполнено: "
+                    + ", ".join(done)
+                    + ". Проверьте результат и уточните, что осталось сделать."
+                )
+            else:
+                content += "Уточните запрос или разбейте его на части."
+            await self._send({"type": "text", "content": content})
 
     async def _execute_single_tool(self, tc: dict, iteration: int) -> tuple[str, dict, str]:
         """Execute one tool call and return (fn_name, result, tool_call_id).

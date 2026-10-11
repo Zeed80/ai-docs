@@ -1,0 +1,84 @@
+# E49: the isolated world for live employee evaluation.
+#
+# A separate Compose project (`-p aiw-eval`) built from the deployed images,
+# with its own throwaway Postgres and Redis (tmpfs: nothing survives `down`)
+# and its own network. It is not attached to the stack network, so it cannot
+# reach production Postgres, Redis, MinIO, Qdrant, mail or the browser. The
+# only way out is the model provider on the host (Strata's published port or
+# Ollama), which the run must use to be a live measurement at all.
+#
+#   docker compose -p aiw-eval -f infra/eval-world/docker-compose.yml up -d
+#   docker compose -p aiw-eval -f infra/eval-world/docker-compose.yml exec eval-backend \
+#       python -m app.ai.evals.live_runner --corpus app/ai/evals/data/employee_live_v1.yaml
+#   docker compose -p aiw-eval -f infra/eval-world/docker-compose.yml down -v
+name: aiw-eval
+
+x-eval-env: &eval-env
+  EMPLOYEE_EVAL_WORLD: isolated
+  POSTGRES_HOST: eval-postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_USER: aiw_eval
+  POSTGRES_PASSWORD: aiw-eval-only
+  POSTGRES_DB: aiworkspace_eval
+  REDIS_URL: redis://eval-redis:6379/0
+  # Nothing listens here: features that need files or vectors report
+  # themselves unavailable instead of reaching the production stores.
+  MINIO_ENDPOINT: eval-unavailable:9000
+  QDRANT_URL: http://eval-unavailable:6333
+  WEB_BROWSER_URL: http://eval-unavailable:8093
+  EGRESS_PROXY_URL: http://eval-unavailable:8094
+  WEB_SEARCH_ENDPOINT: http://eval-unavailable:8080/search
+  OLLAMA_URL: http://host-gateway:11434
+  STRATA_URL: ${EVAL_STRATA_URL:-http://host-gateway:8090}
+  STRATA_API_KEY: ${STRATA_API_KEY:-}
+  APP_ENV: development
+  # Real authentication: agent calls act as the owner through the signed
+  # execution context, so roles and row security apply as in production.
+  AUTH_ENABLED: "true"
+  APP_SECRET_KEY: aiw-eval-secret-not-for-production
+  CSRF_SECRET: aiw-eval-csrf-not-for-production
+  AGENT_SERVICE_KEY: aiw-eval-agent-key
+  FASTAPI_URL: http://eval-backend:8000
+  AIAGENT_ROOT: /aiagent
+  SCRIPT_RUNS_ENABLED: "false"
+  EMG_PIPELINE_ENABLED: "false"
+
+services:
+  eval-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: aiw_eval
+      POSTGRES_PASSWORD: aiw-eval-only
+      POSTGRES_DB: aiworkspace_eval
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiw_eval -d aiworkspace_eval"]
+      interval: 3s
+      retries: 20
+    networks: [eval]
+
+  eval-redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    networks: [eval]
+
+  eval-backend:
+    image: infra-backend:latest
+    environment:
+      <<: *eval-env
+    volumes:
+      # Skill registry, routes and prompts are data the agent reads.
+      - ../../aiagent:/aiagent:ro
+    extra_hosts:
+      - "host-gateway:host-gateway"
+    depends_on:
+      eval-postgres:
+        condition: service_healthy
+      eval-redis:
+        condition: service_started
+    networks: [eval]
+
+networks:
+  eval:
+    name: aiw-eval

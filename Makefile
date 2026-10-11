@@ -1,4 +1,4 @@
-.PHONY: help \
+.PHONY: help employee-live-eval \
         dev dev-build dev-bg dev-llamacpp down restart \
         prod prod-bg prod-build prod-down \
         clean rebuild nuke \
@@ -487,6 +487,11 @@ cad-corpus-generate:
 
 agent-test:
 	cd infra/scripts && python3 run-agent-tests.py
+
+# E49: live employee cases in a fresh isolated world (infra/eval-world), real
+# model and runtime; results in infra/eval-world/results/.
+employee-live-eval:
+	infra/eval-world/run.sh $(EVAL_ARGS)
 
 studio-queue-smoke:
 	python3 scripts/studio_queue_load_smoke.py
