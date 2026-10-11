@@ -205,6 +205,11 @@ class DocumentOut(DocumentSummary):
 
     extractions: list[DocumentExtractionOut] = []
     links: list[DocumentLinkOut] = []
+    # The beginning of what the document says (stored OCR chunks or the
+    # extraction's text), so a question about its content does not end in a
+    # re-extraction; the whole text is documents.read.
+    text_preview: str | None = None
+    text_hint: str | None = None
 
 
 class DocumentPipelineStatus(BaseModel):

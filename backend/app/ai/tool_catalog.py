@@ -140,6 +140,13 @@ _OPERATIONS = {
     ),
     "documents.list": ("GET", "/api/documents", [], "read", False),
     "documents.get": ("GET", "/api/documents/{document_id}", ["document_id"], "read", False),
+    "documents.read": (
+        "GET",
+        "/api/documents/{document_id}/text",
+        ["document_id"],
+        "read",
+        False,
+    ),
     "documents.search": ("POST", "/api/search/documents", [], "read", False),
     "documents.ingest": ("POST", "/api/documents/ingest", [], "write", False),
     "documents.classify": (

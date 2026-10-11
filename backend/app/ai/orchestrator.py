@@ -22,6 +22,10 @@ from pydantic import BaseModel, Field
 logger = structlog.get_logger()
 
 
+# Slow retrieval tools a structured (SQL/table) turn must not wander into.
+STRUCTURED_TURN_HIDDEN_TOOLS = frozenset({"memory", "search"})
+
+
 def _agent_headers() -> dict:
     """X-API-Key (+ acting user) for internal orchestrator → backend calls.
 
@@ -494,7 +498,11 @@ class AgentOrchestrator:
             plan.workspace.canvas_id == "agent:spec-table" or self._turn_grounding == "structured"
         )
         if structured_only:
-            self._executor.set_excluded_tools({"memory", "search", "documents"})
+            # Only the slow RAG tools. documents (search/get/read) is SQL and the
+            # one way to what a contract or letter says: hidden here, "take the
+            # e-mail from contract ДП-77 and put it on the supplier" could not
+            # be done on any turn that also named an invoice (E50 live run).
+            self._executor.set_excluded_tools(STRUCTURED_TURN_HIDDEN_TOOLS)
         else:
             self._executor.set_excluded_tools(set())
         # Reliable desktop output: tell the worker this turn is routed to the

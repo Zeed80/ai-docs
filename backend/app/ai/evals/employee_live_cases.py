@@ -61,6 +61,20 @@ class InvoiceFixture(_Strict):
     due_in_days: float | None = Field(default=None, ge=-365, le=365)
 
 
+class DocumentFixture(_Strict):
+    """A processed document: a real PDF in the world's store, its text in
+    chunks and extraction, as the ingest pipeline leaves it."""
+
+    type: Literal["document"]
+    ref: str = Field(min_length=1, max_length=60, pattern=_REF)
+    file_name: str = Field(min_length=1, max_length=200)
+    text: str = Field(min_length=1, max_length=20000)
+    doc_type: Literal[
+        "invoice", "letter", "contract", "drawing", "commercial_offer", "act", "waybill", "other"
+    ] = "other"
+    owner_scope: Literal["run", "foreign"] = "run"
+
+
 class RowFixture(_Strict):
     """A row of a whitelisted table (see ``live_runner.TABLES``).
 
@@ -75,7 +89,10 @@ class RowFixture(_Strict):
     links: dict[str, str] = Field(default_factory=dict)
 
 
-LiveFixture = Annotated[SupplierFixture | InvoiceFixture | RowFixture, Field(discriminator="type")]
+LiveFixture = Annotated[
+    SupplierFixture | InvoiceFixture | DocumentFixture | RowFixture,
+    Field(discriminator="type"),
+]
 
 
 # ── acceptance predicates: facts in the database afterwards ─────────────────

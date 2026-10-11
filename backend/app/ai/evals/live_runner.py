@@ -36,6 +36,7 @@ from app.ai.evals.employee_live_cases import (
     ActionAttempted,
     ActionCalled,
     ActionSucceeded,
+    DocumentFixture,
     FieldChanged,
     FieldContains,
     FieldEquals,
@@ -123,6 +124,10 @@ TABLES: dict[str, tuple[str, tuple[str, ...]]] = {
         ("title", "status", "items", "deadline", "notes", "requested_by"),
     ),
     "documents": ("Document", ("file_name", "status", "doc_type", "owner_sub")),
+    "document_links": (
+        "DocumentLink",
+        ("document_id", "linked_entity_type", "linked_entity_id", "link_type"),
+    ),
     "reminders": (
         "Reminder",
         ("remind_at", "message", "entity_type", "entity_id", "user_id", "is_sent"),
@@ -132,10 +137,10 @@ TABLES: dict[str, tuple[str, tuple[str, ...]]] = {
         ("title", "event_date", "event_type", "entity_type", "entity_id"),
     ),
 }
-_FIXTURE_TABLE = {"supplier": "parties", "invoice": "invoices"}
+_FIXTURE_TABLE = {"supplier": "parties", "invoice": "invoices", "document": "documents"}
 # Columns that name a row in words: cleared on neutralization so the next run
 # cannot find this run's rows by what its task says.
-_IDENTIFYING = ("name", "title", "objective", "sku", "invoice_number", "inn")
+_IDENTIFYING = ("name", "title", "objective", "sku", "invoice_number", "inn", "file_name")
 
 
 def _model(table: str):
@@ -264,6 +269,69 @@ def _matches(row: Any, where: dict[str, Any], ids: dict[str, Any]) -> bool:
     return True
 
 
+def _pdf_bytes(text: str) -> bytes:
+    """A one-text-layer PDF with Cyrillic, read back exactly by extract_pdf."""
+    import glob
+
+    import pymupdf
+
+    font = (glob.glob("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf") or [None])[0]
+    pdf = pymupdf.open()
+    lines = text.splitlines() or [text]
+    for start in range(0, len(lines), 45):
+        page = pdf.new_page()
+        if font:
+            page.insert_font(fontname="F0", fontfile=font)
+        page.insert_textbox(
+            pymupdf.Rect(50, 50, 550, 800),
+            "\n".join(lines[start : start + 45]),
+            fontname="F0" if font else "helv",
+            fontsize=10,
+        )
+    return pdf.tobytes()
+
+
+async def _seed_document(db: Any, fixture: Any, owner: str, ns: str, tag: dict) -> Any:
+    from app.db.models import (
+        Document,
+        DocumentChunk,
+        DocumentExtraction,
+        DocumentStatus,
+        DocumentType,
+    )
+    from app.storage import upload_file
+
+    content = _pdf_bytes(fixture.text)
+    path = f"employee-eval/{ns}/{fixture.ref}.pdf"
+    upload_file(content, path, "application/pdf")
+    document = Document(
+        owner_sub=owner,
+        file_name=fixture.file_name,
+        file_hash=_digest([ns, fixture.ref, fixture.text]),
+        file_size=len(content),
+        mime_type="application/pdf",
+        storage_path=path,
+        page_count=1,
+        doc_type=DocumentType(fixture.doc_type),
+        status=DocumentStatus.approved,
+        metadata_=tag,
+    )
+    db.add(document)
+    await db.flush()
+    paragraphs = [p.strip() for p in fixture.text.split("\n\n") if p.strip()] or [fixture.text]
+    for index, paragraph in enumerate(paragraphs):
+        db.add(DocumentChunk(document_id=document.id, chunk_index=index, text=paragraph))
+    db.add(
+        DocumentExtraction(
+            document_id=document.id,
+            model_name="employee-eval-fixture",
+            raw_output={"text": fixture.text},
+        )
+    )
+    await db.flush()
+    return document
+
+
 class LiveRunner:
     def __init__(
         self,
@@ -365,6 +433,12 @@ class LiveRunner:
                     db.add(invoice)
                     await db.flush()
                     rows[fixture.ref] = ("invoices", invoice.id, owner)
+            for fixture in case.fixtures:
+                if isinstance(fixture, DocumentFixture):
+                    owner = owner_sub if fixture.owner_scope == "run" else foreign_sub
+                    document = await _seed_document(db, fixture, owner, ns, tag)
+                    documents.append(document.id)
+                    rows[fixture.ref] = ("documents", document.id, owner)
             for fixture in case.fixtures:
                 if isinstance(fixture, RowFixture):
                     model = _model(fixture.table)

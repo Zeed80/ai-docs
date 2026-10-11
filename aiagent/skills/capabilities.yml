@@ -221,6 +221,17 @@ capabilities:
       (классификация→OCR→извлечение→граф→вектор) и поля с низкой уверенностью
       (low_confidence_significant), которые требуют проверки человеком;
       action=reprocess — перезапустить обработку документа заново.
+      Прочитать содержимое (адрес, срок, сумму, номер из договора или письма):
+      action=read с document_id — возвращает сам текст страницами
+      (filters.offset, filters.limit; next_offset — следующая страница).
+      Не запускай extract ради чтения: он заново обрабатывает документ, а для
+      уже обработанного агенту отвечает отказом.
+      Документ из системы (договор, акт, письмо) ищи здесь: action=search с
+      query (номер, название, фраза из текста), затем get/read. Реестр
+      договоров procurement — это другие записи; файл договора лежит здесь.
+      Привязать документ к счёту, поставщику или заявке — action=link с
+      document_id и body {linked_entity_type: "invoice"|"supplier"|...,
+      linked_entity_id}; пометка в самом счёте привязкой не является.
     path: /api/agent/cap/documents
     method: POST
     gate_actions: [delete, bulk_delete]
@@ -229,10 +240,10 @@ capabilities:
       properties:
         action:
           type: string
-          description: "list | get | search | ingest | classify | extract | summarize | update | delete | bulk_delete | link | queue | processing_status | reprocess"
+          description: "list | get | read | search | ingest | classify | extract | summarize | update | delete | bulk_delete | link | queue | processing_status | reprocess"
         document_id:
           type: string
-          description: "ID документа (для get, classify, extract, summarize, update, delete, link)"
+          description: "ID документа (для get, read, classify, extract, summarize, update, delete, link)"
         query:
           type: string
           description: "Текст поиска или фильтрации"

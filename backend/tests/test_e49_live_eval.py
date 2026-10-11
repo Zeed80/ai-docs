@@ -318,3 +318,61 @@ async def test_records_nobody_asked_for_fail_the_case(test_engine):
     )
     assert result.status == "failed"
     assert list(implicit.evidence["created"]) == ["purchase_requests"]  # the proposal is fine
+
+
+@pytest.mark.asyncio
+async def test_document_fixtures_are_real_readable_pdfs(test_engine):
+    """A file case starts from processed documents: the PDF text reads back,
+    chunks are searchable, a foreign document is someone else's."""
+    from app.ai.pdf_processor import extract_pdf
+    from app.db.models import Document, DocumentChunk, DocumentLink, Invoice
+    from app.storage import download_file
+
+    seen: dict = {}
+
+    async def links_the_contract(db, order_id):
+        from app.db.models import WorkOrder
+
+        order = await db.get(WorkOrder, order_id)
+        contract = await db.scalar(
+            select(Document).where(Document.file_name.like("Договор поставки ДП-77%"))
+        )
+        invoice = await db.scalar(select(Invoice).where(Invoice.invoice_number == "EV-6101"))
+        seen["text"] = extract_pdf(
+            download_file(contract.storage_path), render_pages=False
+        ).full_text
+        seen["chunks"] = list(
+            await db.scalars(
+                select(DocumentChunk.text).where(DocumentChunk.document_id == contract.id)
+            )
+        )
+        seen["owner"] = (contract.owner_sub, order.owner_key)
+        db.add(
+            DocumentLink(
+                document_id=contract.id, linked_entity_type="invoice", linked_entity_id=invoice.id
+            )
+        )
+
+    _, runner = _runner(test_engine, links_the_contract)
+    result = await runner.run_case(_cases()["files-link-contract-to-invoice"])
+    assert result.status == "passed", result.model_dump_json(indent=2)
+    assert "buh@eval-stal.example" in seen["text"]
+    assert any("buh@eval-stal.example" in chunk for chunk in seen["chunks"])
+    assert seen["owner"][0] == seen["owner"][1]
+
+
+@pytest.mark.asyncio
+async def test_a_foreign_document_belongs_to_someone_else(test_engine):
+    from app.db.models import Document, WorkOrder
+
+    owners: dict = {}
+
+    async def looks(db, order_id):
+        order = await db.get(WorkOrder, order_id)
+        doc = await db.scalar(select(Document).where(Document.file_name.like("Договор ДП-95%")))
+        owners["doc"], owners["run"] = doc.owner_sub, order.owner_key
+
+    _, runner = _runner(test_engine, looks)
+    result = await runner.run_case(_cases()["files-foreign-document"])
+    assert result.status == "passed"
+    assert owners["doc"] != owners["run"] and owners["doc"].endswith(":foreign")

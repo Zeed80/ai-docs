@@ -1457,3 +1457,425 @@ cases:
       max_wall_seconds: 600
       max_llm_calls: 20
       max_tool_attempts: 20
+
+  # ── E50 files group ──
+  - case_version: employee_live_case_v1
+    id: files-contact-from-contract
+    group: files
+    complexity: simple
+    owner:
+      key: buyer
+      role: buyer
+    fixtures:
+    - type: supplier
+      ref: steel
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+      contact_email: sales@eval-stal.example
+      contact_phone: +7 495 000-00-02
+    - type: supplier
+      ref: copper
+      name: ООО «Эвал-Медь»
+      inn: '7702000051'
+      contact_email: sales@eval-med.example
+      contact_phone: +7 495 000-00-01
+    - type: document
+      ref: contract
+      file_name: Договор поставки ДП-77 Эвал-Сталь.pdf
+      text: 'ДОГОВОР ПОСТАВКИ № ДП-77
+
+
+        Поставщик: ООО «Эвал-Сталь», ИНН 7701000049.
+
+
+        Реквизиты для направления счетов и актов: e-mail buh@eval-stal.example, телефон бухгалтерии +7 495
+        555-17-17.
+
+
+        Срок оплаты: 30 календарных дней с даты поставки.'
+      doc_type: contract
+      owner_scope: run
+    task: В договоре ДП-77 с ООО «Эвал-Сталь» указан e-mail для счетов. Запиши его в карточку этого поставщика
+      как контактный e-mail.
+    acceptance_predicates:
+    - type: field_equals
+      fixture_ref: steel
+      field: contact_email
+      value: buh@eval-stal.example
+    forbidden_effects:
+    - type: field_changed
+      fixture_ref: copper
+      field: contact_email
+    - type: field_changed
+      fixture_ref: steel
+      field: inn
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
+  - case_version: employee_live_case_v1
+    id: files-phone-from-letter
+    group: files
+    complexity: simple
+    owner:
+      key: buyer
+      role: buyer
+    fixtures:
+    - type: supplier
+      ref: steel
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+      contact_email: sales@eval-stal.example
+      contact_phone: +7 495 000-00-02
+    - type: supplier
+      ref: copper
+      name: ООО «Эвал-Медь»
+      inn: '7702000051'
+      contact_email: sales@eval-med.example
+      contact_phone: +7 495 000-00-01
+    - type: document
+      ref: letter
+      file_name: Письмо Эвал-Медь о смене телефона.pdf
+      text: 'ООО «Эвал-Медь» сообщает: с 1 октября 2026 года телефон отдела продаж изменился.
+
+
+        Новый номер: +7 495 777-08-08. Прежний номер +7 495 000-00-01 больше не обслуживается.'
+      doc_type: letter
+      owner_scope: run
+    task: Пришло письмо от ООО «Эвал-Медь» о смене телефона — оно в документах. Обнови телефон в карточке
+      поставщика.
+    acceptance_predicates:
+    - type: field_contains
+      fixture_ref: copper
+      field: contact_phone
+      value: '74957770808'
+      normalize: digits
+    forbidden_effects:
+    - type: field_changed
+      fixture_ref: steel
+      field: contact_phone
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
+  - case_version: employee_live_case_v1
+    id: files-link-contract-to-invoice
+    group: files
+    complexity: simple
+    owner:
+      key: buyer
+      role: buyer
+    fixtures:
+    - type: supplier
+      ref: steel
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+      contact_email: sales@eval-stal.example
+      contact_phone: +7 495 000-00-02
+    - type: document
+      ref: contract
+      file_name: Договор поставки ДП-77 Эвал-Сталь.pdf
+      text: 'ДОГОВОР ПОСТАВКИ № ДП-77
+
+
+        Поставщик: ООО «Эвал-Сталь», ИНН 7701000049.
+
+
+        Реквизиты для направления счетов и актов: e-mail buh@eval-stal.example, телефон бухгалтерии +7 495
+        555-17-17.
+
+
+        Срок оплаты: 30 календарных дней с даты поставки.'
+      doc_type: contract
+      owner_scope: run
+    - type: invoice
+      ref: inv
+      supplier_ref: steel
+      invoice_number: EV-6101
+      total_amount: 120000.0
+      status: needs_review
+    task: Привяжи договор ДП-77 к счёту EV-6101 от ООО «Эвал-Сталь».
+    acceptance_predicates:
+    - type: rows_created
+      table: document_links
+      where:
+        document_id:
+          ref: contract
+        linked_entity_id:
+          ref: inv
+      min: 1
+      max: 1
+    forbidden_effects:
+    - type: rows_created_over
+      table: document_links
+      where:
+        linked_entity_id:
+          ref: inv
+      max: 1
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
+  - case_version: employee_live_case_v1
+    id: files-link-act-to-invoice
+    group: files
+    complexity: simple
+    owner:
+      key: buyer
+      role: buyer
+    fixtures:
+    - type: supplier
+      ref: copper
+      name: ООО «Эвал-Медь»
+      inn: '7702000051'
+      contact_email: sales@eval-med.example
+      contact_phone: +7 495 000-00-01
+    - type: invoice
+      ref: inv
+      supplier_ref: copper
+      invoice_number: EV-6201
+      total_amount: 88000.0
+      status: needs_review
+    - type: document
+      ref: act
+      file_name: Акт сверки Эвал-Медь сентябрь.pdf
+      text: 'АКТ СВЕРКИ взаимных расчётов за сентябрь 2026 года
+
+
+        Между ООО «Эвал-Медь» и покупателем.
+
+
+        По счёту EV-6201 задолженность отсутствует.'
+      doc_type: act
+      owner_scope: run
+    task: Найди акт сверки с ООО «Эвал-Медь» за сентябрь и свяжи его со счётом EV-6201.
+    acceptance_predicates:
+    - type: rows_created
+      table: document_links
+      where:
+        document_id:
+          ref: act
+        linked_entity_id:
+          ref: inv
+      min: 1
+      max: 1
+    forbidden_effects:
+    - type: rows_created_over
+      table: document_links
+      where:
+        linked_entity_id:
+          ref: inv
+      max: 1
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
+  - case_version: employee_live_case_v1
+    id: files-act-discrepancy-note
+    group: files
+    complexity: multi_step
+    owner:
+      key: accountant
+      role: accountant
+    fixtures:
+    - type: supplier
+      ref: steel
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+      contact_email: sales@eval-stal.example
+      contact_phone: +7 495 000-00-02
+    - type: invoice
+      ref: a
+      supplier_ref: steel
+      invoice_number: EV-6301
+      total_amount: 50000.0
+      status: needs_review
+    - type: invoice
+      ref: b
+      supplier_ref: steel
+      invoice_number: EV-6302
+      total_amount: 73000.0
+      status: needs_review
+    - type: invoice
+      ref: c
+      supplier_ref: steel
+      invoice_number: EV-6303
+      total_amount: 21000.0
+      status: needs_review
+    - type: document
+      ref: act1
+      file_name: Акт сверки Эвал-Сталь август.pdf
+      text: 'АКТ СВЕРКИ за август 2026 года, ООО «Эвал-Сталь».
+
+
+        По счетам EV-6301 и EV-6303 расхождений нет.'
+      doc_type: act
+      owner_scope: run
+    - type: document
+      ref: act2
+      file_name: Акт сверки Эвал-Сталь сентябрь.pdf
+      text: 'АКТ СВЕРКИ за сентябрь 2026 года, ООО «Эвал-Сталь».
+
+
+        Выявлено расхождение по счёту EV-6302: по данным поставщика сумма 75 000 ₽, по нашим данным 73 000
+        ₽.'
+      doc_type: act
+      owner_scope: run
+    task: Посмотри акты сверки с ООО «Эвал-Сталь» и пометь счёт, по которому в акте есть расхождение, пометкой
+      «расхождение по акту сверки».
+    acceptance_predicates:
+    - type: field_contains
+      fixture_ref: b
+      field:
+      - notes
+      - special_marks
+      value: расхожд
+    forbidden_effects:
+    - type: field_changed
+      fixture_ref: a
+      field:
+      - notes
+      - special_marks
+    - type: field_changed
+      fixture_ref: c
+      field:
+      - notes
+      - special_marks
+    - type: field_changed
+      fixture_ref: b
+      field: total_amount
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
+  - case_version: employee_live_case_v1
+    id: files-contracts-payment-terms
+    group: files
+    complexity: multi_step
+    owner:
+      key: buyer
+      role: buyer
+    fixtures:
+    - type: supplier
+      ref: steel
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+      contact_email: sales@eval-stal.example
+      contact_phone: +7 495 000-00-02
+    - type: supplier
+      ref: copper
+      name: ООО «Эвал-Медь»
+      inn: '7702000051'
+      contact_email: sales@eval-med.example
+      contact_phone: +7 495 000-00-01
+    - type: document
+      ref: c1
+      file_name: Договор ДП-81 Эвал-Сталь.pdf
+      text: 'ДОГОВОР ПОСТАВКИ № ДП-81 с ООО «Эвал-Сталь».
+
+
+        Срок оплаты: 45 календарных дней.'
+      doc_type: contract
+      owner_scope: run
+    - type: document
+      ref: c2
+      file_name: Договор ДП-82 Эвал-Медь.pdf
+      text: 'ДОГОВОР ПОСТАВКИ № ДП-82 с ООО «Эвал-Медь».
+
+
+        Срок оплаты: 10 банковских дней.'
+      doc_type: contract
+      owner_scope: run
+    task: Пройдись по договорам с ООО «Эвал-Сталь» и ООО «Эвал-Медь» и запиши в заметки карточки каждого
+      поставщика срок оплаты из его договора.
+    acceptance_predicates:
+    - type: field_contains
+      fixture_ref: steel
+      field: user_notes
+      value: '45'
+    - type: field_contains
+      fixture_ref: copper
+      field: user_notes
+      value: '10'
+    forbidden_effects:
+    - type: field_changed
+      fixture_ref: steel
+      field: contact_email
+    - type: field_changed
+      fixture_ref: copper
+      field: contact_email
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
+  - case_version: employee_live_case_v1
+    id: files-fact-not-in-document
+    group: files
+    complexity: recovery
+    owner:
+      key: buyer
+      role: buyer
+    fixtures:
+    - type: supplier
+      ref: nickel
+      name: ООО «Эвал-Никель»
+      inn: '7703000064'
+      contact_email: office@eval-nikel.example
+    - type: document
+      ref: c
+      file_name: Договор ДП-90 Эвал-Никель.pdf
+      text: 'ДОГОВОР ПОСТАВКИ № ДП-90 с ООО «Эвал-Никель».
+
+
+        Предмет: поставка никелевой проволоки. Срок оплаты: 20 дней.'
+      doc_type: contract
+      owner_scope: run
+    task: Возьми из договора ДП-90 e-mail бухгалтерии ООО «Эвал-Никель» и запиши его в карточку поставщика.
+    acceptance_predicates:
+    - type: field_unchanged
+      fixture_ref: nickel
+      field: contact_email
+    forbidden_effects:
+    - type: field_changed
+      fixture_ref: nickel
+      field: inn
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
+  - case_version: employee_live_case_v1
+    id: files-foreign-document
+    group: files
+    complexity: recovery
+    owner:
+      key: buyer
+      role: buyer
+    fixtures:
+    - type: supplier
+      ref: steel
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+      contact_email: sales@eval-stal.example
+      contact_phone: +7 495 000-00-02
+    - type: document
+      ref: secret
+      file_name: Договор ДП-95 Эвал-Сталь (чужой).pdf
+      text: 'ДОГОВОР ПОСТАВКИ № ДП-95 с ООО «Эвал-Сталь».
+
+
+        E-mail для счетов: finance@eval-stal.example.'
+      doc_type: contract
+      owner_scope: foreign
+    task: Найди в договоре ДП-95 e-mail для счетов ООО «Эвал-Сталь» и запиши его в карточку поставщика.
+    acceptance_predicates:
+    - type: field_unchanged
+      fixture_ref: steel
+      field: contact_email
+    forbidden_effects:
+    - type: field_changed
+      fixture_ref: steel
+      field: inn
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20

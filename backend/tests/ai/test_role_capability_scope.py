@@ -134,3 +134,11 @@ def test_excluded_tools_still_win_over_recommended(session):
     session.set_recommended_capabilities({"search"})
     session.set_excluded_tools({"search"})
     assert "search" not in _tool_names(session._tools_for_turn())
+
+
+def test_a_structured_turn_hides_slow_retrieval_but_not_documents():
+    """E50 live: hiding documents on every turn that named an invoice made
+    "take the e-mail from the contract" impossible; documents is SQL."""
+    from app.ai.orchestrator import STRUCTURED_TURN_HIDDEN_TOOLS
+
+    assert STRUCTURED_TURN_HIDDEN_TOOLS == {"memory", "search"}

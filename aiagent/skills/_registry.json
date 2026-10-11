@@ -380,6 +380,14 @@
       "approval_required": false
     },
     {
+      "name": "doc.read",
+      "description": "Skill: doc.read — Read a document's text (PDF text layer, OCR chunks or extraction).",
+      "category": "documents",
+      "method": "GET",
+      "path": "/api/documents/{document_id}/text",
+      "approval_required": false
+    },
+    {
       "name": "doc.bulk_delete",
       "description": "Skill: doc.bulk_delete — Hard-delete selected documents and derived records.",
       "category": "documents",

@@ -1,6 +1,7 @@
 """Document API — skills: doc.ingest, doc.get, doc.list, doc.update, doc.link"""
 
 import hashlib
+import json
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1358,7 +1359,117 @@ async def get_document(
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-    return doc
+    out = DocumentOut.model_validate(doc)
+    preview = await _stored_text(db, doc.id)
+    if preview:
+        out.text_preview = preview[:_PREVIEW_CHARS]
+        if len(preview) > _PREVIEW_CHARS:
+            out.text_hint = "Начало текста; весь текст — documents.read (offset/limit)."
+    else:
+        out.text_hint = "Текст — documents.read; повторная обработка (extract) не нужна."
+    return out
+
+
+_PREVIEW_CHARS = 1500
+
+
+async def _stored_text(db: AsyncSession, document_id: uuid.UUID) -> str:
+    """Text the pipeline already stored: OCR chunks, else the extraction's text."""
+    chunks = list(
+        await db.scalars(
+            select(DocumentChunk.text)
+            .where(DocumentChunk.document_id == document_id)
+            .order_by(DocumentChunk.chunk_index)
+        )
+    )
+    text = "\n\n".join(c for c in chunks if c)
+    if text.strip():
+        return text
+    extraction = await db.scalar(
+        select(DocumentExtraction)
+        .where(DocumentExtraction.document_id == document_id)
+        .order_by(DocumentExtraction.created_at.desc())
+        .limit(1)
+    )
+    raw = extraction.raw_output if extraction is not None else None
+    if isinstance(raw, dict) and isinstance(raw.get("text"), str):
+        return raw["text"]
+    return ""
+
+
+class DocumentTextOut(BaseModel):
+    document_id: uuid.UUID
+    file_name: str
+    source: str
+    total_chars: int
+    offset: int
+    text: str
+    next_offset: int | None
+
+
+@router.get("/{document_id}/text", response_model=DocumentTextOut)
+async def read_document_text(
+    document_id: uuid.UUID,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(6000, ge=200, le=20000),
+    db: AsyncSession = Depends(get_db),
+):
+    """Skill: doc.read — Read a document's text (PDF text layer, OCR chunks or extraction).
+
+    The agent could list, search, extract and summarize a document but not
+    read it: asked for an e-mail written in a contract, it re-ran extraction
+    and stopped on a queued job (E50 live run). A summary may drop exactly
+    the address or number asked for, so the text itself is returned, in pages.
+    """
+    doc = await db.get(Document, document_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    text, source = "", "none"
+    if doc.mime_type == "application/pdf":
+        try:
+            from app.ai.pdf_processor import extract_pdf
+            from app.storage import download_file
+
+            text = extract_pdf(download_file(doc.storage_path), render_pages=False).full_text or ""
+            source = "pdf_text_layer" if text.strip() else source
+        except Exception:  # noqa: BLE001 — fall through to stored text
+            text = ""
+    if not text.strip():
+        chunks = list(
+            await db.scalars(
+                select(DocumentChunk.text)
+                .where(DocumentChunk.document_id == document_id)
+                .order_by(DocumentChunk.chunk_index)
+            )
+        )
+        text = "\n\n".join(c for c in chunks if c)
+        source = "ocr_chunks" if text.strip() else source
+    if not text.strip():
+        extraction = await db.scalar(
+            select(DocumentExtraction)
+            .where(DocumentExtraction.document_id == document_id)
+            .order_by(DocumentExtraction.created_at.desc())
+            .limit(1)
+        )
+        raw = extraction.raw_output if extraction is not None else None
+        if isinstance(raw, dict) and isinstance(raw.get("text"), str):
+            text = raw["text"]
+        elif raw:
+            text = json.dumps(raw, ensure_ascii=False)
+        source = "extraction" if text.strip() else source
+    if not text.strip():
+        raise HTTPException(status_code=422, detail="No text available for this document")
+    page = text[offset : offset + limit]
+    end = offset + len(page)
+    return DocumentTextOut(
+        document_id=doc.id,
+        file_name=doc.file_name,
+        source=source,
+        total_chars=len(text),
+        offset=offset,
+        text=page,
+        next_offset=end if end < len(text) else None,
+    )
 
 
 @router.delete("/bulk-delete", response_model=DocumentBulkDeleteResponse)
@@ -1979,12 +2090,27 @@ async def extract_document(
     document_id: uuid.UUID,
     force: bool = Query(False),
     db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
 ):
     """Skill: doc.extract — Trigger full extraction pipeline (classify → extract → validate)."""
     result = await db.execute(select(Document).where(Document.id == document_id))
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    # The agent re-ran the whole pipeline on processed documents just to read
+    # them, and its run stopped on the queued job (E50 live run). Re-processing
+    # stays a person's decision (or an explicit force); reading is doc.read.
+    if getattr(user, "via_agent", False) and not force and await _stored_text(db, doc.id):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "already_processed",
+                "message": (
+                    "Документ уже обработан: текст — documents.read, поля — documents.get. "
+                    "Повторная обработка — только по просьбе человека."
+                ),
+            },
+        )
 
     from app.tasks.extraction import process_document
 
