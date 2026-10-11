@@ -646,6 +646,9 @@ async def dispatch_capability(capability_name: str, request: Request) -> JSONRes
 
     await _audit_tool_call(capability_name, action, reason, request)
 
+    if capability_name == "computer_use":
+        body = _bind_computer_use(action, path_tpl, body, request)
+
     result = await _proxy(
         method,
         path_tpl,
@@ -657,6 +660,46 @@ async def dispatch_capability(capability_name: str, request: Request) -> JSONRes
         extra_headers=_relayed_handoff(capability_name, action, request),
     )
     return JSONResponse(content=result)
+
+
+_COMPUTER_USE_FIELDS = frozenset({"work_order_id", "step_id", "target", "arguments"})
+
+
+def _bind_computer_use(action: str, path_tpl: str, body: dict, request: Request) -> dict:
+    """Shape a computer_use call for its broker and bind it to the real order.
+
+    Found live (E50): the model does not know its work order and invented one
+    ("wo-eval-stal-email"), so every grant-bound browser call 404'd or 422'd;
+    and the shared /execute endpoint never received which action it was. The
+    order and step come from the signed effect fence the executor sends with
+    each call — never from the model. Action-specific fields the flattening
+    spread over the top level are gathered back into ``body``.
+    """
+    from app.auth.effect_fence import (
+        EFFECT_FENCE_HEADER,
+        EffectFenceRejected,
+        verify_effect_fence,
+    )
+
+    shaped = dict(body)
+    token = request.headers.get(EFFECT_FENCE_HEADER)
+    if token:
+        try:
+            fence = verify_effect_fence(token)
+        except EffectFenceRejected:
+            fence = None
+        if fence is not None:
+            shaped["work_order_id"] = str(fence.work_order_id)
+            shaped["step_id"] = str(fence.step_id)
+    if path_tpl != "/api/computer-use/execute":
+        return shaped
+    arguments = shaped.pop("arguments", None)
+    extra = {k: shaped.pop(k) for k in list(shaped) if k not in _COMPUTER_USE_FIELDS}
+    return {
+        **shaped,
+        "action": action,
+        "body": {**extra, **(arguments if isinstance(arguments, dict) else {})},
+    }
 
 
 def _relayed_handoff(capability_name: str, action: str, request: Request) -> dict[str, str]:

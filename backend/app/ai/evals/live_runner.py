@@ -636,6 +636,8 @@ class LiveRunner:
         async with self._factory()() as db:
             intake = await submit_agent_intake(db, identity=identity, request=request)
         order_id = intake.order.id
+        if case.browser_grant is not None:
+            await self._grant_browser(case, world, order_id)
         deadline = time.monotonic() + case.budget.max_wall_seconds
         while time.monotonic() < deadline:
             async with self._factory()() as db:
@@ -659,6 +661,29 @@ class LiveRunner:
             except TimeoutError:
                 break
         return order_id
+
+    async def _grant_browser(
+        self, case: LiveEmployeeCase, world: dict[str, Any], order_id: uuid.UUID
+    ) -> None:
+        from app.db.models import ComputerUseGrant
+
+        grant = case.browser_grant
+        async with self._factory()() as db:
+            db.add(
+                ComputerUseGrant(
+                    work_order_id=order_id,
+                    granted_to=world["owner_sub"],
+                    granted_by=f"{world['owner_sub']}:eval-fixture",
+                    actions=list(grant.actions),
+                    allowed_hosts=list(grant.allowed_hosts),
+                    allowed_roots=[],
+                    allowed_commands=[],
+                    max_actions=grant.max_actions,
+                    expires_at=datetime.now(UTC) + timedelta(hours=1),
+                    reason=f"employee eval case {case.id}",
+                )
+            )
+            await db.commit()
 
     async def _evidence(self, order_id: uuid.UUID | None) -> dict[str, Any]:
         from app.db.agent_runtime_models import ChatLogicalAction, DurableChatRun

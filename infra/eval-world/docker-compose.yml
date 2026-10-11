@@ -29,9 +29,9 @@ x-eval-env: &eval-env
   MINIO_BUCKET: documents
   QDRANT_URL: http://eval-qdrant:6333
   QDRANT_API_KEY: ""
-  # Nothing listens here: the browser and web search stay unavailable.
-  WEB_BROWSER_URL: http://eval-unavailable:8093
-  EGRESS_PROXY_URL: http://eval-unavailable:8094
+  # The world's own browser; it reaches only the world's test sites.
+  WEB_BROWSER_URL: http://eval-browser:8093
+  EGRESS_PROXY_URL: http://eval-browser:8094
   WEB_SEARCH_ENDPOINT: http://eval-unavailable:8080/search
   OLLAMA_URL: http://host-gateway:11434
   STRATA_URL: ${EVAL_STRATA_URL:-http://host-gateway:8090}
@@ -126,7 +126,7 @@ services:
   # Document processing (ingest, extraction) in the world, as in the stack.
   eval-worker:
     image: infra-celery-worker:latest
-    command: celery -A app.tasks.celery_app worker -l info -c 2 -Q celery,extraction,ingest,scheduler
+    command: celery -A app.tasks.celery_app worker -l info -c 2 -Q celery,extraction,ingest,scheduler,catalog,catalog_render
     environment:
       <<: *eval-env
       SKIP_DB_MIGRATE: "1"
@@ -139,6 +139,32 @@ services:
         condition: service_started
     networks: [eval]
 
+  # The browser: the stack's image and egress policy, with one explicit
+  # exception — the world's own subnet, where the test sites live.
+  eval-browser:
+    image: infra-web-browser:latest
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 2g
+    shm_size: 1g
+    environment:
+      BROWSER_EGRESS_PROXY_HOST: 0.0.0.0
+      BROWSER_EGRESS_PROXY_PORT: "8094"
+      BROWSER_EGRESS_ALLOW_CIDRS: 172.31.250.0/24
+    networks: [eval]
+
+  # Static test sites (infra/eval-world/sites): supplier pages with contacts,
+  # prices, links, a page without the asked fact and one carrying an
+  # injected instruction.
+  eval-sites:
+    image: nginx:alpine
+    volumes:
+      - ./sites:/usr/share/nginx/html:ro
+    networks: [eval]
+
 networks:
   eval:
     name: aiw-eval
+    ipam:
+      config:
+        - subnet: 172.31.250.0/24

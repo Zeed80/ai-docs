@@ -1075,3 +1075,20 @@ async def test_ingest_status_does_not_report_catalogs_that_were_deleted(
         assert "устарела" in data["sources"][0]["message"]
     finally:
         clear_source_statuses(str(supplier.id))
+
+
+@pytest.mark.asyncio
+async def test_a_counterparty_id_given_as_supplier_id_resolves(client, db_session):
+    """E50 live: suppliers.search answers with the Party id; passed on as the
+    catalog supplier_id it was "not found" and the crawl never started."""
+    from app.db.models import Party
+
+    party = Party(name="ООО «Эвал-Медь»", inn="7702000051")
+    db_session.add(party)
+    await db_session.commit()
+    resp = await client.post(
+        "/api/tool-catalog/resolve-supplier", json={"supplier_id": str(party.id)}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["resolved"] is True
+    assert resp.json()["party_id"] == str(party.id)

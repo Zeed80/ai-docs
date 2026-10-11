@@ -226,8 +226,13 @@ async def _heartbeat_step(
         except TimeoutError:
             pass
         async with factory() as db:
-            step = await db.get(WorkStep, step_id, with_for_update=True)
-            attempt = await db.get(WorkStepAttempt, attempt_id, with_for_update=True)
+            # FOR NO KEY UPDATE, not FOR UPDATE: the checkpoint writer locks
+            # the order and then inserts a journal row whose foreign key needs
+            # KEY SHARE on this attempt. FOR UPDATE blocked that while this
+            # heartbeat waited for the order — a deadlock (E50 live run);
+            # NO KEY UPDATE lets the key check pass and breaks the cycle.
+            step = await db.get(WorkStep, step_id, with_for_update={"key_share": True})
+            attempt = await db.get(WorkStepAttempt, attempt_id, with_for_update={"key_share": True})
             # Ф4-re (AGENT_AUTONOMY_ROADMAP.md): found live on the
             # persistence re-verification pilot — a real Postgres deadlock
             # among 4 concurrently executing sibling steps of the same

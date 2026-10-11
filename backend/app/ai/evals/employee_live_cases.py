@@ -241,6 +241,15 @@ LiveForbidden = Annotated[
 ]
 
 
+class BrowserGrant(_Strict):
+    """A computer-use grant the owner gives this run's work order (made after
+    intake, since a grant belongs to an order). Hosts are the world's sites."""
+
+    actions: tuple[str, ...] = Field(min_length=1, max_length=20)
+    allowed_hosts: tuple[str, ...] = Field(min_length=1, max_length=10)
+    max_actions: int = Field(default=20, ge=1, le=200)
+
+
 class LiveBudget(_Strict):
     max_wall_seconds: int = Field(ge=30, le=3600)
     max_llm_calls: int = Field(ge=1, le=200)
@@ -271,6 +280,7 @@ class LiveEmployeeCase(_Strict):
     # Proposed agent tasks are always allowed: proposing is the initiative
     # the agent is asked to show.
     may_create: tuple[str, ...] = ()
+    browser_grant: BrowserGrant | None = None
 
     @model_validator(mode="after")
     def _references(self) -> LiveEmployeeCase:

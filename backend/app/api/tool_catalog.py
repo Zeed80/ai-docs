@@ -1211,8 +1211,14 @@ async def _resolve_supplier(
 
     if ref.supplier_id:
         supplier = await db.get(ToolSupplier, ref.supplier_id)
-        if not supplier:
+        if not supplier and await db.get(Party, ref.supplier_id) is not None:
+            # suppliers.search/get answer with the counterparty's id; taken for
+            # a catalog supplier's id it was "not found" and the crawl never
+            # started (E50 live run). It names the same supplier.
+            ref = ref.model_copy(update={"supplier_id": None, "party_id": ref.supplier_id})
+        elif not supplier:
             raise HTTPException(status_code=404, detail="Поставщик каталога не найден")
+    if ref.supplier_id and supplier:
         return supplier, ResolveSupplierResult(
             resolved=True,
             tool_supplier_id=supplier.id,

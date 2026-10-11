@@ -57,10 +57,10 @@ capabilities:
           description: "browser_fetch | desktop_snapshot | desktop_start | desktop_observe | desktop_prepare_submit | desktop_click | desktop_type | desktop_read | desktop_navigate | desktop_tabs | desktop_fill_secret | desktop_upload | desktop_downloads | desktop_save_download | desktop_close | file_read | file_write | shell | web_discover"
         work_order_id:
           type: string
-          description: "ID поручения, к которому привязан grant"
+          description: "Не указывай: поручение и шаг подставляет система из текущей работы"
         step_id:
           type: string
-          description: "ID текущего шага для аудита"
+          description: "Не указывай: подставляется системой"
         target:
           type: string
           description: "URL, абсолютный путь или команда argv (не используется для web_discover — см. queries)"
