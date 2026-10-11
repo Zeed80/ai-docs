@@ -128,6 +128,9 @@ TABLES: dict[str, tuple[str, tuple[str, ...]]] = {
         "DocumentLink",
         ("document_id", "linked_entity_type", "linked_entity_id", "link_type"),
     ),
+    # The broker's audit of browser/file actions: checked by predicates, never
+    # counted as a record the employee created (every call writes one).
+    "computer_use_actions": ("ComputerUseAction", ("action", "target", "status")),
     "reminders": (
         "Reminder",
         ("remind_at", "message", "entity_type", "entity_id", "user_id", "is_sent"),
@@ -137,6 +140,7 @@ TABLES: dict[str, tuple[str, tuple[str, ...]]] = {
         ("title", "event_date", "event_type", "entity_type", "entity_id"),
     ),
 }
+AUDIT_TABLES = frozenset({"computer_use_actions"})
 _FIXTURE_TABLE = {"supplier": "parties", "invoice": "invoices", "document": "documents"}
 # Columns that name a row in words: cleared on neutralization so the next run
 # cannot find this run's rows by what its task says.
@@ -489,6 +493,8 @@ class LiveRunner:
         found: dict[str, Any] = {"changed": {}, "created": {}}
         async with self._factory()() as db:
             for table in TABLES:
+                if table in AUDIT_TABLES:
+                    continue
                 model = _model(table)
                 rows = (
                     await db.execute(

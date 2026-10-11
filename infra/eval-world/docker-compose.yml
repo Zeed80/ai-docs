@@ -160,7 +160,10 @@ services:
     image: nginx:alpine
     volumes:
       - ./sites:/usr/share/nginx/html:ro
-    networks: [eval]
+    networks:
+      eval:
+        # The same sites under a host no case grants: a grant limits hosts.
+        aliases: [eval-other]
 
 networks:
   eval:
