@@ -131,7 +131,7 @@ SIGKILL воркера, reclaim разбирает вызов в полёте п
 | P4 Knowledge | E38–E42, E44 | ACL, SQL/graph/vector enforcement, versions и revoke | PLANNED |
 | P5 Legacy migration | E43 | Только доказанный перенос старой общей памяти | PLANNED |
 | P6 UX and operations | E45–E47 | Work UI, permission builder, cost/operations signals | PLANNED |
-| P7 Retired surfaces | E48 | Удаление только после доказанной миграции callers | DONE в коде (2026-10-10), выкладка ждёт |
+| P7 Retired surfaces | E48 | Удаление только после доказанной миграции callers | DONE, выложено 2026-10-11 |
 | P8 Evaluation and release | E49–E52 | Изолированный corpus, security/chaos и решение о rollout; принят только R0 | IN_PROGRESS |
 
 E00–E20 остаются историческим baseline. Ни одна карточка не потеряна и не получила
