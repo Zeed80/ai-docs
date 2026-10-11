@@ -28,7 +28,7 @@ router = APIRouter()
 
 class ComputerActionIn(BaseModel):
     action: str = Field(
-        pattern="^(browser_fetch|desktop_snapshot|desktop_start|desktop_observe|desktop_prepare_submit|desktop_click|desktop_type|desktop_read|desktop_navigate|desktop_tabs|desktop_fill_secret|desktop_upload|desktop_downloads|desktop_save_download|desktop_close|file_read|file_write|shell)$"
+        pattern="^(browser_fetch|desktop_snapshot|desktop_start|desktop_observe|desktop_prepare_submit|desktop_click|desktop_type|desktop_read|desktop_navigate|desktop_tabs|desktop_fill_secret|desktop_upload|desktop_downloads|desktop_save_download|desktop_close|desktop_handoff|file_read|file_write|shell)$"
     )
     work_order_id: uuid.UUID
     step_id: uuid.UUID | None = None
@@ -257,6 +257,7 @@ async def _perform(
                 "tab": body.get("tab"),
                 "card": body.get("card"),
                 "wait_ms": min(int(body.get("wait_ms", 0)), 15000),
+                "reason": str(body.get("reason") or "")[:500] or None,
             }
         )
         if action == "desktop_click" and not isinstance(body.get("card"), dict):
@@ -288,6 +289,16 @@ async def _perform(
             )
         if action == "desktop_save_download":
             result = await _register_download(result, grant)
+        if action == "desktop_handoff":
+            # T3: the owner continues in the same session; the agent waits.
+            result["owner_url"] = (
+                f"/work-orders/browser?work_order_id={grant.work_order_id}&session={target}"
+            )
+            result["next"] = (
+                "Сессия у владельца. Попроси его открыть owner_url, сделать нужное "
+                "(код MFA, CAPTCHA) и вернуть сессию; до возврата действия в ней "
+                "отклоняются. После возврата начни с desktop_observe."
+            )
         screenshot = result.get("screenshot_b64")
         evidence = {
             "url": result.get("url"),
@@ -358,7 +369,11 @@ async def execute_computer_action(
             .with_for_update()
         )
     ).scalar_one_or_none()
-    if grant is None or body.action not in set(grant.actions or []):
+    allowed = set(grant.actions or []) if grant is not None else set()
+    if "desktop_start" in allowed:
+        # T3: a session the agent may start, it may hand to its owner.
+        allowed.add("desktop_handoff")
+    if grant is None or body.action not in allowed:
         raise HTTPException(
             status_code=423, detail="A matching active computer-use grant is required"
         )
@@ -395,6 +410,122 @@ async def execute_computer_action(
     audit.finished_at = datetime.now(UTC)
     await db.commit()
     return {"action_id": str(audit.id), "result": result, "evidence": evidence}
+
+
+# ── T3: the owner takes over a browser session (MFA, CAPTCHA) ───────────────
+#
+# The agent hands a session over with desktop_handoff; the person sees it and
+# acts in it by coordinates and keys, as a person would. Only the work
+# order's owner, never the agent (via_agent), and every input is journaled as
+# the owner's — what was typed is not stored, only its length.
+
+
+class HumanSessionIn(BaseModel):
+    work_order_id: uuid.UUID
+    op: str = Field(pattern="^(view|take|click|type|key|return)$")
+    x: int | None = Field(default=None, ge=0, le=10000)
+    y: int | None = Field(default=None, ge=0, le=10000)
+    text: str | None = Field(default=None, max_length=500)
+    key: str | None = Field(default=None, max_length=20)
+
+
+async def _owner_order(db: AsyncSession, work_order_id: uuid.UUID, user: UserInfo) -> WorkOrder:
+    if user.via_agent:
+        raise HTTPException(403, "The browser session is handed to a person, not the agent")
+    order = await db.get(WorkOrder, work_order_id)
+    if order is None or order.owner_key != user.sub:
+        raise HTTPException(status_code=404, detail="Work order not found")
+    return order
+
+
+async def _browser_call(path: str, payload: dict) -> dict:
+    from app.ai.web_search_config import get_config
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        response = await client.post(get_config().browser_url.rstrip("/") + path, json=payload)
+    response.raise_for_status()
+    return response.json()
+
+
+@router.get("/sessions")
+async def list_owner_sessions(
+    work_order_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_effective_user),
+) -> dict:
+    """The work order's live browser sessions and which ones wait for the owner."""
+    order = await _owner_order(db, work_order_id, user)
+    result = await _browser_call("/desktop/list-owner", {"owner": browser_session_owner(order.id)})
+    return {"sessions": result.get("sessions") or []}
+
+
+@router.post("/sessions/{session_id}/human")
+async def human_session_input(
+    session_id: str,
+    body: HumanSessionIn,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_effective_user),
+) -> dict:
+    """The owner looks at the session or acts in it once it is handed over."""
+    order = await _owner_order(db, body.work_order_id, user)
+    payload = {
+        "session_id": session_id,
+        "owner": browser_session_owner(order.id),
+        **body.model_dump(exclude={"work_order_id"}, exclude_none=True),
+    }
+    if body.op == "view":
+        result = await _browser_call("/desktop/human", payload)
+        if not result.get("ok"):
+            raise HTTPException(409, result.get("error") or "Browser session unavailable")
+        return result
+    grant = await db.scalar(
+        select(ComputerUseGrant)
+        .where(ComputerUseGrant.work_order_id == order.id)
+        .order_by(ComputerUseGrant.created_at.desc())
+        .limit(1)
+    )
+    if grant is None:
+        raise HTTPException(404, "Browser session not found")
+    arguments: dict[str, Any] = {"by": "owner"}
+    if body.op == "click":
+        arguments.update(x=body.x, y=body.y)
+    elif body.op == "type":
+        arguments["chars"] = len(body.text or "")
+    elif body.op == "key":
+        arguments["key"] = body.key
+    now = datetime.now(UTC)
+    audit = ComputerUseAction(
+        work_order_id=order.id,
+        grant_id=grant.id,
+        action=f"owner_{body.op}",
+        target=session_id,
+        arguments=arguments,
+        action_digest=hashlib.sha256(
+            json.dumps({"op": body.op, "session": session_id, **arguments}, sort_keys=True).encode()
+        ).hexdigest(),
+        status="running",
+        started_at=now,
+    )
+    db.add(audit)
+    await db.commit()
+    try:
+        result = await _browser_call("/desktop/human", payload)
+    except Exception as exc:
+        await db.refresh(audit, with_for_update=True)
+        audit.status = "failed"
+        audit.error = {"type": type(exc).__name__}
+        audit.finished_at = datetime.now(UTC)
+        await db.commit()
+        raise HTTPException(502, "Browser service unavailable") from exc
+    await db.refresh(audit, with_for_update=True)
+    audit.status = "succeeded" if result.get("ok") else "failed"
+    audit.error = None if result.get("ok") else {"code": result.get("error")}
+    audit.result = {k: result.get(k) for k in ("url", "handoff", "outside_allowlist")}
+    audit.finished_at = datetime.now(UTC)
+    await db.commit()
+    if not result.get("ok"):
+        raise HTTPException(409, result.get("error") or "Browser action failed")
+    return result
 
 
 # ── web_discover — Ф2.A (AGENT_AUTONOMY_ROADMAP.md) ─────────────────────────

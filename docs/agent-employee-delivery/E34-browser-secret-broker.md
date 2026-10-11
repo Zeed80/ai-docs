@@ -32,13 +32,35 @@
 
 ## Вход с MFA и CAPTCHA
 
-CAPTCHA не обходится. Код MFA агент не вводит и не подбирает — просит владельца.
-**Не сделано (в плане):** передача живой сессии человеку (видеть страницу и
-ввести код в ту же сессию) и экран управления секретами в интерфейсе — сейчас
-секреты заводятся через API.
+CAPTCHA не обходится. Код MFA агент не вводит и не подбирает — передаёт сессию
+владельцу (T3, 2026-10-12):
+
+- `computer_use.desktop_handoff {reason}` — сессия переходит к владельцу заказа;
+  доступно любому гранту с `desktop_start`. Ответ даёт `owner_url`
+  (`/work-orders/browser?work_order_id=…&session=…`). Пока сессия у владельца,
+  любое действие агента в ней — `session_with_owner`.
+- Владелец (человек; вызов от агента — 403, чужой заказ — 404):
+  `GET /api/computer-use/sessions?work_order_id=` и
+  `POST /api/computer-use/sessions/{id}/human {op: view|take|click|type|key|return}`.
+  Ввод — как у человека: щелчок по координатам снимка, набор с клавиатуры,
+  клавиши Enter/Tab/Shift+Tab/Backspace/Escape/стрелки/Space. Действовать
+  можно только в переданной сессии (`take` — взять самому).
+- Набранное владельцем (от 4 символов) вычищается из ответов агенту, как
+  секрет: код MFA до модели не доходит. В журнале (`computer_use_actions`,
+  `owner_<op>`) — «ввёл владелец» и длина, без текста.
+- `return`: агентский `observe` до передачи становится устаревшим
+  (`stale_revision`), нужен новый; если страница вне allowlist гранта, сессия
+  закрывается, а не возвращается агенту.
+- Экран: «Браузер сотрудника» — живой снимок раз в 3 с, щелчок по снимку,
+  поле ввода, клавиши, «Взять сессию» / «Вернуть сотруднику». Секреты —
+  «Настройки → Браузер».
+
+Остаток: снимок, а не поток — на сайтах с быстрой анимацией владелец видит
+кадр с задержкой до 3 с.
 
 ## Проверки
 
-Сервис, настоящий Chromium (4 теста брокера, всего 37):
+Сервис, настоящий Chromium (4 теста брокера, 3 — передачи, всего 54):
 `docker run --rm -v $PWD/infra/web-browser:/app -w /app --user root infra-web-browser sh -c "pip install -q pytest httpx; python -m pytest tests -q"`.
-Бэкенд: `python3 -m pytest backend/tests/test_browser_secrets.py -q`.
+Бэкенд: `python3 -m pytest backend/tests/test_browser_secrets.py backend/tests/test_t3_browser_handoff.py -q`.
+UI: `PLAYWRIGHT_MOCK_API=1 npx playwright test tests/e2e/browser-handoff.spec.ts tests/e2e/browser-secrets.spec.ts --project=chromium`.

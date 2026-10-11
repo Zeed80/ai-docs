@@ -73,7 +73,7 @@ infra/             — docker-compose, traefik, scripts
 - Язык общения и документации: **русский**
 - Код, комментарии в коде, имена переменных: **английский**
 - Pydantic schemas = единый источник правды для AiAgent skills (auto-gen YAML)
-- 23 capability (21 маршрутизируемая + vault/mcp), 332 действия, 41 gate_action
+- 23 capability (21 маршрутизируемая + vault/mcp), 333 действия, 41 gate_action
 - Все endpoints = AiAgent tools (через `infra/scripts/generate-skill-registry.py`)
 
 ## Команды (целевые)
@@ -129,12 +129,13 @@ make agent-test   # AiAgent scenarios на mock skills
 - **Живая приёмка сотрудника (E49–E50)**: `make employee-live-eval` поднимает изолированный мир `infra/eval-world` (свои Postgres, Redis, MinIO, Qdrant на tmpfs, CPU-узел Ollama, воркер, браузер и тестовые сайты `eval-sites`; своя сеть, боевые хранилища не резолвятся, наружу только модель), переносит настройку модели из боя, гонит `app/ai/evals/data/employee_live_v1.yaml` и удаляет мир. Вердикт — по БД, текст ответа не учитывается; каждая запись вне фикстур кейса — провал; недоступность модели — `error`, а не провал. Проверка: `python3 -m pytest backend/tests/test_e49_live_eval.py -q`
 - **Цель записи и повторы (T5, E50)**: изменение записи, которую модель выбрала сама (похожая, одна из нескольких), идёт с `target_match: "guess"` и ждёт подтверждения владельца; отметка не доходит до получателя. Повторное создание в одном ходе (то же действие, те же id, моменты и адреса; создание — это `write` с POST без параметров пути по каталогу) не отправляется: ответ `already_done` с id. Напоминание принадлежит создателю, чужие не видны.
 - **Скрипты агента (E26–E30, включено 2026-10-10)**: шаг `script` durable-работы запускает Python в одноразовом контейнере под gVisor (`runsc`) через `agent-script-supervisor` (профиль compose `scripts`, единственный с Docker socket): без сети, корень только для чтения, лимиты; вход — `code` и `data` → `data.json`, выход — stdout и файлы `/tmp/out` как артефакты. Флажок `SCRIPT_RUNS_ENABLED`; выключен — план со `script` отклоняется. Проверка: `python3 -m pytest backend/tests/test_script_runs.py -q`, `cd infra/agent-script-supervisor && AIW_TEST_OCI_RUNTIME=runsc python3 -m pytest tests -q`
+- **Передача браузера владельцу (T3)**: `computer_use.desktop_handoff {reason}` отдаёт живую сессию владельцу заказа для MFA/CAPTCHA (ответ — `owner_url`); пока она у владельца, действия агента — `session_with_owner`. Владелец (не агент) на «Браузер сотрудника» (`/work-orders/browser`) видит снимок и действует щелчком и клавиатурой (`/api/computer-use/sessions/{id}/human`); набранное вычищается из ответов агенту, в журнале `owner_<op>` без текста; после возврата нужен новый observe, страница вне allowlist закрывает сессию. Пароли — «Настройки → Браузер». Проверка: `python3 -m pytest backend/tests/test_t3_browser_handoff.py -q`, тесты сервиса — в `infra/web-browser/tests/test_human_handoff.py`
 - **Генерация скиллов снята (E48)**: builder, evolver, песочница, кэш скиллов и контейнер `skill-runner` удалены; `/generated-skill*`, `/skill-evolution/*`, `capabilities/{id}/sandbox-apply|decide|promote` отвечают 410 и скрыты из схемы. `POST /capabilities/propose` — только отчёт о нехватке. Код агента исполняется лишь шагом `script` (выше). Проверка: `python3 -m pytest backend/tests/test_e48_retired_surfaces.py -q`
 - **AgentCron**: beat-задача `agent.cron_dispatch` создаёт `WorkOrder` и совместимый `AgentTask`; выполнение идёт только через durable runtime. `AgentTeam` пока остаётся registry.
 
 ## Skills и endpoints
 
-23 capability, 332 действия. Каждое действие = FastAPI endpoint, описанный Pydantic-схемой. Скрипт `infra/scripts/generate-skill-registry.py` генерирует YAML для AiAgent из Pydantic-схем автоматически. Pydantic схемы = единственный источник правды для AiAgent skills.
+23 capability, 333 действия. Каждое действие = FastAPI endpoint, описанный Pydantic-схемой. Скрипт `infra/scripts/generate-skill-registry.py` генерирует YAML для AiAgent из Pydantic-схем автоматически. Pydantic схемы = единственный источник правды для AiAgent skills.
 
 Категории skills: Documents, Invoices, Email, Suppliers, Anomalies, Tables & Export, Approvals, Calendar, Collections, Normalization, NL & Search, Compare (КП), Audit.
 
