@@ -378,3 +378,52 @@ def test_an_empty_lookup_does_not_judge_a_target_no_read_showed():
         request="В каталоге ООО «Эвал-Медь» найди медную проволоку 2 мм",
     )
     assert guessed_target("suppliers", UPDATE, messages) is None
+
+
+def _reminder(message):
+    return {
+        "action": "calendar_create_reminder",
+        "body": {"remind_at": "2026-12-01T09:00:00+03:00", "message": message},
+    }
+
+
+def test_an_unattached_reminder_on_an_ambiguous_number_is_a_guess():
+    """T8h (E52): two suppliers have EV-5701; the reminder named it in text only."""
+    twins = _envelope(
+        {
+            "items": [
+                {"id": INV, "invoice_number": "EV-5701"},
+                {"id": NEAR, "invoice_number": "EV-5701"},
+            ]
+        }
+    )
+    messages = _turn(
+        ("invoices", {"action": "list", "filters": {"invoice_number": "EV-5701"}}, twins),
+        request="Напомни мне в день срока проверить оплату счёта EV-5701.",
+    )
+    assert (
+        guessed_target("analytics", _reminder("Проверить оплату счёта EV-5701"), messages)
+        == "one_of_several"
+    )
+
+
+def test_an_unattached_reminder_on_a_missing_number_is_a_guess():
+    near = _envelope({"items": [{"id": NEAR, "invoice_number": "EV-9998"}]})
+    messages = _turn(
+        ("invoices", {"action": "list", "filters": {"invoice_number": "EV-9999"}}, near),
+        request="Напомни в понедельник про оплату счёта EV-9999.",
+    )
+    assert (
+        guessed_target("analytics", _reminder("Оплата счёта EV-9999"), messages)
+        == "requested_record_not_found"
+    )
+
+
+def test_an_unattached_reminder_on_a_unique_or_unlooked_number_passes():
+    one = _envelope({"items": [{"id": INV, "invoice_number": "EV-5301"}]})
+    messages = _turn(
+        ("invoices", {"action": "list", "filters": {"invoice_number": "EV-5301"}}, one),
+        request="Напомни про оплату счёта EV-5301.",
+    )
+    assert guessed_target("analytics", _reminder("Оплата счёта EV-5301"), messages) is None
+    assert guessed_target("analytics", _reminder("Позвонить по ДП-77"), messages) is None

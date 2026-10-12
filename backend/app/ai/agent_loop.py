@@ -2475,7 +2475,80 @@ def guessed_target(
         reason = _judge_target(target, definition, messages, start)
         if reason is not None:
             return reason
+    if not path_ids and not body_ids:
+        # T8h: an unattached record names its subject in words ("оплата счёта
+        # EV-5701"); E52 set such reminders when two invoices had that number.
+        for code in _record_codes(args):
+            reason = _judge_code(code, messages, start)
+            if reason is not None:
+                return reason
     return None
+
+
+_CODE_RE = re.compile(r"\b[a-zа-я]{1,6}-?\d{2,}[\w/-]*", re.I)
+
+
+def _record_codes(arguments: Any) -> list[str]:
+    """Record numbers inside free text of a new record (EV-5701, ДП-77)."""
+    texts: list[str] = []
+
+    def collect(value: Any) -> None:
+        if isinstance(value, str):
+            if not _UUID_RE.match(value.strip()):
+                texts.append(value)
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                if key != "action":
+                    collect(item)
+        elif isinstance(value, list):
+            for item in value:
+                collect(item)
+
+    collect(arguments)
+    return list(dict.fromkeys(m.group(0).lower() for t in texts for m in _CODE_RE.finditer(t)))
+
+
+def _judge_code(code: str, messages: list[dict], start: int) -> str | None:
+    """Judge a record number like a target id: by the reads that looked it up."""
+    turn = messages[start + 1 :]
+    results = {
+        str(m["tool_call_id"]): m.get("content")
+        for m in turn
+        if m.get("role") == "tool" and m.get("tool_call_id")
+    }
+    needed = _words(code)
+    verdicts: list[int] = []
+    for message in turn:
+        if message.get("role") != "assistant":
+            continue
+        for call in message.get("tool_calls") or []:
+            function = call.get("function") or {}
+            call_args = function.get("arguments") or {}
+            if isinstance(call_args, str):
+                try:
+                    call_args = json.loads(call_args)
+                except (TypeError, ValueError):
+                    continue
+            if not isinstance(call_args, dict):
+                continue
+            read = _tool_definition(str(function.get("name") or ""), call_args)
+            if read is None or read.effect != "read":
+                continue
+            looked = set().union(*(_words(w) for w in _lookup_words(call_args)), set())
+            if not _covers(needed, looked):
+                continue
+            raw = results.get(str(call.get("id") or ""))
+            try:
+                result = json.loads(raw) if isinstance(raw, str) else raw
+            except (TypeError, ValueError):
+                continue
+            records = _records(result)
+            if records is None:
+                continue
+            verdicts.append(sum(1 for r in records if _covers(needed, _record_words(r))))
+    if not verdicts or 1 in verdicts:
+        return None
+    return "one_of_several" if max(verdicts) > 1 else "requested_record_not_found"
 
 
 _ORG_FORMS = frozenset({"ооо", "ао", "зао", "пао", "оао", "ип"})
@@ -2654,6 +2727,59 @@ def performed_changes(messages: list[dict], start: int | None = None) -> list[st
             if label not in done:
                 done.append(label)
     return done
+
+
+def _denied(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return False
+    evidence = result.get("evidence") if isinstance(result.get("evidence"), dict) else {}
+    return (
+        result.get("error_code") == "http_403"
+        or result.get("status_code") == 403
+        or evidence.get("http_status") == 403
+    )
+
+
+def denied_writes(messages: list[dict], start: int | None = None) -> list[str]:
+    """T8c: changes of this turn the recipient refused for lack of rights.
+
+    E52: refused agent_control.task_propose (403), the employee set calendar
+    reminders instead and reported the work done. A refusal ends the
+    changing part of the turn; the owner decides what to do instead.
+    """
+    if start is None:
+        start = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1)
+    turn = messages[start + 1 :]
+    results = {
+        str(m["tool_call_id"]): m.get("content")
+        for m in turn
+        if m.get("role") == "tool" and m.get("tool_call_id")
+    }
+    denied: list[str] = []
+    for message in turn:
+        if message.get("role") != "assistant":
+            continue
+        for call in message.get("tool_calls") or []:
+            function = call.get("function") or {}
+            arguments = function.get("arguments") or {}
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except (TypeError, ValueError):
+                    arguments = {}
+            if not isinstance(arguments, dict):
+                continue
+            definition = _tool_definition(str(function.get("name") or ""), arguments)
+            if definition is None or definition.effect == "read":
+                continue
+            raw = results.get(str(call.get("id") or ""))
+            try:
+                result = json.loads(raw) if isinstance(raw, str) else raw
+            except (TypeError, ValueError):
+                continue
+            if _denied(result) and definition.name not in denied:
+                denied.append(definition.name)
+    return denied
 
 
 class AgentSession:
@@ -3855,6 +3981,23 @@ class AgentSession:
         action_arg = execution_args.get("action", "")
         if action_arg and (action_arg in cap_gate_actions or "*" in cap_gate_actions):
             current_gates.add(original_name)
+        # T8c: after a refusal for lack of rights, no other change in this
+        # turn — the employee reports the refusal instead of a substitute.
+        definition = _tool_definition(original_name, execution_args)
+        if definition is not None and definition.effect != "read":
+            refused = denied_writes(self.messages, self._turn_start())
+            if refused and definition.name not in refused:
+                result = {
+                    "status": "blocked",
+                    "error_code": "refused_earlier_in_turn",
+                    "message": (
+                        f"Ранее в этом ходе отказано в правах: {', '.join(refused)}. "
+                        "Другие изменения вместо запрещённого не делаю. Сообщи пользователю "
+                        "об отказе и о том, у кого есть права; ничего не подменяй."
+                    ),
+                }
+                await self._send({"type": "tool_result", "tool": fn_name, "result": result})
+                return fn_name, result, tc_id
         # T5: a change aimed at a record the model chose itself (a look-alike,
         # one of several) is marked target_match="guess"; it never runs on the
         # model's say-so — the owner confirms the exact target first. The mark
