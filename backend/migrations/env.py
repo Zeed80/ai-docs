@@ -66,6 +66,10 @@ def run_migrations_online() -> None:
             if head is None:
                 raise RuntimeError("Alembic has no single current head")
             with connection.begin():
+                # Migrations create these; the bootstrap skips them. Without
+                # pg_trgm every similarity() search answered 500 on a fresh
+                # database (E52 eval world: catalog cases 0/3 twice).
+                connection.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS pg_trgm")
                 target_metadata.create_all(bind=connection)
                 MigrationContext.configure(connection).stamp(script, head)
             return
