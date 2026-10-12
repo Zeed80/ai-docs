@@ -2211,6 +2211,7 @@ SendFn = Callable[[dict], Awaitable[None]]
 
 
 GUESSED_TARGET_MARKS = frozenset({"guess", "similar", "inferred"})
+STEPS_LEFT_NUDGE = 3
 
 
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
@@ -3255,6 +3256,16 @@ class AgentSession:
         from app.ai.input_sanitizer import UNTRUSTED_NOTE
 
         system = f"{self._system}\n\n{_today_context()}\n\n{UNTRUSTED_NOTE}"
+        steps_left = getattr(self, "_steps_left", None)
+        if steps_left is not None and steps_left <= STEPS_LEFT_NUDGE:
+            # T8a (E52): drafts never got written — the steps went on side
+            # lookups (requisites, price history, document searches) until
+            # the turn ran out. Say so while there is still room to act.
+            system = (
+                f"{system}\n\nОсталось шагов: {steps_left}. Хватит собирать сведения: "
+                "выполни просьбу пользователя тем, что уже известно, а чего не хватает — "
+                "назови в ответе."
+            )
         tone_hint = _tone_style_hint(getattr(self._config, "agent_tone", "neutral"))
         if tone_hint:
             system = f"{system}\n\n{tone_hint}"
@@ -3614,6 +3625,7 @@ class AgentSession:
             consecutive_empty_responses = 0
             for iteration in range(start_iteration, self._config.max_steps):
                 self._iteration = iteration
+                self._steps_left = self._config.max_steps - iteration
                 budget_context = getattr(self, "_work_budget_context", None)
                 if budget_context is not None:
                     budget_context.raise_if_stopped()

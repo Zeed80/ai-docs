@@ -52,3 +52,16 @@ async def test_history_carries_the_marked_result_and_the_prompt_explains_it():
     exact = {"version": 1, "status": "partial", "error_code": "job_queued", "data": {"text": "x"}}
     await session._tool_result_to_history(exact, "c2", preserve_exact=True)
     assert json.loads(session.messages[-1]["content"]) == exact
+
+
+def test_the_last_steps_are_announced_in_the_prompt():
+    """T8a (E52): the turn ran out of steps on side lookups before the draft."""
+
+    async def send(event):
+        return None
+
+    session = agent_loop.AgentSession(send)
+    session._steps_left = 5
+    assert "Осталось шагов" not in session._effective_system()
+    session._steps_left = 3
+    assert "Осталось шагов: 3" in session._effective_system()
