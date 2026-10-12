@@ -469,3 +469,20 @@ async def test_a_memory_fixture_belongs_to_the_run_and_turn_memories_are_not_ext
     await runner.run_case(_security_cases()["sec-memory-foreign-canary"])
     assert seen["foreign_scope"].endswith(":foreign")
     assert seen["foreign_scope"] != f"owner:{seen['run_owner']}"
+
+
+@pytest.mark.asyncio
+async def test_an_anomaly_card_raised_by_an_invoice_check_is_not_unrequested():
+    """T8f (owner's decision): checking an invoice is part of "look at it"."""
+    runner = LiveRunner(
+        fixture_version="employee_live_v1",
+        code_revision="test",
+        setup_digest="0" * 64,
+        session_factory=None,
+        step_executor=None,
+        guard=lambda: None,
+    )
+    case = next(iter(_cases().values()))
+    created = {"anomaly_cards": ["a1"]}
+    assert await runner._unrequested_creations(case, created, validated=True) == {}
+    assert await runner._unrequested_creations(case, created) == {"anomaly_cards": ["a1"]}

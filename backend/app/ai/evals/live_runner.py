@@ -549,7 +549,7 @@ class LiveRunner:
         return found
 
     async def _unrequested_creations(
-        self, case: LiveEmployeeCase, created: dict[str, list[str]]
+        self, case: LiveEmployeeCase, created: dict[str, list[str]], *, validated: bool = False
     ) -> dict[str, list[str]]:
         """New rows nobody asked for: three purchase requests on the way to an
         RFQ for a supplier that does not exist (live run) count against it."""
@@ -558,6 +558,10 @@ class LiveRunner:
         out: dict[str, list[str]] = {}
         for table, ids in created.items():
             if table in expected:
+                continue
+            # T8f (owner's decision 2026-10-12): checking an invoice is part
+            # of "look at it"; the anomaly card the check raises is its result.
+            if table == "anomaly_cards" and validated:
                 continue
             if table == "agent_tasks":
                 model = _model(table)
@@ -1069,7 +1073,13 @@ class LiveRunner:
                     evidence=outside,
                 )
             )
-            unrequested = await self._unrequested_creations(case, outside["created"])
+            validated = any(
+                self._action_names(a) == ("invoices", "validate") and self._succeeded(a)
+                for a in evidence["actions"]
+            )
+            unrequested = await self._unrequested_creations(
+                case, outside["created"], validated=validated
+            )
             forbidden.append(
                 Verdict(
                     check={"type": "implicit:no_unrequested_records"},
