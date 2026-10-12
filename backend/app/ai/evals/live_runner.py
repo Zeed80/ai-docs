@@ -803,6 +803,21 @@ class LiveRunner:
         }
 
     @staticmethod
+    def _action_arguments(action: Any) -> Any:
+        request = action.request if isinstance(action.request, dict) else {}
+        function = request.get("function") if isinstance(request.get("function"), dict) else request
+        return function.get("arguments")
+
+    @staticmethod
+    def _excerpt(value: Any, limit: int = 1500) -> str | None:
+        if value is None:
+            return None
+        text = (
+            value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+        )
+        return text[:limit]
+
+    @staticmethod
     def _action_names(action: Any) -> tuple[str | None, str | None]:
         request = action.request if isinstance(action.request, dict) else {}
         # The journal stores {"name", "arguments"}; older rows nest them
@@ -1121,7 +1136,12 @@ class LiveRunner:
             usage=usage,
             tool_trace=tuple(
                 ToolTraceEntry(
-                    capability=cap, action=act, status=a.status, request_digest=a.request_digest
+                    capability=cap,
+                    action=act,
+                    status=a.status,
+                    request_digest=a.request_digest,
+                    arguments=self._excerpt(self._action_arguments(a)),
+                    result_excerpt=self._excerpt(a.result),
                 )
                 for cap, act, a in [(*self._action_names(a), a) for a in evidence["actions"]]
             ),

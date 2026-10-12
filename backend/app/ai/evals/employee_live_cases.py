@@ -387,6 +387,9 @@ class ToolTraceEntry(_Strict):
     action: str | None
     status: str
     request_digest: str
+    # Excerpts for reading a failure afterwards; never part of a verdict.
+    arguments: str | None = None
+    result_excerpt: str | None = None
 
 
 class LiveEmployeeResult(_Strict):
