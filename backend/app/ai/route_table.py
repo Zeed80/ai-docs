@@ -385,6 +385,11 @@ def response_budgets() -> dict[str, Any]:
     return _table().get("response_budgets") or {}
 
 
+def field_terms(tool: str) -> dict[str, list[str]]:
+    """T7c: field → word stems the request must contain to change it."""
+    return (_table().get("field_terms") or {}).get(tool) or {}
+
+
 def aux_quality_budgets() -> dict[str, Any]:
     """Max auxiliary quality LLM calls per turn thresholds (A4) — see routes.yml."""
     return _table().get("aux_quality_budgets") or {}

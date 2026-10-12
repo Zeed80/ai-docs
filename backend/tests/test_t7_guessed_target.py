@@ -122,3 +122,70 @@ def test_creates_and_reads_are_never_judged():
         guessed_target("analytics", {"action": "calendar_create_reminder", "body": {}}, messages)
         is None
     )
+
+
+def _request(text):
+    return [{"role": "user", "content": text}]
+
+
+def _update(**body):
+    return {"action": "update", "supplier_id": COPPER, "body": body}
+
+
+def test_a_field_the_request_never_named_is_reported():
+    """E52: asked for the KPP, the employee also wrote the address."""
+    from app.ai.agent_loop import unrequested_fields
+
+    messages = _request(
+        "Возьми из договора ДП-201 КПП ООО «Эвал-Сталь» и запиши его в карточку поставщика."
+    )
+    assert unrequested_fields(
+        "suppliers", _update(kpp="770101001", address="Москва"), messages
+    ) == ["address"]
+    assert unrequested_fields("suppliers", _update(kpp="770101001"), messages) == []
+
+
+def test_requisites_cover_the_bank_fields_and_a_number_is_a_phone():
+    from app.ai.agent_loop import unrequested_fields
+
+    account = _request("Обнови расчётный счёт в карточке поставщика по письму.")
+    assert unrequested_fields(
+        "suppliers", _update(bank_account="4070", bank_bik="0445"), account
+    ) == ["bank_bik"]
+    requisites = _request("Обнови реквизиты ООО «Эвал-Медь» по письму.")
+    assert (
+        unrequested_fields("suppliers", _update(bank_account="4070", bank_bik="0445"), requisites)
+        == []
+    )
+    phone = _request("Возьми из письма новый номер и обнови карточку.")
+    assert unrequested_fields("suppliers", _update(contact_phone="+7"), phone) == []
+
+
+def test_unlisted_fields_and_other_tools_are_not_judged():
+    from app.ai.agent_loop import unrequested_fields
+
+    messages = _request("Обнови карточку")
+    assert unrequested_fields("suppliers", _update(notes="x"), messages) == []
+    assert (
+        unrequested_fields(
+            "invoices", {"action": "update", "invoice_id": COPPER, "body": {"notes": "x"}}, messages
+        )
+        == []
+    )
+
+
+def test_a_yes_to_the_agents_proposal_names_its_fields():
+    from app.ai.agent_loop import unrequested_fields
+
+    messages = [
+        {"role": "user", "content": "Что в письме Эвал-Меди?"},
+        {
+            "role": "assistant",
+            "content": "В письме новый телефон +7 495 100-20-30. Записать его в карточку?",
+        },
+        {"role": "user", "content": "Да"},
+    ]
+    assert (
+        unrequested_fields("suppliers", _update(contact_phone="+7 495 100-20-30"), messages) == []
+    )
+    assert unrequested_fields("suppliers", _update(address="Москва"), messages) == ["address"]

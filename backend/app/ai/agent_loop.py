@@ -2348,6 +2348,45 @@ def _lookup_text(arguments: Any) -> bool:
     return False
 
 
+def unrequested_fields(
+    name: str, arguments: Any, messages: list[dict], start: int | None = None
+) -> list[str]:
+    """T7c: fields a change sets that the request never named (E52: asked for
+    the KPP, the employee also wrote the address; asked for the account, also
+    the BIK). Judged from field_terms in routes.yml; unlisted fields pass."""
+    from app.ai.route_table import field_terms, normalize
+
+    args = arguments if isinstance(arguments, dict) else {}
+    definition = _tool_definition(name, args)
+    body = args.get("body")
+    if definition is None or definition.effect != "write" or not isinstance(body, dict):
+        return []
+    terms = field_terms(definition.name)
+    if not terms:
+        return []
+    if start is None:
+        start = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1)
+    if start < 0:
+        return []  # no request to compare with
+    request = normalize(str(messages[start].get("content") or ""))
+    # "Да, запиши" answers the agent's own proposal: its words name the fields.
+    proposal = next(
+        (
+            m
+            for m in reversed(messages[:start])
+            if m.get("role") == "assistant" and m.get("content")
+        ),
+        None,
+    )
+    if proposal is not None:
+        request += " " + normalize(str(proposal.get("content")))
+    return sorted(
+        field
+        for field in body
+        if field in terms and not any(normalize(stem) in request for stem in terms[field])
+    )
+
+
 def guessed_target(
     name: str, arguments: Any, messages: list[dict], start: int | None = None
 ) -> str | None:
@@ -3697,6 +3736,13 @@ class AgentSession:
         if guess_reason is not None:
             current_gates.add(original_name)
             logger.info("guessed_target_gated", tool=original_name, reason=guess_reason)
+        # T7c: a field the request never named is the owner's call.
+        extra_fields = unrequested_fields(
+            original_name, execution_args, self.messages, self._turn_start()
+        )
+        if extra_fields:
+            current_gates.add(original_name)
+            logger.info("unrequested_fields_gated", tool=original_name, fields=extra_fields)
         # T7a: a second copy of something that already exists (the recipient
         # answered already_exists) is the owner's call, not the model's.
         body_arg = execution_args.get("body")

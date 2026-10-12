@@ -900,3 +900,23 @@ prompt_sections:
       до планирования. Если такой вопрос всё же дошёл сюда (снимок недоступен), назначь
       data_analyst со skills: analytics.dashboard_today, approvals.approval_list,
       anomalies.list, payments.overdue.
+
+# T7c (E52): a field of an existing record changes only when the request names
+# it. tool → field → word stems (normalized: lower, ё→е). A field changed
+# without any of its stems in the request waits for the owner. Fields not
+# listed here are not judged.
+field_terms:
+  suppliers.update:
+    name: [назван, наименован, переимен]
+    inn: [инн]
+    kpp: [кпп]
+    ogrn: [огрн]
+    address: [адрес]
+    contact_email: [e-mail, email, почт, мейл, электрон]
+    contact_phone: [телефон, номер]
+    bank_name: [банк, реквизит]
+    bank_bik: [бик, реквизит]
+    bank_account: [расчетн, р/с, реквизит]
+    corr_account: [корр, к/с, реквизит]
+    user_rating: [рейтинг, оцен]
+    price_spike_threshold_pct: [порог]
