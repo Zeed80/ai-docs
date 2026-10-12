@@ -2454,24 +2454,31 @@ def guessed_target(
     """
     args = arguments if isinstance(arguments, dict) else {}
     definition = _tool_definition(name, args)
-    if (
-        definition is None
-        or definition.effect not in {"write", "delete"}
-        or not definition.path_params
-    ):
+    if definition is None or definition.effect not in {"write", "delete"}:
         return None
-    target = next(
-        (
-            str(args[p]).lower()
-            for p in definition.path_params
-            if isinstance(args.get(p), str | uuid.UUID)
-        ),
-        None,
-    )
-    if not target:
-        return None
+    # The record changed (path) and the records a new one points at (a
+    # reminder's entity_id, a link's linked_entity_id): E52 also attached
+    # reminders and links to EV-9998 when EV-9999 did not exist.
+    path_ids = [
+        str(args[p]).lower()
+        for p in definition.path_params
+        if isinstance(args.get(p), str | uuid.UUID)
+    ]
+    body_ids = [
+        v
+        for v in _anchor_values({k: v for k, v in args.items() if k != "action"})
+        if _UUID_RE.match(v)
+    ]
     if start is None:
         start = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1)
+    for target in dict.fromkeys(path_ids + body_ids):
+        reason = _judge_target(target, definition, messages, start)
+        if reason is not None:
+            return reason
+    return None
+
+
+def _judge_target(target: str, definition, messages: list[dict], start: int) -> str | None:
     if start >= 0 and target in str(messages[start].get("content") or "").lower():
         return None
     turn = messages[start + 1 :]

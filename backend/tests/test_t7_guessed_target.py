@@ -147,18 +147,18 @@ def test_a_field_the_request_never_named_is_reported():
     assert unrequested_fields("suppliers", _update(kpp="770101001"), messages) == []
 
 
-def test_requisites_cover_the_bank_fields_and_a_number_is_a_phone():
+def test_requisites_do_not_cover_the_bik_and_a_number_is_a_phone():
     from app.ai.agent_loop import unrequested_fields
 
     account = _request("Обнови расчётный счёт в карточке поставщика по письму.")
     assert unrequested_fields(
         "suppliers", _update(bank_account="4070", bank_bik="0445"), account
     ) == ["bank_bik"]
-    requisites = _request("Обнови реквизиты ООО «Эвал-Медь» по письму.")
-    assert (
-        unrequested_fields("suppliers", _update(bank_account="4070", bank_bik="0445"), requisites)
-        == []
-    )
+    # E52: "о смене реквизитов. Обнови расчётный счёт" — the BIK was not asked for.
+    requisites = _request("Письмо о смене реквизитов. Обнови расчётный счёт ООО «Эвал-Медь».")
+    assert unrequested_fields(
+        "suppliers", _update(bank_account="4070", bank_bik="0445"), requisites
+    ) == ["bank_bik"]
     phone = _request("Возьми из письма новый номер и обнови карточку.")
     assert unrequested_fields("suppliers", _update(contact_phone="+7"), phone) == []
 
@@ -259,3 +259,48 @@ def test_a_record_chosen_by_a_filter_after_an_empty_lookup_is_confirmed():
         request="Добавь заметку ко всем утверждённым счетам",
     )
     assert guessed_target("invoices", NOTE, messages) is None
+
+
+def test_a_reminder_or_link_pointing_at_a_near_match_is_a_guess():
+    """E52 repeat: EV-9999 did not exist; reminders and links went to EV-9998."""
+    messages = _turn(
+        (
+            "invoices",
+            {"action": "list", "filters": {"invoice_number": "EV-9999"}},
+            _envelope({"items": [{"id": INV, "invoice_number": "EV-9998"}]}),
+        ),
+        request="Напомни в понедельник про оплату счёта EV-9999",
+    )
+    reminder = {
+        "action": "calendar_create_reminder",
+        "body": {
+            "remind_at": "2026-10-19T09:00:00+03:00",
+            "message": "Оплата",
+            "entity_type": "invoice",
+            "entity_id": INV,
+        },
+    }
+    assert guessed_target("analytics", reminder, messages) == "one_of_several"
+    doc = "55555555-5555-5555-5555-555555555555"
+    link = {
+        "action": "link",
+        "document_id": doc,
+        "body": {"linked_entity_type": "invoice", "linked_entity_id": INV},
+    }
+    assert guessed_target("documents", link, messages) == "one_of_several"
+
+
+def test_a_reminder_on_the_named_invoice_is_not_a_guess():
+    messages = _turn(
+        (
+            "invoices",
+            {"action": "list", "filters": {"invoice_number": "EV-5301"}},
+            _envelope({"items": [{"id": INV, "invoice_number": "EV-5301"}]}),
+        ),
+        request="Напомни про оплату счёта EV-5301",
+    )
+    reminder = {
+        "action": "calendar_create_reminder",
+        "body": {"message": "x", "entity_type": "invoice", "entity_id": INV},
+    }
+    assert guessed_target("analytics", reminder, messages) is None
