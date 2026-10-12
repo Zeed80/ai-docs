@@ -3571,6 +3571,13 @@ class AgentSession:
             args = {k: v for k, v in args.items() if k != "target_match"}
             if str(target_match).casefold() in GUESSED_TARGET_MARKS:
                 current_gates.add(original_name)
+        # T7a: a second copy of something that already exists (the recipient
+        # answered already_exists) is the owner's call, not the model's.
+        body_arg = execution_args.get("body")
+        if execution_args.get("allow_duplicate") is True or (
+            isinstance(body_arg, dict) and body_arg.get("allow_duplicate") is True
+        ):
+            current_gates.add(original_name)
 
         policy = check_tool_execution(
             skill_name=original_name,

@@ -254,6 +254,7 @@ async def test_supplier_reminder_uses_the_contractor_id(client: AsyncClient, db_
             "entity_id": str(profile.id),
             "remind_at": when,
             "message": "по профилю",
+            "allow_duplicate": True,
         },
     )
 
@@ -329,3 +330,62 @@ async def test_a_reminder_in_the_past_is_refused(client: AsyncClient):
     soon = (datetime.now(UTC) + timedelta(minutes=1)).isoformat()
     ok = await client.post("/api/calendar/reminders", json={"remind_at": soon, "message": "y"})
     assert ok.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_a_second_open_reminder_is_already_exists(
+    client: AsyncClient, invoice_with_dates, as_user
+):
+    """E52: the employee saw the open reminder and made another one in 6 of 6
+    runs. The same person's second open reminder for the same record (or,
+    unattached, with the same text) is refused; only an explicit one passes."""
+    as_user("alice")
+    first_at = (datetime.now(UTC) + timedelta(days=2)).isoformat()
+    later = (datetime.now(UTC) + timedelta(days=5)).isoformat()
+    on_invoice = {"entity_type": "invoice", "entity_id": str(invoice_with_dates.id)}
+    first = await client.post(
+        "/api/calendar/reminders",
+        json={**on_invoice, "remind_at": first_at, "message": "Проверить оплату"},
+    )
+    assert first.status_code == 200, first.text
+
+    again = await client.post(
+        "/api/calendar/reminders",
+        json={**on_invoice, "remind_at": later, "message": "Оплата счёта"},
+    )
+    assert again.status_code == 409
+    detail = again.json()["detail"]
+    assert detail["code"] == "already_exists"
+    assert detail["reminder"]["id"] == first.json()["id"]
+
+    loose = {"remind_at": later, "message": "Позвонить в банк"}
+    assert (await client.post("/api/calendar/reminders", json=loose)).status_code == 200
+    same_text = {"remind_at": first_at, "message": "  позвонить в банк "}
+    assert (await client.post("/api/calendar/reminders", json=same_text)).status_code == 409
+
+    explicit = await client.post(
+        "/api/calendar/reminders",
+        json={**on_invoice, "remind_at": later, "message": "Ещё раз", "allow_duplicate": True},
+    )
+    assert explicit.status_code == 200, explicit.text
+
+    as_user("bob")
+    others = await client.post(
+        "/api/calendar/reminders",
+        json={**on_invoice, "remind_at": later, "message": "Проверить оплату"},
+    )
+    assert others.status_code == 200, others.text
+
+
+@pytest.mark.asyncio
+async def test_a_sent_reminder_does_not_block_a_new_one(client: AsyncClient, invoice_with_dates):
+    on_invoice = {"entity_type": "invoice", "entity_id": str(invoice_with_dates.id)}
+    when = (datetime.now(UTC) + timedelta(days=1)).isoformat()
+    first = await client.post(
+        "/api/calendar/reminders", json={**on_invoice, "remind_at": when, "message": "a"}
+    )
+    await client.post(f"/api/calendar/reminders/{first.json()['id']}/mark-sent")
+    second = await client.post(
+        "/api/calendar/reminders", json={**on_invoice, "remind_at": when, "message": "b"}
+    )
+    assert second.status_code == 200, second.text

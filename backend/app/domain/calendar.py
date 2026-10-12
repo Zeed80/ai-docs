@@ -40,6 +40,11 @@ class ReminderCreate(BaseModel):
     remind_at: datetime
     message: str
     calendar_event_id: uuid.UUID | None = None
+    # T7a: a second open reminder of the same person for the same record (or,
+    # unattached, with the same text) is refused as already_exists. Only an
+    # explicit second one passes, and the agent's request for it is an
+    # owner-confirmed action (agent_loop treats the flag as a gate).
+    allow_duplicate: bool = False
 
 
 class ReminderOut(BaseModel):

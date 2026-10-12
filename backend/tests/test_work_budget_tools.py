@@ -882,3 +882,53 @@ def test_a_correction_retry_stays_in_the_same_turn():
     assert prior_creation(session.messages, key, session._turn_start()) is not None
     # Without the turn marker the correction would have hidden it.
     assert prior_creation(session.messages, key) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit", [True, False])
+async def test_a_requested_duplicate_waits_for_the_owner(test_engine, monkeypatch, explicit):
+    """T7a: after already_exists only the owner can ask for a second copy;
+    the model's allow_duplicate is an approval, not a bypass."""
+    from app.ai import agent_config
+
+    _, _, context = await _claimed_context(test_engine)
+    effects = []
+    _install_http(monkeypatch, [httpx.Response(200, json={"id": "r2"})], effects)
+    config = BuiltinAgentConfig(approval_gates=[])
+    monkeypatch.setattr(agent_config, "get_builtin_agent_config", lambda: config)
+
+    async def send(event):
+        return None
+
+    session = agent_loop.AgentSession(send)
+    session.set_work_budget_context(context)
+    session._skill_map = {
+        "analytics": {"name": "analytics", "method": "POST", "path": "/api/agent/cap/analytics"}
+    }
+
+    async def no_log(**kwargs):
+        return None
+
+    session._log_action = no_log
+    asked: list[dict] = []
+
+    async def approve(skill_name, args):
+        asked.append(args)
+        return True
+
+    session._request_approval = approve
+    body = {"remind_at": "2026-12-01T09:00:00+03:00", "message": "Проверить оплату"}
+    if explicit:
+        body["allow_duplicate"] = True
+    await session._execute_single_tool(
+        {
+            "id": "rem-1",
+            "function": {
+                "name": "analytics",
+                "arguments": {"action": "calendar_create_reminder", "body": body},
+            },
+        },
+        0,
+    )
+    assert len(asked) == (1 if explicit else 0)
+    assert len(effects) == 1

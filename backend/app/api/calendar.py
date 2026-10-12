@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.acting import get_effective_user
@@ -305,6 +305,34 @@ async def create_reminder(
                     f"{payload.entity_type} {payload.entity_id} not found — "
                     "cannot attach a reminder to a non-existent entity",
                 )
+    if not payload.allow_duplicate:
+        # E52: the employee saw the open reminder (calendar.upcoming) and made
+        # another one anyway in 6 runs of 6; a prompt rule did not hold it.
+        same = select(Reminder).where(Reminder.user_id == user.sub, Reminder.is_sent == False)  # noqa: E712
+        if payload.entity_type and entity_id:
+            same = same.where(
+                Reminder.entity_type == payload.entity_type, Reminder.entity_id == entity_id
+            )
+        else:
+            same = same.where(
+                Reminder.entity_id.is_(None),
+                func.lower(func.btrim(Reminder.message)) == payload.message.strip().lower(),
+            )
+        existing = (
+            await db.execute(same.order_by(Reminder.remind_at.asc()).limit(1))
+        ).scalar_one_or_none()
+        if existing is not None:
+            raise HTTPException(
+                409,
+                {
+                    "code": "already_exists",
+                    "message": (
+                        "У пользователя уже есть такое напоминание. Не создавайте второе — "
+                        "сообщите о существующем. Второе — только если пользователь прямо попросит."
+                    ),
+                    "reminder": ReminderOut.model_validate(existing).model_dump(mode="json"),
+                },
+            )
     reminder = Reminder(
         calendar_event_id=payload.calendar_event_id,
         entity_type=payload.entity_type,

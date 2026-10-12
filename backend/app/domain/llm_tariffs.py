@@ -90,6 +90,10 @@ async def add_tariff_version(
         )
     elif input_per_1m < 0 or output_per_1m < 0:
         raise TariffRejected("Цена не может быть отрицательной")
+    elif input_per_1m == 0 and output_per_1m == 0:
+        # A zero price is a claim the call costs nothing; it has its own flag
+        # so "free" is a decision, not a placeholder (live smoke 2026-10-12).
+        raise TariffRejected("Обе цены нулевые — это тариф «бесплатно», отметьте его флагом")
     row = LlmTariff(
         id=uuid.uuid4(),
         provider=provider,

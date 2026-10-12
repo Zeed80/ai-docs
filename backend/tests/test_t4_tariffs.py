@@ -153,6 +153,26 @@ async def test_tariff_versions_are_never_backdated_and_need_both_prices(db_sessi
             effective_from=None,
             **common,
         )
+    with pytest.raises(TariffRejected, match="флагом"):
+        await add_tariff_version(
+            db_session,
+            currency="USD",
+            input_per_1m=Decimal(0),
+            output_per_1m=Decimal("0.00"),
+            free=False,
+            effective_from=None,
+            **common,
+        )
+    paid_output = await add_tariff_version(
+        db_session,
+        currency="USD",
+        input_per_1m=Decimal(0),
+        output_per_1m=Decimal(2),
+        free=False,
+        effective_from=None,
+        **common,
+    )
+    assert paid_output.output_per_1m == Decimal(2)
     with pytest.raises(TariffRejected, match="бесплатного"):
         await add_tariff_version(
             db_session,
