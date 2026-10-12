@@ -69,3 +69,31 @@ async def test_other_results_are_not_touched(monkeypatch):
     done = {"version": 1, "status": "succeeded", "data": {"id": "x"}}
     assert await session._await_queued_job(done) == done
     assert await session._await_queued_job({"ok": True}) == {"ok": True}
+
+
+LEGACY = {"status": "queued", "task_id": "t-2", "supplier_id": "s", "message": "Обход запущен"}
+
+
+@pytest.mark.asyncio
+async def test_a_catalog_crawl_receipt_is_waited_for_too(monkeypatch):
+    """E52: crawl_site answers {"status": "queued", "task_id"} without an envelope."""
+    job = _Job(["STARTED", "SUCCESS"], {"pages_read": 3, "entries_created": 5})
+    result = await _session(monkeypatch, job)._await_queued_job(LEGACY)
+    assert result["status"] == "completed" and result["job_result"]["entries_created"] == 5
+    assert result["task_id"] == "t-2"
+
+
+@pytest.mark.asyncio
+async def test_a_receipt_without_a_task_id_is_not_waited_for(monkeypatch):
+    session = _session(monkeypatch, _Job(["SUCCESS"], {}))
+    receipt = {"status": "queued", "message": "x"}
+    assert await session._await_queued_job(receipt) == receipt
+
+
+def test_a_crawl_takes_url_as_its_start():
+    from app.domain.tool_catalog import CrawlSiteRequest
+
+    request = CrawlSiteRequest.model_validate(
+        {"supplier_name": "ООО «Эвал-Медь»", "url": "http://eval-sites/med/catalog.html"}
+    )
+    assert request.start_url == "http://eval-sites/med/catalog.html"

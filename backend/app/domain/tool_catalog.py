@@ -334,10 +334,13 @@ class CrawlSiteRequest(SupplierRefRequest):
     suppliers publish no PDF at all — the catalog *is* the site.
     """
 
+    # "url" too: the model named it so (E52) and the crawl fell back to the
+    # supplier's unknown website — a refused call and a lost step every run.
     start_url: str | None = Field(
         default=None,
         min_length=4,
         max_length=2048,
+        validation_alias=AliasChoices("start_url", "url"),
         description="Where to start; defaults to the supplier's known website.",
     )
     max_pages: int = Field(60, ge=1, le=300)

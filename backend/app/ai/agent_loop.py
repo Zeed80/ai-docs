@@ -4301,12 +4301,19 @@ class AgentSession:
         reporting nothing. A job that completes within the wait answers the
         call; one that does not leaves the honest "queued" result as before.
         """
-        if not isinstance(result, dict) or result.get("version") != 1:
+        if not isinstance(result, dict):
             return result
-        if result.get("status") != "partial" or result.get("error_code") != "job_queued":
-            return result
-        task_id = (result.get("checkpoint") or {}).get("task_id")
-        if not task_id:
+        legacy = result.get("version") != 1
+        if legacy:
+            # A reviewed catalog receipt (crawl_site, attach_web_catalog):
+            # {"status": "queued", "task_id": ...} — E52 ran out of steps
+            # polling ingest_status while the crawl finished in ~25 s.
+            task_id = result.get("task_id") if result.get("status") == "queued" else None
+        elif result.get("status") == "partial" and result.get("error_code") == "job_queued":
+            task_id = (result.get("checkpoint") or {}).get("task_id")
+        else:
+            task_id = None
+        if not isinstance(task_id, str) or not task_id:
             return result
         from celery.result import AsyncResult
 
@@ -4330,6 +4337,16 @@ class AgentSession:
             await asyncio.sleep(self.QUEUED_JOB_POLL_S)
         else:
             return result
+        if legacy:
+            outcome = await asyncio.to_thread(lambda: job.result)
+            if state == "SUCCESS":
+                return {**result, "status": "completed", "job_state": state, "job_result": outcome}
+            return {
+                **result,
+                "status": "failed",
+                "job_state": state,
+                "job_error": str(outcome)[:300],
+            }
         from app.ai.tool_result import ToolResult
 
         evidence = {**(result.get("evidence") or {}), "job_state": state}
