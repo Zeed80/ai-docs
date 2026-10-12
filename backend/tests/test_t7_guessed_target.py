@@ -304,3 +304,44 @@ def test_a_reminder_on_the_named_invoice_is_not_a_guess():
         "body": {"message": "x", "entity_type": "invoice", "entity_id": INV},
     }
     assert guessed_target("analytics", reminder, messages) is None
+
+
+ITEM10 = "66666666-6666-6666-6666-666666666666"
+ITEM12 = "77777777-7777-7777-7777-777777777777"
+SHEETS = _envelope(
+    {
+        "items": [
+            {"id": ITEM10, "name": "Лист 09Г2С 10 мм", "sku": "EV-LS-10"},
+            {"id": ITEM12, "name": "Лист 09Г2С 12 мм", "sku": "EV-LS-12"},
+        ]
+    }
+)
+MIN_QTY = {"action": "update_item", "item_id": ITEM10, "body": {"min_qty": 20}}
+
+
+def test_every_lookup_word_names_one_sheet_among_its_neighbours():
+    """E52 targeted run: "09Г2С 10" also returned the 12 mm sheet."""
+    messages = _turn(
+        ("warehouse", {"action": "list_inventory", "search": "09Г2С 10"}, SHEETS),
+        request="Поставь минимальный остаток 20 для листа 09Г2С 10 мм",
+    )
+    assert guessed_target("warehouse", MIN_QTY, messages) is None
+    vague = _turn(
+        ("warehouse", {"action": "list_inventory", "search": "09Г2С"}, SHEETS),
+        request="Поставь минимум 20 для листа 09Г2С",
+    )
+    assert guessed_target("warehouse", MIN_QTY, vague) == "one_of_several"
+
+
+def test_a_record_the_request_names_is_not_a_guess_after_an_empty_lookup():
+    """A group request: one lookup found nothing, the items came from a list."""
+    messages = _turn(
+        (
+            "warehouse",
+            {"action": "list_inventory", "search": "листы 09Г2С"},
+            _envelope({"items": []}),
+        ),
+        ("warehouse", {"action": "list_inventory"}, SHEETS),
+        request="Перенеси лист 09Г2С 10 мм и лист 09Г2С 12 мм на стеллаж D-01",
+    )
+    assert guessed_target("warehouse", MIN_QTY, messages) is None

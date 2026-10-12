@@ -2478,9 +2478,61 @@ def guessed_target(
     return None
 
 
+_ORG_FORMS = frozenset({"ооо", "ао", "зао", "пао", "оао", "ип"})
+_NAME_KEYS = ("name", "title", "invoice_number", "sku", "file_name", "number", "label")
+
+
+def _words(text: Any) -> set[str]:
+    return {w for w in re.findall(r"[0-9a-zа-я]+", _plain(text)) if w not in _ORG_FORMS}
+
+
+def _word_in(word: str, words: set[str]) -> bool:
+    """Same word up to an ending: лист/листа, медь/меди — not сталь/станок."""
+    if word in words:
+        return True
+    if word.isdigit() or len(word) < 3:
+        return False
+    for other in words:
+        if other.isdigit() or len(other) < 3:
+            continue
+        common = len(os.path.commonprefix([word, other]))
+        if common >= 3 and common >= min(len(word), len(other)) - 1:
+            return True
+    return False
+
+
+def _covers(needed: set[str], present: set[str]) -> bool:
+    return bool(needed) and all(_word_in(w, present) for w in needed)
+
+
+def _record_words(record: Any, depth: int = 0) -> set[str]:
+    out: set[str] = set()
+    if isinstance(record, dict) and depth < 3:
+        for value in record.values():
+            out |= _record_words(value, depth + 1)
+    elif isinstance(record, list) and depth < 3:
+        for value in record[:20]:
+            out |= _record_words(value, depth + 1)
+    elif isinstance(record, str | int | float) and not isinstance(record, bool):
+        out |= _words(record)
+    return out
+
+
+def _named_in(record: dict, words: set[str]) -> bool:
+    """Any one name of the record (its name, number or SKU) is in the words."""
+    return any(
+        _covers(_words(record[key]), words)
+        for key in _NAME_KEYS
+        if isinstance(record.get(key), str | int) and not isinstance(record.get(key), bool)
+    )
+
+
 def _judge_target(target: str, definition, messages: list[dict], start: int) -> str | None:
-    if start >= 0 and target in str(messages[start].get("content") or "").lower():
+    request = str(messages[start].get("content") or "") if start >= 0 else ""
+    if target in request.lower():
         return None
+    request_words = _words(request)
+    target_record: dict | None = None
     turn = messages[start + 1 :]
     results = {
         str(m["tool_call_id"]): m.get("content")
@@ -2514,6 +2566,8 @@ def _judge_target(target: str, definition, messages: list[dict], start: int) -> 
             if records is None:
                 continue
             ids = [str(r["id"]).lower() for r in records]
+            if target in ids:
+                target_record = records[ids.index(target)]
             words = _lookup_words(call_args)
             if not words:
                 if target in ids and (ids == [target] or _filtered(call_args)):
@@ -2525,14 +2579,20 @@ def _judge_target(target: str, definition, messages: list[dict], start: int) -> 
                 continue
             if target not in ids:
                 continue
-            named = {str(r["id"]).lower(): _named_by(r, words) for r in records}
-            for level in (0, 1):  # equal beats contained
-                hits = [rid for rid, marks in named.items() if marks[level]]
-                if hits:
-                    if hits == [target]:
-                        return None
-                    break
+            # Every word of the lookup in the record ("09Г2С 10" names the
+            # 10 mm sheet, not the 12 mm one); a field equal to it breaks a tie.
+            looked = set().union(*(_words(w) for w in words))
+            full = [str(r["id"]).lower() for r in records if _covers(looked, _record_words(r))]
+            if len(full) > 1:
+                equal = [str(r["id"]).lower() for r in records if _named_by(r, words)[0]]
+                full = equal or full
+            if full == [target]:
+                return None
             among_several = True
+    # The request itself names the record (a group of items, a supplier by
+    # name) — one lookup finding nothing does not make it a guess.
+    if target_record is not None and _named_in(target_record, request_words):
+        return None
     if nothing_found:
         return "requested_record_not_found"
     if among_several:
