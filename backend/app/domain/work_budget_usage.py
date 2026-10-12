@@ -285,6 +285,88 @@ def _canonical_component(component: TokenComponentEvidence) -> dict[str, Any]:
     return {"status": "unknown", "reason": component.unknown_reason}
 
 
+_UNKNOWN_COST = {
+    "status": "unknown",
+    "currency": "USD",
+    "reason": "tariff_unavailable",
+    "tariff_version": None,
+}
+_AMOUNT_QUANTUM = Decimal("0.00000001")
+
+
+@dataclass(frozen=True)
+class TariffTerms:
+    """The price in force when a call was reserved, copied into its receipt."""
+
+    version: str
+    currency: str
+    input_per_1m: Decimal | None
+    output_per_1m: Decimal | None
+    free: bool
+
+
+def _decimal_text(value: Decimal) -> str:
+    text = format(value, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def _cost(tariff: TariffTerms | None, input_units: int | None, output_units: int | None) -> dict:
+    """Known only from an explicit tariff: free, or both counters observed."""
+    if tariff is None:
+        return dict(_UNKNOWN_COST)
+    if not tariff.free and (tariff.input_per_1m is None or tariff.output_per_1m is None):
+        raise ValueError("A paid tariff needs both prices")
+    if tariff.free:
+        amount = Decimal(0)
+    elif input_units is None or output_units is None:
+        return {
+            "status": "unknown",
+            "currency": tariff.currency,
+            "reason": "tokens_unknown",
+            "tariff_version": tariff.version,
+        }
+    else:
+        amount = (
+            Decimal(input_units) * tariff.input_per_1m
+            + Decimal(output_units) * tariff.output_per_1m
+        ) / Decimal(1_000_000)
+    return {
+        "status": "known",
+        "currency": tariff.currency,
+        "amount": _decimal_text(amount.quantize(_AMOUNT_QUANTUM)),
+        "tariff_version": tariff.version,
+        "free": tariff.free,
+        "input_per_1m": None if tariff.free else _decimal_text(tariff.input_per_1m),
+        "output_per_1m": None if tariff.free else _decimal_text(tariff.output_per_1m),
+    }
+
+
+def _tariff_from_cost(cost: Any) -> TariffTerms | None:
+    """Rebuild the copied tariff from a stored receipt's cost, for re-checking."""
+    if not isinstance(cost, dict) or cost.get("tariff_version") is None:
+        return None
+    version = cost.get("tariff_version")
+    currency = cost.get("currency")
+    if not isinstance(version, str) or not isinstance(currency, str):
+        raise ValueError("Malformed receipt tariff")
+    if cost.get("status") == "known":
+        free = cost.get("free")
+        if not isinstance(free, bool):
+            raise ValueError("Malformed receipt tariff")
+        if free:
+            return TariffTerms(version, currency, None, None, True)
+        return TariffTerms(
+            version,
+            currency,
+            Decimal(str(cost.get("input_per_1m"))),
+            Decimal(str(cost.get("output_per_1m"))),
+            False,
+        )
+    # "tokens_unknown": any prices rebuild the same unknown cost, and known
+    # counters with them would come out "known" — a forged unknown fails.
+    return TariffTerms(version, currency, Decimal(0), Decimal(0), False)
+
+
 def _is_v2(evidence: OllamaUsageEvidence) -> bool:
     return evidence.provider != "ollama" or evidence.model is not None
 
@@ -294,8 +376,13 @@ def canonical_usage_payload(
     evidence: OllamaUsageEvidence,
     *,
     owner_key: str,
+    tariff: TariffTerms | None = None,
 ) -> dict[str, Any]:
-    """Bind canonical evidence to authoritative reservation fields."""
+    """Bind canonical evidence to authoritative reservation fields.
+
+    ``tariff`` is the version in force at reservation; only a v2 receipt (it
+    names the model) can carry one.
+    """
     if evidence.outcome not in _OUTCOMES or not isinstance(evidence.terminal_observed, bool):
         raise ValueError("Unsupported Ollama usage outcome")
     if evidence.provider not in RECEIPT_PROVIDERS:
@@ -343,12 +430,11 @@ def canonical_usage_payload(
             "output": output_component,
             "total": total_component,
         },
-        "cost": {
-            "status": "unknown",
-            "currency": "USD",
-            "reason": "tariff_unavailable",
-            "tariff_version": None,
-        },
+        "cost": _cost(
+            tariff if _is_v2(evidence) else None,
+            input_component.get("units") if total_known else None,
+            output_component.get("units") if total_known else None,
+        ),
     }
 
 
@@ -390,12 +476,11 @@ def valid_usage_receipt_payload(
     } or any(payload.get(key) != value for key, value in expected_identity.items()):
         return False
     cost = payload.get("cost")
-    if cost != {
-        "status": "unknown",
-        "currency": "USD",
-        "reason": "tariff_unavailable",
-        "tariff_version": None,
-    }:
+    if not v2 and cost != _UNKNOWN_COST:
+        return False
+    try:
+        tariff = _tariff_from_cost(cost)
+    except (ArithmeticError, ValueError):
         return False
     tokens = payload.get("tokens")
     if not isinstance(tokens, dict) or set(tokens) != {"input", "output", "total"}:
@@ -451,8 +536,11 @@ def valid_usage_receipt_payload(
             provider=payload.get("provider"),
             model=payload.get("model"),
         )
-        return canonical_usage_payload(reservation, evidence, owner_key=owner_key) == payload
-    except (TypeError, ValueError):
+        return (
+            canonical_usage_payload(reservation, evidence, owner_key=owner_key, tariff=tariff)
+            == payload
+        )
+    except (ArithmeticError, TypeError, ValueError):
         return False
 
 

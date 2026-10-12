@@ -873,6 +873,7 @@ async def grant_computer_use(
         "desktop_downloads",
         "desktop_save_download",
         "desktop_close",
+        "desktop_handoff",
         "file_read",
         "file_write",
         "shell",

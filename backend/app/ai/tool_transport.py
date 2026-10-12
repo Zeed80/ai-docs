@@ -42,6 +42,7 @@ BROWSER_SCRIPT_MCP_OPERATIONS = frozenset(
         "computer_use.desktop_downloads",
         "computer_use.desktop_save_download",
         "computer_use.desktop_close",
+        "computer_use.desktop_handoff",
         "computer_use.file_read",
         "computer_use.file_write",
         "computer_use.shell",

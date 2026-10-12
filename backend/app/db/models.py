@@ -35,6 +35,7 @@ from app.db.agent_runtime_models import (  # noqa: F401
 )
 from app.db.base import GUID, Base, TimestampMixin, UUIDPrimaryKey
 from app.db.work_budget_models import (  # noqa: F401
+    LlmTariff,
     WorkBudgetLedger,
     WorkBudgetReservation,
 )

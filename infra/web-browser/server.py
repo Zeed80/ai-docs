@@ -337,7 +337,7 @@ class DesktopActionRequest(BaseModel):
     session_id: str
     owner: str = Field(min_length=1, max_length=200)
     action: str = Field(
-        pattern="^(observe|describe|click|type|fill_secret|upload|read|screenshot|navigate|tabs|switch_tab|downloads|take_download|close)$"
+        pattern="^(observe|describe|click|type|fill_secret|upload|read|screenshot|navigate|tabs|switch_tab|downloads|take_download|close|handoff)$"
     )
     # E32: click/type address an element by the ref an observe returned,
     # under that observe's revision — never a model-written CSS selector
@@ -358,6 +358,35 @@ class DesktopActionRequest(BaseModel):
     # only if the live form still describes to the same card.
     card: dict | None = None
     download_id: str | None = Field(default=None, max_length=40)
+    # T3: why the agent hands the session to its owner (MFA, CAPTCHA).
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class DesktopHumanRequest(BaseModel):
+    """T3: the session's owner, a person, looks at it and acts in it."""
+
+    session_id: str
+    owner: str = Field(min_length=1, max_length=200)
+    op: str = Field(pattern="^(view|take|click|type|key|return)$")
+    x: int | None = Field(default=None, ge=0, le=10000)
+    y: int | None = Field(default=None, ge=0, le=10000)
+    text: str | None = Field(default=None, max_length=500, repr=False)
+    key: str | None = Field(default=None, max_length=20)
+
+
+class DesktopListOwnerRequest(BaseModel):
+    owner: str = Field(min_length=1, max_length=200)
+
+
+# T3: keys a person may press in a handed-off session.
+_HUMAN_KEYS = frozenset(
+    {"Enter", "Tab", "Shift+Tab", "Backspace", "Escape", "ArrowUp", "ArrowDown",
+     "ArrowLeft", "ArrowRight", "Space"}
+)
+# What a person types is redacted from the agent's answers like a secret
+# (an MFA code must not reach the model); shorter text would blank out
+# ordinary page characters, so it is not tracked.
+_HUMAN_TEXT_REDACT_MIN = 4
 
 
 # E32: what an observe sees. Interactive elements of the active tab's main
@@ -620,9 +649,15 @@ async def desktop_action(req: DesktopActionRequest) -> dict:
             # Closed (by owner, revoke or sweep) while this action waited.
             return {"ok": False, "error": "session_not_found"}
         session["last_used"] = time.monotonic()
+        if session.get("handoff") is not None:
+            # T3: the owner holds the session; the agent waits for it back.
+            return {"ok": False, "error": "session_with_owner"}
         if req.action == "close":
             await _close_session(req.session_id)
             return {"ok": True, "closed": True}
+        if req.action == "handoff":
+            session["handoff"] = {"reason": (req.reason or "")[:500], "since": time.time()}
+            return {"ok": True, "handed_off": True, "url": session["page"].url}
         try:
             result = await _desktop_step(session, req)
         except Exception as exc:  # noqa: BLE001
@@ -816,6 +851,100 @@ async def _desktop_step(session: dict, req: DesktopActionRequest) -> dict:
         await page.wait_for_timeout(req.wait_ms)
     # A new tab the click opened becomes visible to the next "tabs".
     return {"done": req.action}
+
+
+async def _human_view(session: dict) -> dict:
+    page = session["page"]
+    shot = await page.screenshot(type="png", animations="disabled", caret="initial")
+    return {
+        "ok": True,
+        "url": page.url,
+        "title": await page.title(),
+        "handoff": session.get("handoff"),
+        "outside_allowlist": not _session_host_allowed(page.url, session["allowed_hosts"]),
+        "viewport": _VIEWPORT,
+        "screenshot_b64": base64.b64encode(shot).decode("ascii"),
+    }
+
+
+@app.post("/desktop/human")
+async def desktop_human(req: DesktopHumanRequest) -> dict:
+    """T3: a person looks at the session and, once it is handed to them, acts.
+
+    The agent's actions are refused while the person holds the session; the
+    person's input goes in by coordinates and keys, as a person's would. On
+    return the agent must observe afresh, and a page outside the allowlist
+    ends the session instead of going back to the agent.
+    """
+    session = _sessions.get(req.session_id)
+    if session is None or session["owner"] != req.owner:
+        return {"ok": False, "error": "session_not_found"}
+    if session["browser"] is not _engine._browser or not _engine.alive():
+        _sessions.pop(req.session_id, None)
+        return {"ok": False, "error": "session_lost"}
+    async with session["lock"]:
+        if _sessions.get(req.session_id) is not session:
+            return {"ok": False, "error": "session_not_found"}
+        session["last_used"] = time.monotonic()
+        page = session["page"]
+        if page.is_closed():
+            context = session["context"]
+            page = session["page"] = (
+                context.pages[-1] if context.pages else await context.new_page()
+            )
+        if req.op == "take" and session.get("handoff") is None:
+            session["handoff"] = {"reason": "Владелец взял сессию сам", "since": time.time()}
+        if req.op not in {"view", "take"} and session.get("handoff") is None:
+            return {"ok": False, "error": "session_with_agent"}
+        if req.op == "click":
+            if req.x is None or req.y is None:
+                return {"ok": False, "error": "coordinates_required"}
+            if req.x >= _VIEWPORT["width"] or req.y >= _VIEWPORT["height"]:
+                return {"ok": False, "error": "outside_viewport"}
+            await page.mouse.click(req.x, req.y)
+            await page.wait_for_timeout(300)
+        elif req.op == "type":
+            if not req.text:
+                return {"ok": False, "error": "text_required"}
+            if len(req.text) >= _HUMAN_TEXT_REDACT_MIN:
+                session.setdefault("secrets", set()).add(req.text)
+            await page.keyboard.type(req.text)
+        elif req.op == "key":
+            if req.key not in _HUMAN_KEYS:
+                return {"ok": False, "error": "key_not_allowed"}
+            await page.keyboard.press(" " if req.key == "Space" else req.key)
+            await page.wait_for_timeout(300)
+        elif req.op == "return":
+            if not _session_host_allowed(page.url, session["allowed_hosts"]):
+                await _close_session(req.session_id)
+                return {"ok": False, "error": "navigation_left_allowlist", "closed": True}
+            session["handoff"] = None
+            # Whatever the agent observed before is stale now.
+            session["revision"] = session.get("revision", 0) + 1
+            try:
+                await page.evaluate(
+                    "() => document.documentElement.removeAttribute('data-aiw-rev')"
+                )
+            except Exception:  # noqa: BLE001 - a page mid-navigation has no root yet
+                pass
+        return await _human_view(session)
+
+
+@app.post("/desktop/list-owner")
+async def desktop_list_owner(req: DesktopListOwnerRequest) -> dict:
+    """T3: one owner's live sessions, for the person's session screen."""
+    return {
+        "ok": True,
+        "sessions": [
+            {
+                "session_id": sid,
+                "url": s["page"].url,
+                "handoff": s.get("handoff"),
+            }
+            for sid, s in _sessions.items()
+            if s["owner"] == req.owner and not s["page"].is_closed()
+        ],
+    }
 
 
 @app.post("/desktop/close-owner")
