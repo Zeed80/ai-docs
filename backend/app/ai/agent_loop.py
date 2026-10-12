@@ -2309,6 +2309,124 @@ def prior_creation(messages: list[dict], key: str, start: int | None = None) -> 
     return None
 
 
+_LOOKUP_KEYS = frozenset(
+    {"query", "q", "search", "name", "text", "title", "invoice_number", "number", "sku"}
+)
+
+
+def _tool_definition(name: str, arguments: dict):
+    from app.ai.tool_catalog import TOOLS, get_tool
+
+    dotted = name.replace("__", ".")
+    return TOOLS.get(dotted) or get_tool(dotted, str(arguments.get("action") or ""))
+
+
+def _record_ids(result: Any) -> list[str] | None:
+    """Ids of the records a read returned, or None when it is not a record read."""
+    if isinstance(result, dict) and result.get("version") == 1 and "data" in result:
+        if result.get("status") != "succeeded":
+            return None
+        result = result.get("data")
+    if isinstance(result, dict) and "id" in result:
+        return [str(result["id"]).lower()]
+    rows = result if isinstance(result, list) else None
+    if isinstance(result, dict):
+        rows = next((v for v in result.values() if isinstance(v, list)), None)
+    if rows is None:
+        return None
+    return [str(r["id"]).lower() for r in rows if isinstance(r, dict) and "id" in r]
+
+
+def _lookup_text(arguments: Any) -> bool:
+    """Whether a read named its record in words (a query, a number), unlike a filter."""
+    if isinstance(arguments, dict):
+        for key, value in arguments.items():
+            if key in _LOOKUP_KEYS and isinstance(value, str) and value.strip():
+                return True
+            if isinstance(value, dict) and _lookup_text(value):
+                return True
+    return False
+
+
+def guessed_target(
+    name: str, arguments: Any, messages: list[dict], start: int | None = None
+) -> str | None:
+    """T7b: why a change of an existing record aims at a record the model chose
+    itself, judged from this turn's reads — not from the model's own mark.
+
+    E52: the employee searched for «Эвал-Никель», found nothing, listed every
+    supplier and changed «Эвал-Медь» without saying it guessed. A target is
+    confirmed by a read that returned it alone; it is a guess when a lookup
+    of this kind found nothing, or when a lookup in words returned several.
+    """
+    args = arguments if isinstance(arguments, dict) else {}
+    definition = _tool_definition(name, args)
+    if (
+        definition is None
+        or definition.effect not in {"write", "delete"}
+        or not definition.path_params
+    ):
+        return None
+    target = next(
+        (
+            str(args[p]).lower()
+            for p in definition.path_params
+            if isinstance(args.get(p), str | uuid.UUID)
+        ),
+        None,
+    )
+    if not target:
+        return None
+    if start is None:
+        start = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1)
+    if start >= 0 and target in str(messages[start].get("content") or "").lower():
+        return None
+    turn = messages[start + 1 :]
+    results = {
+        str(m["tool_call_id"]): m.get("content")
+        for m in turn
+        if m.get("role") == "tool" and m.get("tool_call_id")
+    }
+    capability = definition.name.split(".")[0]
+    nothing_found = among_several = False
+    for message in turn:
+        if message.get("role") != "assistant":
+            continue
+        for call in message.get("tool_calls") or []:
+            function = call.get("function") or {}
+            call_args = function.get("arguments") or {}
+            if isinstance(call_args, str):
+                try:
+                    call_args = json.loads(call_args)
+                except (TypeError, ValueError):
+                    continue
+            if not isinstance(call_args, dict):
+                continue
+            read = _tool_definition(str(function.get("name") or ""), call_args)
+            if read is None or read.effect != "read":
+                continue
+            raw = results.get(str(call.get("id") or ""))
+            try:
+                result = json.loads(raw) if isinstance(raw, str) else raw
+            except (TypeError, ValueError):
+                continue
+            ids = _record_ids(result)
+            if ids is None:
+                continue
+            if ids == [target]:
+                return None
+            lookup = _lookup_text({k: v for k, v in call_args.items() if k != "action"})
+            if lookup and not ids and read.name.split(".")[0] == capability:
+                nothing_found = True
+            if lookup and len(ids) > 1 and target in ids:
+                among_several = True
+    if nothing_found:
+        return "requested_record_not_found"
+    if among_several:
+        return "one_of_several"
+    return None
+
+
 def performed_changes(messages: list[dict], start: int | None = None) -> list[str]:
     """Changing tool calls of the current turn that reported success, in order.
 
@@ -3571,6 +3689,14 @@ class AgentSession:
             args = {k: v for k, v in args.items() if k != "target_match"}
             if str(target_match).casefold() in GUESSED_TARGET_MARKS:
                 current_gates.add(original_name)
+        # T7b: whether the target is a guess is judged from this turn's reads,
+        # whatever the model marked (E52: it changed a look-alike unmarked).
+        guess_reason = guessed_target(
+            original_name, execution_args, self.messages, self._turn_start()
+        )
+        if guess_reason is not None:
+            current_gates.add(original_name)
+            logger.info("guessed_target_gated", tool=original_name, reason=guess_reason)
         # T7a: a second copy of something that already exists (the recipient
         # answered already_exists) is the owner's call, not the model's.
         body_arg = execution_args.get("body")

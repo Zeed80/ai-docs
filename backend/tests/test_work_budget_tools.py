@@ -932,3 +932,71 @@ async def test_a_requested_duplicate_waits_for_the_owner(test_engine, monkeypatc
     )
     assert len(asked) == (1 if explicit else 0)
     assert len(effects) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_change_after_an_empty_search_waits_for_the_owner_unmarked(
+    test_engine, monkeypatch
+):
+    """T7b (E52): the model searched «Эвал-Никель», found nothing and changed
+    «Эвал-Медь» without a mark; the code, not the mark, makes it a guess."""
+    from app.ai import agent_config
+
+    _, _, context = await _claimed_context(test_engine)
+    effects = []
+    _install_http(monkeypatch, [httpx.Response(200, json={"ok": True})], effects)
+    config = BuiltinAgentConfig(approval_gates=[])
+    monkeypatch.setattr(agent_config, "get_builtin_agent_config", lambda: config)
+
+    async def send(event):
+        return None
+
+    session = agent_loop.AgentSession(send)
+    session.set_work_budget_context(context)
+    session._skill_map = {
+        "suppliers": {"name": "suppliers", "method": "POST", "path": "/api/agent/cap/suppliers"}
+    }
+
+    async def no_log(**kwargs):
+        return None
+
+    session._log_action = no_log
+    asked: list[dict] = []
+
+    async def approve(skill_name, args):
+        asked.append(args)
+        return True
+
+    session._request_approval = approve
+    session.messages = [
+        {"role": "user", "content": "Обнови телефон ООО «Эвал-Никель»"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "s1",
+                    "function": {
+                        "name": "suppliers",
+                        "arguments": {"action": "search", "query": "Эвал-Никель"},
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "s1", "content": json.dumps({"results": [], "total": 0})},
+    ]
+    copper = str(uuid.uuid4())
+    await session._execute_single_tool(
+        {
+            "id": "upd-1",
+            "function": {
+                "name": "suppliers",
+                "arguments": {
+                    "action": "update",
+                    "supplier_id": copper,
+                    "body": {"contact_phone": "+7"},
+                },
+            },
+        },
+        0,
+    )
+    assert len(asked) == 1
