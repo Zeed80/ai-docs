@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import re
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -433,17 +434,36 @@ async def _create_agent_task(payload: AgentTaskCreate, db: AsyncSession) -> Agen
 _OPEN_TASK_STATUSES = ("proposed", "created", "running")
 
 
-def _objective_words(text: str) -> set[str]:
-    """Word stems of an objective: word order and endings vary between rewordings."""
-    words = re.findall(r"[0-9a-zа-я]+", text.lower().replace("ё", "е"))
-    return {w[:5] for w in words if len(w) >= 3}
+def _quoted_names(text: str) -> set[str]:
+    return {n.strip().lower().replace("ё", "е") for n in re.findall(r"«([^»]+)»", text)}
+
+
+def _word_matches(word: str, words: set[str]) -> bool:
+    """The same word up to an ending (сверять/сверка, цены/цен)."""
+    for other in words:
+        common = len(os.path.commonprefix([word, other]))
+        if word == other or (common >= 3 and common >= min(len(word), len(other)) - 1):
+            return True
+    return False
 
 
 def _same_objective(a: str, b: str) -> bool:
-    """Same stems, any order. A share of common words would merge two tasks
-    that differ only in the supplier (7 of 9 stems shared)."""
-    left = _objective_words(a)
-    return bool(left) and left == _objective_words(b)
+    """The same task reworded. Quoted names must match exactly — a share of
+    common words alone would merge two tasks that differ only in the supplier
+    (7 of 9 words shared) — and most other words must match both ways.
+
+    E52 run 3: «Ежемесячная сверка цен ООО «Эвал-Сталь» с их прайсом» was
+    proposed next to the open «Сверять цены ООО «Эвал-Сталь» с их прайсом раз
+    в месяц»; an equal-stems rule let it through."""
+    if _quoted_names(a) != _quoted_names(b):
+        return False
+    left = {w for w in re.findall(r"[0-9a-zа-я]+", a.lower().replace("ё", "е")) if len(w) >= 3}
+    right = {w for w in re.findall(r"[0-9a-zа-я]+", b.lower().replace("ё", "е")) if len(w) >= 3}
+    if not left or not right:
+        return False
+    there = sum(_word_matches(w, right) for w in left) / len(left)
+    back = sum(_word_matches(w, left) for w in right) / len(right)
+    return min(there, back) >= 0.6
 
 
 async def _propose_agent_task(

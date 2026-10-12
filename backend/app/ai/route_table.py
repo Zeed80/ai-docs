@@ -385,6 +385,11 @@ def response_budgets() -> dict[str, Any]:
     return _table().get("response_budgets") or {}
 
 
+def stale_source_markers() -> list[str]:
+    """T8b: phrases that mark a web page as out of date."""
+    return list(_table().get("stale_source_markers") or [])
+
+
 def group_request_words() -> list[str]:
     """T7b: words that make a request ask for a whole set of records."""
     return list(_table().get("group_request_words") or [])

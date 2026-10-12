@@ -2486,6 +2486,100 @@ def guessed_target(
     return None
 
 
+def _contact_values(body: Any) -> list[tuple[str, str]]:
+    """(field, normalized value) for phones and e-mails a change writes."""
+    out: list[tuple[str, str]] = []
+    if not isinstance(body, dict):
+        return out
+    for key, value in body.items():
+        if not isinstance(value, str):
+            continue
+        text = value.strip().lower()
+        if _EMAIL_RE.match(text):
+            out.append((key, text))
+            continue
+        digits = re.sub(r"\D", "", text)
+        if len(digits) >= 10 and len(digits) >= len(re.sub(r"[\s()+\-]", "", text)) - 1:
+            out.append((key, digits))
+    return out
+
+
+def _pages(messages: list[dict], start: int) -> list[dict]:
+    """Web pages read in this turn: {url, title, text} from tool results."""
+    pages: list[dict] = []
+
+    def visit(value: Any, depth: int) -> None:
+        if depth > 4:
+            return
+        if isinstance(value, dict):
+            if isinstance(value.get("text"), str) and (value.get("url") or value.get("final_url")):
+                pages.append(value)
+            for item in value.values():
+                visit(item, depth + 1)
+        elif isinstance(value, list):
+            for item in value[:20]:
+                visit(item, depth + 1)
+
+    for message in messages[start + 1 :]:
+        if message.get("role") != "tool":
+            continue
+        raw = message.get("content")
+        try:
+            visit(json.loads(raw) if isinstance(raw, str) else raw, 0)
+        except (TypeError, ValueError):
+            continue
+    return pages
+
+
+def doubtful_source(
+    name: str, arguments: Any, messages: list[dict], start: int | None = None
+) -> str | None:
+    """T8b: a contact taken from a page that is someone else's or out of date.
+
+    E52: the employee read «Новости Эвал-Медь» and wrote its phone into
+    «Эвал-Сталь»; read a page saying "устарела… номер больше не обслуживается"
+    and wrote that number anyway — both times saying so in the answer.
+    Judged only for phones and e-mails found verbatim on a page of this turn.
+    """
+    from app.ai.route_table import stale_source_markers
+
+    args = arguments if isinstance(arguments, dict) else {}
+    definition = _tool_definition(name, args)
+    if definition is None or definition.effect != "write" or not definition.path_params:
+        return None
+    values = _contact_values(args.get("body"))
+    if not values:
+        return None
+    if start is None:
+        start = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1)
+    target = next((str(args[p]).lower() for p in definition.path_params if args.get(p)), None)
+    target_record = None
+    for message in messages[start + 1 :]:
+        if message.get("role") != "tool" or target_record is not None:
+            continue
+        try:
+            records = _records(json.loads(message.get("content") or "null"))
+        except (TypeError, ValueError):
+            continue
+        for record in records or []:
+            if str(record.get("id")).lower() == target:
+                target_record = record
+    markers = [_plain(m) for m in stale_source_markers()]
+    for page in _pages(messages, start):
+        text = _plain(re.sub(r"</?untrusted-content[^>]*>", " ", str(page.get("text") or "")))
+        page_digits = re.sub(r"\D", "", text)
+        if not any(v in (page_digits if v.isdigit() else text) for _field, v in values):
+            continue
+        if any(marker in text for marker in markers):
+            return "stale_source"
+        page_words = _words(
+            f"{page.get('title') or ''} {text} {page.get('url') or page.get('final_url') or ''}"
+        )
+        if target_record is not None and not _named_in(target_record, page_words):
+            return "foreign_source"
+    return None
+
+
 _CODE_RE = re.compile(r"\b[a-zа-я]{1,6}-?\d{2,}[\w/-]*", re.I)
 
 
@@ -4080,6 +4174,13 @@ class AgentSession:
         if guess_reason is not None:
             current_gates.add(original_name)
             logger.info("guessed_target_gated", tool=original_name, reason=guess_reason)
+        # T8b: a contact copied from someone else's or an outdated page.
+        source_doubt = doubtful_source(
+            original_name, execution_args, self.messages, self._turn_start()
+        )
+        if source_doubt is not None:
+            current_gates.add(original_name)
+            logger.info("doubtful_source_gated", tool=original_name, reason=source_doubt)
         # T7c: a field the request never named is the owner's call.
         extra_fields = unrequested_fields(
             original_name, execution_args, self.messages, self._turn_start()

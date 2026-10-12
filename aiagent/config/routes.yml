@@ -906,6 +906,10 @@ prompt_sections:
 # model's choice among look-alikes. Normalized (lower, ё→е) whole words.
 group_request_words: [все, всех, всем, всеми, каждый, каждого, каждому, каждой, каждую]
 
+# T8b (E52): a page that says it is out of date is not a source for a card.
+# Normalized (lower, ё→е) substrings of the page text.
+stale_source_markers: [устарел, архивная страниц, не обновляется, не обслуживается, больше не действует, недействител]
+
 # T7c (E52): a field of an existing record changes only when the request names
 # it. tool → field → word stems (normalized: lower, ё→е). A field changed
 # without any of its stems in the request waits for the owner. Fields not

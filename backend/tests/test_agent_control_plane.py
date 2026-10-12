@@ -943,3 +943,26 @@ async def test_a_reworded_open_task_proposal_is_already_exists(client: AsyncClie
         json={"objective": f"Сверять цены ООО «Эвал-Сталь{tag}» с их прайсом раз в месяц"},
     )
     assert reopened.status_code == 200, reopened.text
+
+
+@pytest.mark.asyncio
+async def test_a_task_reworded_in_other_words_is_already_exists(client: AsyncClient):
+    """T8d (E52 run 3): «Ежемесячная сверка цен» next to «Сверять цены … раз в месяц»."""
+    tag = uuid.uuid4().hex[:6]
+    first = await client.post(
+        "/api/agent/tasks/propose",
+        json={"objective": f"Сверять цены ООО «Эвал-Сталь{tag}» с их прайсом раз в месяц"},
+    )
+    assert first.status_code == 200, first.text
+    reworded = await client.post(
+        "/api/agent/tasks/propose",
+        json={"objective": f"Ежемесячная сверка цен ООО «Эвал-Сталь{tag}» с их прайсом"},
+    )
+    assert reworded.status_code == 409
+    other = await client.post(
+        "/api/agent/tasks/propose",
+        json={"objective": f"Найти каталоги ООО «Эвал-Сталь{tag}» и прикрепить их к карточке"},
+    )
+    assert other.status_code == 200, other.text
+    for task in (first, other):
+        await client.post(f"/api/agent/tasks/{task.json()['id']}/decide", json={"approved": False})
