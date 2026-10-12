@@ -345,3 +345,36 @@ def test_a_record_the_request_names_is_not_a_guess_after_an_empty_lookup():
         request="Перенеси лист 09Г2С 10 мм и лист 09Г2С 12 мм на стеллаж D-01",
     )
     assert guessed_target("warehouse", MIN_QTY, messages) is None
+
+
+def test_a_set_the_user_asked_for_is_not_a_choice_among_look_alikes():
+    """E52: "Пометь все утверждённые счета ООО «Эвал-Сталь»" — every match is meant."""
+    invoices = _envelope(
+        {
+            "items": [
+                {"id": INV, "invoice_number": "EV-3301", "supplier": {"name": "ООО «Эвал-Сталь»"}},
+                {"id": NEAR, "invoice_number": "EV-3303", "supplier": {"name": "ООО «Эвал-Сталь»"}},
+            ]
+        }
+    )
+    lookup = ("invoices", {"action": "list", "filters": {"name": "Эвал-Сталь"}}, invoices)
+    group = _turn(
+        lookup, request="Пометь все утверждённые счета ООО «Эвал-Сталь» пометкой «готов к оплате»."
+    )
+    assert guessed_target("invoices", NOTE, group) is None
+    single = _turn(lookup, request="Пометь счёт ООО «Эвал-Сталь» пометкой «готов к оплате».")
+    assert guessed_target("invoices", NOTE, single) == "one_of_several"
+
+
+def test_an_empty_lookup_does_not_judge_a_target_no_read_showed():
+    """E52 catalog cases: the supplier came from resolve_supplier, a catalog
+    search found nothing — the empty search says nothing about the supplier."""
+    messages = _turn(
+        (
+            "tool_catalog",
+            {"action": "search_positions", "query": "проволока 2 мм"},
+            _envelope({"items": []}),
+        ),
+        request="В каталоге ООО «Эвал-Медь» найди медную проволоку 2 мм",
+    )
+    assert guessed_target("suppliers", UPDATE, messages) is None

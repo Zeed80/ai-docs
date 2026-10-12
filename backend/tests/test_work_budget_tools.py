@@ -968,6 +968,7 @@ async def test_a_change_after_an_empty_search_waits_for_the_owner_unmarked(
         return True
 
     session._request_approval = approve
+    copper = str(uuid.uuid4())
     session.messages = [
         {"role": "user", "content": "Обнови телефон ООО «Эвал-Никель»"},
         {
@@ -983,8 +984,26 @@ async def test_a_change_after_an_empty_search_waits_for_the_owner_unmarked(
             ],
         },
         {"role": "tool", "tool_call_id": "s1", "content": json.dumps({"results": [], "total": 0})},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "l1", "function": {"name": "suppliers", "arguments": {"action": "list"}}}
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "l1",
+            "content": json.dumps(
+                {
+                    "items": [
+                        {"id": str(uuid.uuid4()), "name": "ООО «Эвал-Сталь»"},
+                        {"id": copper, "name": "ООО «Эвал-Медь»"},
+                    ],
+                    "total": 2,
+                }
+            ),
+        },
     ]
-    copper = str(uuid.uuid4())
     await session._execute_single_tool(
         {
             "id": "upd-1",

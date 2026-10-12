@@ -385,6 +385,11 @@ def response_budgets() -> dict[str, Any]:
     return _table().get("response_budgets") or {}
 
 
+def group_request_words() -> list[str]:
+    """T7b: words that make a request ask for a whole set of records."""
+    return list(_table().get("group_request_words") or [])
+
+
 def field_terms(tool: str) -> dict[str, list[str]]:
     """T7c: field → word stems the request must contain to change it."""
     return (_table().get("field_terms") or {}).get(tool) or {}

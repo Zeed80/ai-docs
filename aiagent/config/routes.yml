@@ -901,6 +901,11 @@ prompt_sections:
       data_analyst со skills: analytics.dashboard_today, approvals.approval_list,
       anomalies.list, payments.overdue.
 
+# T7b (E52): a request for a whole set ("все утверждённые счета", "для всех
+# кругов") makes several records matching one lookup the user's set, not a
+# model's choice among look-alikes. Normalized (lower, ё→е) whole words.
+group_request_words: [все, всех, всем, всеми, каждый, каждого, каждому, каждой, каждую]
+
 # T7c (E52): a field of an existing record changes only when the request names
 # it. tool → field → word stems (normalized: lower, ё→е). A field changed
 # without any of its stems in the request waits for the owner. Fields not

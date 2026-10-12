@@ -2532,6 +2532,9 @@ def _judge_target(target: str, definition, messages: list[dict], start: int) -> 
     if target in request.lower():
         return None
     request_words = _words(request)
+    from app.ai.route_table import group_request_words
+
+    group = bool(request_words & set(group_request_words()))
     target_record: dict | None = None
     turn = messages[start + 1 :]
     results = {
@@ -2586,14 +2589,16 @@ def _judge_target(target: str, definition, messages: list[dict], start: int) -> 
             if len(full) > 1:
                 equal = [str(r["id"]).lower() for r in records if _named_by(r, words)[0]]
                 full = equal or full
-            if full == [target]:
+            if full == [target] or (group and target in full):
                 return None
             among_several = True
     # The request itself names the record (a group of items, a supplier by
     # name) — one lookup finding nothing does not make it a guess.
     if target_record is not None and _named_in(target_record, request_words):
         return None
-    if nothing_found:
+    # A target no read of this turn showed (it came from a resolver, an
+    # earlier turn) is not judged by an unrelated empty lookup.
+    if nothing_found and target_record is not None:
         return "requested_record_not_found"
     if among_several:
         return "one_of_several"
