@@ -1379,3 +1379,31 @@ async def test_short_tool_result_is_kept_whole(test_engine):
         "content": '{"tool": "documents", "result": {"summary": "Пересказ"}}',
         "truncated": False,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retry_says", ["answer", "nothing"])
+async def test_an_audit_retry_replaces_the_first_attempts_text(test_engine, retry_says):
+    """Live 2026-10-12: "could not finish in the allotted steps" from the first
+    attempt was glued in front of the retry's real answer, without a space."""
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    run, step, attempt = await claimed_run(factory)
+
+    class Agent(FakeAgent):
+        async def on_user_message(self, prompt, **kwargs):
+            await self.send(
+                {"type": "text", "content": "Не удалось завершить за отведённое число шагов."}
+            )
+            await self.send({"type": "audit.retry_started", "content": "Аудит: исправляю."})
+            if retry_says == "answer":
+                await self.send({"type": "text", "content": "Поставщика нет в справочнике."})
+                await self.send({"type": "text", "content": "Телефон не менял."})
+            await self.send({"type": "done"})
+
+    output = await run_durable_chat(
+        run["work_order_id"], step, attempt, session_factory=factory, agent_factory=Agent
+    )
+    if retry_says == "answer":
+        assert output["text"] == "Поставщика нет в справочнике.\n\nТелефон не менял."
+    else:
+        assert output["text"] == "Не удалось завершить за отведённое число шагов."
