@@ -23,6 +23,11 @@ REV=$(git rev-parse --short HEAD)$(git diff --quiet HEAD -- backend aiagent || e
 # killed at 72/363 on host memory) lost everything but its log.
 cleanup() {
   docker cp aiw-eval-eval-backend-1:/tmp/results.jsonl "$OUT_DIR/$STAMP.jsonl" >/dev/null 2>&1 || true
+  # The API and the worker log what the runner only sees as "HTTP 500"
+  # (E52: catalog cases failed 0/3 twice with nothing to read afterwards).
+  for svc in backend worker; do
+    docker logs "aiw-eval-eval-$svc-1" 2>&1 | gzip > "$OUT_DIR/$STAMP.$svc.log.gz" || true
+  done
   [ "${EVAL_KEEP_WORLD:-0}" = "1" ] && return
   "${COMPOSE[@]}" down -v >/dev/null 2>&1 || true
 }
