@@ -2321,31 +2321,82 @@ def _tool_definition(name: str, arguments: dict):
     return TOOLS.get(dotted) or get_tool(dotted, str(arguments.get("action") or ""))
 
 
-def _record_ids(result: Any) -> list[str] | None:
-    """Ids of the records a read returned, or None when it is not a record read."""
+def _records(result: Any) -> list[dict] | None:
+    """Records a read returned (each with an id), or None when it is not a record read."""
     if isinstance(result, dict) and result.get("version") == 1 and "data" in result:
         if result.get("status") != "succeeded":
             return None
         result = result.get("data")
     if isinstance(result, dict) and "id" in result:
-        return [str(result["id"]).lower()]
+        return [result]
     rows = result if isinstance(result, list) else None
     if isinstance(result, dict):
         rows = next((v for v in result.values() if isinstance(v, list)), None)
     if rows is None:
         return None
-    return [str(r["id"]).lower() for r in rows if isinstance(r, dict) and "id" in r]
+    return [r for r in rows if isinstance(r, dict) and "id" in r]
 
 
-def _lookup_text(arguments: Any) -> bool:
-    """Whether a read named its record in words (a query, a number), unlike a filter."""
+_PAGING_KEYS = frozenset(
+    {"action", "limit", "offset", "page", "page_size", "sort", "sort_by", "order", "fields"}
+)
+
+
+def _lookup_words(arguments: Any) -> list[str]:
+    """The words a read named its record by (a query, a number), unlike a filter."""
+    out: list[str] = []
     if isinstance(arguments, dict):
         for key, value in arguments.items():
             if key in _LOOKUP_KEYS and isinstance(value, str) and value.strip():
+                out.append(value)
+            elif isinstance(value, dict):
+                out.extend(_lookup_words(value))
+    return out
+
+
+def _filtered(arguments: Any) -> bool:
+    """A read narrowed by a criterion (status, amount, date) — the user's choice."""
+    if not isinstance(arguments, dict):
+        return False
+    for key, value in arguments.items():
+        if key in _PAGING_KEYS or key in _LOOKUP_KEYS or value in (None, "", [], {}):
+            continue
+        if isinstance(value, dict):
+            if _filtered(value):
                 return True
-            if isinstance(value, dict) and _lookup_text(value):
-                return True
+            continue
+        return True
     return False
+
+
+def _plain(text: str) -> str:
+    return re.sub(r"[«»\"'“”]", "", str(text).lower().replace("ё", "е")).strip()
+
+
+def _named_by(record: dict, words: list[str]) -> tuple[bool, bool]:
+    """(equal, contained): a field of the record equals / contains the words."""
+    values: list[str] = []
+
+    def collect(value: Any, depth: int) -> None:
+        if isinstance(value, bool) or value is None:
+            return
+        if isinstance(value, str | int | float):
+            values.append(_plain(value))
+        elif isinstance(value, dict) and depth < 2:
+            for item in value.values():
+                collect(item, depth + 1)
+        elif isinstance(value, list) and depth < 2:
+            for item in value[:20]:
+                collect(item, depth + 1)
+
+    collect(record, 0)
+    equal = contained = False
+    for word in (_plain(w) for w in words):
+        if not word:
+            continue
+        equal = equal or word in values
+        contained = contained or any(word in v for v in values)
+    return equal, contained
 
 
 def unrequested_fields(
@@ -2395,8 +2446,11 @@ def guessed_target(
 
     E52: the employee searched for «Эвал-Никель», found nothing, listed every
     supplier and changed «Эвал-Медь» without saying it guessed. A target is
-    confirmed by a read that returned it alone; it is a guess when a lookup
-    of this kind found nothing, or when a lookup in words returned several.
+    confirmed by a read that returned it alone, by a lookup whose words name
+    it and no other returned record (a fuzzy search also returns neighbours:
+    EV-5301 next to EV-5310), or by a filter (status, amount) — the user's
+    criterion. It is a guess when a lookup of this kind found nothing, or when
+    the words named several records equally.
     """
     args = arguments if isinstance(arguments, dict) else {}
     definition = _tool_definition(name, args)
@@ -2449,16 +2503,29 @@ def guessed_target(
                 result = json.loads(raw) if isinstance(raw, str) else raw
             except (TypeError, ValueError):
                 continue
-            ids = _record_ids(result)
-            if ids is None:
+            records = _records(result)
+            if records is None:
                 continue
-            if ids == [target]:
-                return None
-            lookup = _lookup_text({k: v for k, v in call_args.items() if k != "action"})
-            if lookup and not ids and read.name.split(".")[0] == capability:
-                nothing_found = True
-            if lookup and len(ids) > 1 and target in ids:
-                among_several = True
+            ids = [str(r["id"]).lower() for r in records]
+            words = _lookup_words(call_args)
+            if not words:
+                if target in ids and (ids == [target] or _filtered(call_args)):
+                    return None
+                continue
+            if not ids:
+                if read.name.split(".")[0] == capability:
+                    nothing_found = True
+                continue
+            if target not in ids:
+                continue
+            named = {str(r["id"]).lower(): _named_by(r, words) for r in records}
+            for level in (0, 1):  # equal beats contained
+                hits = [rid for rid, marks in named.items() if marks[level]]
+                if hits:
+                    if hits == [target]:
+                        return None
+                    break
+            among_several = True
     if nothing_found:
         return "requested_record_not_found"
     if among_several:

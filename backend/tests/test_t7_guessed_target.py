@@ -27,10 +27,12 @@ def _envelope(data):
 
 
 UPDATE = {"action": "update", "supplier_id": COPPER, "body": {"contact_phone": "+7 495 222-33-44"}}
+S_REC = {"id": STEEL, "name": "ООО «Эвал-Сталь»"}
+C_REC = {"id": COPPER, "name": "ООО «Эвал-Медь»"}
 LIST_ALL = (
     "suppliers",
     {"action": "list"},
-    _envelope({"items": [{"id": STEEL}, {"id": COPPER}], "total": 2}),
+    _envelope({"items": [S_REC, C_REC], "total": 2}),
 )
 
 
@@ -51,7 +53,7 @@ def test_one_of_several_found_by_name_is_a_guess():
         (
             "suppliers",
             {"action": "search", "query": "Эвал"},
-            _envelope({"results": [{"id": STEEL}, {"id": COPPER}], "total": 2}),
+            _envelope({"results": [S_REC, C_REC], "total": 2}),
         ),
     )
     assert guessed_target("suppliers", UPDATE, messages) == "one_of_several"
@@ -67,7 +69,7 @@ def test_a_record_read_alone_is_confirmed():
         (
             "suppliers",
             {"action": "search", "query": "Эвал-Медь"},
-            _envelope({"results": [{"id": COPPER}], "total": 1}),
+            _envelope({"results": [C_REC], "total": 1}),
         ),
     )
     assert guessed_target("suppliers", UPDATE, messages) is None
@@ -79,7 +81,7 @@ def test_records_picked_by_a_filter_are_not_a_guess():
         (
             "suppliers",
             {"action": "list", "filters": {"status": "active"}},
-            _envelope({"items": [{"id": STEEL}, {"id": COPPER}], "total": 2}),
+            _envelope({"items": [S_REC, C_REC], "total": 2}),
         ),
         request="Отметь всех активных поставщиков",
     )
@@ -189,3 +191,71 @@ def test_a_yes_to_the_agents_proposal_names_its_fields():
         unrequested_fields("suppliers", _update(contact_phone="+7 495 100-20-30"), messages) == []
     )
     assert unrequested_fields("suppliers", _update(address="Москва"), messages) == ["address"]
+
+
+INV = "33333333-3333-3333-3333-333333333333"
+NEAR = "44444444-4444-4444-4444-444444444444"
+NOTE = {"action": "update", "invoice_id": INV, "body": {"notes": "x"}}
+
+
+def test_the_exact_record_among_fuzzy_neighbours_is_confirmed():
+    """E52 repeat: a search by number also returned EV-5310; EV-5301 is named."""
+    messages = _turn(
+        (
+            "invoices",
+            {"action": "list", "filters": {"invoice_number": "EV-5301"}},
+            _envelope(
+                {
+                    "items": [
+                        {"id": INV, "invoice_number": "EV-5301"},
+                        {"id": NEAR, "invoice_number": "EV-5310"},
+                    ]
+                }
+            ),
+        ),
+        request="Добавь заметку к счёту EV-5301",
+    )
+    assert guessed_target("invoices", NOTE, messages) is None
+
+
+def test_a_lone_near_match_is_still_a_guess():
+    messages = _turn(
+        (
+            "invoices",
+            {"action": "list", "filters": {"invoice_number": "EV-9999"}},
+            _envelope({"items": [{"id": INV, "invoice_number": "EV-9998"}]}),
+        ),
+        request="Добавь заметку к счёту EV-9999",
+    )
+    assert guessed_target("invoices", NOTE, messages) == "one_of_several"
+
+
+def test_a_name_inside_a_nested_field_names_the_record():
+    messages = _turn(
+        (
+            "invoices",
+            {"action": "list", "filters": {"name": "Эвал-Медь"}},
+            _envelope(
+                {
+                    "items": [
+                        {"id": INV, "supplier": {"name": "ООО «Эвал-Медь»"}},
+                        {"id": NEAR, "supplier": {"name": "ООО «Эвал-Сталь»"}},
+                    ]
+                }
+            ),
+        ),
+    )
+    assert guessed_target("invoices", NOTE, messages) is None
+
+
+def test_a_record_chosen_by_a_filter_after_an_empty_lookup_is_confirmed():
+    messages = _turn(
+        ("invoices", {"action": "list", "filters": {"q": "утвержд"}}, _envelope({"items": []})),
+        (
+            "invoices",
+            {"action": "list", "filters": {"status": "approved"}},
+            _envelope({"items": [{"id": INV}, {"id": NEAR}]}),
+        ),
+        request="Добавь заметку ко всем утверждённым счетам",
+    )
+    assert guessed_target("invoices", NOTE, messages) is None
