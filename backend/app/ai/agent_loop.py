@@ -4237,6 +4237,72 @@ class AgentSession:
             msg["tool_call_id"] = tool_call_id
         self.messages.append(msg)
 
+    # T8g: how long a turn waits for a background job it started itself.
+    QUEUED_JOB_WAIT_S = 90.0
+    QUEUED_JOB_POLL_S = 2.0
+
+    async def _await_queued_job(self, result: dict) -> dict:
+        """Wait, briefly, for the background job this call just queued.
+
+        E52: asked for a price "in the catalog at this link", the employee
+        queued a site crawl (about 40 s) and ended the turn before it finished,
+        reporting nothing. A job that completes within the wait answers the
+        call; one that does not leaves the honest "queued" result as before.
+        """
+        if not isinstance(result, dict) or result.get("version") != 1:
+            return result
+        if result.get("status") != "partial" or result.get("error_code") != "job_queued":
+            return result
+        task_id = (result.get("checkpoint") or {}).get("task_id")
+        if not task_id:
+            return result
+        from celery.result import AsyncResult
+
+        from app.tasks.celery_app import celery_app
+
+        job = AsyncResult(str(task_id), app=celery_app)
+        budget_context = getattr(self, "_work_budget_context", None)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.QUEUED_JOB_WAIT_S
+        await self._send({"type": "status", "content": "Жду завершения фоновой задачи…"})
+        while loop.time() < deadline:
+            if budget_context is not None:
+                budget_context.raise_if_stopped()
+            try:
+                state = await asyncio.to_thread(lambda: job.state)
+            except Exception as exc:  # noqa: BLE001 — no result store: keep "queued"
+                logger.warning("queued_job_poll_failed", task_id=task_id, error=str(exc))
+                return result
+            if state in {"SUCCESS", "FAILURE", "REVOKED"}:
+                break
+            await asyncio.sleep(self.QUEUED_JOB_POLL_S)
+        else:
+            return result
+        from app.ai.tool_result import ToolResult
+
+        evidence = {**(result.get("evidence") or {}), "job_state": state}
+        checkpoint = {**(result.get("checkpoint") or {}), "status": state.lower()}
+        try:
+            if state == "SUCCESS":
+                payload = await asyncio.to_thread(lambda: job.result)
+                data = {**(result.get("data") or {}), "status": "completed", "job_result": payload}
+                done = ToolResult(
+                    status="succeeded", data=data, evidence=evidence, checkpoint=checkpoint
+                )
+            else:
+                error = str(await asyncio.to_thread(lambda: job.result))[:300]
+                done = ToolResult(
+                    status="failed",
+                    data=result.get("data"),
+                    error_code="job_failed",
+                    evidence={**evidence, "job_error": error},
+                    checkpoint=checkpoint,
+                )
+            return done.model_dump(mode="json")
+        except Exception as exc:  # noqa: BLE001 — an odd payload keeps "queued"
+            logger.warning("queued_job_result_rejected", task_id=task_id, error=str(exc))
+            return result
+
     @staticmethod
     def _nonterminal_v1_status(result: object) -> str | None:
         """Return lifecycle status only for a valid v1 nonterminal envelope."""
@@ -4303,6 +4369,7 @@ class AgentSession:
                 self._checkpoint_in_flight = tc["id"]
                 await self.save_checkpoint("tool_started")
             fn_name, result, tc_id = await self._execute_single_tool(tc, iteration)
+            result = await self._await_queued_job(result)
             results.append((fn_name, result))
             nonterminal_status = self._nonterminal_v1_status(result)
             await self._tool_result_to_history(
