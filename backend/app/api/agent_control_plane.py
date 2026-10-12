@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
@@ -211,6 +212,9 @@ class AgentTaskPropose(BaseModel):
     rationale: str | None = None
     suggested_trigger: str | None = None
     metadata: dict | None = None
+    # T7a: an open task with the same objective is already_exists; a second
+    # one passes only explicitly, and the agent's request is owner-confirmed.
+    allow_duplicate: bool = False
 
 
 class AgentTaskDecision(BaseModel):
@@ -426,12 +430,57 @@ async def _create_agent_task(payload: AgentTaskCreate, db: AsyncSession) -> Agen
     return task
 
 
+_OPEN_TASK_STATUSES = ("proposed", "created", "running")
+
+
+def _objective_words(text: str) -> set[str]:
+    """Word stems of an objective: word order and endings vary between rewordings."""
+    words = re.findall(r"[0-9a-zа-я]+", text.lower().replace("ё", "е"))
+    return {w[:5] for w in words if len(w) >= 3}
+
+
+def _same_objective(a: str, b: str) -> bool:
+    """Same stems, any order. A share of common words would merge two tasks
+    that differ only in the supplier (7 of 9 stems shared)."""
+    left = _objective_words(a)
+    return bool(left) and left == _objective_words(b)
+
+
 async def _propose_agent_task(
     payload: AgentTaskPropose,
     db: AsyncSession,
     *,
     commit: bool = True,
 ) -> AgentTask:
+    if not payload.allow_duplicate:
+        # E52: the employee re-proposed an open task, reworded, in 3 runs of 3.
+        open_tasks = (
+            await db.execute(
+                select(AgentTask)
+                .where(AgentTask.status.in_(_OPEN_TASK_STATUSES))
+                .order_by(AgentTask.created_at.desc())
+                .limit(500)
+            )
+        ).scalars()
+        existing = next(
+            (t for t in open_tasks if _same_objective(t.objective, payload.objective)), None
+        )
+        if existing is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "already_exists",
+                    "message": (
+                        "Такая задача уже есть. Не предлагайте вторую — сообщите о существующей. "
+                        "Вторую — только если пользователь прямо попросит."
+                    ),
+                    "task": {
+                        "id": str(existing.id),
+                        "objective": existing.objective,
+                        "status": existing.status,
+                    },
+                },
+            )
     metadata = {
         "proposal_kind": "agent_task",
         "approval_required": True,

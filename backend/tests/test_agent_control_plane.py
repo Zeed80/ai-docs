@@ -904,3 +904,42 @@ async def test_system_prompt_proposal_still_requires_protected_flow(
     from app.ai.agent_config import get_builtin_agent_config
 
     assert get_builtin_agent_config().system_prompt != "Ты — другой агент."
+
+
+@pytest.mark.asyncio
+async def test_a_reworded_open_task_proposal_is_already_exists(client: AsyncClient):
+    """T7a (E52): the employee re-proposed an open task, reworded, in 3 of 3 runs."""
+    tag = uuid.uuid4().hex[:6]
+    first = await client.post(
+        "/api/agent/tasks/propose",
+        json={"objective": f"Сверять цены ООО «Эвал-Сталь{tag}» с их прайсом раз в месяц"},
+    )
+    assert first.status_code == 200, first.text
+    again = await client.post(
+        "/api/agent/tasks/propose",
+        json={"objective": f"Раз в месяц сверять цены ООО «Эвал-Сталь{tag}» с их прайсом."},
+    )
+    assert again.status_code == 409
+    assert again.json()["detail"]["task"]["id"] == first.json()["id"]
+
+    other = await client.post(
+        "/api/agent/tasks/propose",
+        json={"objective": f"Сверять цены ООО «Эвал-Медь{tag}» с их прайсом раз в месяц"},
+    )
+    assert other.status_code == 200, other.text
+    explicit = await client.post(
+        "/api/agent/tasks/propose",
+        json={
+            "objective": f"Раз в месяц сверять цены ООО «Эвал-Сталь{tag}» с их прайсом.",
+            "allow_duplicate": True,
+        },
+    )
+    assert explicit.status_code == 200, explicit.text
+
+    await client.post(f"/api/agent/tasks/{first.json()['id']}/decide", json={"approved": False})
+    await client.post(f"/api/agent/tasks/{explicit.json()['id']}/decide", json={"approved": False})
+    reopened = await client.post(
+        "/api/agent/tasks/propose",
+        json={"objective": f"Сверять цены ООО «Эвал-Сталь{tag}» с их прайсом раз в месяц"},
+    )
+    assert reopened.status_code == 200, reopened.text
