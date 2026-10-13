@@ -456,6 +456,10 @@ def match_fast_intent(content: str, prior_user: str | None = None) -> FastIntent
         return None
     if any(marker in t for marker in fp.get("rich_output_markers") or []):
         return None
+    if any(normalize(marker) in t for marker in fp.get("condition_markers") or []):
+        return None
+    if sum(t.count(normalize(marker)) for marker in fp.get("count_markers") or []) > 1:
+        return None
     if any(marker in t for marker in fp.get("price_markers") or []):
         return None
 
