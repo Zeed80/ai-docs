@@ -748,9 +748,9 @@ services:
   # the first start (66-84 GB). The image is built from a pinned commit for the
   # RTX 3090 (sm_86); other cards: STRATA_CUDA_ARCHITECTURES.
   strata:
-    image: ${STRATA_IMAGE:-ai-workspace/strata:1735d64}
+    image: ${STRATA_IMAGE:-ai-workspace/strata:a0116b2}
     build:
-      context: https://github.com/Niko1221/Strata.git#1735d6471df29b42c26170efaac1f1446a58640f
+      context: https://github.com/Niko1221/Strata.git#a0116b2782a5b82622358c04a06496485d12b2d6
       args:
         CUDA_ARCHITECTURES: ${STRATA_CUDA_ARCHITECTURES:-86}
         BUILD_VISION: "1"
