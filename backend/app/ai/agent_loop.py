@@ -2954,6 +2954,68 @@ def mark_untrusted(value: Any, _depth: int = 0) -> Any:
     return value
 
 
+def _not_found(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return False
+    evidence = result.get("evidence") if isinstance(result.get("evidence"), dict) else {}
+    data = result.get("data") if isinstance(result.get("data"), dict) else {}
+    detail = data.get("detail") if isinstance(data.get("detail"), dict) else {}
+    return (
+        result.get("error_code") == "http_404"
+        or evidence.get("http_status") == 404
+        or str(result.get("error") or "").strip().upper() == "HTTP 404"
+        or str(detail.get("error") or "").strip().upper() == "HTTP 404"
+    )
+
+
+def not_found_in_turn(ids: list[str], messages: list[dict], start: int | None = None) -> str | None:
+    """An id that a read of this turn answered 404 for (absent or not visible).
+
+    E52: «Утверди счёт EV-8401» — the invoice belonged to another user;
+    invoices.get answered 404 for the id, and the employee sent that very id
+    to invoices.approve, which reached the owner as a confirmation card.
+    """
+    if not ids:
+        return None
+    if start is None:
+        start = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1)
+    turn = messages[start + 1 :]
+    results = {
+        str(m["tool_call_id"]): m.get("content")
+        for m in turn
+        if m.get("role") == "tool" and m.get("tool_call_id")
+    }
+    wanted = {i.lower() for i in ids}
+    for message in turn:
+        if message.get("role") != "assistant":
+            continue
+        for call in message.get("tool_calls") or []:
+            function = call.get("function") or {}
+            arguments = function.get("arguments") or {}
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except (TypeError, ValueError):
+                    continue
+            if not isinstance(arguments, dict):
+                continue
+            read = _tool_definition(str(function.get("name") or ""), arguments)
+            if read is None or read.effect != "read" or not read.path_params:
+                continue
+            asked = {str(arguments.get(p) or "").lower() for p in read.path_params}
+            hit = asked & wanted
+            if not hit:
+                continue
+            raw = results.get(str(call.get("id") or ""))
+            try:
+                result = json.loads(raw) if isinstance(raw, str) else raw
+            except (TypeError, ValueError):
+                continue
+            if _not_found(result):
+                return next(iter(hit))
+    return None
+
+
 class AgentSession:
     """Per-WebSocket-connection agent state.
 
@@ -4191,6 +4253,27 @@ class AgentSession:
                         f"{', '.join(bad)} — это идентификатор записи (UUID), а передано "
                         f"«{execution_args[bad[0]]}». Сначала найди запись поиском и возьми её id; "
                         "если записи не видно — скажи об этом пользователю."
+                    ),
+                }
+                await self._send({"type": "tool_result", "tool": fn_name, "result": result})
+                return fn_name, result, tc_id
+        if (
+            definition is not None
+            and definition.effect in {"write", "delete"}
+            and definition.path_params
+        ):
+            missing = not_found_in_turn(
+                [str(execution_args[p]) for p in definition.path_params if execution_args.get(p)],
+                self.messages,
+                self._turn_start(),
+            )
+            if missing is not None:
+                result = {
+                    "status": "error",
+                    "error_code": "record_not_found",
+                    "message": (
+                        f"Запись {missing} в этом ходе не найдена (404): её нет или она вам не видна. "
+                        "Изменять её нельзя — скажи пользователю, что записи не нашлось."
                     ),
                 }
                 await self._send({"type": "tool_result", "tool": fn_name, "result": result})

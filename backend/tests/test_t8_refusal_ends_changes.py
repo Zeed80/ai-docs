@@ -152,3 +152,33 @@ async def test_a_number_where_an_id_is_due_is_refused_before_any_card(test_engin
     )
     assert result["error_code"] == "bad_arguments"
     assert asked == [] and effects == []
+
+
+def test_an_id_a_read_answered_404_for_is_found():
+    from app.ai.agent_loop import not_found_in_turn
+
+    inv = "3587b9c0-3f2b-4fc6-87cc-57cd819a31c9"
+    gone = {
+        "version": 1,
+        "status": "failed",
+        "error_code": "http_404",
+        "data": {"detail": {"error": "HTTP 404"}},
+    }
+    messages = [
+        {"role": "user", "content": "Утверди счёт EV-8401"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "g1",
+                    "function": {
+                        "name": "invoices",
+                        "arguments": {"action": "get", "invoice_id": inv},
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "g1", "content": json.dumps(gone)},
+    ]
+    assert not_found_in_turn([inv], messages) == inv
+    assert not_found_in_turn(["00000000-0000-4000-8000-000000000009"], messages) is None
