@@ -304,3 +304,18 @@ async def test_create_with_supplier_creates_reminder(client: AsyncClient, invoic
     )
     assert resp.status_code == 201
     assert resp.json()["amount"] == 90000.0
+
+
+@pytest.mark.asyncio
+async def test_a_schedule_with_a_bare_due_date_is_created(client: AsyncClient, invoice):
+    """E52 T8 run: "due_date": "2026-10-11" (no zone) answered 500."""
+    resp = await client.post(
+        "/api/payment-schedules",
+        json={
+            "invoice_id": str(invoice.id),
+            "due_date": "2099-10-11",
+            "amount": 100.0,
+            "currency": "RUB",
+        },
+    )
+    assert resp.status_code == 201, resp.text

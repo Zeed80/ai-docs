@@ -2686,6 +2686,18 @@ def _record_words(record: Any, depth: int = 0) -> set[str]:
     return out
 
 
+def _request_names(record: dict, words: set[str]) -> set[str]:
+    """The record's names (normalized) that the words name: two records
+    answering to the same name ("EV-5701" twice) are ambiguous."""
+    return {
+        _plain(record[key])
+        for key in _NAME_KEYS
+        if isinstance(record.get(key), str | int)
+        and not isinstance(record.get(key), bool)
+        and _covers(_words(record[key]), words)
+    }
+
+
 def _named_in(record: dict, words: set[str]) -> bool:
     """Any one name of the record (its name, number or SKU) is in the words."""
     return any(
@@ -2704,6 +2716,7 @@ def _judge_target(target: str, definition, messages: list[dict], start: int) -> 
 
     group = bool(request_words & set(group_request_words()))
     target_record: dict | None = None
+    named_by_request: dict[str, set[str]] = {}
     turn = messages[start + 1 :]
     results = {
         str(m["tool_call_id"]): m.get("content")
@@ -2739,6 +2752,10 @@ def _judge_target(target: str, definition, messages: list[dict], start: int) -> 
             ids = [str(r["id"]).lower() for r in records]
             if target in ids:
                 target_record = records[ids.index(target)]
+            for rid, r in zip(ids, records, strict=True):
+                names = _request_names(r, request_words)
+                if names:
+                    named_by_request[rid] = names
             words = _lookup_words(call_args)
             if not words:
                 if target in ids and (ids == [target] or _filtered(call_args)):
@@ -2761,9 +2778,16 @@ def _judge_target(target: str, definition, messages: list[dict], start: int) -> 
                 return None
             among_several = True
     # The request itself names the record (a group of items, a supplier by
-    # name) — one lookup finding nothing does not make it a guess.
-    if target_record is not None and _named_in(target_record, request_words):
-        return None
+    # name) — one lookup finding nothing does not make it a guess. Only when
+    # it names no other: "EV-5701" named two invoices of two suppliers, and the
+    # employee set a reminder on each (E52 T8 run).
+    if target in named_by_request:
+        clash = any(
+            rid != target and names & named_by_request[target]
+            for rid, names in named_by_request.items()
+        )
+        if group or not clash:
+            return None
     # A target no read of this turn showed (it came from a resolver, an
     # earlier turn) is not judged by an unrelated empty lookup.
     if nothing_found and target_record is not None:

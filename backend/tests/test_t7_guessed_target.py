@@ -427,3 +427,24 @@ def test_an_unattached_reminder_on_a_unique_or_unlooked_number_passes():
     )
     assert guessed_target("analytics", _reminder("Оплата счёта EV-5301"), messages) is None
     assert guessed_target("analytics", _reminder("Позвонить по ДП-77"), messages) is None
+
+
+def test_a_number_the_request_names_on_two_records_is_still_ambiguous():
+    """E52 T8 run: "EV-5701" named two invoices; a reminder went on each."""
+    twins = _envelope(
+        {
+            "items": [
+                {"id": INV, "invoice_number": "EV-5701"},
+                {"id": NEAR, "invoice_number": "EV-5701"},
+            ]
+        }
+    )
+    messages = _turn(
+        ("invoices", {"action": "list", "query": "EV-5701"}, twins),
+        request="Напомни мне в день срока проверить оплату счёта EV-5701.",
+    )
+    reminder = {
+        "action": "calendar_create_reminder",
+        "body": {"message": "x", "entity_type": "invoice", "entity_id": INV},
+    }
+    assert guessed_target("analytics", reminder, messages) == "one_of_several"

@@ -281,7 +281,7 @@ capabilities:
           description: "ID счёта (для get, validate, approve, reject, compare_prices, export, update, delete)"
         filters:
           type: object
-          description: "Фильтры для list: supplier_id, status, date_from, date_to, amount_min, amount_max, limit (не больше 200), offset"
+          description: "Фильтры для list: supplier_id, status, search (номер счёта), date_from/date_to (дата счёта), due_to (срок оплаты не позже даты), overdue=true (просроченные: срок прошёл, не оплачен и не отклонён), amount_min, amount_max, limit (не больше 200), offset"
         body:
           type: object
           description: "Данные подтверждения (для approve, reject: reason, comment; для bulk_approve/bulk_reject: ids)"

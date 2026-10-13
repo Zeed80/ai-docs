@@ -413,3 +413,60 @@ async def test_changing_an_invoice_with_a_supplier_answers_after_commit(
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == status
     assert resp.json()["supplier"]["inn"] == "7701000049"
+
+
+@pytest.mark.asyncio
+async def test_overdue_lists_unpaid_invoices_past_their_due_date(
+    client: AsyncClient, db_session: AsyncSession
+):
+    """E52: "просроченные счета" had no filter; date_to is the invoice date."""
+    from datetime import UTC, datetime, timedelta
+
+    tag = uuid.uuid4().hex[:6]
+    now = datetime.now(UTC)
+    rows = {
+        "late": (now - timedelta(days=5), InvoiceStatus.approved),
+        "late-paid": (now - timedelta(days=5), InvoiceStatus.paid),
+        "future": (now + timedelta(days=20), InvoiceStatus.approved),
+    }
+    for suffix, (due, status) in rows.items():
+        doc = Document(
+            file_name=f"{suffix}.pdf",
+            file_hash=f"{tag}{suffix}",
+            file_size=1,
+            mime_type="application/pdf",
+            storage_path=f"t/{tag}{suffix}",
+            status=DocumentStatus.approved,
+        )
+        db_session.add(doc)
+        await db_session.flush()
+        db_session.add(
+            Invoice(
+                document_id=doc.id,
+                invoice_number=f"OV-{tag}-{suffix}",
+                currency="RUB",
+                total_amount=1.0,
+                status=status,
+                due_date=due,
+            )
+        )
+    await db_session.flush()
+    resp = await client.get(
+        "/api/invoices", params={"overdue": "true", "search": f"OV-{tag}", "limit": 200}
+    )
+    assert resp.status_code == 200, resp.text
+    assert {i["invoice_number"] for i in resp.json()["items"]} == {f"OV-{tag}-late"}
+    due = await client.get(
+        "/api/invoices",
+        params={"due_to": (now + timedelta(days=1)).date().isoformat(), "search": f"OV-{tag}"},
+    )
+    assert {i["invoice_number"] for i in due.json()["items"]} == {
+        f"OV-{tag}-late",
+        f"OV-{tag}-late-paid",
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_date_filter_is_refused_not_ignored(client: AsyncClient):
+    resp = await client.get("/api/invoices", params={"date_to": "вчера"})
+    assert resp.status_code == 422

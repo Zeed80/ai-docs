@@ -69,12 +69,33 @@ async def list_invoices(
     amount_max: float | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    due_to: str | None = Query(None, description="Срок оплаты не позже даты (YYYY-MM-DD)"),
+    overdue: bool = Query(
+        False, description="Только просроченные: срок оплаты прошёл, счёт не оплачен и не отклонён"
+    ),
     offset: int = 0,
     limit: int = Query(50, le=200),
     db: AsyncSession = Depends(get_db),
     current_user: UserInfo = Depends(get_current_user),
 ):
-    """Skill: invoice.list — List invoices with filters."""
+    """Skill: invoice.list — List invoices with filters.
+
+    date_from/date_to filter the invoice date; due_to and overdue — the
+    payment due date. E52: "просроченные счета" had no filter at all, and the
+    employee ran out of steps listing everything (date_to is not the due date).
+    """
+    from datetime import UTC, datetime
+
+    def _moment(name: str, value: str) -> datetime:
+        try:
+            moment = datetime.fromisoformat(value)
+        except ValueError as exc:
+            # Silently ignored before: the caller believed its filter applied.
+            raise HTTPException(
+                422, f"{name}: ожидается дата YYYY-MM-DD, получено «{value}»"
+            ) from exc
+        return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
+
     query = select(Invoice).options(
         selectinload(Invoice.lines),
         selectinload(Invoice.supplier),
@@ -99,19 +120,16 @@ async def list_invoices(
     if amount_max is not None:
         query = query.where(Invoice.total_amount <= amount_max)
     if date_from:
-        from datetime import datetime
-
-        try:
-            query = query.where(Invoice.invoice_date >= datetime.fromisoformat(date_from))
-        except ValueError:
-            pass
+        query = query.where(Invoice.invoice_date >= _moment("date_from", date_from))
     if date_to:
-        from datetime import datetime
-
-        try:
-            query = query.where(Invoice.invoice_date <= datetime.fromisoformat(date_to))
-        except ValueError:
-            pass
+        query = query.where(Invoice.invoice_date <= _moment("date_to", date_to))
+    if due_to:
+        query = query.where(Invoice.due_date <= _moment("due_to", due_to))
+    if overdue:
+        query = query.where(
+            Invoice.due_date < datetime.now(UTC),
+            Invoice.status.notin_([InvoiceStatus.paid, InvoiceStatus.rejected]),
+        )
 
     count_query = select(func.count()).select_from(query.subquery())
     total = (await db.execute(count_query)).scalar() or 0

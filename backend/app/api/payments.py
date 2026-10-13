@@ -121,7 +121,13 @@ async def create_payment_schedule(
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
 
-    schedule = PaymentSchedule(**payload.model_dump())
+    values = payload.model_dump()
+    # A bare date ("2026-10-11") arrives without a zone; compared with the
+    # aware clock below it answered 500 (E52 T8 run).
+    if values["due_date"].tzinfo is None:
+        values["due_date"] = values["due_date"].replace(tzinfo=UTC)
+    due_date = values["due_date"]
+    schedule = PaymentSchedule(**values)
     db.add(schedule)
     await db.flush()
 
@@ -129,7 +135,7 @@ async def create_payment_schedule(
     calendar_event = CalendarEvent(
         title=f"Оплата счёта {invoice.invoice_number or str(invoice.id)[:8]} — {payload.amount} {payload.currency}",
         event_type="payment",
-        event_date=payload.due_date,
+        event_date=due_date,
         entity_type="payment_schedule",
         entity_id=schedule.id,
         source="manual",
@@ -137,7 +143,7 @@ async def create_payment_schedule(
     db.add(calendar_event)
 
     # Create reminder 3 days before
-    remind_at = payload.due_date - timedelta(days=3)
+    remind_at = due_date - timedelta(days=3)
     if remind_at > datetime.now(UTC):
         supplier_name = ""
         if invoice.supplier_id:
