@@ -199,11 +199,11 @@ def _route_query_params(method: str, path_tpl: str) -> frozenset[str]:
 
     names: frozenset[str] = frozenset()
     try:
-        from app.main import app as _app
+        from app.api_routes import api_routes
 
         want = _shape(path_tpl)
-        for route in _app.routes:
-            if _shape(getattr(route, "path", "")) != want:
+        for route_path, route in api_routes():
+            if _shape(route_path) != want:
                 continue
             if method not in (getattr(route, "methods", None) or []):
                 continue

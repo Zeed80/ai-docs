@@ -76,16 +76,14 @@ def describe(response_model: Any) -> str | None:
 def action_output_shapes() -> dict[str, str]:
     """``capability.action`` → shape, for every action whose endpoint declares
     a response model. Built once per process from the live routes."""
-    from fastapi.routing import APIRoute
 
     from app.ai.tool_catalog import TOOLS
-    from app.main import app
+    from app.api_routes import api_routes
 
     routes: dict[tuple[str, str], Any] = {}
-    for route in app.routes:
-        if isinstance(route, APIRoute):
-            for method in route.methods or ():
-                routes[(method, route.path)] = route.response_model
+    for path, route in api_routes():
+        for method in route.methods or ():
+            routes[(method, path)] = route.response_model
     shapes: dict[str, str] = {}
     for name, tool in TOOLS.items():
         shape = describe(routes.get((tool.method, tool.path)))
@@ -104,17 +102,14 @@ def action_uuid_path_params() -> dict[str, frozenset[str]]:
     """
     import uuid as _uuid
 
-    from fastapi.routing import APIRoute
-
     from app.ai.tool_catalog import TOOLS
-    from app.main import app
+    from app.api_routes import api_routes
 
     routes: dict[tuple[str, str], frozenset[str]] = {}
-    for route in app.routes:
-        if isinstance(route, APIRoute):
-            ids = frozenset(
-                p.name for p in route.dependant.path_params if p.field_info.annotation is _uuid.UUID
-            )
-            for method in route.methods or ():
-                routes[(method, route.path)] = ids
+    for path, route in api_routes():
+        ids = frozenset(
+            p.name for p in route.dependant.path_params if p.field_info.annotation is _uuid.UUID
+        )
+        for method in route.methods or ():
+            routes[(method, path)] = ids
     return {name: routes.get((tool.method, tool.path), frozenset()) for name, tool in TOOLS.items()}
