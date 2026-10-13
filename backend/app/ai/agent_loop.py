@@ -4166,9 +4166,37 @@ class AgentSession:
         action_arg = execution_args.get("action", "")
         if action_arg and (action_arg in cap_gate_actions or "*" in cap_gate_actions):
             current_gates.add(original_name)
+        definition = _tool_definition(original_name, execution_args)
+        # A record named by its number where the endpoint takes an id is a
+        # call that cannot succeed — refuse it before any confirmation card.
+        if definition is not None and definition.path_params:
+            from app.ai.output_shapes import action_uuid_path_params
+
+            try:
+                uuid_params = action_uuid_path_params().get(definition.name, frozenset())
+            except Exception:  # noqa: BLE001 — no route table: let the endpoint judge
+                uuid_params = frozenset()
+            bad = [
+                p
+                for p in definition.path_params
+                if p in uuid_params
+                and isinstance(execution_args.get(p), str)
+                and not _UUID_RE.match(execution_args[p].strip())
+            ]
+            if bad:
+                result = {
+                    "status": "error",
+                    "error_code": "bad_arguments",
+                    "message": (
+                        f"{', '.join(bad)} — это идентификатор записи (UUID), а передано "
+                        f"«{execution_args[bad[0]]}». Сначала найди запись поиском и возьми её id; "
+                        "если записи не видно — скажи об этом пользователю."
+                    ),
+                }
+                await self._send({"type": "tool_result", "tool": fn_name, "result": result})
+                return fn_name, result, tc_id
         # T8c: after a refusal for lack of rights, no other change in this
         # turn — the employee reports the refusal instead of a substitute.
-        definition = _tool_definition(original_name, execution_args)
         if definition is not None and definition.effect != "read":
             refused = denied_writes(self.messages, self._turn_start())
             if refused and definition.name not in refused:

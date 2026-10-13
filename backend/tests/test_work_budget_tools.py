@@ -31,7 +31,7 @@ from app.domain.work_orders import claim_ready_step, create_single_step_plan, cr
 READ_SKILL = {"name": "documents", "method": "POST", "path": "/api/agent/cap/documents"}
 READ_ARGS = {"action": "list"}
 WRITE_SKILL = {"name": "documents", "method": "POST", "path": "/api/agent/cap/documents"}
-WRITE_ARGS = {"action": "delete", "document_id": "document-1"}
+WRITE_ARGS = {"action": "delete", "document_id": "00000000-0000-4000-8000-000000000001"}
 
 
 async def _claimed_context(test_engine, *, max_tool_attempts: int | None = None):
@@ -775,7 +775,7 @@ async def test_a_guessed_target_waits_for_the_owner_and_the_mark_is_never_sent(
     session._request_approval = approve
     arguments = {
         "action": "update",
-        "supplier_id": "s1",
+        "supplier_id": "00000000-0000-4000-8000-000000000001",
         "body": {"contact_phone": "+7 495 222-33-44"},
         "target_match": mark,
     }

@@ -92,3 +92,29 @@ def action_output_shapes() -> dict[str, str]:
         if shape:
             shapes[name] = shape
     return shapes
+
+
+@lru_cache(maxsize=1)
+def action_uuid_path_params() -> dict[str, frozenset[str]]:
+    """``capability.action`` → its path parameters the endpoint types as UUID.
+
+    E52: "Утверди счёт EV-8401" (a number, not an id, of an invoice the
+    employee could not see) went to the owner as an approval card; the
+    endpoint would have refused it anyway. Built once from the live routes.
+    """
+    import uuid as _uuid
+
+    from fastapi.routing import APIRoute
+
+    from app.ai.tool_catalog import TOOLS
+    from app.main import app
+
+    routes: dict[tuple[str, str], frozenset[str]] = {}
+    for route in app.routes:
+        if isinstance(route, APIRoute):
+            ids = frozenset(
+                p.name for p in route.dependant.path_params if p.field_info.annotation is _uuid.UUID
+            )
+            for method in route.methods or ():
+                routes[(method, route.path)] = ids
+    return {name: routes.get((tool.method, tool.path), frozenset()) for name, tool in TOOLS.items()}

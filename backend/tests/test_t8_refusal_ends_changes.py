@@ -101,3 +101,54 @@ def test_the_gateways_plain_refusal_counts_too():
     assert denied_writes(_turn(plain)) == ["agent_control.task_propose"]
     other = {"detail": "x", "error": "HTTP 422"}
     assert denied_writes(_turn(other)) == []
+
+
+@pytest.mark.asyncio
+async def test_a_number_where_an_id_is_due_is_refused_before_any_card(test_engine, monkeypatch):
+    """E52: "Утверди счёт EV-8401" reached the owner as a card with invoice_id="EV-8401"."""
+    from app.ai import agent_config
+
+    _, _, context = await _claimed_context(test_engine)
+    effects = []
+    _install_http(monkeypatch, [httpx.Response(200, json={"ok": True})], effects)
+    monkeypatch.setattr(
+        agent_config, "get_builtin_agent_config", lambda: BuiltinAgentConfig(approval_gates=[])
+    )
+
+    async def send(event):
+        return None
+
+    session = agent_loop.AgentSession(send)
+    session.set_work_budget_context(context)
+    session._skill_map = {
+        "invoices": {
+            "name": "invoices",
+            "method": "POST",
+            "path": "/api/agent/cap/invoices",
+            "gate_actions": ["approve"],
+        }
+    }
+
+    async def no_log(**kwargs):
+        return None
+
+    session._log_action = no_log
+    asked = []
+
+    async def approve(skill_name, args):
+        asked.append(args)
+        return True
+
+    session._request_approval = approve
+    _, result, _ = await session._execute_single_tool(
+        {
+            "id": "a-1",
+            "function": {
+                "name": "invoices",
+                "arguments": {"action": "approve", "invoice_id": "EV-8401"},
+            },
+        },
+        0,
+    )
+    assert result["error_code"] == "bad_arguments"
+    assert asked == [] and effects == []

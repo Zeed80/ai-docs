@@ -843,12 +843,17 @@ class LiveRunner:
         result = action.result if isinstance(action.result, dict) else {}
         if result.get("ok") is False:
             return False
+        # A refusal by the agent itself (T8c "refused_earlier_in_turn", a gate
+        # rejection) never ran: E52 counted such a "blocked" call as committed.
         return str(result.get("status") or "ok") not in {
             "error",
             "failed",
             "approval_required",
             "waiting_approval",
             "outcome_unknown",
+            "blocked",
+            "rejected",
+            "already_done",
         }
 
     async def _desktop_text(self, owner_sub: str) -> str:
