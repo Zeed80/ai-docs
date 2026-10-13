@@ -176,3 +176,68 @@ async def test_find_similar_invalid_entity(client: AsyncClient):
     )
     # May return 200 with empty results or 404 — either is acceptable
     assert resp.status_code in (200, 404)
+
+
+async def _letter(db_session, name: str, text: str, doc_type: str = "letter"):
+    from app.db.models import DocumentChunk
+
+    doc = Document(
+        file_name=name,
+        file_hash=uuid.uuid4().hex,
+        file_size=10,
+        mime_type="application/pdf",
+        storage_path=f"s/{uuid.uuid4().hex}.pdf",
+        status=DocumentStatus.needs_review,
+        doc_type=doc_type,
+    )
+    db_session.add(doc)
+    await db_session.flush()
+    db_session.add(DocumentChunk(document_id=doc.id, chunk_index=0, text=text))
+    await db_session.commit()
+    return doc
+
+
+@pytest.mark.asyncio
+async def test_a_letter_with_some_of_the_words_is_found(client: AsyncClient, db_session):
+    """T8i (E52): "новый адрес доставки заказов" missed «заказы принимаем на orders@…»."""
+    tag = uuid.uuid4().hex[:8]
+    steel = await _letter(
+        db_session,
+        f"Письмо {tag} сталь.pdf",
+        f"ООО «Эвал-Сталь{tag}»: с 1 ноября заказы принимаем на orders@eval-stal.example.",
+    )
+    nickel = await _letter(
+        db_session,
+        f"Письмо {tag} никель.pdf",
+        f"ООО «Эвал-Никель{tag}»: новый адрес для заявок — zayavki@eval-nikel.example.",
+    )
+    other = await _letter(
+        db_session, f"Акт {tag}.pdf", f"Акт сверки {tag}: заказы и новый адрес", doc_type="act"
+    )
+    resp = await client.post(
+        "/api/search/documents",
+        json={
+            "query": f"новый адрес доставки заказов {tag}",
+            "filters": {"doc_type": "letter", "limit": 50},
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    ids = {d["id"] for d in resp.json()}
+    assert {str(steel.id), str(nickel.id)} <= ids
+    assert str(other.id) not in ids
+
+
+@pytest.mark.asyncio
+async def test_documents_of_a_type_without_words_and_an_unknown_type(
+    client: AsyncClient, db_session
+):
+    tag = uuid.uuid4().hex[:8]
+    letter = await _letter(db_session, f"Письмо {tag}.pdf", "текст")
+    listed = await client.post(
+        "/api/search/documents", json={"filters": {"doc_type": "letter", "limit": 100}}
+    )
+    assert listed.status_code == 200, listed.text
+    assert all(d["doc_type"] == "letter" for d in listed.json())
+    assert str(letter.id) in {d["id"] for d in listed.json()}
+    bad = await client.post("/api/search/documents", json={"filters": {"doc_type": "письмо"}})
+    assert bad.status_code == 422

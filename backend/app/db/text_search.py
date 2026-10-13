@@ -133,3 +133,37 @@ def immutable_fts_rank(
         immutable_fts_expression(columns, config=config),
         func.plainto_tsquery(pg_config, query),
     )
+
+
+def postgres_fts_any_condition(
+    columns: list[ColumnElement],
+    query: str,
+    *,
+    config: str = "russian",
+) -> ColumnElement:
+    """Some of the query's words, not all (websearch OR between the words)."""
+    pg_config = _postgres_config_literal(config)
+    return func.to_tsvector(pg_config, _concat_columns(columns)).op("@@")(
+        func.websearch_to_tsquery(pg_config, _any_words(query))
+    )
+
+
+def postgres_fts_any_rank(
+    columns: list[ColumnElement],
+    query: str,
+    *,
+    config: str = "russian",
+) -> ColumnElement:
+    """More of the query's words found — higher."""
+    pg_config = _postgres_config_literal(config)
+    return func.ts_rank_cd(
+        func.to_tsvector(pg_config, _concat_columns(columns)),
+        func.websearch_to_tsquery(pg_config, _any_words(query)),
+    )
+
+
+def _any_words(query: str) -> str:
+    import re
+
+    words = [w for w in re.findall(r"[\w@.-]+", query) if len(w) >= 3]
+    return " or ".join(words) or query

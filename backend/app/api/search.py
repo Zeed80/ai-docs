@@ -19,7 +19,13 @@ from app.db.models import (
     SavedQuery,
 )
 from app.db.session import get_db
-from app.db.text_search import text_search_condition, text_search_rank
+from app.db.text_search import (
+    is_postgresql_session,
+    postgres_fts_any_condition,
+    postgres_fts_any_rank,
+    text_search_condition,
+    text_search_rank,
+)
 from app.domain.documents import DocumentSummary
 
 router = APIRouter()
@@ -76,6 +82,10 @@ class DocumentSearchBody(BaseModel):
     q: str | None = None
     query: str | None = None
     limit: int | None = None
+    doc_type: str | None = None
+    # The agent sends its narrowing as "filters"; doc_type there was dropped
+    # without a word (E52: "письма о новых адресах" searched every document).
+    filters: dict | None = None
 
 
 @router.post("/documents", response_model=list[DocumentSummary])
@@ -86,45 +96,89 @@ async def search_documents(
     # the parameter tuple instead of the documents.
     query_text: str | None = Query(None, alias="query", min_length=1),
     limit: int = Query(20, le=100),
+    doc_type: str | None = Query(
+        None, description="Тип документа: invoice, letter, contract, act, …"
+    ),
     body: DocumentSearchBody | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """Skill: doc.search — Hybrid search: Postgres FTS + ILIKE fallback."""
+    """Skill: doc.search — Hybrid search: Postgres FTS + ILIKE fallback.
+
+    Documents with all the words come first; when they are fewer than the
+    limit, documents with some of the words follow, ranked by how many. E52:
+    "новый адрес доставки заказов" missed a letter saying "заказы принимаем на
+    orders@…" — every word had to match. With doc_type and no words, every
+    document of that type.
+    """
+    filters = (body.filters if body and isinstance(body.filters, dict) else None) or {}
     q = (
-        q or query_text or (body.q if body else None) or (body.query if body else None) or ""
+        q
+        or query_text
+        or (body.q if body else None)
+        or (body.query if body else None)
+        or str(filters.get("query") or filters.get("q") or "")
     ).strip()
-    if body and body.limit:
-        limit = min(int(body.limit), 100)
-    if not q:
-        raise HTTPException(status_code=422, detail="Укажите строку поиска (q или query)")
+    doc_type = doc_type or (body.doc_type if body else None) or filters.get("doc_type")
+    requested_limit = (body.limit if body and body.limit else None) or filters.get("limit")
+    if requested_limit:
+        limit = min(int(requested_limit), 100)
+    if not q and not doc_type:
+        raise HTTPException(
+            status_code=422, detail="Укажите строку поиска (q или query) или doc_type"
+        )
+    if doc_type:
+        try:
+            doc_type = DocumentType(str(doc_type).strip().lower())
+        except ValueError as exc:
+            allowed = ", ".join(t.value for t in DocumentType)
+            raise HTTPException(
+                422, f"doc_type «{doc_type}» неизвестен; допустимо: {allowed}"
+            ) from exc
     columns = [
         Document.file_name,
         DocumentChunk.text,
         ExtractionField.field_name,
         ExtractionField.field_value,
     ]
-    rank = text_search_rank(db, columns, q)
-    # PostgreSQL requires ORDER BY expressions to appear in SELECT list when using DISTINCT.
-    # Workaround: fetch with ORDER BY (may have duplicate document rows from joins),
-    # then deduplicate in Python preserving rank order.
-    query = (
-        select(Document)
-        .outerjoin(DocumentChunk, DocumentChunk.document_id == Document.id)
-        .outerjoin(DocumentExtraction, DocumentExtraction.document_id == Document.id)
-        .outerjoin(ExtractionField, ExtractionField.extraction_id == DocumentExtraction.id)
-        .where(text_search_condition(db, columns, q))
-    )
-    if rank is not None:
-        query = query.order_by(desc(rank), Document.created_at.desc())
-    else:
-        query = query.order_by(Document.created_at.desc())
-    result = await db.execute(query.limit(limit * 5))
+
+    def base():
+        statement = (
+            select(Document)
+            .outerjoin(DocumentChunk, DocumentChunk.document_id == Document.id)
+            .outerjoin(DocumentExtraction, DocumentExtraction.document_id == Document.id)
+            .outerjoin(ExtractionField, ExtractionField.extraction_id == DocumentExtraction.id)
+        )
+        if doc_type:
+            statement = statement.where(Document.doc_type == doc_type)
+        return statement
+
+    async def collect(statement, seen: dict) -> None:
+        # PostgreSQL requires ORDER BY expressions in the SELECT list with
+        # DISTINCT: fetch with joins' duplicates, deduplicate in rank order.
+        for doc in (await db.execute(statement.limit(limit * 5))).scalars().all():
+            if len(seen) >= limit:
+                return
+            seen.setdefault(doc.id, doc)
+
     seen: dict = {}
-    for doc in result.scalars().all():
-        if doc.id not in seen:
-            seen[doc.id] = doc
-        if len(seen) == limit:
-            break
+    if not q:
+        await collect(base().order_by(Document.created_at.desc()), seen)
+        return list(seen.values())
+    rank = text_search_rank(db, columns, q)
+    exact = base().where(text_search_condition(db, columns, q))
+    exact = (
+        exact.order_by(desc(rank), Document.created_at.desc())
+        if rank is not None
+        else exact.order_by(Document.created_at.desc())
+    )
+    await collect(exact, seen)
+    if len(seen) < limit and is_postgresql_session(db):
+        partial = (
+            base()
+            .where(postgres_fts_any_condition(columns, q))
+            .order_by(desc(postgres_fts_any_rank(columns, q)), Document.created_at.desc())
+        )
+        await collect(partial, seen)
     return list(seen.values())
 
 

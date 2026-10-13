@@ -249,10 +249,10 @@ capabilities:
           description: "ID документа (для get, read, classify, extract, summarize, update, delete, link)"
         query:
           type: string
-          description: "Текст поиска или фильтрации"
+          description: "Текст поиска или фильтрации. search находит сначала документы со всеми словами, затем с частью слов"
         filters:
           type: object
-          description: "Фильтры: status, doc_type, supplier_id, date_from, date_to, limit, offset"
+          description: "Фильтры: status, doc_type (invoice|letter|contract|act|…), supplier_id, date_from, date_to, limit, offset. search с doc_type и без query — все документы этого типа (например, все письма)"
         body:
           type: object
           description: "Дополнительные данные (для update, ingest, link)"
