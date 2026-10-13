@@ -310,6 +310,9 @@ class DocumentLinkCreate(BaseModel):
     linked_entity_type: str
     linked_entity_id: uuid.UUID
     link_type: str = "related"
+    # T7a: the same document linked to the same record twice is already_exists;
+    # a second link passes only explicitly (owner-confirmed for the agent).
+    allow_duplicate: bool = False
 
 
 # ── Classify / Extract (doc.classify, doc.extract) ─────────────────────────

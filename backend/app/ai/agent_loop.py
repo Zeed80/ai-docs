@@ -2746,6 +2746,12 @@ def _judge_target(target: str, definition, messages: list[dict], start: int) -> 
                 result = json.loads(raw) if isinstance(raw, str) else raw
             except (TypeError, ValueError):
                 continue
+            # The employee opened this very record (documents.read of ДП-221
+            # after a search found ДП-220 and ДП-221, E52 run 3): the choice was
+            # made on its content, not guessed from a name.
+            opened = {str(call_args.get(p) or "").lower() for p in read.path_params}
+            if target in opened and not _not_found(result) and not _failed(result):
+                return None
             records = _records(result)
             if records is None:
                 continue
@@ -2966,6 +2972,14 @@ def _not_found(result: Any) -> bool:
         or str(result.get("error") or "").strip().upper() == "HTTP 404"
         or str(detail.get("error") or "").strip().upper() == "HTTP 404"
     )
+
+
+def _failed(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return True
+    if result.get("version") == 1:
+        return result.get("status") != "succeeded"
+    return bool(result.get("error") or result.get("error_code"))
 
 
 def not_found_in_turn(ids: list[str], messages: list[dict], start: int | None = None) -> str | None:

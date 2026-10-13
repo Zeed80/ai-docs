@@ -448,3 +448,33 @@ def test_a_number_the_request_names_on_two_records_is_still_ambiguous():
         "body": {"message": "x", "entity_type": "invoice", "entity_id": INV},
     }
     assert guessed_target("analytics", reminder, messages) == "one_of_several"
+
+
+def test_a_record_the_employee_opened_is_not_a_guess():
+    """E52 run 3: two contracts matched; the employee read both and chose by content."""
+    c220 = "88888888-8888-8888-8888-888888888888"
+    c221 = "99999999-9999-9999-9999-999999999999"
+    found = _envelope(
+        {
+            "items": [
+                {"id": c220, "file_name": "Договор ДП-220"},
+                {"id": c221, "file_name": "Договор ДП-221"},
+            ]
+        }
+    )
+    opened = _envelope(
+        {"document_id": c221, "file_name": "Договор ДП-221", "text": "неустойка 0,5% в день"}
+    )
+    messages = _turn(
+        ("documents", {"action": "search", "query": "договор неустойка"}, found),
+        ("documents", {"action": "read", "document_id": c221}, opened),
+        request="Найди договор, где неустойка 0,5% в день, и привяжи его к счёту EV-6601",
+    )
+    link = {
+        "action": "link",
+        "document_id": c221,
+        "body": {"linked_entity_type": "invoice", "linked_entity_id": INV},
+    }
+    single = _envelope({"items": [{"id": INV, "invoice_number": "EV-6601"}]})
+    messages += _turn(("invoices", {"action": "list", "query": "EV-6601"}, single))[2:]
+    assert guessed_target("documents", link, messages) is None

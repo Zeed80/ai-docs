@@ -1843,6 +1843,28 @@ async def link_document(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
+    if not payload.allow_duplicate:
+        # E52 run 3: linked without a type, then again with one — two links
+        # where one was asked for.
+        existing = await db.scalar(
+            select(DocumentLink).where(
+                DocumentLink.document_id == document_id,
+                DocumentLink.linked_entity_type == payload.linked_entity_type,
+                DocumentLink.linked_entity_id == payload.linked_entity_id,
+            )
+        )
+        if existing is not None:
+            raise HTTPException(
+                409,
+                {
+                    "code": "already_exists",
+                    "message": (
+                        "Документ уже связан с этой записью; второй связи не создаю. "
+                        "Сменить тип связи — documents.link_update."
+                    ),
+                    "link": DocumentLinkOut.model_validate(existing).model_dump(mode="json"),
+                },
+            )
     link = DocumentLink(
         document_id=document_id,
         linked_entity_type=payload.linked_entity_type,

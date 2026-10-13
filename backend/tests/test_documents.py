@@ -357,6 +357,28 @@ async def test_link_document(client: AsyncClient):
     assert resp.status_code == 201
     assert resp.json()["linked_entity_type"] == "party"
 
+    # E52 run 3: linked again (now with a type) — one link was asked for.
+    again = await client.post(
+        f"/api/documents/{doc_id}/links",
+        json={
+            "linked_entity_type": "party",
+            "linked_entity_id": "00000000-0000-0000-0000-000000000001",
+            "link_type": "contract",
+        },
+    )
+    assert again.status_code == 409
+    assert again.json()["detail"]["link"]["id"] == resp.json()["id"]
+    explicit = await client.post(
+        f"/api/documents/{doc_id}/links",
+        json={
+            "linked_entity_type": "party",
+            "linked_entity_id": "00000000-0000-0000-0000-000000000001",
+            "link_type": "contract",
+            "allow_duplicate": True,
+        },
+    )
+    assert explicit.status_code == 201, explicit.text
+
 
 @pytest.mark.asyncio
 async def test_document_dependencies_include_links_and_graph(
