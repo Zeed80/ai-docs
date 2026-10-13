@@ -90,3 +90,14 @@ async def test_no_substitute_change_after_a_refusal(test_engine, monkeypatch):
     )
     assert result["error_code"] == "refused_earlier_in_turn"
     assert effects == []
+
+
+def test_the_gateways_plain_refusal_counts_too():
+    """E52: {"detail": "...administrator rights", "error": "HTTP 403"} was missed."""
+    plain = {
+        "detail": '{"detail":"This operation requires administrator rights"}',
+        "error": "HTTP 403",
+    }
+    assert denied_writes(_turn(plain)) == ["agent_control.task_propose"]
+    other = {"detail": "x", "error": "HTTP 422"}
+    assert denied_writes(_turn(other)) == []

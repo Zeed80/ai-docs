@@ -2852,10 +2852,15 @@ def _denied(result: Any) -> bool:
     if not isinstance(result, dict):
         return False
     evidence = result.get("evidence") if isinstance(result.get("evidence"), dict) else {}
+    data = result.get("data") if isinstance(result.get("data"), dict) else {}
+    # The capability gateway also answers {"error": "HTTP 403", "detail": ...}
+    # (E52: T8c missed it and the employee set a reminder instead).
     return (
         result.get("error_code") == "http_403"
         or result.get("status_code") == 403
         or evidence.get("http_status") == 403
+        or str(result.get("error") or "").strip().upper() == "HTTP 403"
+        or str(data.get("error") or "").strip().upper() == "HTTP 403"
     )
 
 
