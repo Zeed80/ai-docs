@@ -98,12 +98,27 @@ function BrowserHandoff() {
   }, [workOrderId, sessionId]);
 
   // A live picture while the page is open: the site may change on its own.
+  // Every second while the owner holds the session (typing a code, solving a
+  // CAPTCHA), every 3 s while only watching; nothing in a hidden tab.
+  const held = Boolean(view?.handoff);
   useEffect(() => {
     if (!sessionId) return;
-    void call("view");
-    const id = setInterval(() => void call("view"), 3000);
-    return () => clearInterval(id);
-  }, [sessionId, call]);
+    const tick = () => {
+      if (
+        typeof document === "undefined" ||
+        document.visibilityState === "visible"
+      ) {
+        void call("view");
+      }
+    };
+    tick();
+    const id = setInterval(tick, held ? 1000 : 3000);
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", tick);
+    };
+  }, [sessionId, call, held]);
 
   async function act(op: string, extra: Record<string, unknown> = {}) {
     setBusy(true);
@@ -141,7 +156,6 @@ function BrowserHandoff() {
       </p>
     );
   }
-  const held = Boolean(view?.handoff);
   return (
     <div className="space-y-3">
       {sessions && sessions.length > 1 && (

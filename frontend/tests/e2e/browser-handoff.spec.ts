@@ -91,3 +91,26 @@ test("the handoff screen fits a 320 px screen", async ({ page, context }) => {
   );
   expect(overflow).toBeLessThanOrEqual(0);
 });
+
+test("the picture refreshes every second while the owner holds the session", async ({
+  page,
+  context,
+}) => {
+  const ops: Record<string, unknown>[] = [];
+  let views = 0;
+  await setAuthCookie(context);
+  await setup(page, ops);
+  page.on("request", (request) => {
+    if (
+      request.url().endsWith("/sessions/s-1/human") &&
+      request.postDataJSON()?.op === "view"
+    )
+      views += 1;
+  });
+  await page.goto(`/work-orders/browser?work_order_id=${WO}&session=s-1`);
+  await expect(page.getByText(/Сессия у вас/)).toBeVisible();
+  const before = views;
+  await page.waitForTimeout(2500);
+  // Every 3 s it would be at most one more picture in 2.5 s.
+  expect(views - before).toBeGreaterThanOrEqual(2);
+});
