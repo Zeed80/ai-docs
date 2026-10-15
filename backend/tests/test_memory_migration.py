@@ -65,7 +65,12 @@ async def test_the_report_sorts_by_provenance_and_writes_nothing(db_session, fac
     assert d[str(facts["manager_pin"])].category == "proven_shared"
     assert d[str(facts["proposal"])].category == "review_queue"
     assert str(facts["already_owned"]) not in d
-    scopes = set(await db_session.scalars(select(MemoryFact.scope)))
+    # Only this test's facts: the shared test DB also holds other files' rows.
+    scopes = set(
+        await db_session.scalars(
+            select(MemoryFact.scope).where(MemoryFact.id.in_(list(facts.values())))
+        )
+    )
     assert scopes == {"project", "owner:e43:alice"}  # dry run moved nothing
 
 

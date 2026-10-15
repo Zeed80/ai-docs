@@ -13,6 +13,16 @@ import pytest
 from app.api import providers_api as p
 
 
+@pytest.fixture(autouse=True)
+def _no_receipts(monkeypatch):
+    """These tests read telemetry; receipt costs (T4) are tested in test_t4_tariffs."""
+
+    async def none(db):
+        return []
+
+    monkeypatch.setattr(p, "_receipt_costs", none)
+
+
 @pytest.fixture
 def telemetry(monkeypatch):
     def _set(rows):
@@ -34,7 +44,7 @@ async def test_priced_cloud_model_is_counted(telemetry):
             }
         ]
     )
-    report = await p.cost_report()
+    report = await p.cost_report(db=None)
 
     row = next(r for r in report.by_model if r.model == "claude_sonnet_anthropic")
     assert row.priced is True
@@ -65,7 +75,7 @@ async def test_one_model_used_by_several_tasks_is_summed_once(telemetry):
             },
         ]
     )
-    report = await p.cost_report()
+    report = await p.cost_report(db=None)
 
     rows = [r for r in report.by_model if r.model == "claude_sonnet_anthropic"]
     assert len(rows) == 1
@@ -86,7 +96,7 @@ async def test_unknown_price_is_never_reported_as_zero(telemetry):
             }
         ]
     )
-    report = await p.cost_report()
+    report = await p.cost_report(db=None)
 
     row = next(r for r in report.by_model if r.model == "нет_такой_модели_в_каталоге")
     assert row.priced is False
@@ -110,7 +120,7 @@ async def test_local_models_are_not_listed_as_unpriced(telemetry):
             }
         ]
     )
-    report = await p.cost_report()
+    report = await p.cost_report(db=None)
 
     assert "qwen3_embedding_4b_ollama" not in report.unpriced_models
     assert all(r.model != "qwen3_embedding_4b_ollama" for r in report.by_model)
@@ -119,7 +129,7 @@ async def test_local_models_are_not_listed_as_unpriced(telemetry):
 @pytest.mark.asyncio
 async def test_empty_telemetry_gives_an_empty_report(telemetry):
     telemetry([])
-    report = await p.cost_report()
+    report = await p.cost_report(db=None)
     assert report.total_usd == 0
     assert report.by_model == []
     assert report.unpriced_models == []
@@ -131,5 +141,5 @@ async def test_telemetry_failure_does_not_break_the_report(monkeypatch):
         raise RuntimeError("redis is down")
 
     monkeypatch.setattr("app.ai.telemetry.get_summary", boom)
-    report = await p.cost_report()
+    report = await p.cost_report(db=None)
     assert report.total_usd == 0

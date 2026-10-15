@@ -205,6 +205,7 @@ RULES: dict[str, str] = {
 # Tables with an owner-like column that are company data on purpose.
 COMPANY_WIDE: dict[str, str] = {
     "users": "сотрудники и их отделы — справочник предприятия",
+    "llm_tariffs": "цены моделей (T4) — справочник предприятия; created_by — автор версии, не владелец",
     "departments": "оргструктура",
     "tool_catalog_entries": "каталог поставщика — справочник; API каталога не фильтрует по владельцу",
     "catalog_pages": "страницы каталога поставщика, как сам каталог",
