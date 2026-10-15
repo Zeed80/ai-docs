@@ -30,6 +30,7 @@ from app.domain.work_orders import (
     owner_instructions,
     promote_ready_dependents,
     promote_waiting_parents,
+    ready_step_ids,
     reclaim_expired_leases,
     record_verifier_verdict,
     recorded_recipient_action_digest,
@@ -2324,19 +2325,66 @@ async def _dispatch_ready_work(limit: int = 10) -> int:
     for step_id in pending_verification:
         verify_work_step.apply_async(args=[str(step_id)], queue="scheduler")
 
-    claimed_ids: list[tuple[str, str]] = []
-    for _ in range(max(1, min(limit, 100))):
-        worker = _worker_id()
+    # The step is claimed by the task that runs it, not here: a claim starts
+    # the 120 s lease, and a task waiting behind a busy queue (a catalog import
+    # held every slot of the shared worker) lost its lease before the turn
+    # began — "lease_expired" with no event at all (2026-10-15). A marker per
+    # step keeps the 5 s dispatch from queueing the same step again meanwhile.
+    async with factory() as db:
+        ready = await ready_step_ids(db, limit=max(1, min(limit, 100)))
+    queued = 0
+    for step_id in ready:
+        if not _mark_queued(step_id):
+            continue
+        claim_and_execute_step.apply_async(args=[str(step_id)], queue="scheduler")
+        queued += 1
+    return queued
+
+
+_QUEUED_MARKER_TTL_S = 900
+
+
+def _queued_key(step_id: uuid.UUID | str) -> str:
+    return f"work:step_queued:{step_id}"
+
+
+def _mark_queued(step_id: uuid.UUID) -> bool:
+    """True when this dispatch is the one to queue the step (best-effort)."""
+    try:
+        from app.utils.redis_client import get_sync_redis
+
+        return bool(
+            get_sync_redis().set(_queued_key(step_id), "1", nx=True, ex=_QUEUED_MARKER_TTL_S)
+        )
+    except Exception:  # noqa: BLE001 — without Redis a duplicate task only finds nothing to claim
+        return True
+
+
+def _clear_queued(step_id: uuid.UUID | str) -> None:
+    try:
+        from app.utils.redis_client import get_sync_redis
+
+        get_sync_redis().delete(_queued_key(step_id))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def claim_and_execute(step_id: uuid.UUID, *, session_factory: Any | None = None) -> bool:
+    """Claim one ready step where it will run, then run it."""
+    from app.db.session import _get_session_factory
+
+    factory = session_factory or _get_session_factory()
+    try:
         async with factory() as db:
-            claimed = await claim_ready_step(db, worker_id=worker)
+            claimed = await claim_ready_step(db, worker_id=_worker_id(), step_id=step_id)
             if claimed is None:
-                break
+                return False  # taken, paused or no longer ready
             _order, step, attempt = claimed
-            claimed_ids.append((str(step.id), str(attempt.id)))
+            attempt_id = attempt.id
             await db.commit()
-    for step_id, attempt_id in claimed_ids:
-        execute_work_step.apply_async(args=[step_id, attempt_id], queue="scheduler")
-    return len(claimed_ids)
+    finally:
+        _clear_queued(step_id)
+    return await execute_claimed_step(step_id, attempt_id, session_factory=factory)
 
 
 async def _plan_order(work_order_id: uuid.UUID, *, session_factory: Any | None = None) -> bool:
@@ -2360,6 +2408,18 @@ def plan_work_order_task(work_order_id: str) -> None:
 )
 def dispatch_ready_work() -> None:
     run_async(_dispatch_ready_work())
+
+
+@celery_app.task(
+    name="work.claim_and_execute",
+    queue="scheduler",
+    max_retries=0,
+    ignore_result=True,
+    soft_time_limit=650,
+    time_limit=_STEP_HARD_LIMIT_SECONDS,
+)
+def claim_and_execute_step(step_id: str) -> None:
+    run_async(claim_and_execute(uuid.UUID(step_id)))
 
 
 @celery_app.task(

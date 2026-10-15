@@ -701,33 +701,53 @@ async def create_work_plan(
     return plan, rows
 
 
+def _ready_step_filters(now):
+    return (
+        WorkPlan.status == "active",
+        WorkStep.state.in_(["ready", "retry_wait"]),
+        WorkOrder.status.in_(["ready", "running"]),
+        # E22: no new step for an order whose owner asked to pause.
+        WorkOrder.metadata_["pause"].is_(None),
+        (WorkStep.next_attempt_at.is_(None) | (WorkStep.next_attempt_at <= now)),
+        (WorkStep.lease_expires_at.is_(None) | (WorkStep.lease_expires_at <= now)),
+    )
+
+
+async def ready_step_ids(db: AsyncSession, *, limit: int = 10) -> list[uuid.UUID]:
+    """Steps a worker could claim now, in claim order — nothing is locked."""
+    query = (
+        select(WorkStep.id)
+        .join(WorkOrder, WorkOrder.id == WorkStep.work_order_id)
+        .join(WorkPlan, WorkPlan.id == WorkStep.plan_id)
+        .where(*_ready_step_filters(utcnow()))
+        .order_by(WorkOrder.priority.desc(), WorkStep.created_at.asc())
+        .limit(limit)
+    )
+    return list((await db.execute(query)).scalars())
+
+
 async def claim_ready_step(
     db: AsyncSession,
     *,
     worker_id: str,
     lease_seconds: int = 120,
     work_order_id: uuid.UUID | None = None,
+    step_id: uuid.UUID | None = None,
 ) -> tuple[WorkOrder, WorkStep, WorkStepAttempt] | None:
     now = utcnow()
     query = (
         select(WorkStep)
         .join(WorkOrder, WorkOrder.id == WorkStep.work_order_id)
         .join(WorkPlan, WorkPlan.id == WorkStep.plan_id)
-        .where(
-            WorkPlan.status == "active",
-            WorkStep.state.in_(["ready", "retry_wait"]),
-            WorkOrder.status.in_(["ready", "running"]),
-            # E22: no new step for an order whose owner asked to pause.
-            WorkOrder.metadata_["pause"].is_(None),
-            (WorkStep.next_attempt_at.is_(None) | (WorkStep.next_attempt_at <= now)),
-            (WorkStep.lease_expires_at.is_(None) | (WorkStep.lease_expires_at <= now)),
-        )
+        .where(*_ready_step_filters(now))
         .order_by(WorkOrder.priority.desc(), WorkStep.created_at.asc())
         .with_for_update(skip_locked=True)
         .limit(1)
     )
     if work_order_id is not None:
         query = query.where(WorkStep.work_order_id == work_order_id)
+    if step_id is not None:
+        query = query.where(WorkStep.id == step_id)
     step = (await db.execute(query)).scalar_one_or_none()
     if step is None:
         return None

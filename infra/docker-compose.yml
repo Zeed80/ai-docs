@@ -1011,7 +1011,7 @@ services:
     # "mail" is its own queue (Ф1.5): IMAP polling used to share "ingest" with
     # OCR/extraction, so a backlog of documents delayed mail delivery and vice
     # versa. Same worker, separate lane.
-    command: celery -A app.tasks.celery_app worker -l info -c 4 -Q celery,extraction,ingest,mail,scheduler,catalog,catalog_render
+    command: celery -A app.tasks.celery_app worker -l info -c 4 -Q celery,extraction,ingest,mail,catalog,catalog_render
     environment:
       <<: *backend-env
       SKIP_DB_MIGRATE: "1"
@@ -1029,6 +1029,43 @@ services:
     # копятся в очереди. ping отвечает только пока пул реально жив.
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.tasks.celery_app inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 60s
+      timeout: 20s
+      retries: 3
+      start_period: 90s
+    extra_hosts:
+      - "host-gateway:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    networks:
+      - app
+
+  # === Celery Worker — agent lane ===
+  # The durable runtime (queue "scheduler": dispatch, plan, execute, verify,
+  # learn, cron) on its own worker. On the shared IO worker a catalog import
+  # held all four slots for minutes; a chat step claimed by the dispatcher
+  # waited in the queue past its 120 s lease and failed "lease_expired" before
+  # the turn even began (2026-10-15).
+  celery-worker-agent:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    mem_limit: 6g
+    command: celery -A app.tasks.celery_app worker -l info -c 4 -Q scheduler -n agent@%h
+    environment:
+      <<: *backend-env
+      SKIP_DB_MIGRATE: "1"
+    volumes:
+      - ../aiagent:/aiagent:ro
+      - backend_data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.tasks.celery_app inspect ping -d agent@$$HOSTNAME || exit 1"]
       interval: 60s
       timeout: 20s
       retries: 3

@@ -57,6 +57,9 @@ services:
   celery-worker:
     restart: unless-stopped
 
+  celery-worker-agent:
+    restart: unless-stopped
+
   celery-worker-gpu:
     restart: unless-stopped
 
