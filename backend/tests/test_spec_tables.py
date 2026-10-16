@@ -1439,3 +1439,24 @@ async def test_an_unreadable_date_is_a_spec_error_not_a_silent_drop(db_session, 
                 filters=[ts.FilterSpec(field="invoice_date", op="gte", value="прошлой весной")],
             ),
         )
+
+
+@pytest.mark.asyncio
+async def test_suppliers_without_a_phone(db_session, seeded):
+    """«поставщики, у которых не указан телефон»: NULL and blank both count."""
+    seeded["romashka"].contact_phone = "+7 495 000-00-00"
+    seeded["lutik"].contact_phone = "  "
+    await db_session.flush()
+
+    def spec(op):
+        return ts.TableSpec(
+            source="suppliers",
+            columns=[ts.ColumnSpec(field="name"), ts.ColumnSpec(field="contact_phone")],
+            filters=[ts.FilterSpec(field="contact_phone", op=op)],
+        )
+
+    empty = await ts.execute_spec(db_session, spec("is_null"))
+    names = {r["name"] for r in empty.rows}
+    assert "АО Лютик" in names and "ООО Ромашка" not in names
+    filled = await ts.execute_spec(db_session, spec("not_empty"))
+    assert {r["name"] for r in filled.rows} == {"ООО Ромашка"}

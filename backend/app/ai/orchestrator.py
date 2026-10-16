@@ -647,7 +647,8 @@ class AgentOrchestrator:
         if recipe_hit is None:
             return ""
         recipe, score, margin = recipe_hit
-        if score >= recipes_module.REPLAY_SCORE and recipe.status == "active":
+        replay_on = bool(getattr(config, "recipe_replay_enabled", False))
+        if replay_on and score >= recipes_module.REPLAY_SCORE and recipe.status == "active":
             slots = recipes_module.resolve_slots(
                 recipe.param_slots, content, extra_entities=decision.entities
             )
@@ -3537,46 +3538,6 @@ def _latest_spec_block() -> dict | None:
     return max(blocks, key=lambda b: str(b.get("updated_at") or ""))
 
 
-def _resolve_workspace_canvas(content: str) -> tuple[str | None, dict[str, str]]:
-    """Select the specialised workspace canvas (and filters) for a table turn.
-
-    This is canvas *template* selection for an already-decided workspace turn —
-    NOT keyword intent routing. The LLM turn-router decides *whether* a turn is a
-    table; this picks the right surface (grouped invoice items, by-supplier, the
-    already-open table, a supplier-filtered list, …) instead of funnelling every
-    workspace turn to the generic ``agent:spec-table`` canvas. Mirrors the canvas
-    resolution that ``_plan_turn`` (the degraded heuristic planner) already does,
-    so both planning paths land on the same specialised invoice tables.
-    """
-    text = _norm(content)
-    canvas_id: str | None = None
-
-    matched_route = _match_intent_route(text)
-    if matched_route:
-        canvas_id = _resolve_canvas_from_route(matched_route, text)
-
-    # A reference to an already-open table wins over re-deriving a canvas.
-    if not canvas_id and _references_existing_table(text):
-        canvas_id = _latest_workspace_table_id()
-
-    # "сгруппируй по поставщикам" → dedicated by-supplier canvas.
-    if not canvas_id and _is_supplier_grouping_request(text):
-        sg = route_table.supplier_grouping()
-        canvas_id = sg.get("canvas_id", "agent:invoice-items-by-supplier")
-
-    filters: dict[str, str] = {}
-    supplier_name = _extract_supplier_name(text)
-    if supplier_name:
-        canvas_id = canvas_id or "agent:invoice-items"
-        filters = {"supplier_query": supplier_name}
-
-    # Fall back to JSON route rules / open-table state, then the generic spec
-    # table as the universal SQL-backed surface.
-    if not canvas_id:
-        canvas_id = _fallback_canvas_id(content) or "agent:spec-table"
-    return canvas_id, filters
-
-
 def _decision_to_plan(decision: TurnDecision, content: str) -> OrchestratorPlan:
     """Map a typed TurnDecision onto the OrchestratorPlan the worker tail expects.
 
@@ -3585,15 +3546,13 @@ def _decision_to_plan(decision: TurnDecision, content: str) -> OrchestratorPlan:
     """
     workspace_required = decision.output_channel == "workspace"
     canvas_id: str | None = None
-    workspace_filters: dict[str, str] = {}
     if workspace_required:
-        # Pick the specialised canvas from the request (grouped invoice items,
-        # by-supplier, the open table, …) instead of always the generic
-        # spec-table — the LLM already decided this is a table; we only choose
-        # which surface. An explicit canvas from the router wins; unmatched
-        # requests still fall back to agent:spec-table.
-        canvas_id, workspace_filters = _resolve_workspace_canvas(content)
-        canvas_id = decision.workspace_canvas_id or canvas_id
+        # The router's canvas, else the generic spec-table. Keywords no longer
+        # pick a template table and a supplier filter on top of the model's
+        # decision: «по поставщикам» sent «Выведи все фрезы, сгруппируй…» to a
+        # fixed template, a name pulled from the text became a filter the audit
+        # demanded (owner's audit 2026-10-16).
+        canvas_id = decision.workspace_canvas_id or "agent:spec-table"
     recommended_skills = [
         f"{r.capability}.{r.action}" if r.action else r.capability for r in decision.recommended
     ]
@@ -3610,7 +3569,7 @@ def _decision_to_plan(decision: TurnDecision, content: str) -> OrchestratorPlan:
             output_type="table" if workspace_required else "text",
             required=workspace_required,
             canvas_id=canvas_id,
-            filters=workspace_filters,
+            filters={},
         ),
     )
 

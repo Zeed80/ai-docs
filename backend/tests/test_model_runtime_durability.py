@@ -108,3 +108,23 @@ async def test_catalog_upsert_is_idempotent(db_session, captured_redis):
     )
     assert len(rows) == 1
     assert rows[0].provider_model == "gemma4:e2b-v2"  # last write wins
+
+
+@pytest.mark.asyncio
+async def test_agent_settings_screen_survives_a_restart(db_session, monkeypatch, tmp_path):
+    """«Настройки → Агент» saved Redis and the file only; the restart restored
+    the old Postgres copy (max_steps 40 → 10, 2026-10-16)."""
+    from app.ai import agent_config
+    from app.api.ai_settings import patch_agent_config
+
+    live: dict = {}
+    monkeypatch.setattr(agent_config, "_redis_set_agent_config", lambda data: live.update(data))
+    monkeypatch.setattr(agent_config, "_redis_get_agent_config", lambda: dict(live) or None)
+    monkeypatch.setattr(agent_config, "_CONFIG_FILE", tmp_path / "agent_config.json")
+
+    await patch_agent_config(agent_config.BuiltinAgentConfigUpdate(max_steps=40), db=db_session)
+
+    restored: dict = {}
+    monkeypatch.setattr(agent_config, "_redis_set_agent_config", lambda data: restored.update(data))
+    await store.hydrate_runtime_cache(db_session)
+    assert restored["max_steps"] == 40

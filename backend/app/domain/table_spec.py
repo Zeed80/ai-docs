@@ -108,7 +108,9 @@ class ColumnSpec(BaseModel):
 
 class FilterSpec(BaseModel):
     field: str
-    op: Literal["eq", "ne", "contains", "gte", "lte", "between", "in", "smart"] = "contains"
+    op: Literal[
+        "eq", "ne", "contains", "gte", "lte", "between", "in", "smart", "empty", "not_empty"
+    ] = "contains"
     value: Any = None
     value2: Any | None = None  # upper bound for "between"
 
@@ -122,6 +124,10 @@ class FilterSpec(BaseModel):
         # op so the call doesn't silently return 0 and force a wasted retry.
         if v in ("like", "ilike"):
             return "contains"
+        if v in ("is_null", "isnull", "null", "is_empty", "missing", "blank"):
+            return "empty"
+        if v in ("not_null", "is_not_null", "notnull", "exists", "present", "not_blank"):
+            return "not_empty"
         return v
 
 
@@ -290,6 +296,8 @@ SOURCES: dict[str, SourceDef] = {
             FieldDef("address", "Адрес", "text", ("адрес",)),
             FieldDef("bank_name", "Банк", "text", ("банк",)),
             FieldDef("bank_bik", "БИК", "text", ("бик",)),
+            FieldDef("contact_phone", "Телефон", "text", ("телефон", "тел")),
+            FieldDef("contact_email", "E-mail", "text", ("почта", "email", "e-mail", "емейл")),
             FieldDef(
                 "total_invoices",
                 "Счетов",
@@ -790,6 +798,8 @@ def _suppliers_exprs() -> dict[str, Any]:
         "address": Party.address,
         "bank_name": Party.bank_name,
         "bank_bik": Party.bank_bik,
+        "contact_phone": Party.contact_phone,
+        "contact_email": Party.contact_email,
         "total_invoices": func.coalesce(SupplierProfile.total_invoices, 0),
         "total_amount": func.coalesce(SupplierProfile.total_amount, 0),
     }
@@ -1878,7 +1888,15 @@ async def execute_spec(
             continue
         expr = exprs[flt.field]
         cond = None
-        if source.fields[flt.field].type == "date":
+        # «у которых не указан телефон»: NULL and blank text are both «не указан».
+        blank = expr.is_(None)
+        if source.fields[flt.field].type == "text":
+            blank = or_(expr.is_(None), func.trim(cast(expr, Text)) == "")
+        if flt.op == "empty":
+            cond = blank
+        elif flt.op == "not_empty":
+            cond = ~blank
+        elif source.fields[flt.field].type == "date":
             cond = _date_condition(expr, flt)
         elif flt.op == "eq":
             cond = expr == flt.value

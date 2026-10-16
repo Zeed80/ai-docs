@@ -9,7 +9,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -39,7 +39,18 @@ class WorkspaceBlockResponse(BaseModel):
     total: int
 
 
-class WorkspaceInvoiceTableRequest(BaseModel):
+class _TemplateTableRequest(BaseModel):
+    """A fixed-shape table: an argument it does not know is an error, not a no-op.
+
+    These templates ignored anything outside their few fields, so «резцы» passed
+    as a search filter vanished and the user got all 151 invoices (live
+    2026-10-16). Rejected, the model sees why and builds a spec_table instead.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class WorkspaceInvoiceTableRequest(_TemplateTableRequest):
     canvas_id: str = "agent:invoice-list"
     limit: int = 5000
     include_delete_actions: bool = True
@@ -50,14 +61,14 @@ class WorkspaceInvoiceTableRequest(BaseModel):
     supplier_query: str | None = None
 
 
-class WorkspaceInvoiceItemsTableRequest(BaseModel):
+class WorkspaceInvoiceItemsTableRequest(_TemplateTableRequest):
     canvas_id: str = "agent:invoice-items"
     limit: int = 10000
     include_invoice_actions: bool = True
     supplier_query: str | None = None
 
 
-class WorkspaceInvoiceItemsGroupedTableRequest(BaseModel):
+class WorkspaceInvoiceItemsGroupedTableRequest(_TemplateTableRequest):
     canvas_id: str = "agent:invoice-items-grouped"
     limit: int = 5000
     include_supplier: bool = False
@@ -67,13 +78,13 @@ class WorkspaceInvoiceItemsGroupedTableRequest(BaseModel):
     supplier_query: str | None = None
 
 
-class WorkspaceInvoiceItemsBySupplierTableRequest(BaseModel):
+class WorkspaceInvoiceItemsBySupplierTableRequest(_TemplateTableRequest):
     canvas_id: str = "agent:invoice-items-by-supplier"
     limit: int = 10000
     supplier_query: str | None = None
 
 
-class WorkspaceInvoicePivotRequest(BaseModel):
+class WorkspaceInvoicePivotRequest(_TemplateTableRequest):
     # Generic group-by for invoice items. group_by picks the grouping dimension;
     # the table always covers ALL data (SQL-side aggregation), so it works for any
     # phrasing instead of relying on a handful of pre-baked layouts.

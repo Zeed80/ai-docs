@@ -282,6 +282,19 @@ async def persist_agent_config(db: AsyncSession, *, config: dict[str, Any]) -> N
     )
 
 
+async def persist_current_agent_config(db: AsyncSession) -> None:
+    """Postgres copy of the live agent config; startup restores Redis from it.
+
+    Every endpoint that changes the config must call it in its own session: a
+    Redis-and-file save was undone by the next restart (max_steps 40 → 10,
+    2026-10-16). Not done inside save_builtin_agent_config: a second
+    connection there waits forever on the row the request's session holds.
+    """
+    from app.ai.agent_config import get_builtin_agent_config
+
+    await persist_agent_config(db, config=get_builtin_agent_config().model_dump(mode="json"))
+
+
 async def create_assignment_revision(
     db: AsyncSession,
     *,

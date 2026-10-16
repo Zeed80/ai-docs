@@ -2,6 +2,8 @@
 items table — it must stay wired so the agent never falls back to hand-building
 tables in the LLM (which silently drops rows/groups)."""
 
+import pytest
+
 from app.api.capability_router import _DISPATCH
 
 
@@ -78,3 +80,13 @@ def test_pivot_message_names_the_real_columns():
         "Открыл сводную таблицу по «Поставщик»: 33 групп (по 391 строкам счетов); "
         "колонки: Поставщик, Счетов, Товары, Сумма."
     )
+
+
+@pytest.mark.asyncio
+async def test_template_table_rejects_an_argument_it_would_drop(client):
+    """«резцы» as search on the grouped template returned all invoices."""
+    resp = await client.post(
+        "/api/workspace/agent/invoices/items-grouped-table", json={"search": "резцы"}
+    )
+    assert resp.status_code == 422
+    assert "search" in resp.text

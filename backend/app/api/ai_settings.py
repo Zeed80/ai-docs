@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai import model_runtime_store
 from app.ai.agent_config import (
     BuiltinAgentConfig,
     BuiltinAgentConfigUpdate,
@@ -376,6 +377,8 @@ async def update_config(
     save_ai_config(cfg)
     if "model_agent" in update and update["model_agent"]:
         update_builtin_agent_config(BuiltinAgentConfigUpdate(model=str(update["model_agent"])))
+        await model_runtime_store.persist_current_agent_config(db)
+        await db.commit()
     if (
         payload.embedding_model
         and previous_embedding_model
@@ -402,8 +405,11 @@ async def get_agent_config() -> BuiltinAgentConfig:
 @router.patch("/agent-config", response_model=BuiltinAgentConfig)
 async def patch_agent_config(
     payload: BuiltinAgentConfigUpdate,
+    db: AsyncSession = Depends(get_db),
 ) -> BuiltinAgentConfig:
     config = update_builtin_agent_config(payload)
+    await model_runtime_store.persist_current_agent_config(db)
+    await db.commit()
     if payload.model is not None:
         _sync_ai_model_agent(payload.model)
     logger.info("builtin_agent_config_updated", **payload.model_dump(exclude_unset=True))
@@ -437,7 +443,9 @@ async def _installed_ollama_model_names() -> set[str]:
 
 
 @router.post("/agent-config/presets/stable-local", response_model=BuiltinAgentConfig)
-async def apply_stable_local_agent_preset() -> BuiltinAgentConfig:
+async def apply_stable_local_agent_preset(
+    db: AsyncSession = Depends(get_db),
+) -> BuiltinAgentConfig:
     """Apply a 3-model local preset: fast orchestrator, main workers, large builder."""
     current = get_builtin_agent_config()
     installed = await _installed_ollama_model_names()
@@ -489,6 +497,8 @@ async def apply_stable_local_agent_preset() -> BuiltinAgentConfig:
         )
     )
     _sync_ai_model_agent(config.model)
+    await model_runtime_store.persist_current_agent_config(db)
+    await db.commit()
     logger.info(
         "builtin_agent_stable_local_preset_applied",
         orchestrator_model=orchestrator_model,
@@ -499,9 +509,11 @@ async def apply_stable_local_agent_preset() -> BuiltinAgentConfig:
 
 
 @router.post("/agent-config/reset", response_model=BuiltinAgentConfig)
-async def reset_agent_config() -> BuiltinAgentConfig:
+async def reset_agent_config(db: AsyncSession = Depends(get_db)) -> BuiltinAgentConfig:
     config = reset_builtin_agent_config()
     _sync_ai_model_agent(config.model)
+    await model_runtime_store.persist_current_agent_config(db)
+    await db.commit()
     logger.info("builtin_agent_config_reset")
     return config
 

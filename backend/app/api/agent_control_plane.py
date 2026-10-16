@@ -21,6 +21,7 @@ from pydantic import AliasChoices, BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.ai import model_runtime_store
 from app.ai.agent_config import (
     BuiltinAgentConfig,
     BuiltinAgentConfigUpdate,
@@ -410,6 +411,7 @@ async def _create_config_proposal(
     )
     if not protected:
         _apply_setting(payload.setting_path, payload.proposed_value)
+        await model_runtime_store.persist_current_agent_config(db)
         proposal.applied_at = datetime.now(UTC)
     db.add(proposal)
     await db.commit()
@@ -911,6 +913,7 @@ async def decide_config_proposal(
     proposal.decision_comment = payload.comment
     if payload.approved:
         _apply_setting(proposal.setting_path, _unwrap_value(proposal.proposed_value))
+        await model_runtime_store.persist_current_agent_config(db)
         proposal.status = "approved"
         proposal.applied_at = now
     else:

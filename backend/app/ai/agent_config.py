@@ -127,6 +127,11 @@ class BuiltinAgentConfig(BaseModel):
     max_audit_retries: int = Field(1, ge=0, le=5)
     memory_enabled: bool = True
     audit_enabled: bool = True
+    # Learned recipes replay their recorded calls without the model. Off: the
+    # three active ones carried literal arguments (a fixed 100000 threshold, a
+    # stale «152 шт.» title) and never replayed once; they stay a hint to the
+    # model. On only after recipes learn parameters (owner's audit 2026-10-16).
+    recipe_replay_enabled: bool = False
     # Retired (E48): generated capabilities are gone. The fields stay so stored
     # configs and old clients still load; the validator above pins them off.
     allow_capability_builder: bool = False
@@ -209,6 +214,7 @@ class BuiltinAgentConfigUpdate(BaseModel):
     max_audit_retries: int | None = Field(default=None, ge=0, le=5)
     memory_enabled: bool | None = None
     audit_enabled: bool | None = None
+    recipe_replay_enabled: bool | None = None
     allow_capability_builder: bool | None = None
     capability_builder_requires_approval: bool | None = None
     autonomy_mode: str | None = None

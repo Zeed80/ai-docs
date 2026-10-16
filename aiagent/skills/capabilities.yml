@@ -581,7 +581,8 @@ capabilities:
         invoice_items: description, sku, quantity, unit, item_with_qty
           («наименование — количество ед.»), unit_price, amount, tax_rate,
           tax_amount, invoice_number, invoice_date, supplier_name.
-        suppliers: name, inn, kpp, address, bank_name, bank_bik.
+        suppliers: name, inn, kpp, address, bank_name, bank_bik, contact_phone,
+          contact_email, total_invoices, total_amount.
         warehouse (остатки): name, sku, current_qty, unit, min_qty, location,
           below_min («Да»/«Нет»; фильтр {field: below_min, op: eq, value:
           "Да"} = дефицит).
@@ -612,7 +613,9 @@ capabilities:
           сущности — обязателен), source_title, edge_type, target_title,
           target_type, confidence, reason. Пример: source=graph_query,
           filters=[{field: start_node, op: contains, value: "ООО Ромашка"}].
-        Фильтр op: eq|ne|contains|gte|lte|between|in|smart
+        Фильтр op: eq|ne|contains|gte|lte|between|in|smart|empty|not_empty
+        (empty — поле не заполнено: «у кого не указан телефон» =
+        {field: contact_phone, op: empty})
         (smart — умный поиск по содержимому: «фрезы диаметра 5»).
         Полный справочник: action=spec_table_catalog.
       - spec_table_patch — править существующую spec-таблицу: canvas_id +

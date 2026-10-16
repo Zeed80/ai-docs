@@ -84,8 +84,9 @@ def _recipe(
     )
 
 
-def _config() -> BuiltinAgentConfig:
+def _config(*, replay: bool = True) -> BuiltinAgentConfig:
     return BuiltinAgentConfig(
+        recipe_replay_enabled=replay,
         department_enabled=True,
         audit_enabled=True,
         model="mock",
@@ -258,3 +259,8 @@ async def test_draft_recipe_only_hints(monkeypatch):
     await session.on_user_message("выведи все товары в таблицу по счетам")
 
     assert hints and "invoices.list" in hints[-1]
+
+
+def test_recipe_replay_is_off_by_default():
+    """Recipes stay a hint to the model until they learn parameters."""
+    assert BuiltinAgentConfig().recipe_replay_enabled is False

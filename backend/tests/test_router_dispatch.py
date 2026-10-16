@@ -29,9 +29,10 @@ def test_decision_to_plan_workspace_analytical():
     plan = _decision_to_plan(d, "счета за май")
     assert plan.workspace.required is True
     assert plan.workspace.channel == "workspace"
-    # Content-aware canvas: an invoice request lands on the specialised invoice
-    # surface, not the generic spec-table funnel.
-    assert plan.workspace.canvas_id == "agent:invoices"
+    # No keyword template on top of the router: the generic spec-table, and
+    # no filter pulled out of the text.
+    assert plan.workspace.canvas_id == "agent:spec-table"
+    assert plan.workspace.filters == {}
     assert plan.worker.role == "data_analyst"
     assert plan.worker.recommended_skills == ["invoices.list"]
 
