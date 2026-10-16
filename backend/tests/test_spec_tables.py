@@ -1551,3 +1551,27 @@ async def test_an_unknown_filter_field_is_refused_not_dropped(db_session, seeded
                 filters=[ts.FilterSpec(field="fax_number_zz", op="empty")],
             ),
         )
+
+
+@pytest.mark.asyncio
+async def test_sum_and_average_of_one_field_side_by_side(db_session, seeded):
+    """«сумма и средняя цена по поставщикам»: two aggregates on amount were both
+    labelled «amount» — ORDER BY ambiguous, HTTP 500 (live 2026-10-16)."""
+    result = await ts.execute_spec(
+        db_session,
+        ts.TableSpec(
+            source="invoice_items",
+            columns=[
+                ts.ColumnSpec(field="supplier_name"),
+                ts.ColumnSpec(field="amount", agg="sum"),
+                ts.ColumnSpec(field="amount", header="Средняя", agg="avg"),
+            ],
+            filters=[ts.FilterSpec(field="description", op="contains", value="фреза")],
+            group_by=["supplier_name"],
+            sort=[ts.SortSpec(field="amount", dir="desc")],
+        ),
+    )
+    assert [c["key"] for c in result.columns] == ["supplier_name", "amount", "amount_avg"]
+    by_supplier = {r["supplier_name"]: (r["amount"], r["amount_avg"]) for r in result.rows}
+    assert by_supplier == {"ООО Ромашка": (8000.0, 8000.0), "АО Лютик": (5000.0, 5000.0)}
+    assert [r["supplier_name"] for r in result.rows] == ["ООО Ромашка", "АО Лютик"]

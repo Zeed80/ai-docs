@@ -1726,24 +1726,35 @@ async def _execute_grouped(
     """One row per group: group key(s) + string_agg(distinct) / SUM aggregates."""
     field_defs = [source.fields[k] for k in keys]
     group_keys = [g for g in spec.group_by if g in exprs]
+    # «сумма и средняя цена»: sum(amount) and avg(amount) are two columns on
+    # one field. Both labelled «amount» made ORDER BY ambiguous — HTTP 500
+    # three times in a row, the model gave up on the table (live 2026-10-16).
+    out_keys: list[str] = []
+    for col in columns:
+        key = col.field
+        if key in out_keys:
+            key = f"{col.field}_{col.agg or 'value'}"
+            while key in out_keys:
+                key += "_"
+        out_keys.append(key)
     select_cols: list[Any] = []
-    for col, fd in zip(columns, field_defs, strict=True):
+    for col, fd, out_key in zip(columns, field_defs, out_keys, strict=True):
         e = exprs[col.field]
         if col.field in group_keys:
-            select_cols.append(e.label(col.field))
+            select_cols.append(e.label(out_key))
             continue
         agg = col.agg or ("sum" if fd.type == "number" else "concat")
         if agg == "concat":
             text_expr = cast(e, Text)
             if col.field not in _LIST_ALL_COLUMNS.get(spec.source, set()):
                 text_expr = distinct(text_expr)
-            select_cols.append(func.string_agg(text_expr, literal("; ")).label(col.field))
+            select_cols.append(func.string_agg(text_expr, literal("; ")).label(out_key))
         elif agg == "count":
-            select_cols.append(func.count(e).label(col.field))
+            select_cols.append(func.count(e).label(out_key))
         elif agg == "avg":
-            select_cols.append(func.round(cast(func.avg(e), Numeric), 2).label(col.field))
+            select_cols.append(func.round(cast(func.avg(e), Numeric), 2).label(out_key))
         else:  # sum / min / max
-            select_cols.append(getattr(func, agg)(e).label(col.field))
+            select_cols.append(getattr(func, agg)(e).label(out_key))
 
     stmt = _base_stmt(spec.source, exprs, keys, select_cols=select_cols)
     for cond in where_conds:
@@ -1770,14 +1781,14 @@ async def _execute_grouped(
     n = len(keys)
     rows = [
         {
-            fd.key: _format_value(value, fd.type)
-            for fd, value in zip(field_defs, row[:n], strict=True)
+            out_key: _format_value(value, fd.type)
+            for fd, out_key, value in zip(field_defs, out_keys, row[:n], strict=True)
         }
         for row in result.all()
     ]
     out_columns = [
-        {"key": fd.key, "header": col.header or fd.header, "type": fd.type, "editable": False}
-        for col, fd in zip(columns, field_defs, strict=True)
+        {"key": out_key, "header": col.header or fd.header, "type": fd.type, "editable": False}
+        for col, fd, out_key in zip(columns, field_defs, out_keys, strict=True)
     ]
     return TableResult(
         columns=out_columns,
@@ -1876,6 +1887,10 @@ async def execute_spec(
         if gb in source.fields and gb not in existing:
             columns.insert(0, ColumnSpec(field=gb))
             existing.add(gb)
+    if not (spec.group_by and _can_aggregate(spec.source, [c.field for c in columns])):
+        # Ungrouped, a second column on the same field is the same data.
+        seen: set[str] = set()
+        columns = [c for c in columns if not (c.field in seen or seen.add(c.field))]
     keys = [c.field for c in columns]
     exprs = _EXPRS[spec.source]()
     stmt = _base_stmt(spec.source, exprs, keys)
