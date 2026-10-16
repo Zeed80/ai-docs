@@ -79,3 +79,32 @@ async def test_the_executing_task_claims_then_runs(test_engine, monkeypatch):
         assert step.state == "running" and step.lease_owner
     # A second task for the same step finds nothing to claim.
     assert await tasks.claim_and_execute(step_id, session_factory=factory) is False
+
+
+@pytest.mark.asyncio
+async def test_the_kill_switch_starts_no_new_step(test_engine, monkeypatch):
+    """E52 release: with the agent off nothing new starts — not only the chat turn."""
+    factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as db:
+        step_id = await _ready_step(db)
+    queued: list[str] = []
+    monkeypatch.setattr(tasks, "agent_switched_on", lambda: False)
+    monkeypatch.setattr(
+        tasks.claim_and_execute_step, "apply_async", lambda args, queue: queued.append(args[0])
+    )
+    monkeypatch.setattr("app.db.session._get_session_factory", lambda: factory)
+    monkeypatch.setattr(tasks, "_clear_queued", lambda s: None)
+
+    assert await tasks._dispatch_ready_work(limit=100) == 0 and queued == []
+    assert await tasks.claim_and_execute(step_id, session_factory=factory) is False
+    async with factory() as db:
+        step = await db.get(WorkStep, step_id)
+        assert step.lease_owner is None  # never claimed
+
+    monkeypatch.setattr(tasks, "agent_switched_on", lambda: True)
+
+    async def execute(step, attempt, *, session_factory=None):
+        return True
+
+    monkeypatch.setattr(tasks, "execute_claimed_step", execute)
+    assert await tasks.claim_and_execute(step_id, session_factory=factory) is True

@@ -109,7 +109,10 @@ async def _intake_due_cron(*, cron_id: uuid.UUID, due_at: datetime, checked_at: 
         submit_agent_intake,
     )
     from app.domain.delegations import arguments_match
+    from app.tasks.work_orders import agent_switched_on
 
+    if not agent_switched_on():
+        return False  # kill switch: no scheduled work while the agent is off
     factory = _get_session_factory()
     async with factory() as db:
         row = await db.get(AgentCron, cron_id, with_for_update=True)

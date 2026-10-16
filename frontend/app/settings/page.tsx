@@ -1605,6 +1605,11 @@ export default function SettingsPage() {
                     />
                     Включить встроенного агента
                   </label>
+                  <p className="-mt-2 break-words text-xs text-slate-400">
+                    Выключатель: без агента не идут ни ходы в чате, ни новая
+                    фоновая работа (расписания, планы). Уже начатое действие
+                    доводится, новых не начинается.
+                  </p>
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <Field
                       label="Имя сотрудника"

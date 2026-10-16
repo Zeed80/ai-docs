@@ -2330,6 +2330,8 @@ async def _dispatch_ready_work(limit: int = 10) -> int:
     # held every slot of the shared worker) lost its lease before the turn
     # began — "lease_expired" with no event at all (2026-10-15). A marker per
     # step keeps the 5 s dispatch from queueing the same step again meanwhile.
+    if not agent_switched_on():
+        return 0  # kill switch: no new step starts while the agent is off
     async with factory() as db:
         ready = await ready_step_ids(db, limit=max(1, min(limit, 100)))
     queued = 0
@@ -2369,11 +2371,30 @@ def _clear_queued(step_id: uuid.UUID | str) -> None:
         pass
 
 
+def agent_switched_on() -> bool:
+    """The release kill switch (E52): the agent's "enabled" setting.
+
+    Off stops the chat turn (agent_loop) and, here, every new durable step —
+    crons, plans, background work. A step already running finishes its current
+    action; nothing new starts. Unreadable config keeps the agent on: the
+    switch is a deliberate decision, not a side effect of an outage.
+    """
+    try:
+        from app.ai.agent_config import get_builtin_agent_config
+
+        return bool(get_builtin_agent_config().enabled)
+    except Exception:  # noqa: BLE001
+        return True
+
+
 async def claim_and_execute(step_id: uuid.UUID, *, session_factory: Any | None = None) -> bool:
     """Claim one ready step where it will run, then run it."""
     from app.db.session import _get_session_factory
 
     factory = session_factory or _get_session_factory()
+    if not agent_switched_on():
+        _clear_queued(step_id)
+        return False
     try:
         async with factory() as db:
             claimed = await claim_ready_step(db, worker_id=_worker_id(), step_id=step_id)
