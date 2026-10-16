@@ -800,6 +800,34 @@ async def test_grouped_aggregate_functions(db_session, seeded):
     assert (await agg_map("avg"))["АО Лютик"] == 2500
 
 
+@pytest.mark.asyncio
+async def test_grouped_items_keep_each_line_quantity(db_session, seeded):
+    """«фрезы по поставщикам: поставщик, перечень с количеством, общая стоимость»."""
+    spec = ts.TableSpec(
+        source="invoice_items",
+        columns=[
+            ts.ColumnSpec(field="supplier_name"),
+            ts.ColumnSpec(field="item_with_qty"),
+            ts.ColumnSpec(field="amount"),
+        ],
+        filters=[ts.FilterSpec(field="description", op="contains", value="фреза")],
+        group_by=["supplier_name"],
+    )
+    res = await ts.execute_spec(db_session, spec)
+    rows = {r["supplier_name"]: r for r in res.rows}
+    assert res.total == 2
+    assert rows["ООО Ромашка"]["item_with_qty"] == "Фреза концевая ⌀5 мм Z4 — 10 шт"
+    assert rows["ООО Ромашка"]["amount"] == 8000
+    assert rows["АО Лютик"]["item_with_qty"] == "Фреза дисковая 50 мм — 2 шт"
+
+    spec.sort = [ts.SortSpec(field="amount", dir="desc")]
+    res = await ts.execute_spec(db_session, spec)
+    assert [r["supplier_name"] for r in res.rows] == ["ООО Ромашка", "АО Лютик"]
+    spec.sort = [ts.SortSpec(field="amount", dir="asc")]
+    res = await ts.execute_spec(db_session, spec)
+    assert [r["supplier_name"] for r in res.rows] == ["АО Лютик", "ООО Ромашка"]
+
+
 def test_columnspec_agg_lenient_aliases():
     assert ts.ColumnSpec(field="unit_price", agg="average").agg == "avg"
     assert ts.ColumnSpec(field="unit_price", agg="средн").agg == "avg"

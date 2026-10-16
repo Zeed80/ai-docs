@@ -247,6 +247,12 @@ SOURCES: dict[str, SourceDef] = {
             FieldDef("sku", "Артикул", "text", ("артикул", "код")),
             FieldDef("quantity", "Кол-во", "number", ("количество", "кол-во")),
             FieldDef("unit", "Ед.", "text", ("единица", "ед", "ед.изм")),
+            FieldDef(
+                "item_with_qty",
+                "Позиция и количество",
+                "text",
+                ("позиция с количеством", "наименование с количеством"),
+            ),
             FieldDef("unit_price", "Цена", "number", ("цена", "цена за единицу")),
             FieldDef("amount", "Сумма", "number", ("сумма", "стоимость", "итого")),
             FieldDef(
@@ -756,6 +762,15 @@ def _invoice_items_exprs() -> dict[str, Any]:
         "sku": InvoiceLine.sku,
         "quantity": InvoiceLine.quantity,
         "unit": InvoiceLine.unit,
+        # «Фреза D10 — 5 шт»: under group_by the list of a supplier's items keeps
+        # each line's quantity, which a summed quantity column cannot show.
+        "item_with_qty": func.concat_ws(
+            " ",
+            InvoiceLine.description,
+            "—",
+            func.coalesce(cast(InvoiceLine.quantity, Text), "?"),
+            InvoiceLine.unit,
+        ),
         "unit_price": InvoiceLine.unit_price,
         "amount": InvoiceLine.amount,
         "pre_discount_amount": InvoiceLine.pre_discount_amount,
@@ -1667,6 +1682,12 @@ _AGG_SKIP_COLUMNS: dict[str, set[str]] = {
     "invoices": {"items_list", "items_count"},
 }
 
+# Text columns listed in full under group_by, not as distinct values: two
+# purchases of the same item in the same quantity are two lines, not one.
+_LIST_ALL_COLUMNS: dict[str, set[str]] = {
+    "invoice_items": {"item_with_qty"},
+}
+
 
 def _can_aggregate(source_key: str, keys: list[str]) -> bool:
     skip = _AGG_SKIP_COLUMNS.get(source_key, set())
@@ -1693,9 +1714,10 @@ async def _execute_grouped(
             continue
         agg = col.agg or ("sum" if fd.type == "number" else "concat")
         if agg == "concat":
-            select_cols.append(
-                func.string_agg(distinct(cast(e, Text)), literal("; ")).label(col.field)
-            )
+            text_expr = cast(e, Text)
+            if col.field not in _LIST_ALL_COLUMNS.get(spec.source, set()):
+                text_expr = distinct(text_expr)
+            select_cols.append(func.string_agg(text_expr, literal("; ")).label(col.field))
         elif agg == "count":
             select_cols.append(func.count(e).label(col.field))
         elif agg == "avg":
@@ -1711,6 +1733,14 @@ async def _execute_grouped(
 
     total = (await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar() or 0
 
+    # One row per group, so an explicit sort («по убыванию суммы») orders the
+    # groups by their aggregate; the group keys only break ties. Sorting by the
+    # keys alone dropped the requested order silently.
+    labels = {c.name: c for c in select_cols}
+    for srt in spec.sort:
+        label = labels.get(srt.field)
+        if label is not None:
+            stmt = stmt.order_by(label.desc().nulls_last() if srt.dir == "desc" else label.asc())
     for g in group_exprs:
         stmt = stmt.order_by(g.asc())
     cap = min(spec.limit or MAX_ROWS, MAX_ROWS)

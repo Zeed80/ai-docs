@@ -18,6 +18,9 @@
    documents, payments, anomalies, emails, drawings, а также:
    - **vector_search** — похожие документы по смыслу (фильтр query="…текст…").
    - **graph_query** — связи сущности в графе памяти (фильтр start_node="…").
+   «Сгруппируй по X» / «по каждому поставщику» — `group_by: [поле]` в spec:
+   одна строка на группу, числа суммируются, текст собирается перечнем.
+   Перечень позиций с количеством — колонка `item_with_qty` (invoice_items).
    Правка готовой таблицы — `action=spec_table_patch` (command или ops).
 2. **Нестандартный срез, которого нет в источниках** → **workspace**
    `action=sql_table` (task="…"). Генерируется валидированный SELECT (только

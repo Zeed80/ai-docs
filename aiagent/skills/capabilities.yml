@@ -564,15 +564,23 @@ capabilities:
       (какие колонки из какого источника), данные придут из SQL целиком
       (всегда полный total — никогда не собирай строки вручную).
       - spec_table — построить таблицу. Передай spec:
-        {source, columns: [{field, header?}], filters: [{field, op, value}],
-         sort: [{field, dir: asc|desc}], title?}.
+        {source, columns: [{field, header?, agg?}], filters: [{field, op, value}],
+         sort: [{field, dir: asc|desc}], group_by?: [field], title?}.
+        Группировка («сгруппируй/по каждому поставщику», «итого по…»):
+        group_by: [поле] — одна строка на группу. Остальные колонки
+        сворачиваются: число — сумма (agg: avg|min|max|count меняет),
+        текст — перечень значений через «; ». Пример «фрезы по поставщикам:
+        поставщик, перечень с количеством, общая стоимость»: source
+        invoice_items, columns [supplier_name, item_with_qty, amount],
+        group_by [supplier_name], фильтр по description.
         Источники и их поля:
         invoices: supplier_name, invoice_number, invoice_date, due_date,
           supplier_inn, subtotal, tax_amount (НДС), total_amount, currency,
           status, items_list (перечень товаров в одной ячейке через перенос
           строки), items_count.
-        invoice_items: description, sku, quantity, unit, unit_price, amount,
-          tax_rate, tax_amount, invoice_number, invoice_date, supplier_name.
+        invoice_items: description, sku, quantity, unit, item_with_qty
+          («наименование — количество ед.»), unit_price, amount, tax_rate,
+          tax_amount, invoice_number, invoice_date, supplier_name.
         suppliers: name, inn, kpp, address, bank_name, bank_bik.
         warehouse (остатки): name, sku, current_qty, unit, min_qty, location,
           below_min («Да»/«Нет»; фильтр {field: below_min, op: eq, value:
@@ -648,7 +656,7 @@ capabilities:
           description: "ID canvas-блока. По умолчанию 'agent:spec-table'; тот же id обновляет ту же таблицу."
         spec:
           type: object
-          description: "Для spec_table: {source, columns:[{field,header?}], filters:[{field,op,value}], sort:[{field,dir}], title?}"
+          description: "Для spec_table: {source, columns:[{field,header?,agg?}], filters:[{field,op,value}], sort:[{field,dir}], group_by?:[field], title?}"
         ops:
           type: array
           description: "Для spec_table_patch: [{op: add_column|remove_column|move_column|set_sort|add_filter|clear_filters, field, before?, after?, dir?, filter?}]"
