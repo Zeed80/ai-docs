@@ -5,11 +5,11 @@ Shared/integration mailboxes (procurement, accounting, general — anything with
 authenticated user of the workspace may read them, because that is the point of
 a company inbox.
 
-Personal mailboxes (``mailbox_configs.mailbox_type == "personal"``, provisioned
-per user by an admin — see backend/app/api/admin.py) are different: their
-contents belong to one employee. They are readable **only by their owner**, and
-deliberately *not* by admins/managers — provisioning a mailbox is an admin
-action, reading someone's private correspondence is not. Widening that rule is
+Personal mailboxes (``mailbox_configs.mailbox_type == "personal"``, owned by one
+user — see backend/app/api/admin.py) are different: their contents belong to one
+employee. They are readable **only by their owner**, and deliberately *not* by
+admins/managers — managing a mailbox is an admin action, reading someone's
+private correspondence is not. Widening that rule is
 a product decision, not a bug fix; it belongs in the mailbox settings UI, not
 in a role check here.
 

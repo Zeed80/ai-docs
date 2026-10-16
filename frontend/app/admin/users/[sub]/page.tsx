@@ -208,25 +208,11 @@ interface UserMailboxOut {
   quota_mb: number | null;
 }
 
-interface UserMailboxProvisionedOut {
-  address: string;
-  generated_password: string;
-}
-
 function MailboxSection({ userSub }: { userSub: string }) {
   const [mailbox, setMailbox] = useState<UserMailboxOut | null>(null);
   const [loading, setLoading] = useState(true);
-  const [localPart, setLocalPart] = useState("");
-  const [quotaMb, setQuotaMb] = useState("");
   const [busy, setBusy] = useState(false);
-  // Destroying a mailbox destroys all of its mail, so the address must be typed
-  // out — a one-click confirm is not a proportionate guard for that.
-  const [deleteMode, setDeleteMode] = useState(false);
-  const [confirmAddress, setConfirmAddress] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [revealed, setRevealed] = useState<UserMailboxProvisionedOut | null>(
-    null,
-  );
 
   function load() {
     setLoading(true);
@@ -244,90 +230,24 @@ function MailboxSection({ userSub }: { userSub: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userSub]);
 
-  async function provision() {
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await fetch(
-        `${API}/api/admin/users/${encodeURIComponent(userSub)}/mailbox`,
-        {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json", ...csrfHeaders() },
-          body: JSON.stringify({
-            local_part: localPart.trim() || null,
-            quota_mb: quotaMb.trim() ? Number(quotaMb) : null,
-          }),
-        },
-      );
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}));
-        throw new Error(d.detail ?? `HTTP ${res.status}`);
-      }
-      const d: UserMailboxProvisionedOut = await res.json();
-      setRevealed(d);
-      setLocalPart("");
-      load();
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function resetPassword() {
-    if (!window.confirm("Сбросить пароль почтового ящика?")) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await fetch(
-        `${API}/api/admin/users/${encodeURIComponent(userSub)}/mailbox/reset-password`,
-        { method: "POST", credentials: "include", headers: csrfHeaders() },
-      );
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}));
-        throw new Error(d.detail ?? `HTTP ${res.status}`);
-      }
-      const d: UserMailboxProvisionedOut = await res.json();
-      setRevealed(d);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function revoke(deleteOnServer: boolean) {
-    if (!deleteOnServer) {
-      if (
-        !window.confirm(
-          `Отключить ящик ${mailbox?.address}? Приём почты и сбор агентом остановятся, письма сохранятся.`,
-        )
+  async function revoke() {
+    if (
+      !window.confirm(
+        `Отключить ящик ${mailbox?.address}? Приём почты и сбор агентом остановятся, собранные письма сохранятся.`,
       )
-        return;
-    }
+    )
+      return;
     setBusy(true);
     setError(null);
     try {
       const res = await fetch(
         `${API}/api/admin/users/${encodeURIComponent(userSub)}/mailbox/revoke`,
-        {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json", ...csrfHeaders() },
-          body: JSON.stringify({
-            delete_on_server: deleteOnServer,
-            confirm_address: deleteOnServer ? confirmAddress.trim() : null,
-          }),
-        },
+        { method: "POST", credentials: "include", headers: csrfHeaders() },
       );
       if (!res.ok && res.status !== 204) {
         const d = await res.json().catch(() => ({}));
         throw new Error(d.detail ?? `HTTP ${res.status}`);
       }
-      setRevealed(null);
-      setDeleteMode(false);
-      setConfirmAddress("");
       load();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
@@ -416,123 +336,22 @@ function MailboxSection({ userSub }: { userSub: string }) {
 
           <div className="flex flex-wrap gap-2 pt-1">
             <button
-              onClick={resetPassword}
+              onClick={revoke}
               disabled={busy}
               className="px-3 py-1.5 rounded border border-border text-sm hover:bg-muted disabled:opacity-50"
-            >
-              Сбросить пароль
-            </button>
-            <button
-              onClick={() => revoke(false)}
-              disabled={busy}
-              className="px-3 py-1.5 rounded border border-border text-sm hover:bg-muted disabled:opacity-50"
-              title="Ящик перестаёт принимать почту, письма сохраняются"
+              title="Приём почты и сбор агентом останавливаются, собранные письма сохраняются"
             >
               Отключить ящик
             </button>
-            <button
-              onClick={() => setDeleteMode((v) => !v)}
-              disabled={busy}
-              className="px-3 py-1.5 rounded border border-destructive text-destructive text-sm hover:bg-destructive/10 disabled:opacity-50"
-            >
-              Удалить безвозвратно…
-            </button>
           </div>
-
-          {deleteMode && (
-            <div className="rounded border border-destructive p-3 space-y-2">
-              <p className="text-xs text-destructive">
-                Ящик и <strong>вся переписка</strong> будут удалены на почтовом
-                сервере. Восстановить можно только из бэкапа. Для подтверждения
-                введите адрес полностью:
-              </p>
-              <input
-                type="text"
-                value={confirmAddress}
-                onChange={(e) => setConfirmAddress(e.target.value)}
-                placeholder={mailbox.address ?? ""}
-                className="w-full border border-border rounded px-3 py-1.5 text-sm bg-background font-mono"
-              />
-              <div className="flex gap-2">
-                <button
-                  onClick={() => revoke(true)}
-                  disabled={
-                    busy ||
-                    confirmAddress.trim().toLowerCase() !==
-                      (mailbox.address ?? "").toLowerCase()
-                  }
-                  className="px-3 py-1.5 rounded bg-destructive text-white text-sm disabled:opacity-50"
-                >
-                  Удалить ящик и почту
-                </button>
-                <button
-                  onClick={() => {
-                    setDeleteMode(false);
-                    setConfirmAddress("");
-                  }}
-                  className="px-3 py-1.5 rounded border border-border text-sm hover:bg-muted"
-                >
-                  Отмена
-                </button>
-              </div>
-            </div>
-          )}
         </div>
       ) : (
-        <div className="space-y-2">
-          <p className="text-xs text-muted-foreground">
-            У пользователя нет личного почтового ящика.
-          </p>
-          <input
-            type="text"
-            value={localPart}
-            onChange={(e) => setLocalPart(e.target.value)}
-            placeholder="Локальная часть адреса (не заполните — предложим сами)"
-            className="w-full border border-border rounded px-3 py-1.5 text-sm bg-background font-mono"
-          />
-          <input
-            type="number"
-            min={0}
-            value={quotaMb}
-            onChange={(e) => setQuotaMb(e.target.value)}
-            placeholder="Квота, МБ (пусто — значение по умолчанию из настроек интеграции)"
-            className="w-full border border-border rounded px-3 py-1.5 text-sm bg-background"
-          />
-          <p className="text-xs text-muted-foreground">
-            Сбор писем агентом при создании выключен — включите его выше после
-            согласия сотрудника.
-          </p>
-          <button
-            onClick={provision}
-            disabled={busy}
-            className="px-3 py-1.5 rounded bg-primary text-primary-foreground text-sm disabled:opacity-50"
-          >
-            {busy ? "Создание..." : "Создать почтовый ящик"}
-          </button>
-        </div>
+        <p className="text-xs text-muted-foreground">
+          У пользователя нет личного почтового ящика.
+        </p>
       )}
 
       {error && <p className="text-xs text-destructive">{error}</p>}
-
-      {revealed && (
-        <div className="rounded border border-amber-500 bg-amber-50 dark:bg-amber-950 p-3 space-y-1">
-          <p className="text-xs font-medium text-amber-800 dark:text-amber-200">
-            Пароль показывается один раз — скопируйте и передайте сотруднику:
-          </p>
-          <p className="text-sm">
-            <span className="font-mono">{revealed.address}</span>
-          </p>
-          <p className="font-mono text-sm select-all bg-background rounded px-2 py-1 border border-border">
-            {revealed.generated_password}
-          </p>
-          <button
-            onClick={() => setRevealed(null)}
-            className="text-xs text-muted-foreground hover:underline"
-          >
-            Скрыть
-          </button>
-        </div>
-      )}
     </div>
   );
 }

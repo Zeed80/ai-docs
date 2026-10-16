@@ -10,7 +10,6 @@
 #
 # Handled jobs:
 #   authentik-update.json  → infra/installer/upgrade-authentik.sh (staged ladder)
-#   mailcow-install.json   → infra/installer/install-mailcow.sh   (deploy mail server)
 #
 # It is intentionally tiny and idempotent: if there's no pending request it exits
 # immediately, and a flock prevents overlapping timer fires from double-running.
@@ -110,40 +109,5 @@ process_authentik() {
   run_job bash "$SELF_DIR/upgrade-authentik.sh" "${args[@]}" || true
 }
 
-# ── Job: Mailcow deployment ─────────────────────────────────────────────────
-# The installer is non-interactive with --yes: it pins the tag, writes
-# MAIL_DOMAIN/MAILCOW_TAG/ports into infra/.env, wires the Traefik route and
-# copies the TLS certificate. DNS, firewall ports, DKIM and the API key stay with
-# the human — the GUI guide (/admin/integrations/mailcow-guide) lists them.
-process_mailcow_install() {
-  CONTROL_FILE="$CONTROL_DIR/mailcow-install.json"
-  LOG_FILE="$CONTROL_DIR/mailcow-install.log"
-  [ -f "$CONTROL_FILE" ] || return 0
-  [ "$(jget status)" = "requested" ] || return 0
-
-  local domain tag tz
-  domain="$(jget mail_domain)"; tag="$(jget tag)"; tz="$(jget timezone)"
-  if [ -z "$domain" ]; then
-    jset status=error "error=В заявке не указан домен почты"
-    return 0
-  fi
-
-  : > "$LOG_FILE"
-  jset status=running "started_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)" current_step=starting
-
-  local args=(--domain "$domain" --yes)
-  [ -n "$tag" ] && args+=(--tag "$tag")
-
-  # MAILCOW_TZ is consumed by generate_config.sh inside the installer.
-  if MAILCOW_TZ="${tz:-Europe/Moscow}" run_job bash "$SELF_DIR/install-mailcow.sh" "${args[@]}"; then
-    # The backend reads MAILCOW_TAG from its environment, so recreate it to pick
-    # up the value the installer just wrote into infra/.env.
-    local compose
-    compose="$(compose_cmd)"
-    ( cd "$ROOT_DIR" && $compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml \
-        --env-file "$ENV_FILE" up -d backend >>"$LOG_FILE" 2>&1 ) || true
-  fi
-}
 
 process_authentik
-process_mailcow_install

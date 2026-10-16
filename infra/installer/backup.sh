@@ -7,14 +7,7 @@
 #   - Redis (agent config, caches)               (volume tar)
 #   - infra/.env                                  (secrets/config)
 #
-#   - Mailcow (почта), если установлен            (helper-scripts/backup_and_restore.sh)
-#
-#   bash infra/installer/backup.sh [--label <name>] [--out <dir>] [--skip-mailcow]
-#
-# ВНИМАНИЕ про размер: mailcow-часть содержит vmail — почтовые ящики ВСЕХ
-# сотрудников целиком, и это полный (не инкрементальный) снимок в каждом архиве.
-# На ежедневном расписании держите отдельную ротацию или гоняйте общий бэкап с
-# --skip-mailcow, а почту бэкапьте реже отдельным запуском.
+#   bash infra/installer/backup.sh [--label <name>] [--out <dir>]
 #
 # Default output: backups/aiw-backup-<UTC-timestamp>[-label].tar.gz
 #
@@ -29,13 +22,11 @@ ENV_FILE="infra/.env"
 PROJECT="${AIW_PROJECT:-infra}"
 OUT_DIR="backups"
 LABEL=""
-SKIP_MAILCOW="${AIW_SKIP_MAILCOW:-0}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --label) LABEL="$2"; shift 2 ;;
     --out) OUT_DIR="$2"; shift 2 ;;
-    --skip-mailcow) SKIP_MAILCOW=1; shift ;;
     -h|--help) grep -E '^#( |$)' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Неизвестный флаг: $1" >&2; exit 1 ;;
   esac
@@ -93,36 +84,6 @@ tar_volume "${PROJECT}_minio_data"  minio_data.tar.gz
 tar_volume "${PROJECT}_qdrant_data" qdrant_data.tar.gz
 tar_volume "${PROJECT}_redis_data"  redis_data.tar.gz
 
-# ── Mailcow (self-hosted mail server) — optional, separate compose project ──
-MAILCOW_DIR="infra/mailcow"
-MAILCOW_COMPONENT=""
-if [ "$SKIP_MAILCOW" = 1 ]; then
-  log "Mailcow пропущен (--skip-mailcow) — почта в этот архив не попадёт."
-elif [ -d "$MAILCOW_DIR/.git" ] && [ -f "$MAILCOW_DIR/mailcow.conf" ]; then
-  step "Mailcow (почтовый сервер)"
-  MAILCOW_STAGE="$STAGE/mailcow"
-  mkdir -p "$MAILCOW_STAGE"
-  # vmail целиком — обычно самая большая часть архива. Показываем размер заранее,
-  # чтобы «бэкап неожиданно на 200 ГБ» не стал открытием после запуска.
-  MAILCOW_SIZE="$(docker run --rm -v "mailcowdockerized_vmail-vol-1:/vmail:ro" alpine:3.20 \
-      du -sh /vmail 2>/dev/null | awk '{print $1}')"
-  [ -n "${MAILCOW_SIZE:-}" ] && info "Объём почтовых ящиков (vmail): ${MAILCOW_SIZE} — попадёт в архив целиком."
-  # Uses Mailcow's own helper script — matches its supported backup format so
-  # infra/installer/update-mailcow.sh / a stock `restore.sh` from mailcow docs
-  # can consume it directly. `yes ""` answers the interactive "keep how many
-  # days" prompt with the default (keep everything in this one-shot dir).
-  if ( cd "$MAILCOW_DIR" && MAILCOW_BACKUP_LOCATION="$MAILCOW_STAGE" \
-        yes "" | ./helper-scripts/backup_and_restore.sh backup all >/dev/null 2>&1 ); then
-    ok "Mailcow (mysql/vmail/crypt/redis/rspamd/postfix) заархивирован."
-    MAILCOW_COMPONENT="mailcow"
-  else
-    warn "Бэкап Mailcow не удался — пропускаю (проверьте infra/mailcow вручную)."
-    rm -rf "$MAILCOW_STAGE"
-  fi
-else
-  log "Mailcow не установлен (infra/mailcow отсутствует) — пропускаю."
-fi
-
 # ── Config ───────────────────────────────────────────────────────────────────
 cp "$ENV_FILE" "$STAGE/env"
 cat > "$STAGE/manifest.json" <<JSON
@@ -132,7 +93,7 @@ cat > "$STAGE/manifest.json" <<JSON
   "label": "${LABEL:-}",
   "project": "$PROJECT",
   "git_commit": "$(git rev-parse HEAD 2>/dev/null || echo unknown)",
-  "components": ["postgres_app", "postgres_authentik", "minio", "qdrant", "redis", "env"${MAILCOW_COMPONENT:+, \"$MAILCOW_COMPONENT\"}]
+  "components": ["postgres_app", "postgres_authentik", "minio", "qdrant", "redis", "env"]
 }
 JSON
 

@@ -3983,8 +3983,8 @@ class MailboxConfig(UUIDPrimaryKey, TimestampMixin, Base):
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sync_error: Mapped[str | None] = mapped_column(Text)
 
-    # Personal mailboxes (owner_sub set, mailbox_type="personal") are provisioned
-    # by an admin for one user (backend/app/api/admin.py) and swept by the same
+    # Personal mailboxes (owner_sub set, mailbox_type="personal") belong to one
+    # user (admin view: backend/app/api/admin.py) and are swept by the same
     # triage sweep as shared/integration mailboxes (procurement/accounting/…).
     owner_sub: Mapped[str | None] = mapped_column(String(255), index=True)
     mailbox_type: Mapped[str] = mapped_column(String(20), default="shared", nullable=False)
@@ -4031,12 +4031,10 @@ class OAuthAppConfig(UUIDPrimaryKey, TimestampMixin, Base):
 
 
 class MailServerConfig(UUIDPrimaryKey, TimestampMixin, Base):
-    """Singleton connection config for the self-hosted mail server (Mailcow admin API).
+    """Singleton mail settings: company domain, webmail link and mail policies.
 
-    Read/written by backend/app/api/admin.py (mail-server settings) and
-    backend/app/services/mailcow_api.py (mailbox provisioning). ``api_key_encrypted``
-    uses app.ai.secret_box (same pattern as provider_instances) — never exposed
-    to clients except as a masked hint.
+    Read/written by backend/app/api/admin.py (domain, webmail) and
+    backend/app/api/email.py (policies).
     """
 
     __tablename__ = "mail_server_config"
@@ -4044,14 +4042,8 @@ class MailServerConfig(UUIDPrimaryKey, TimestampMixin, Base):
     singleton_key: Mapped[str] = mapped_column(
         String(50), default="default", unique=True, nullable=False
     )
-    api_url: Mapped[str | None] = mapped_column(String(500))
-    api_key_encrypted: Mapped[str | None] = mapped_column(Text)
     mail_domain: Mapped[str | None] = mapped_column(String(255))
     webmail_url: Mapped[str | None] = mapped_column(String(500))
-    imap_host: Mapped[str | None] = mapped_column(String(255))
-    imap_port: Mapped[int] = mapped_column(Integer, default=993, nullable=False)
-    smtp_host: Mapped[str | None] = mapped_column(String(255))
-    smtp_port: Mapped[int] = mapped_column(Integer, default=465, nullable=False)
     # Protected policy: may email filter rules send without a human? (admin-only)
     auto_send_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     auto_send_max_per_day: Mapped[int] = mapped_column(Integer, default=20, nullable=False)
@@ -4060,9 +4052,6 @@ class MailServerConfig(UUIDPrimaryKey, TimestampMixin, Base):
     # upload (never after buffering the whole file) and again on the total size
     # of one message before it is handed to SMTP.
     max_attachment_mb: Mapped[int] = mapped_column(Integer, default=25, nullable=False)
-    # Default quota for newly provisioned personal mailboxes (admin-editable,
-    # per-mailbox override at provisioning time).
-    default_quota_mb: Mapped[int] = mapped_column(Integer, default=1024, nullable=False)
     updated_by: Mapped[str | None] = mapped_column(String(100))
 
 

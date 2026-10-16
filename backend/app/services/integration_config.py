@@ -56,37 +56,21 @@ def mask_token(token: str) -> str:
     return "••••" + token[-4:] if len(token) >= 4 else "••••"
 
 
-# ── Mail server (Mailcow) — durable, encrypted in Postgres ─────────────────
-# Unlike the Authentik token above, the Mailcow API key lives in the
-# mail_server_config table (single row, api_key_encrypted via app.ai.secret_box)
-# rather than Redis: it's a lower-traffic, higher-durability secret and doesn't
-# need the hot-path Redis lookup Authentik gets on every request.
+# ── Mail server settings — Postgres, single row ─────────────────────────────
 
 _MAIL_SERVER_SINGLETON = "default"
 
 
 @dataclass
 class MailServerConfig:
-    api_url: str | None
-    api_key: str
     mail_domain: str | None
     webmail_url: str | None
-    imap_host: str | None
-    imap_port: int
-    smtp_host: str | None
-    smtp_port: int
-    default_quota_mb: int = 1024
-
-    @property
-    def configured(self) -> bool:
-        return bool(self.api_url and self.api_key and self.mail_domain)
 
 
 async def get_mail_server_config() -> MailServerConfig:
-    """Load the Mailcow connection config, decrypting the API key."""
+    """Load the company mail domain and webmail link."""
     from sqlalchemy import select
 
-    from app.ai.secret_box import decrypt
     from app.db.models import MailServerConfig as MailServerConfigRow
     from app.db.session import _get_session_factory
 
@@ -101,25 +85,5 @@ async def get_mail_server_config() -> MailServerConfig:
         ).scalar_one_or_none()
 
     if row is None:
-        return MailServerConfig(
-            api_url=None,
-            api_key="",
-            mail_domain=None,
-            webmail_url=None,
-            imap_host=None,
-            imap_port=993,
-            smtp_host=None,
-            smtp_port=465,
-            default_quota_mb=1024,
-        )
-    return MailServerConfig(
-        api_url=row.api_url,
-        api_key=decrypt(row.api_key_encrypted),
-        mail_domain=row.mail_domain,
-        webmail_url=row.webmail_url,
-        imap_host=row.imap_host,
-        imap_port=row.imap_port,
-        smtp_host=row.smtp_host,
-        smtp_port=row.smtp_port,
-        default_quota_mb=row.default_quota_mb,
-    )
+        return MailServerConfig(mail_domain=None, webmail_url=None)
+    return MailServerConfig(mail_domain=row.mail_domain, webmail_url=row.webmail_url)

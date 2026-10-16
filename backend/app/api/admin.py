@@ -30,7 +30,6 @@ from app.domain.admin import (
     IntegrationAuthentikOut,
     IntegrationAuthentikUpdate,
     IntegrationMailServerOut,
-    IntegrationMailServerSaved,
     IntegrationMailServerUpdate,
     IntegrationTestResult,
     OAuthAppOut,
@@ -40,15 +39,11 @@ from app.domain.admin import (
     SystemStatusOut,
     UserCreate,
     UserListResponse,
-    UserMailboxCreate,
     UserMailboxOut,
-    UserMailboxProvisionedOut,
-    UserMailboxRevoke,
     UserMailboxSweepUpdate,
     UserOut,
     UserUpdate,
 )
-from app.utils.crypto import encrypt_password
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 logger = structlog.get_logger()
@@ -193,74 +188,21 @@ async def set_user_password(
     logger.info("admin_set_password", admin=admin.sub, target=user_sub)
 
 
-# ── Personal mailbox provisioning ───────────────────────────────────────────
-# A personal @<domain> mailbox is a MailboxConfig row with owner_sub set and
-# mailbox_type="personal" (backend/app/db/models.py) — it's swept by the same
-# triage sweep as shared mailboxes (procurement/accounting/…) and works with
-# every existing email skill unmodified. Provisioning is admin-only, direct
-# (not agent-gated) — same trust level as set_user_password above.
-
-_TRANSLIT = {
-    "а": "a",
-    "б": "b",
-    "в": "v",
-    "г": "g",
-    "д": "d",
-    "е": "e",
-    "ё": "e",
-    "ж": "zh",
-    "з": "z",
-    "и": "i",
-    "й": "y",
-    "к": "k",
-    "л": "l",
-    "м": "m",
-    "н": "n",
-    "о": "o",
-    "п": "p",
-    "р": "r",
-    "с": "s",
-    "т": "t",
-    "у": "u",
-    "ф": "f",
-    "х": "h",
-    "ц": "ts",
-    "ч": "ch",
-    "ш": "sh",
-    "щ": "sch",
-    "ъ": "",
-    "ы": "y",
-    "ь": "",
-    "э": "e",
-    "ю": "yu",
-    "я": "ya",
-}
+# ── Personal mailbox ────────────────────────────────────────────────────────
+# A MailboxConfig row with owner_sub set and mailbox_type="personal". A revoked
+# one stays in the table as an audit trail, so only active rows count here.
 
 
-def _suggest_local_part(user: User) -> str:
-    import re
-
-    source = user.preferred_username or user.name or user.email.split("@")[0]
-    translit = "".join(_TRANSLIT.get(ch, ch) for ch in source.lower())
-    slug = re.sub(r"[^a-z0-9]+", ".", translit).strip(".")
-    return slug or "user"
-
-
-async def _personal_mailbox(db: AsyncSession, user_sub: str, *, active_only: bool = True):
-    """The user's personal mailbox row.
-
-    ``active_only`` matters: a revoked mailbox stays in the table (audit trail,
-    and a deactivated Mailcow mailbox still exists server-side). Provisioning
-    must not be blocked by such a row — it reuses or replaces it — while
-    password reset and the self-service view must only ever see a live one.
-    """
-    conditions = [
-        MailboxConfig.owner_sub == user_sub,
-        MailboxConfig.mailbox_type == "personal",
-    ]
-    if active_only:
-        conditions.append(MailboxConfig.is_active == True)  # noqa: E712
-    return (await db.execute(select(MailboxConfig).where(*conditions))).scalar_one_or_none()
+async def _personal_mailbox(db: AsyncSession, user_sub: str):
+    return (
+        await db.execute(
+            select(MailboxConfig).where(
+                MailboxConfig.owner_sub == user_sub,
+                MailboxConfig.mailbox_type == "personal",
+                MailboxConfig.is_active == True,  # noqa: E712
+            )
+        )
+    ).scalar_one_or_none()
 
 
 @router.get("/users/{user_sub}/mailbox", response_model=UserMailboxOut)
@@ -286,209 +228,33 @@ async def get_user_mailbox(
     )
 
 
-@router.post("/users/{user_sub}/mailbox", response_model=UserMailboxProvisionedOut, status_code=201)
-async def provision_user_mailbox(
-    user_sub: str,
-    payload: UserMailboxCreate,
-    admin: UserInfo = _admin_dep,
-    db: AsyncSession = Depends(get_db),
-) -> UserMailboxProvisionedOut:
-    """Create a personal @<domain> mailbox for a user via the Mailcow API."""
-    from app.services import mailcow_api
-    from app.services.integration_config import get_mail_server_config
-
-    user = (await db.execute(select(User).where(User.sub == user_sub))).scalar_one_or_none()
-    if user is None:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    if await _personal_mailbox(db, user_sub) is not None:
-        raise HTTPException(status_code=409, detail="У пользователя уже есть личный ящик")
-
-    # A previously revoked mailbox leaves an inactive row behind; drop it so the
-    # user can be issued a mailbox again (otherwise revocation was a one-way door).
-    stale = await _personal_mailbox(db, user_sub, active_only=False)
-    if stale is not None:
-        await db.delete(stale)
-        await db.flush()
-
-    mail_cfg = await get_mail_server_config()
-    if not mail_cfg.configured:
-        raise HTTPException(
-            status_code=503,
-            detail="Mail server is not configured (см. /api/admin/integrations/mail-server)",
-        )
-
-    local_part = (payload.local_part or _suggest_local_part(user)).strip().lower()
-    if not local_part:
-        raise HTTPException(status_code=422, detail="local_part is required")
-
-    try:
-        available = await mailcow_api.check_local_part_available(local_part, mail_cfg.mail_domain)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=mailcow_api.explain_api_failure(exc))
-    if not available:
-        raise HTTPException(
-            status_code=409, detail=f"{local_part}@{mail_cfg.mail_domain} уже занят"
-        )
-
-    full_address = f"{local_part}@{mail_cfg.mail_domain}"
-    password = secrets.token_urlsafe(18)
-    quota_mb = payload.quota_mb or mail_cfg.default_quota_mb
-
-    try:
-        await mailcow_api.create_mailbox(
-            local_part=local_part,
-            domain=mail_cfg.mail_domain,
-            password=password,
-            full_name=user.name or user.preferred_username,
-            quota_mb=quota_mb,
-        )
-    except Exception as exc:
-        logger.error("mailcow_provision_failed", error=str(exc), user_sub=user_sub)
-        raise HTTPException(status_code=502, detail=mailcow_api.explain_api_failure(exc))
-
-    cfg = MailboxConfig(
-        name=full_address,
-        display_name=f"{user.name} — личная почта",
-        owner_sub=user_sub,
-        mailbox_type="personal",
-        imap_host=mail_cfg.imap_host,
-        imap_port=mail_cfg.imap_port,
-        imap_user=full_address,
-        imap_password_encrypted=encrypt_password(password),
-        imap_ssl=True,
-        smtp_host=mail_cfg.smtp_host,
-        smtp_port=mail_cfg.smtp_port,
-        smtp_user=full_address,
-        smtp_password_encrypted=encrypt_password(password),
-        # 465 is the implicit-TLS/SMTPS submission port (SMTP_SSL from the
-        # first byte) — STARTTLS must not be attempted there, or every send
-        # fails with a handshake error. 587 (and anything else) is submission
-        # with STARTTLS. The mail-server integration page only exposes a port,
-        # not a TLS-mode toggle, so this has to be derived, not hardcoded.
-        smtp_use_tls=mail_cfg.smtp_port != 465,
-        smtp_from_address=full_address,
-        smtp_from_name=user.name,
-        is_active=True,
-        quota_mb=quota_mb,
-        # Consent, not a side effect: the AI does not read this mailbox until its
-        # owner turns the sweep on in /settings (app/tasks/email_triage.py).
-        sweep_enabled=False,
-    )
-    db.add(cfg)
-    db.add(
-        AuditLog(
-            user_id=admin.sub,
-            action="admin.provision_mailbox",
-            entity_type="user",
-            details={"target_sub": user_sub, "address": full_address, "quota_mb": quota_mb},
-        )
-    )
-    await db.commit()
-    logger.info("admin_provision_mailbox", admin=admin.sub, target=user_sub, address=full_address)
-    return UserMailboxProvisionedOut(address=full_address, generated_password=password)
-
-
-@router.post("/users/{user_sub}/mailbox/reset-password", response_model=UserMailboxProvisionedOut)
-async def reset_user_mailbox_password(
-    user_sub: str,
-    admin: UserInfo = _admin_dep,
-    db: AsyncSession = Depends(get_db),
-) -> UserMailboxProvisionedOut:
-    from app.services import mailcow_api
-
-    cfg = await _personal_mailbox(db, user_sub)
-    if cfg is None:
-        raise HTTPException(status_code=404, detail="У пользователя нет активного личного ящика")
-
-    password = secrets.token_urlsafe(18)
-    try:
-        await mailcow_api.edit_mailbox_password(cfg.name, password)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=mailcow_api.explain_api_failure(exc))
-
-    cfg.imap_password_encrypted = encrypt_password(password)
-    cfg.smtp_password_encrypted = encrypt_password(password)
-    db.add(
-        AuditLog(
-            user_id=admin.sub,
-            action="admin.reset_mailbox_password",
-            entity_type="user",
-            details={"target_sub": user_sub, "address": cfg.name},
-        )
-    )
-    await db.commit()
-    logger.info("admin_reset_mailbox_password", admin=admin.sub, target=user_sub)
-    return UserMailboxProvisionedOut(address=cfg.name, generated_password=password)
-
-
 @router.post("/users/{user_sub}/mailbox/revoke", status_code=204)
 async def revoke_user_mailbox(
     user_sub: str,
-    payload: UserMailboxRevoke,
     admin: UserInfo = _admin_dep,
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    """Revoke a personal mailbox.
+    """Stop polling a personal mailbox and close it to the agent.
 
-    Two very different operations behind one word, so they are separated:
-      * default — deactivate (Mailcow `active=0`, sweep off, our row inactive).
-        Nothing is lost; the right move when someone leaves and their mail may
-        still be needed.
-      * delete_on_server=True — destroy the mailbox and every message in it.
-        Irreversible, so the caller must echo the exact address.
+    Only our config changes: the mailbox itself lives at an outside provider,
+    and the letters already collected stay.
     """
-    from app.services import mailcow_api
-
     cfg = await _personal_mailbox(db, user_sub)
     if cfg is None:
         raise HTTPException(status_code=404, detail="У пользователя нет активного личного ящика")
-
-    if payload.delete_on_server:
-        if (payload.confirm_address or "").strip().lower() != cfg.name.lower():
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Для безвозвратного удаления повторите адрес ящика в confirm_address. "
-                    "Вся переписка будет уничтожена."
-                ),
-            )
-        try:
-            await mailcow_api.delete_mailbox(cfg.name)
-        except Exception as exc:
-            logger.warning("mailcow_delete_failed", error=str(exc), address=cfg.name)
-            raise HTTPException(status_code=502, detail=mailcow_api.explain_api_failure(exc))
-        action = "admin.delete_mailbox"
-    else:
-        try:
-            await mailcow_api.set_mailbox_active(cfg.name, active=False)
-        except Exception as exc:
-            logger.warning("mailcow_deactivate_failed", error=str(exc), address=cfg.name)
-            raise HTTPException(status_code=502, detail=mailcow_api.explain_api_failure(exc))
-        action = "admin.deactivate_mailbox"
 
     cfg.is_active = False
     cfg.sweep_enabled = False
     db.add(
         AuditLog(
             user_id=admin.sub,
-            action=action,
+            action="admin.deactivate_mailbox",
             entity_type="user",
-            details={
-                "target_sub": user_sub,
-                "address": cfg.name,
-                "deleted_on_server": payload.delete_on_server,
-            },
+            details={"target_sub": user_sub, "address": cfg.name},
         )
     )
     await db.commit()
-    logger.info(
-        "admin_revoke_mailbox",
-        admin=admin.sub,
-        target=user_sub,
-        address=cfg.name,
-        deleted=payload.delete_on_server,
-    )
+    logger.info("admin_revoke_mailbox", admin=admin.sub, target=user_sub, address=cfg.name)
 
 
 @router.patch("/users/{user_sub}/mailbox/sweep", response_model=UserMailboxOut)
@@ -768,18 +534,6 @@ async def update_user(
             # explicit action (POST .../mailbox/revoke).
             mailbox = await _personal_mailbox(db, user_sub)
             if mailbox is not None:
-                from app.services import mailcow_api
-
-                try:
-                    await mailcow_api.set_mailbox_active(mailbox.name, active=False)
-                except Exception as exc:  # noqa: BLE001
-                    # The user record still gets deactivated — but say so loudly,
-                    # a silently live mailbox is a real security gap.
-                    logger.error(
-                        "mailbox_deactivate_failed_on_user_deactivate",
-                        address=mailbox.name,
-                        error=str(exc),
-                    )
                 mailbox.sweep_enabled = False
                 mailbox.is_active = False
                 db.add(
@@ -1089,11 +843,8 @@ async def test_authentik_integration(
         return IntegrationTestResult(ok=False, detail=f"Ошибка соединения: {exc}")
 
 
-# ── Mail server (Mailcow) integration ───────────────────────────────────────
-# Connection settings for the self-hosted mail server (see infra/installer/
-# install-mailcow.sh). Stored in mail_server_config (Postgres, singleton row);
-# api_key encrypted at rest with app.ai.secret_box, same pattern as
-# provider_instances API keys — never returned to clients, only masked.
+# ── Mail server settings ────────────────────────────────────────────────────
+# Company mail domain and webmail link (mail_server_config, singleton row).
 
 
 async def _get_mail_server_row(db: AsyncSession):
@@ -1111,67 +862,18 @@ async def get_mail_server_integration(
     admin: UserInfo = _admin_dep,
     db: AsyncSession = Depends(get_db),
 ) -> IntegrationMailServerOut:
-    from app.ai.secret_box import decrypt, mask
-
     row = await _get_mail_server_row(db)
     if row is None:
-        return IntegrationMailServerOut(
-            configured=False,
-            api_key_set=False,
-            api_key_hint="",
-            imap_port=993,
-            smtp_port=465,
-            default_quota_mb=1024,
-        )
-    api_key = decrypt(row.api_key_encrypted)
-    return IntegrationMailServerOut(
-        configured=bool(row.api_url and api_key and row.mail_domain),
-        api_url=row.api_url,
-        api_key_set=bool(api_key),
-        api_key_hint=mask(api_key),
-        mail_domain=row.mail_domain,
-        webmail_url=row.webmail_url,
-        imap_host=row.imap_host,
-        imap_port=row.imap_port,
-        smtp_host=row.smtp_host,
-        smtp_port=row.smtp_port,
-        default_quota_mb=row.default_quota_mb,
-    )
+        return IntegrationMailServerOut()
+    return IntegrationMailServerOut(mail_domain=row.mail_domain, webmail_url=row.webmail_url)
 
 
-def _normalize_api_url(raw: str) -> str:
-    """Validate + normalise the Mailcow base URL.
-
-    Typos here surface much later as an opaque connection error during
-    provisioning, so reject them at save time: scheme required, no path, no
-    trailing slash (the client appends /api/v1/...).
-    """
-    from urllib.parse import urlparse
-
-    value = (raw or "").strip().rstrip("/")
-    if not value:
-        return ""
-    parsed = urlparse(value)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        raise HTTPException(
-            status_code=422,
-            detail="API URL должен начинаться с http:// или https:// и содержать хост, например https://mail.example.com",
-        )
-    if parsed.path not in ("", "/"):
-        raise HTTPException(
-            status_code=422,
-            detail=f"Уберите путь из API URL — нужен только адрес сервера: {parsed.scheme}://{parsed.netloc}",
-        )
-    return f"{parsed.scheme}://{parsed.netloc}"
-
-
-@router.put("/integrations/mail-server", response_model=IntegrationMailServerSaved)
+@router.put("/integrations/mail-server", response_model=IntegrationMailServerOut)
 async def update_mail_server_integration(
     payload: IntegrationMailServerUpdate,
     admin: UserInfo = _admin_dep,
     db: AsyncSession = Depends(get_db),
 ) -> IntegrationMailServerOut:
-    from app.ai.secret_box import encrypt
     from app.db.models import MailServerConfig
 
     row = await _get_mail_server_row(db)
@@ -1180,50 +882,15 @@ async def update_mail_server_integration(
         db.add(row)
 
     fields = payload.model_fields_set
-    if "api_url" in fields:
-        row.api_url = _normalize_api_url(payload.api_url or "") or None
-    if "api_key" in fields:
-        row.api_key_encrypted = (
-            encrypt((payload.api_key or "").strip()) if payload.api_key else None
-        )
     if "mail_domain" in fields:
         row.mail_domain = (payload.mail_domain or "").strip().lower() or None
     if "webmail_url" in fields:
         row.webmail_url = (payload.webmail_url or "").strip() or None
-    if "imap_host" in fields:
-        row.imap_host = (payload.imap_host or "").strip() or None
-    if "imap_port" in fields and payload.imap_port:
-        row.imap_port = payload.imap_port
-    if "smtp_host" in fields:
-        row.smtp_host = (payload.smtp_host or "").strip() or None
-    if "smtp_port" in fields and payload.smtp_port:
-        row.smtp_port = payload.smtp_port
-    if "default_quota_mb" in fields and payload.default_quota_mb is not None:
-        row.default_quota_mb = payload.default_quota_mb
     row.updated_by = admin.sub
 
     await db.commit()
     logger.info("admin_update_mail_server_integration", admin=admin.sub)
-
-    saved = await get_mail_server_integration(admin=admin, db=db)
-    result = IntegrationMailServerSaved(**saved.model_dump())
-    if payload.verify:
-        from app.services import mailcow_api
-
-        ok, detail = await mailcow_api.test_connection()
-        result.verified = ok
-        result.verify_detail = detail
-    return result
-
-
-@router.post("/integrations/mail-server/test", response_model=IntegrationTestResult)
-async def test_mail_server_integration(
-    admin: UserInfo = _admin_dep,
-) -> IntegrationTestResult:
-    from app.services import mailcow_api
-
-    ok, detail = await mailcow_api.test_connection()
-    return IntegrationTestResult(ok=ok, detail=detail)
+    return IntegrationMailServerOut(mail_domain=row.mail_domain, webmail_url=row.webmail_url)
 
 
 # ── OAuth apps (Gmail / Microsoft 365 mailbox auth) ──────────────────────────

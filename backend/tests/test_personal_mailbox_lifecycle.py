@@ -1,16 +1,15 @@
-"""Personal mailbox lifecycle: consent to sweep, re-provisioning, safe revoke.
+"""Personal mailbox lifecycle: consent to sweep, revoke.
 
 Covers the rules that make a personal mailbox different from a company inbox:
   * the agent does not read it until its owner says so (sweep_enabled);
   * a DB outage in the sweep is reported, not disguised as a normal run;
-  * revoking is reversible by default and never a one-way door for the user;
-  * destroying mail requires echoing the address.
+  * revoking stops polling and AI access and keeps the row as an audit trail.
 
 Two dependencies deliberately live outside the per-test transaction and are
 substituted here: the Celery sweep uses a synchronous session of its own
-(app.db.sync_session), and the Mailcow connection config is read through its own
-async session (app.services.integration_config) — neither can see rows held in
-the rolled-back test transaction.
+(app.db.sync_session), and the mail settings are read through their own async
+session (app.services.integration_config) — neither can see rows held in the
+rolled-back test transaction.
 """
 
 from unittest.mock import AsyncMock, patch
@@ -26,22 +25,12 @@ from app.services.integration_config import MailServerConfig
 OWNER_SUB = "employee-sub"
 ADDRESS = "ivan.petrov@example.com"
 
-MAIL_CFG = MailServerConfig(
-    api_url="https://mail.example.com",
-    api_key="test-key",
-    mail_domain="example.com",
-    webmail_url="https://mail.example.com",
-    imap_host="mail.example.com",
-    imap_port=993,
-    smtp_host="mail.example.com",
-    smtp_port=465,
-    default_quota_mb=2048,
-)
+MAIL_CFG = MailServerConfig(mail_domain="example.com", webmail_url="https://mail.example.com")
 
 
 @pytest.fixture(autouse=True)
 def mail_server_configured():
-    """Pretend the admin has connected a Mailcow instance."""
+    """Pretend the admin has set the company mail domain."""
     with patch(
         "app.services.integration_config.get_mail_server_config",
         new=AsyncMock(return_value=MAIL_CFG),
@@ -189,97 +178,45 @@ async def test_owner_can_toggle_sweep_for_own_mailbox(client: AsyncClient, db_se
     assert resp.json()["sweep_enabled"] is True
 
 
-# ── Revoke / re-provision ───────────────────────────────────────────────────
+# ── Revoke ──────────────────────────────────────────────────────────────────
 
 
-async def test_deactivate_then_provision_again(client: AsyncClient, db_session, personal_mailbox):
-    """Revoke must not lock the user out of ever having a mailbox again."""
-    with patch("app.services.mailcow_api.set_mailbox_active", new=AsyncMock()):
-        resp = await client.post(
-            f"/api/admin/users/{OWNER_SUB}/mailbox/revoke",
-            json={"delete_on_server": False},
-        )
+async def test_revoke_stops_polling_and_ai_access(
+    client: AsyncClient, db_session, personal_mailbox
+):
+    personal_mailbox.sweep_enabled = True
+    await db_session.commit()
+
+    resp = await client.post(f"/api/admin/users/{OWNER_SUB}/mailbox/revoke")
     assert resp.status_code == 204, resp.text
 
     await db_session.refresh(personal_mailbox)
     assert personal_mailbox.is_active is False
     assert personal_mailbox.sweep_enabled is False
 
-    with (
-        patch(
-            "app.services.mailcow_api.check_local_part_available", new=AsyncMock(return_value=True)
-        ),
-        patch("app.services.mailcow_api.create_mailbox", new=AsyncMock(return_value={})),
-    ):
-        resp = await client.post(
-            f"/api/admin/users/{OWNER_SUB}/mailbox", json={"local_part": "ivan.petrov"}
-        )
-    assert resp.status_code == 201, resp.text
-    body = resp.json()
-    assert body["address"] == ADDRESS
-    assert body["generated_password"]
-
-
-async def test_new_mailbox_starts_without_ai_access(client: AsyncClient, employee):
-    with (
-        patch(
-            "app.services.mailcow_api.check_local_part_available", new=AsyncMock(return_value=True)
-        ),
-        patch("app.services.mailcow_api.create_mailbox", new=AsyncMock(return_value={})),
-    ):
-        resp = await client.post(f"/api/admin/users/{OWNER_SUB}/mailbox", json={})
-    assert resp.status_code == 201, resp.text
-
     resp = await client.get(f"/api/admin/users/{OWNER_SUB}/mailbox")
-    assert resp.json()["sweep_enabled"] is False
+    assert resp.json()["address"] is None
+
+    resp = await client.post(f"/api/admin/users/{OWNER_SUB}/mailbox/revoke")
+    assert resp.status_code == 404
 
 
-async def test_destructive_delete_requires_address_confirmation(
-    client: AsyncClient, personal_mailbox
-):
-    delete_mock = AsyncMock()
-    with patch("app.services.mailcow_api.delete_mailbox", new=delete_mock):
-        resp = await client.post(
-            f"/api/admin/users/{OWNER_SUB}/mailbox/revoke",
-            json={"delete_on_server": True, "confirm_address": "wrong@example.com"},
-        )
-    assert resp.status_code == 400
-    delete_mock.assert_not_awaited()
-
-    with patch("app.services.mailcow_api.delete_mailbox", new=delete_mock):
-        resp = await client.post(
-            f"/api/admin/users/{OWNER_SUB}/mailbox/revoke",
-            json={"delete_on_server": True, "confirm_address": ADDRESS},
-        )
-    assert resp.status_code == 204, resp.text
-    delete_mock.assert_awaited_once()
+# ── Mail settings ───────────────────────────────────────────────────────────
 
 
-async def test_provision_uses_configured_default_quota(client: AsyncClient, employee):
-    create_mock = AsyncMock(return_value={})
-    with (
-        patch(
-            "app.services.mailcow_api.check_local_part_available", new=AsyncMock(return_value=True)
-        ),
-        patch("app.services.mailcow_api.create_mailbox", new=create_mock),
-    ):
-        resp = await client.post(f"/api/admin/users/{OWNER_SUB}/mailbox", json={})
-    assert resp.status_code == 201, resp.text
-    assert create_mock.await_args.kwargs["quota_mb"] == 2048
-
-
-# ── Integration config validation ───────────────────────────────────────────
-
-
-async def test_api_url_is_validated(client: AsyncClient):
+async def test_mail_settings_keep_only_domain_and_webmail(client: AsyncClient):
     resp = await client.put(
         "/api/admin/integrations/mail-server",
-        json={"api_url": "mail.example.com"},  # no scheme
+        json={"mail_domain": " Example.COM ", "webmail_url": "https://mail.example.com"},
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"mail_domain": "example.com", "webmail_url": "https://mail.example.com"}
 
-    resp = await client.put(
-        "/api/admin/integrations/mail-server",
-        json={"api_url": "https://mail.example.com/api/v1/"},  # path included
-    )
-    assert resp.status_code == 422
+    resp = await client.get("/api/admin/integrations/mail-server")
+    assert resp.json()["mail_domain"] == "example.com"
+
+
+async def test_mailcow_surfaces_are_gone(client: AsyncClient, employee):
+    assert (await client.post(f"/api/admin/users/{OWNER_SUB}/mailbox", json={})).status_code == 405
+    assert (await client.post("/api/admin/integrations/mail-server/test")).status_code in (404, 405)
+    assert (await client.get("/api/admin/updates/mailcow")).status_code == 404

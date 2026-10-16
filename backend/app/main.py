@@ -107,7 +107,6 @@ from app.api import (
 from app.api import devices as devices_api
 from app.api import image_generation as image_generation_api
 from app.api import lora_training as lora_training_api
-from app.api import mail_deploy as mail_deploy_api
 from app.api import maintenance as maintenance_api
 from app.api import mobile_build as mobile_build_api
 from app.api import setup as setup_api
@@ -628,7 +627,6 @@ def create_app() -> FastAPI:
     app.include_router(admin_api.router, dependencies=_auth)
     app.include_router(maintenance_api.router, dependencies=_auth)
     app.include_router(updates_api.router, dependencies=_auth)
-    app.include_router(mail_deploy_api.router, dependencies=_auth)
     app.include_router(admin_graph_api.router, dependencies=_auth)
     app.include_router(rooms.router, prefix="/api/rooms", tags=["rooms"], dependencies=_auth)
     app.include_router(

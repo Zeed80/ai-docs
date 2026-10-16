@@ -1,6 +1,6 @@
 """Ф0.7 + Ф0.8 — consent for AI reading, and what reaches a lock screen.
 
-* An admin provisioning a mailbox is not the same as an admin deciding that an
+* An admin managing a mailbox is not the same as an admin deciding that an
   AI may read the correspondence in it. Switching the flag ON is the owner's
   call; an admin may only ask (and may always switch it OFF).
 * Notification preferences lived in localStorage only, so the server pushed
@@ -20,7 +20,7 @@ OWNER_SUB = "employee-sub"
 
 @pytest.fixture(autouse=True)
 def _stub_mail_server_config(monkeypatch):
-    """The admin endpoint reads the Mailcow config through its own session
+    """The admin endpoint reads the mail settings through its own session
     factory (app.db.session._get_session_factory), whose engine is cached across
     event loops — in tests that surfaces as "Event loop is closed" during
     teardown rather than as anything about the endpoint. Stub the lookup; it is

@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class UserOut(BaseModel):
@@ -100,44 +100,20 @@ class SetPasswordRequest(BaseModel):
     password: str
 
 
-# ── Mail server (Mailcow) integration ───────────────────────────────────────
+# ── Mail server settings ────────────────────────────────────────────────────
+# What remains after the self-hosted mail server was retired: the company mail
+# domain (tells internal correspondents from external ones in email rules) and
+# a webmail link shown on personal mailbox cards.
 
 
 class IntegrationMailServerOut(BaseModel):
-    configured: bool
-    api_url: str | None = None
-    api_key_set: bool
-    api_key_hint: str  # masked — never the full key
     mail_domain: str | None = None
     webmail_url: str | None = None
-    imap_host: str | None = None
-    imap_port: int
-    smtp_host: str | None = None
-    smtp_port: int
-    default_quota_mb: int = 1024
 
 
 class IntegrationMailServerUpdate(BaseModel):
-    # Provide api_key to set it; empty string clears. Omit to leave unchanged.
-    api_url: str | None = None
-    api_key: str | None = None
     mail_domain: str | None = None
     webmail_url: str | None = None
-    imap_host: str | None = None
-    imap_port: int | None = None
-    smtp_host: str | None = None
-    smtp_port: int | None = None
-    default_quota_mb: int | None = Field(default=None, ge=0, le=1024 * 1024)
-    # Save-and-verify in one click: run the connection probe after storing and
-    # return its verdict, instead of making the admin press two buttons.
-    verify: bool = False
-
-
-class IntegrationMailServerSaved(IntegrationMailServerOut):
-    """PUT result: the stored config plus the optional verification verdict."""
-
-    verified: bool | None = None
-    verify_detail: str | None = None
 
 
 # ── OAuth apps (Gmail / Microsoft 365 mailbox auth) ─────────────────────────
@@ -173,32 +149,10 @@ class UserMailboxOut(BaseModel):
     quota_mb: int | None = None
 
 
-class UserMailboxCreate(BaseModel):
-    local_part: str | None = None  # omit to auto-suggest from the user's name/username
-    quota_mb: int | None = Field(default=None, ge=0, le=1024 * 1024)
-
-
 class UserMailboxSweepUpdate(BaseModel):
     """Owner-controlled consent: let the agent read this mailbox, or stop it."""
 
     sweep_enabled: bool
-
-
-class UserMailboxRevoke(BaseModel):
-    """Revoke a personal mailbox.
-
-    ``delete_on_server=False`` (default) only deactivates it in Mailcow and in our
-    config — the mail is preserved. ``True`` destroys the mailbox with all of its
-    correspondence and therefore requires ``confirm_address`` to match exactly.
-    """
-
-    delete_on_server: bool = False
-    confirm_address: str | None = None
-
-
-class UserMailboxProvisionedOut(BaseModel):
-    address: str
-    generated_password: str  # shown once; never retrievable again
 
 
 class UserListResponse(BaseModel):

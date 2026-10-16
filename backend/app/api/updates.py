@@ -1,4 +1,4 @@
-"""Updates API — Authentik staged upgrade + Mailcow update status.
+"""Updates API — Authentik staged upgrade.
 
 The backend cannot edit compose/.env or run `docker compose` (no CLI, files not
 mounted). So it does NOT perform the upgrade itself. Instead it:
@@ -68,23 +68,6 @@ class AuthentikUpdateInfo(BaseModel):
     job: dict[str, Any] | None  # current control-file state, if any
 
 
-class MailcowUpdateInfo(BaseModel):
-    """Read-only update status of the mail server (a separate compose project).
-
-    Deliberately informational: unlike Authentik, Mailcow is not driven from the
-    GUI here — the upgrade runs from the shell (infra/installer/update-mailcow.sh)
-    where a rollback is at hand. ``status="unknown"`` is a first-class answer:
-    "could not check" must never be shown as "up to date" for a public mail server.
-    """
-
-    installed: bool
-    current_tag: str | None = None
-    latest_tag: str | None = None
-    status: str = "unknown"  # up_to_date | update_available | unknown | not_installed
-    detail: str | None = None
-    command: str = "infra/installer/update-mailcow.sh --check"
-
-
 class UpdateRequestIn(BaseModel):
     # "next" = advance one major; "latest" = walk to the end; "to" = up to `target`.
     mode: str = "latest"
@@ -144,69 +127,6 @@ def _write_control(state: dict[str, Any]) -> None:
     tmp = CONTROL_FILE.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2))
     tmp.replace(CONTROL_FILE)  # atomic so the host agent never reads a half-write
-
-
-def _mailcow_current_tag() -> str | None:
-    """Deployed Mailcow release.
-
-    The backend has no access to the repo checkout, so the value comes from the
-    environment the stack was started with (compose passes infra/.env through) —
-    with a just-finished GUI deployment as a fallback, since that writes
-    MAILCOW_TAG into infra/.env but the running container still has the old env
-    (see app.api.mail_deploy.installed_tag).
-    """
-    from app.api.mail_deploy import installed_tag
-
-    return installed_tag()
-
-
-async def _mailcow_latest_tag() -> str | None:
-    import httpx
-
-    url = "https://api.github.com/repos/mailcow/mailcow-dockerized/releases/latest"
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.get(url, headers={"Accept": "application/vnd.github+json"})
-            r.raise_for_status()
-            return (r.json() or {}).get("tag_name") or None
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("mailcow_latest_tag_probe_failed", error=str(exc))
-        return None
-
-
-@router.get("/mailcow", response_model=MailcowUpdateInfo)
-async def mailcow_info(_user: UserInfo = _admin_dep) -> MailcowUpdateInfo:
-    current = _mailcow_current_tag()
-    if not current:
-        return MailcowUpdateInfo(
-            installed=False,
-            status="not_installed",
-            detail="Почтовый сервер не развёрнут — Администрирование → Интеграции → «Развернуть Mailcow».",
-        )
-    latest = await _mailcow_latest_tag()
-    if latest is None:
-        return MailcowUpdateInfo(
-            installed=True,
-            current_tag=current,
-            status="unknown",
-            detail="Не удалось запросить список релизов Mailcow — статус обновлений неизвестен.",
-        )
-    if latest == current:
-        return MailcowUpdateInfo(
-            installed=True,
-            current_tag=current,
-            latest_tag=latest,
-            status="up_to_date",
-            detail="Установлен актуальный релиз.",
-        )
-    return MailcowUpdateInfo(
-        installed=True,
-        current_tag=current,
-        latest_tag=latest,
-        status="update_available",
-        detail=f"Доступен релиз {latest}. Обновление выполняется из консоли: "
-        f"infra/installer/update-mailcow.sh --yes (бэкап → апдейт → health-check → откат при сбое).",
-    )
 
 
 @router.get("/authentik", response_model=AuthentikUpdateInfo)
