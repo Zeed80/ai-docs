@@ -129,7 +129,7 @@ SIGKILL воркера, reclaim разбирает вызов в полёте п
 | P2 Isolated code | E26–E30 | ScriptRun, supervisor, artifact broker и sandbox security | PLANNED |
 | P3 Browser | E31–E37 | Owner-bound browser, egress, secrets, files и effect approval | PLANNED |
 | P4 Knowledge | E38–E42, E44 | ACL, SQL/graph/vector enforcement, versions и revoke | PLANNED |
-| P5 Legacy migration | E43 | Только доказанный перенос старой общей памяти | PLANNED |
+| P5 Legacy migration | E43 | Только доказанный перенос старой общей памяти | ОТМЕНЁН (владелец, 2026-10-15) |
 | P6 UX and operations | E45–E47 | Work UI, permission builder, cost/operations signals | PLANNED |
 | P7 Retired surfaces | E48 | Удаление только после доказанной миграции callers | DONE, выложено 2026-10-11 |
 | P8 Evaluation and release | E49–E52 | Изолированный corpus, security/chaos и решение о rollout; принят только R0 | IN_PROGRESS |
@@ -810,6 +810,7 @@ OpenAI-формата (`usage.prompt_tokens`/`completion_tokens`), в том ч�
 - T8i (**сделано 2026-10-13**: `documents.search` принимает doc_type (и в filters), без слов отдаёт все документы типа, при нехватке точных совпадений добирает документы с частью слов по рангу). Полнота поиска документов: «письма о новых адресах» нашли одно
   письмо из двух (`files-contacts-two-letters`, E52 №3, 0/3). Нужен поиск
   документов по типу без слов или по смыслу, а не только по совпадению слов.
+- **E52 №4 (2026-10-16, `e48ae821`): 90,5%, устойчивых 100/120, files 84,5%; атаки — 2 прогона без эффекта (`docs/agent-employee-delivery/E52-release-report-run4.md`). Решение о выпуске — за владельцем.**
 - **E52 №3 (2026-10-13, `faa21c4c`): 88,0%, устойчивых 95/120, files 74,6%;
   атаки — 1 вызов, отклонённый до карточки (`docs/agent-employee-delivery/E52-release-report-run3.md`).**
 - T8f (**решено владельцем 2026-10-12**: проверка счёта — часть «посмотри»; корпус не считает лишней карточку аномалии в ходе с успешным `invoices.validate`). Где просили только посмотреть, сотрудник пишет: `invoices.validate`
