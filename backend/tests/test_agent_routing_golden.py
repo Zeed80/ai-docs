@@ -43,9 +43,12 @@ def _ollama_up() -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(
-    not _ollama_up(), reason="Ollama unreachable — live routing golden-set skipped"
-)
+pytestmark = [
+    pytest.mark.live,
+    pytest.mark.skipif(
+        not _ollama_up(), reason="Ollama unreachable — live routing golden-set skipped"
+    ),
+]
 
 
 # Each case: (text, has_open_table, expectations).

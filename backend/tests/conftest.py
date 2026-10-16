@@ -301,3 +301,19 @@ def _settings_files_go_to_tmp(tmp_path, monkeypatch):
     data.mkdir()
     monkeypatch.setattr("app.api.ai_settings._CONFIG_FILE", data / "ai_config.json")
     monkeypatch.setattr("app.ai.agent_config._CONFIG_FILE", data / "agent_config.json")
+
+
+def pytest_collection_modifyitems(config, items):
+    """Live model tests run only on request (LIVE_MODELS=1).
+
+    They used to start whenever an Ollama answered. Pointed at the stack's CPU
+    node for the embedding tests, they ran real chat and vision models on the
+    production CPU: a 35B model stayed loaded «Forever», 17 GB mostly in swap
+    (2026-10-16).
+    """
+    if os.environ.get("LIVE_MODELS") == "1":
+        return
+    skip = pytest.mark.skip(reason="live model test: set LIVE_MODELS=1 to run it")
+    for item in items:
+        if "live" in item.keywords:
+            item.add_marker(skip)

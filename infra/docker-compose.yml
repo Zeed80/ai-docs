@@ -284,8 +284,13 @@ services:
       OLLAMA_NUM_PARALLEL: "2"
       OLLAMA_KEEP_ALIVE: "30m"
       OLLAMA_HOST: "0.0.0.0:11434"
+    # Its own model directory with only the embedding and reranker models
+    # (hard links into the GPU node's store, no extra disk). With the GPU node's
+    # whole store it could load any chat model on the CPU: a 35B one sat there
+    # «Forever», 17 GB mostly in swap (2026-10-16). Add a model here only if
+    # the CPU node must serve it.
     volumes:
-      - ${OLLAMA_MODELS_DIR:-/home/ollama-models/gpu/models}:/models
+      - ${OLLAMA_CPU_MODELS_DIR:-/home/ollama-models/cpu/models}:/models
     # Reachable internally as http://ollama-cpu:11434 — no published port.
     networks:
       - app
