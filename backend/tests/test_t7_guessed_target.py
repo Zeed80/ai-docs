@@ -478,3 +478,37 @@ def test_a_record_the_employee_opened_is_not_a_guess():
     single = _envelope({"items": [{"id": INV, "invoice_number": "EV-6601"}]})
     messages += _turn(("invoices", {"action": "list", "query": "EV-6601"}, single))[2:]
     assert guessed_target("documents", link, messages) is None
+
+
+def test_a_supplier_search_narrowed_by_amount_is_the_users_selection():
+    """«Эвал-Медь, счета дороже 120000 — пометь НДС»: invoices.list searched by
+    the supplier and an amount returned two of its invoices; both are the
+    user's selection, not «one of several» (E52 run 5, 0/3)."""
+    first = "33333333-3333-3333-3333-333333333333"
+    second = "44444444-4444-4444-4444-444444444444"
+    supplier = {"id": COPPER, "name": "ООО «Эвал-Медь»"}
+    items = [
+        {"id": first, "invoice_number": "EV-3201", "supplier": supplier, "total_amount": 250000},
+        {"id": second, "invoice_number": "EV-3203", "supplier": supplier, "total_amount": 180000},
+    ]
+    request = "Пометь «проверить НДС» счета Эвал-Медь дороже 120 000"
+    narrowed = _turn(
+        (
+            "invoices",
+            {"action": "list", "filters": {"amount_min": 120000, "search": "Эвал-Медь"}},
+            _envelope({"items": items, "total": 2}),
+        ),
+        request=request,
+    )
+    update = {"action": "update", "invoice_id": second, "body": {"special_marks": "проверить НДС"}}
+    assert guessed_target("invoices", update, narrowed) is None
+    # The same two found by the name alone stay a guess.
+    by_name = _turn(
+        (
+            "invoices",
+            {"action": "list", "filters": {"search": "Эвал-Медь"}},
+            _envelope({"items": items, "total": 2}),
+        ),
+        request="Пометь «проверить НДС» счёт Эвал-Медь",
+    )
+    assert guessed_target("invoices", update, by_name) == "one_of_several"

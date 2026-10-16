@@ -62,7 +62,8 @@ async def test_step_reserves_its_cap_and_is_charged_the_measured_time(test_engin
     async def fake_inner(*args, **kwargs):
         executed.append(True)
         [row] = await _active(factory, order_id)
-        assert row.reserved_units == 700  # min(timeout 900, the Celery hard limit)
+        # min(timeout 900, the Celery hard limit)
+        assert row.reserved_units == min(900, tasks._STEP_HARD_LIMIT_SECONDS)
         return True
 
     monkeypatch.setattr(tasks, "_execute_claimed_step", fake_inner)

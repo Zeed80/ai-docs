@@ -2782,6 +2782,12 @@ def _judge_target(target: str, definition, messages: list[dict], start: int) -> 
                 full = equal or full
             if full == [target] or (group and target in full):
                 return None
+            # A lookup narrowed by a criterion too («Эвал-Медь» and amount over
+            # 120000): every record it returned that the words name is the
+            # user's selection, as for a filter alone. Gated as «one of several»
+            # once invoices.list searched supplier names (E52 run 5).
+            if target in full and _filtered(call_args):
+                return None
             among_several = True
     # The request itself names the record (a group of items, a supplier by
     # name) — one lookup finding nothing does not make it a guess. Only when
@@ -2972,6 +2978,65 @@ def _not_found(result: Any) -> bool:
         or str(result.get("error") or "").strip().upper() == "HTTP 404"
         or str(detail.get("error") or "").strip().upper() == "HTTP 404"
     )
+
+
+# Iterations in a row that only re-read what the turn already read or found
+# nothing: then the search is over and the agent answers with what it has.
+FRUITLESS_ITERATIONS = 3
+
+
+def _found_nothing(result: Any) -> bool:
+    """An empty list, a 404 (API or a fetched web page)."""
+    if _not_found(result):
+        return True
+    if isinstance(result, dict):
+        for holder in (result, result.get("result"), result.get("evidence")):
+            if isinstance(holder, dict) and holder.get("status") == 404:
+                return True
+    return _records(result) == []
+
+
+def _answer(result: Any) -> Any:
+    """The part of a result that changes with the data, not per call (ids of
+    the action, timestamps of the envelope)."""
+    if isinstance(result, dict):
+        if result.get("version") == 1 and "data" in result:
+            return result.get("data")
+        if "result" in result:
+            return result.get("result")
+    return result
+
+
+def fruitless_reads(calls: list[tuple[str, Any, Any]], seen: set[str]) -> bool:
+    """True when every call of an iteration is a read that repeats one the turn
+    already made with the same answer, or found nothing; ``seen`` collects the
+    calls of the turn. A poll whose answer changes (a job status) is progress.
+
+    E52 run 5 (max_steps 40): «suppliers.search Эвал-Медь» 25 times in a row,
+    the same browser_fetch 15 times, a missing page tried under 15 spellings —
+    37 turns of 120 ran 40+ model calls and failed on budget. At 10 steps the
+    limit had been doing this job.
+    """
+    if not calls:
+        return False
+    fruitless = True
+    for name, arguments, result in calls:
+        args = arguments if isinstance(arguments, dict) else {}
+        definition = _tool_definition(name, args)
+        key = name + json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
+        key += (
+            "\n"
+            + hashlib.sha256(
+                json.dumps(_answer(result), sort_keys=True, default=str).encode()
+            ).hexdigest()
+        )
+        repeated = key in seen
+        seen.add(key)
+        if definition is None or definition.effect != "read":
+            fruitless = False
+        elif not repeated and not _found_nothing(result):
+            fruitless = False
+    return fruitless
 
 
 def _failed(result: Any) -> bool:
@@ -3822,6 +3887,8 @@ class AgentSession:
                 await self._inject_learning_rules()
 
             consecutive_empty_responses = 0
+            seen_reads: set[str] = set()
+            fruitless_streak = 0
             for iteration in range(start_iteration, self._config.max_steps):
                 self._iteration = iteration
                 self._steps_left = self._config.max_steps - iteration
@@ -3993,6 +4060,33 @@ class AgentSession:
                             "НЕ вызывай инструменты — только текст."
                         ),
                         fallback=publish_reply,
+                    )
+                    break
+
+                calls = []
+                for tc, (_name, result) in zip(tool_calls, results, strict=False):
+                    fn = tc.get("function") or {}
+                    arguments = fn.get("arguments") or {}
+                    if isinstance(arguments, str):
+                        try:
+                            arguments = json.loads(arguments)
+                        except (TypeError, ValueError):
+                            arguments = {}
+                    calls.append((str(fn.get("name") or ""), arguments, result))
+                if fruitless_reads(calls, seen_reads):
+                    fruitless_streak += 1
+                else:
+                    fruitless_streak = 0
+                if fruitless_streak >= FRUITLESS_ITERATIONS:
+                    logger.info("agent_search_exhausted", iteration=iteration)
+                    await self._force_final_answer(
+                        instruction=(
+                            "Последние поиски повторяют уже сделанные или ничего не "
+                            "находят — искать дальше бесполезно. Ответь пользователю "
+                            "по тому, что уже узнал: что сделано, что найти не "
+                            "удалось и что для этого нужно от него. НЕ вызывай "
+                            "инструменты — только текст."
+                        ),
                     )
                     break
             else:
