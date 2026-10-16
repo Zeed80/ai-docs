@@ -296,8 +296,12 @@ SOURCES: dict[str, SourceDef] = {
             FieldDef("address", "Адрес", "text", ("адрес",)),
             FieldDef("bank_name", "Банк", "text", ("банк",)),
             FieldDef("bank_bik", "БИК", "text", ("бик",)),
-            FieldDef("contact_phone", "Телефон", "text", ("телефон", "тел")),
-            FieldDef("contact_email", "E-mail", "text", ("почта", "email", "e-mail", "емейл")),
+            FieldDef(
+                "contact_phone", "Телефон", "text", ("телефон", "тел", "phone", "phone_number")
+            ),
+            FieldDef(
+                "contact_email", "E-mail", "text", ("почта", "email", "e-mail", "емейл", "mail")
+            ),
             FieldDef(
                 "total_invoices",
                 "Счетов",
@@ -1268,7 +1272,10 @@ def validate_spec(spec: TableSpec) -> list[str]:
             problems.append(f"unknown column field {col.field!r} for source {spec.source!r}")
     for flt in spec.filters:
         if flt.op != "smart" and flt.field not in source.fields:
-            problems.append(f"unknown filter field {flt.field!r}")
+            problems.append(
+                f"unknown filter field {flt.field!r}; fields of {spec.source!r}: "
+                f"{sorted(source.fields)}"
+            )
     for srt in spec.sort:
         if srt.field not in source.fields:
             problems.append(f"unknown sort field {srt.field!r}")
@@ -1483,8 +1490,11 @@ def repair_spec_to_catalog(spec: TableSpec) -> tuple[TableSpec, list[str]]:
             continue
         healed_flt = _heal_filter(source, flt)
         if healed_flt is None:
-            # A dropped FILTER returns wrong (unfiltered) data — surface it loudly.
-            notes.append(f"⚠ убрал неизвестный фильтр «{flt.field}»")
+            # Kept, so validate_spec refuses the spec: a dropped filter published
+            # every supplier for «у которых не указан телефон» (field «phone»,
+            # live 2026-10-16) and the table looked done. The error lists the
+            # fields, the model retries with the right one.
+            new_filters.append(flt)
         else:
             if (healed_flt.field, healed_flt.op) != (flt.field, flt.op):
                 tail = f" ({healed_flt.op})" if healed_flt.op != flt.op else ""
@@ -1870,12 +1880,13 @@ async def execute_spec(
     exprs = _EXPRS[spec.source]()
     stmt = _base_stmt(spec.source, exprs, keys)
 
-    # Filters. Same-field filters OR together (facets: "фреза" OR "резец" on
+    # Filters. Same-field alternatives OR together (facets: "фреза" OR "резец" on
     # description — a model/patch adding a second contains on the same field
     # almost always means "also include", never "and also contains both
     # substrings" which is an impossible/empty condition for distinct values).
-    # Different fields AND together (narrowing), same as before.
+    # Ranges and every other op, and different fields, AND together.
     field_conds: dict[str, list[Any]] = {}
+    narrowing: list[Any] = []
     primary_text = source.primary_text_field or "description"
     for flt in spec.filters:
         if flt.op == "smart":
@@ -1903,7 +1914,11 @@ async def execute_spec(
         elif flt.op == "ne":
             cond = expr != flt.value
         elif flt.op == "contains":
-            cond = expr.ilike(f"%{flt.value}%")
+            pattern = _word_form_pattern(str(flt.value or ""))
+            if pattern and source.fields[flt.field].type == "text":
+                cond = cast(expr, Text).op("~*")(pattern)
+            else:
+                cond = expr.ilike(f"%{flt.value}%")
         elif flt.op == "gte":
             cond = expr >= flt.value
         elif flt.op == "lte":
@@ -1913,9 +1928,15 @@ async def execute_spec(
         elif flt.op == "in":
             values = flt.value if isinstance(flt.value, list) else [flt.value]
             cond = expr.in_(values)
-        if cond is not None:
+        if cond is None:
+            continue
+        if flt.op in _ALTERNATIVE_OPS:
             field_conds.setdefault(flt.field, []).append(cond)
-    where_conds: list[Any] = []
+        else:
+            # Bounds narrow: «с 2024-01-01» OR «по 2024-12-31» was every
+            # invoice, the 2025 ones included (live 2026-10-16).
+            narrowing.append(cond)
+    where_conds: list[Any] = list(narrowing)
     for conds in field_conds.values():
         where_conds.append(conds[0] if len(conds) == 1 else or_(*conds))
 
@@ -2195,6 +2216,57 @@ def _contains_stem(word: str) -> str:
         if word.endswith(ending) and len(word) - 1 >= 4:
             return word[:-1]
     return word
+
+
+# Same-field filters with these ops are alternatives (OR): «фрезы» or «резцы»,
+# supplier A or B. Every other op (ranges, ne, empty) narrows (AND).
+_ALTERNATIVE_OPS = frozenset({"contains", "eq", "in", "smart"})
+
+_CYRILLIC_RE = re.compile(r"[а-яё]", re.IGNORECASE)
+
+
+_FORM_ENDINGS = tuple(
+    sorted(
+        (
+            "ями ами ого его ому ему ыми ими ах ях ов ев ей ам ям ая яя ое ее "
+            "ой ый ий ые ие ых их ом ем а я о е ы и у ю ь й"
+        ).split(),
+        key=len,
+        reverse=True,
+    )
+)
+
+
+def _form_stem(word: str) -> str:
+    """«пластинами»→«пластин», «твердосплавная»→«твердосплавн», «сверло»→«сверл»."""
+    for ending in _FORM_ENDINGS:
+        if word.endswith(ending) and len(word) - len(ending) >= 4:
+            return word[: -len(ending)]
+    return word
+
+
+def _word_form_pattern(value: str) -> str | None:
+    """Case-insensitive regex for a Russian ``contains`` value, any word form.
+
+    A literal ``ilike '%пластина%'`` missed «Пластины тв.спл.» — 51 of 76
+    lines (live 2026-10-16), and «резц» missed «резец». Each word is cut to
+    its stem and a fleeting vowel before a final ц/к is optional, so
+    «резец»/«резцы»/«резц» meet at «рез[еёо]?ц». Values without Cyrillic
+    (SKU, ИНН, numbers) return None and stay a plain substring match.
+    """
+    words = [w for w in re.split(r"\s+", value.strip().lower()) if w]
+    if not words or not any(_CYRILLIC_RE.search(w) for w in words):
+        return None
+    parts = []
+    for word in words:
+        stem = _form_stem(word) if _CYRILLIC_RE.search(word) else word
+        if len(stem) >= 4 and stem[-1] in "цк" and stem[-2] in "еёо" and stem[-3] not in _VOWELS:
+            parts.append(re.escape(stem[:-2]) + "[еёо]?" + stem[-1])
+        elif len(stem) >= 4 and stem[-1] in "цк" and stem[-2] not in _VOWELS:
+            parts.append(re.escape(stem[:-1]) + "[еёо]?" + stem[-1])
+        else:
+            parts.append(re.escape(stem))
+    return ".*".join(parts)
 
 
 def _filter_items_from_query(query: str) -> list[str]:

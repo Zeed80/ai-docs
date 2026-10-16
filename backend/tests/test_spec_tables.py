@@ -1460,3 +1460,94 @@ async def test_suppliers_without_a_phone(db_session, seeded):
     assert "АО Лютик" in names and "ООО Ромашка" not in names
     filled = await ts.execute_spec(db_session, spec("not_empty"))
     assert {r["name"] for r in filled.rows} == {"ООО Ромашка"}
+
+
+@pytest.mark.asyncio
+async def test_a_date_range_on_one_field_narrows(db_session, seeded):
+    """«за май»: gte and lte on invoice_date were OR-ed like facets, so every
+    invoice came back (spend for 2024 counted the 2025 ones, live 2026-10-16)."""
+    may = [
+        ts.FilterSpec(field="invoice_date", op="gte", value="2026-05-01"),
+        ts.FilterSpec(field="invoice_date", op="lte", value="2026-05-31"),
+    ]
+    flat = await ts.execute_spec(
+        db_session,
+        ts.TableSpec(
+            source="invoices", columns=[ts.ColumnSpec(field="invoice_number")], filters=may
+        ),
+    )
+    assert {r["invoice_number"] for r in flat.rows} == {"INV-001", "INV-002"}
+    grouped = await ts.execute_spec(
+        db_session,
+        ts.TableSpec(
+            source="invoices",
+            columns=[
+                ts.ColumnSpec(field="supplier_name"),
+                ts.ColumnSpec(field="total_amount", agg="sum"),
+            ],
+            filters=may,
+            group_by=["supplier_name"],
+        ),
+    )
+    assert {r["supplier_name"]: r["total_amount"] for r in grouped.rows} == {
+        "ООО Ромашка": 12000.0,
+        "АО Лютик": 5000.0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_contains_finds_every_word_form(db_session, seeded):
+    """The model writes «пластина», lines say «Пластины тв.спл.»: a literal
+    ilike found 51 of 76 lines (live 2026-10-16)."""
+
+    async def descriptions(value):
+        result = await ts.execute_spec(
+            db_session,
+            ts.TableSpec(
+                source="invoice_items",
+                columns=[ts.ColumnSpec(field="description")],
+                filters=[ts.FilterSpec(field="description", op="contains", value=value)],
+            ),
+        )
+        return {r["description"] for r in result.rows}
+
+    mills = {"Фреза концевая ⌀5 мм Z4", "Фреза дисковая 50 мм"}
+    assert await descriptions("фрезы") == mills
+    assert await descriptions("фрезой") == mills
+    assert await descriptions("сверла") == {"Сверло 5 мм HSS"}
+    # No Cyrillic: a plain substring, as for an SKU.
+    assert await descriptions("M8") == set() and await descriptions("DIN 933") == {
+        "Болт М8х40 DIN 933"
+    }
+
+
+def test_word_form_pattern_handles_a_fleeting_vowel():
+    for word in ("резец", "резцы", "резц", "резцами"):
+        assert ts._word_form_pattern(word) == "рез[еёо]?ц"
+    assert ts._word_form_pattern("CCMT09T304") is None
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_filter_field_is_refused_not_dropped(db_session, seeded):
+    """A dropped filter published every supplier for «не указан телефон»."""
+    seeded["romashka"].contact_phone = "+7 495 000-00-00"
+    await db_session.flush()
+    healed = await ts.execute_spec(
+        db_session,
+        ts.TableSpec(
+            source="suppliers",
+            columns=[ts.ColumnSpec(field="name")],
+            filters=[ts.FilterSpec(field="phone", op="is_null")],
+        ),
+    )
+    names = {r["name"] for r in healed.rows}
+    assert "АО Лютик" in names and "ООО Ромашка" not in names
+    with pytest.raises(ValueError, match="contact_phone"):
+        await ts.execute_spec(
+            db_session,
+            ts.TableSpec(
+                source="suppliers",
+                columns=[ts.ColumnSpec(field="name")],
+                filters=[ts.FilterSpec(field="fax_number_zz", op="empty")],
+            ),
+        )
