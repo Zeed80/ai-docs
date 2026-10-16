@@ -8,7 +8,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -64,7 +64,9 @@ logger = structlog.get_logger()
 async def list_invoices(
     status: InvoiceStatus | None = None,
     supplier_id: uuid.UUID | None = None,
-    search: str | None = None,
+    search: str | None = Query(
+        None, description="Номер счёта, название или ИНН поставщика (часть строки)"
+    ),
     amount_min: float | None = None,
     amount_max: float | None = None,
     date_from: str | None = None,
@@ -114,7 +116,16 @@ async def list_invoices(
     if supplier_id:
         query = query.where(Invoice.supplier_id == supplier_id)
     if search:
-        query = query.where(Invoice.invoice_number.ilike(f"%{search}%"))
+        # The model passes a supplier name here as naturally as a number:
+        # «счета Хоффман» searched invoice numbers only and found nothing, so the
+        # turn spent its steps working around an empty answer (live 2026-10-16).
+        pattern = f"%{search.strip()}%"
+        suppliers = select(Party.id).where(
+            or_(Party.name.ilike(pattern), Party.inn == search.strip())
+        )
+        query = query.where(
+            or_(Invoice.invoice_number.ilike(pattern), Invoice.supplier_id.in_(suppliers))
+        )
     if amount_min is not None:
         query = query.where(Invoice.total_amount >= amount_min)
     if amount_max is not None:

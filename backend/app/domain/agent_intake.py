@@ -237,6 +237,7 @@ async def submit_agent_intake(
         if active:
             raise IntakeConflictError("A durable turn is already active in this conversation")
 
+        context = await _preceding_dialogue(db, session.id)
         message = await append_chat_message(
             db, session_id=session.id, role="user", content=request.content
         )
@@ -254,6 +255,7 @@ async def submit_agent_intake(
             db,
             owner_key=identity.account_key,
             objective=request.content,
+            description=context or None,
             source="durable_chat",
             budgets={"max_replans": 0, "max_wall_clock_seconds": 7200, "max_tool_calls": 200},
             metadata={"chat_session_id": str(session.id)},
@@ -315,3 +317,29 @@ async def submit_agent_intake(
     except Exception:
         await db.rollback()
         raise
+
+
+async def _preceding_dialogue(db: AsyncSession, session_id: uuid.UUID) -> str:
+    """The last exchanges before this message, for the verifier.
+
+    The objective of a chat turn is the message itself. Judged alone, a reply
+    such as «И?», «2» or «Выбери сама путь» failed verification after correct
+    work (7 of the owner's 15 failed checks, 2026-09/10).
+    """
+    rows = (
+        await db.scalars(
+            select(ChatMessage)
+            .where(
+                ChatMessage.session_id == session_id,
+                ChatMessage.role.in_(("user", "assistant")),
+            )
+            .order_by(ChatMessage.created_at.desc())
+            .limit(4)
+        )
+    ).all()
+    lines = []
+    for row in reversed(rows):
+        who = "Пользователь" if row.role == "user" else "Ассистент"
+        body = " ".join(str(row.content or "").split())
+        lines.append(f"{who}: {body[:600]}{'…' if len(body) > 600 else ''}")
+    return ("Предыдущий разговор:\n" + "\n".join(lines)) if lines else ""

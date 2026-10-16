@@ -495,3 +495,21 @@ async def test_record_candidate_records_dataflow_with_references(recipes_db):
 
         recipe = (await db.execute(select(RecipeSkill))).scalars().one()
         assert recipe.steps[1]["args_template"]["invoice_id"] == "{{step.0.items.0.id}}"
+
+
+def test_replay_refuses_other_numbers_than_the_learned_trigger():
+    from types import SimpleNamespace
+
+    from app.ai.recipes import replay_gate_ok
+
+    recipe = SimpleNamespace(trigger_examples=["счета на сумму больше 100000"], param_slots=None)
+    assert replay_gate_ok(recipe, 0.95, 0.2, "счета на сумму больше 100000") == (True, "ok")
+    assert replay_gate_ok(recipe, 0.95, 0.2, "счета на сумму больше 100 000") == (True, "ok")
+    assert replay_gate_ok(recipe, 0.95, 0.2, "счета на сумму больше 50000")[1] == "literal_drift"
+    plain = SimpleNamespace(trigger_examples=["Покажи все счета"], param_slots=None)
+    assert replay_gate_ok(plain, 0.95, 0.2, "покажи все счета")[0]
+    assert replay_gate_ok(plain, 0.95, 0.2, "покажи все счета за 2024")[1] == "literal_drift"
+    slotted = SimpleNamespace(
+        trigger_examples=["счета больше 100000"], param_slots=[{"name": "amount"}]
+    )
+    assert replay_gate_ok(slotted, 0.95, 0.2, "счета больше 50000")[0]

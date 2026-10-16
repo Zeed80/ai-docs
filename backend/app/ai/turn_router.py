@@ -248,6 +248,10 @@ def build_router_user(content: str, *, has_open_spec_table: bool, history_summar
     parts = []
     if history_summary:
         parts.append(f"Недавний контекст диалога:\n{history_summary}")
+        parts.append(
+            "Короткий ответ («2», «да», «так ищи», «выбери сама») продолжает задачу "
+            "из контекста: классифицируй её, а не реплику отдельно."
+        )
     parts.append(
         f"Открыта ли сейчас таблица на Рабочем столе: {'да' if has_open_spec_table else 'нет'}."
     )

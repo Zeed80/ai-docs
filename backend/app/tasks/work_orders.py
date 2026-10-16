@@ -1187,6 +1187,9 @@ async def verify_semantic_criteria(
             provider=model.provider,
             system="""You are an independent acceptance verifier. Judge only from supplied evidence.
 owner_instructions revise the objective; a later instruction overrides an earlier one.
+When description holds the preceding conversation, the objective is a reply within it
+(«2», «так ищи», «выбери сама»): judge it as the task that conversation sets.
+A polite closing or thanks with nothing to do is met by a short reply.
 Return JSON: {verdicts:[{criterion_id,ok,reason,checks:[string]}]}. Fail closed when
 evidence is missing, contradictory, or does not demonstrate the objective.
 A necessary stop is also a correct outcome: when the evidence shows the objective cannot

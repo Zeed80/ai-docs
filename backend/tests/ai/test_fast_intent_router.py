@@ -95,3 +95,31 @@ def test_inventory_without_term():
     assert intent.capability == "warehouse"
     # "позиций" is filler → no concrete search term
     assert intent.search_term is None
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Привет! Сколькоу нас счетов хоффман?",  # live 2026-10-13: «Всего счетов: 153»
+        "сколько счетов за 2024 год",
+        "сколько счетов больше 100000",
+        "сколько утверждённых счетов от Селты",
+        "сколько поставщиков из Москвы",
+    ],
+)
+def test_count_with_an_unexpressed_condition_goes_to_the_model(question):
+    assert match_fast_intent(question) is None
+
+
+@pytest.mark.parametrize(
+    "question,capability",
+    [
+        ("Сколько у нас счетов?", "invoices"),
+        ("Сколько всего поставщиков в справочнике?", "suppliers"),
+        ("сколько документов в системе", "documents"),
+        ("сколько счетов ожидают утверждения", "invoices"),
+    ],
+)
+def test_plain_count_keeps_the_fast_path(question, capability):
+    intent = match_fast_intent(question)
+    assert intent is not None and intent.capability == capability

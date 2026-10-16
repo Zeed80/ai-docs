@@ -442,6 +442,30 @@ def _extract_inventory_term(text: str) -> str | None:
     return term or None
 
 
+_WORD_RE = re.compile(r"[a-zа-я0-9-]+")
+
+
+def _unexplained_words(t: str, explained: list[str], filler: set[str]) -> list[str]:
+    """Words of the question the fast path would drop.
+
+    A count answers only «сколько <сущность> [<статус>]». Any other word — a
+    supplier name, a period, an amount — is a condition the fast path cannot
+    express, and answering without it gives a confident wrong number («сколько
+    счетов Хоффман?» → «Всего счетов: 153», live 2026-10-13). A blacklist of
+    condition words was never complete, so the check is the other way round:
+    every word must be accounted for.
+    """
+    explained = [part for marker in explained for part in marker.split() if len(part) >= 3]
+    left = []
+    for word in _WORD_RE.findall(t):
+        if len(word) < 3 or word in filler:
+            continue
+        if any(marker and marker in word for marker in explained):
+            continue
+        left.append(word)
+    return left
+
+
 def match_fast_intent(content: str, prior_user: str | None = None) -> FastIntent | None:
     """Return a high-confidence deterministic intent, or None to defer to the LLM.
 
@@ -463,6 +487,9 @@ def match_fast_intent(content: str, prior_user: str | None = None) -> FastIntent
         return None
     if any(marker in t for marker in fp.get("price_markers") or []):
         return None
+
+    filler = {normalize(str(w)) for w in fp.get("count_filler_words") or []}
+    count_words = [normalize(str(m)).strip() for m in fp.get("count_markers") or []]
 
     # ── Inventory count (stock context) ─ checked first: it is more specific. ──
     if any(marker in t for marker in fp.get("stock_markers") or []):
@@ -489,6 +516,8 @@ def match_fast_intent(content: str, prior_user: str | None = None) -> FastIntent
         entity_kw = normalize(str(rule.get("entity") or ""))
         markers = [normalize(str(m)) for m in (rule.get("markers") or [])]
         if entity_kw and entity_kw in t and any(m in t for m in markers):
+            if _unexplained_words(t, [*count_words, entity_kw, *markers], filler):
+                return None
             status = str(rule.get("status") or "")
             return FastIntent(
                 capability=str(rule.get("capability") or ""),
@@ -508,6 +537,8 @@ def match_fast_intent(content: str, prior_user: str | None = None) -> FastIntent
     for rule in rules:
         keyword = normalize(str(rule.get("keyword") or ""))
         if keyword and keyword in t:
+            if _unexplained_words(t, [*count_words, keyword], filler):
+                return None
             return FastIntent(
                 capability=str(rule.get("capability") or ""),
                 action="list",

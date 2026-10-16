@@ -701,6 +701,27 @@ class AgentOrchestrator:
         if not await strata_manager.ensure_loaded():
             logger.warning("strata_load_wait_timed_out")
 
+    def _router_history(self, content: str) -> str:
+        """The last exchanges, short, for the turn router.
+
+        Without them a follow-up is routed blind: «2» (the user picking an
+        option) and «Выбери сама путь» went as smalltalk, «Сгруппируй их» lost
+        what «их» is (live 2026-10-13/14).
+        """
+        turns = self._recent_dialogue()
+        if (
+            turns
+            and turns[-1]["role"] == "user"
+            and turns[-1]["content"].strip() == content.strip()
+        ):
+            turns = turns[:-1]
+        lines = []
+        for turn in turns[-4:]:
+            who = "Пользователь" if turn["role"] == "user" else "Ассистент"
+            text = " ".join(turn["content"].split())
+            lines.append(f"{who}: {text[:300]}{'…' if len(text) > 300 else ''}")
+        return "\n".join(lines)
+
     async def _decide_turn(self, content: str, config: BuiltinAgentConfig) -> TurnDecision:
         """Route the turn via the LLM router (two-tier: fast → orchestrator model).
 
@@ -710,6 +731,7 @@ class AgentOrchestrator:
         from app.ai import turn_router
 
         has_open_spec = _latest_spec_block() is not None
+        history = self._router_history(content)
         fast = _registry_model_name(config.fast_model)
         big = _registry_model_name(config.orchestrator_model or config.worker_model or config.model)
         min_conf = float(config.turn_router_min_confidence)
@@ -738,6 +760,7 @@ class AgentOrchestrator:
             preferred_model=fast or big,
             timeout=timeout,
             has_open_spec_table=has_open_spec,
+            history_summary=history,
             thinking=fast_thinking if fast else big_thinking,
             thinking_level=fast_level if fast else big_level,
         )
@@ -748,6 +771,7 @@ class AgentOrchestrator:
                 preferred_model=big,
                 timeout=timeout,
                 has_open_spec_table=has_open_spec,
+                history_summary=history,
                 thinking=big_thinking,
                 thinking_level=big_level,
             )

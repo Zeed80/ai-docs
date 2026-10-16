@@ -395,6 +395,27 @@ def _has_new_intent_modifier(content: str, trigger_examples: list[str] | None) -
     return False
 
 
+_NUMBER_RE = re.compile(r"\d+(?:[.,]\d+)?")
+
+
+def _numbers(text: str) -> set[str]:
+    return {n.replace(",", ".") for n in _NUMBER_RE.findall((text or "").replace(" ", ""))}
+
+
+def _has_literal_drift(content: str, recipe: Any) -> bool:
+    """True when the request names other numbers than every learned trigger.
+
+    A recipe without parameter slots replays its learned arguments as they
+    are: learned on «счета на сумму больше 100000», it would answer «больше
+    50000» with the 100000 list — the texts embed almost identically.
+    """
+    if getattr(recipe, "param_slots", None):
+        return False
+    wanted = _numbers(content)
+    triggers = getattr(recipe, "trigger_examples", None) or []
+    return not any(_numbers(t) == wanted for t in triggers)
+
+
 def replay_gate_ok(
     recipe: Any,
     score: float,
@@ -411,6 +432,8 @@ def replay_gate_ok(
         return False, f"ambiguous_match(margin={margin:.3f}<{_REPLAY_MARGIN})"
     if _has_new_intent_modifier(content, getattr(recipe, "trigger_examples", None)):
         return False, "intent_modifier_drift"
+    if _has_literal_drift(content, recipe):
+        return False, "literal_drift"
     return True, "ok"
 
 

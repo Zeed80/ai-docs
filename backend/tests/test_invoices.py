@@ -85,6 +85,27 @@ async def test_list_invoices(client: AsyncClient, db_session: AsyncSession):
 
 
 @pytest.mark.asyncio
+async def test_list_search_finds_invoices_by_supplier_name_and_inn(
+    client: AsyncClient, db_session: AsyncSession
+):
+    """«счета Хоффман» searched invoice numbers only and found nothing."""
+    _, invoice_id = await _create_invoice(db_session)
+    supplier = Party(
+        name='ЗАО "Хоффманн Профессиональный Инструмент"', inn="7816017139", role=PartyRole.supplier
+    )
+    db_session.add(supplier)
+    await db_session.flush()
+    invoice = await db_session.get(Invoice, invoice_id)
+    invoice.supplier_id = supplier.id
+    await db_session.commit()
+
+    for term in ("Хоффман", "хоффманн", "7816017139", "INV-001"):
+        data = (await client.get("/api/invoices", params={"search": term})).json()
+        assert data["total"] == 1, term
+    assert (await client.get("/api/invoices", params={"search": "Селта"})).json()["total"] == 0
+
+
+@pytest.mark.asyncio
 async def test_get_invoice(client: AsyncClient, db_session: AsyncSession):
     """invoice.get — returns invoice with lines."""
     _, invoice_id = await _create_invoice(db_session)
