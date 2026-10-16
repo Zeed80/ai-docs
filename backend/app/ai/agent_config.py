@@ -94,7 +94,7 @@ class BuiltinAgentConfig(BaseModel):
     openai_compatible_url: str = "http://localhost:8001/v1"
     backend_url: str = "http://localhost:8000"
     temperature: float = Field(0.1, ge=0.0, le=2.0)
-    max_steps: int = Field(10, ge=1, le=30)
+    max_steps: int = Field(10, ge=1, le=60)
     llm_timeout_seconds: int = Field(600, ge=10, le=1800)
     backend_timeout_seconds: int = Field(30, ge=5, le=300)
     approval_timeout_seconds: int = Field(120, ge=10, le=1800)
@@ -197,7 +197,7 @@ class BuiltinAgentConfigUpdate(BaseModel):
     openai_compatible_url: str | None = None
     backend_url: str | None = None
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
-    max_steps: int | None = Field(default=None, ge=1, le=30)
+    max_steps: int | None = Field(default=None, ge=1, le=60)
     llm_timeout_seconds: int | None = Field(default=None, ge=10, le=1800)
     backend_timeout_seconds: int | None = Field(default=None, ge=5, le=300)
     approval_timeout_seconds: int | None = Field(default=None, ge=10, le=1800)

@@ -569,8 +569,12 @@ async def _attempt_reserved_tool_dispatch(
 
 
 _SYNTHESIS_MAX_INPUT_CHARS = 12_000
-# execute_work_step's Celery time_limit: no step outlives it.
-_STEP_HARD_LIMIT_SECONDS = 700
+# execute_work_step's Celery time_limit: no step outlives it. A chat turn is
+# one step; with up to 40 tool steps it ran past the old 700 s (one turn took
+# 746 s on 10 steps), so the ceiling is 45 minutes. Each step's own
+# timeout_seconds (600 by default) still bounds everything else.
+_STEP_HARD_LIMIT_SECONDS = 2700
+_STEP_SOFT_LIMIT_SECONDS = _STEP_HARD_LIMIT_SECONDS - 60
 _VERIFIER_EVIDENCE_CHARS = 24_000
 _SYNTHESIS_ROW_CHARS = 300
 _LIST_KEYS = ("items", "rows", "results", "data")
@@ -2439,7 +2443,7 @@ def dispatch_ready_work() -> None:
     queue="scheduler",
     max_retries=0,
     ignore_result=True,
-    soft_time_limit=650,
+    soft_time_limit=_STEP_SOFT_LIMIT_SECONDS,
     time_limit=_STEP_HARD_LIMIT_SECONDS,
 )
 def claim_and_execute_step(step_id: str) -> None:
@@ -2451,7 +2455,7 @@ def claim_and_execute_step(step_id: str) -> None:
     queue="scheduler",
     max_retries=0,
     ignore_result=True,
-    soft_time_limit=650,
+    soft_time_limit=_STEP_SOFT_LIMIT_SECONDS,
     time_limit=_STEP_HARD_LIMIT_SECONDS,
 )
 def execute_work_step(step_id: str, attempt_id: str) -> None:
