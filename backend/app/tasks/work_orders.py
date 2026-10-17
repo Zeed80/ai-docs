@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 import structlog
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.ai.chat_checkpoint import ChatNonterminalToolResult, ChatWaitingApprovalToolResult
 from app.ai.work_budget_context import BudgetExecutionStopped, WorkBudgetContext
@@ -253,11 +253,9 @@ async def _heartbeat_step(
             # held only for the instant of the UPDATE instead of reserved
             # for the whole transaction, which is what was creating the
             # circular-wait window across concurrent siblings.
-            order = await db.get(WorkOrder, work_order_id)
             if (
                 step is None
                 or attempt is None
-                or order is None
                 or step.state != "running"
                 or attempt.status != "running"
                 or step.lease_owner != worker_id
@@ -267,8 +265,18 @@ async def _heartbeat_step(
             now = utcnow()
             lease_expires_at = now + timedelta(seconds=lease_seconds)
             step.lease_expires_at = lease_expires_at
-            order.lease_expires_at = lease_expires_at
             attempt.heartbeat_at = now
+            await db.commit()
+            # The order in its own transaction, holding nothing else: the
+            # checkpoint writer locks the order and then updates this step's
+            # rows, so waiting for the order while holding them is a cycle
+            # (E52 run 8: «deadlock detected» on UPDATE work_orders, two turns
+            # lost as errors). The order's lease is informational.
+            await db.execute(
+                update(WorkOrder)
+                .where(WorkOrder.id == work_order_id)
+                .values(lease_expires_at=lease_expires_at)
+            )
             await db.commit()
 
 

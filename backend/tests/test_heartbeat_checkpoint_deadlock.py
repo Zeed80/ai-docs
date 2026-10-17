@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.api.chat_runs import ChatRunCreate, submit_chat_run
 from app.auth.jwt import _DEV_USER
 from app.db.agent_runtime_models import ChatLogicalAction
-from app.db.models import WorkOrder, WorkStep
+from app.db.models import WorkOrder, WorkStep, WorkStepAttempt
 from app.domain.work_orders import claim_ready_step
 from app.tasks.work_orders import _heartbeat_step
 
@@ -74,3 +74,58 @@ async def test_heartbeat_waits_for_a_checkpoint_instead_of_deadlocking(test_engi
     async with factory() as db:
         refreshed = await db.get(WorkStep, step.id)
         assert refreshed.lease_expires_at is not None
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_and_a_writer_that_updates_the_step_after_the_order(test_engine):
+    """E52 run 8: «deadlock detected» on the heartbeat's UPDATE work_orders.
+    A writer locked the order and then updated the attempt; the heartbeat held
+    the attempt and waited for the order. The order now goes in its own
+    transaction, holding nothing else."""
+    from sqlalchemy import update
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as db:
+        run = await submit_chat_run(
+            ChatRunCreate(request_id=uuid.uuid4(), content="Deadlock probe 2"), db, _DEV_USER
+        )
+    async with factory() as db:
+        _, step, attempt = await claim_ready_step(
+            db, worker_id="deadlock-probe", work_order_id=run["work_order_id"]
+        )
+        await db.commit()
+    order_id = run["work_order_id"]
+
+    stop = asyncio.Event()
+    writer = factory()
+    await writer.scalar(select(WorkOrder).where(WorkOrder.id == order_id).with_for_update())
+    heartbeat = asyncio.create_task(
+        _heartbeat_step(
+            work_order_id=order_id,
+            step_id=step.id,
+            attempt_id=attempt.id,
+            worker_id="deadlock-probe",
+            stop=stop,
+            interval_seconds=0,
+            session_factory=factory,
+        )
+    )
+    try:
+        await asyncio.sleep(0.5)
+        await asyncio.wait_for(
+            writer.execute(
+                update(WorkStepAttempt)
+                .where(WorkStepAttempt.id == attempt.id)
+                .values(checkpoint={"probe": 1})
+            ),
+            timeout=10,
+        )
+        await asyncio.wait_for(writer.commit(), timeout=10)
+    finally:
+        await writer.close()
+        await asyncio.sleep(0.3)
+        stop.set()
+        await asyncio.wait_for(heartbeat, timeout=10)
+    async with factory() as db:
+        order = await db.get(WorkOrder, order_id)
+        assert order.lease_expires_at is not None
