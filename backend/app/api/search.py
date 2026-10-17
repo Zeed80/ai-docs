@@ -9,6 +9,8 @@ from pydantic import BaseModel
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.jwt import get_current_user
+from app.auth.models import UserInfo
 from app.db.models import (
     Document,
     DocumentChunk,
@@ -26,10 +28,19 @@ from app.db.text_search import (
     text_search_condition,
     text_search_rank,
 )
+from app.domain.access import document_visibility_filter
 from app.domain.documents import DocumentSummary
 
 router = APIRouter()
 logger = structlog.get_logger()
+
+
+async def _visible_documents(statement, db: AsyncSession, user: UserInfo):
+    """The visibility rule of the document list. Search had none: a contract
+    of another department showed up by name, and documents.read on it said
+    404 — the agent kept searching for a document it could not open (E52)."""
+    clause = await document_visibility_filter(db, user)
+    return statement if clause is None else statement.where(clause)
 
 
 # ── Schemas ─────────────────────────────────────────────────────────────────
@@ -101,6 +112,7 @@ async def search_documents(
     ),
     body: DocumentSearchBody | None = None,
     db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
 ):
     """Skill: doc.search — Hybrid search: Postgres FTS + ILIKE fallback.
 
@@ -141,6 +153,8 @@ async def search_documents(
         ExtractionField.field_value,
     ]
 
+    visibility = await document_visibility_filter(db, current_user)
+
     def base():
         statement = (
             select(Document)
@@ -150,6 +164,8 @@ async def search_documents(
         )
         if doc_type:
             statement = statement.where(Document.doc_type == doc_type)
+        if visibility is not None:
+            statement = statement.where(visibility)
         return statement
 
     async def collect(statement, seen: dict) -> None:
@@ -222,6 +238,7 @@ Respond with JSON:
 async def nl_to_query(
     payload: NLQueryRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
 ):
     """Skill: search.nl_to_query — Convert natural language to structured query."""
     # Try AI parsing first, fallback to simple text search
@@ -255,7 +272,7 @@ async def nl_to_query(
         structured = StructuredFilter(search_text=payload.query)
 
     # Execute structured query
-    query = select(Document)
+    query = await _visible_documents(select(Document), db, current_user)
     if structured.doc_type:
         try:
             query = query.where(Document.doc_type == DocumentType(structured.doc_type))
@@ -298,6 +315,7 @@ async def nl_to_query(
 async def hybrid_search(
     payload: HybridSearchRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
 ):
     """Skill: search.hybrid — Vector similarity search via Qdrant + SQL filter fallback."""
     from app.ai.embeddings import embed_text, get_active_embedding_profile
@@ -332,9 +350,10 @@ async def hybrid_search(
                     {uid: idx for idx, uid in enumerate(uuid_ids)},
                     value=Document.id,
                 )
-                result = await db.execute(
-                    select(Document).where(Document.id.in_(uuid_ids)).order_by(ordering)
+                visible = await _visible_documents(
+                    select(Document).where(Document.id.in_(uuid_ids)), db, current_user
                 )
+                result = await db.execute(visible.order_by(ordering))
                 items = result.scalars().all()
                 total = len(items)
                 used_vector = True
@@ -350,7 +369,7 @@ async def hybrid_search(
 
     # Fallback: SQL ILIKE
     if not used_vector:
-        query = select(Document)
+        query = await _visible_documents(select(Document), db, current_user)
         if payload.query:
             query = query.where(Document.file_name.ilike(f"%{payload.query}%"))
         if payload.doc_type:
@@ -479,6 +498,7 @@ async def find_similar(
     entity_id: uuid.UUID,
     limit: int = Query(5, le=20),
     db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
 ):
     """Skill: search.similar — Find entities similar to the given entity using vector search."""
     results: list[SimilarResult] = []
@@ -533,12 +553,10 @@ async def find_similar(
         elif entity_type == "document":
             from app.db.models import Document
 
-            rows = await db.execute(
-                select(Document)
-                .where(Document.id != entity_id)
-                .order_by(Document.created_at.desc())
-                .limit(limit)
+            visible = await _visible_documents(
+                select(Document).where(Document.id != entity_id), db, current_user
             )
+            rows = await db.execute(visible.order_by(Document.created_at.desc()).limit(limit))
             for doc in rows.scalars().all():
                 results.append(
                     SimilarResult(
@@ -548,6 +566,19 @@ async def find_similar(
                         score=0.5,
                     )
                 )
+
+    if entity_type == "document" and results:
+        ids = []
+        for item in results:
+            try:
+                ids.append(uuid.UUID(item.id))
+            except ValueError:
+                continue
+        statement = await _visible_documents(
+            select(Document.id).where(Document.id.in_(ids)), db, current_user
+        )
+        shown = {str(i) for i in (await db.execute(statement)).scalars().all()}
+        results = [item for item in results if item.id in shown]
 
     return SimilarResponse(
         results=results[:limit],

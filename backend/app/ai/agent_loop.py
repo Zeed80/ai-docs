@@ -3007,35 +3007,52 @@ def _answer(result: Any) -> Any:
     return result
 
 
-def fruitless_reads(calls: list[tuple[str, Any, Any]], seen: set[str]) -> bool:
-    """True when every call of an iteration is a read that repeats one the turn
-    already made with the same answer, or found nothing; ``seen`` collects the
-    calls of the turn. A poll whose answer changes (a job status) is progress.
+def _job_running(result: Any) -> bool:
+    answer = _answer(result)
+    return isinstance(answer, dict) and answer.get("in_progress") is True
+
+
+def fruitless_reads(calls: list[tuple[str, Any, Any]], seen: set[str]) -> bool | None:
+    """True when every call of an iteration is a read that brings back an
+    answer the turn already had, or found nothing; ``seen`` collects the
+    answers of the turn. None when the iteration only waited on a job that is
+    still running: neither progress nor a failed search.
 
     E52 run 5 (max_steps 40): «suppliers.search Эвал-Медь» 25 times in a row,
     the same browser_fetch 15 times, a missing page tried under 15 spellings —
     37 turns of 120 ran 40+ model calls and failed on budget. At 10 steps the
-    limit had been doing this job.
+    limit had been doing this job. Run 6: the answer, not the arguments, is
+    what repeats — «поставка» paged by offset 1…18 returned the same contract
+    each time; a write refused with «записи нет» did nothing either.
     """
     if not calls:
         return False
     fruitless = True
+    waiting = True
     for name, arguments, result in calls:
         args = arguments if isinstance(arguments, dict) else {}
         definition = _tool_definition(name, args)
-        key = name + json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
-        key += (
-            "\n"
+        key = (
+            name
+            + "\n"
             + hashlib.sha256(
                 json.dumps(_answer(result), sort_keys=True, default=str).encode()
             ).hexdigest()
         )
         repeated = key in seen
         seen.add(key)
-        if definition is None or definition.effect != "read":
+        refused_missing = (
+            isinstance(result, dict) and result.get("error_code") == "record_not_found"
+        )
+        is_read = definition is not None and definition.effect == "read"
+        if not (is_read and _job_running(result)):
+            waiting = False
+        if refused_missing:
+            continue
+        if not is_read or not (repeated or _found_nothing(result)):
             fruitless = False
-        elif not repeated and not _found_nothing(result):
-            fruitless = False
+    if waiting:
+        return None
     return fruitless
 
 
@@ -4073,9 +4090,10 @@ class AgentSession:
                         except (TypeError, ValueError):
                             arguments = {}
                     calls.append((str(fn.get("name") or ""), arguments, result))
-                if fruitless_reads(calls, seen_reads):
+                verdict = fruitless_reads(calls, seen_reads)
+                if verdict:
                     fruitless_streak += 1
-                else:
+                elif verdict is False:
                     fruitless_streak = 0
                 if fruitless_streak >= FRUITLESS_ITERATIONS:
                     logger.info("agent_search_exhausted", iteration=iteration)

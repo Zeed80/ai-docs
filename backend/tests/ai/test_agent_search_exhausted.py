@@ -46,6 +46,31 @@ def test_a_poll_whose_answer_changes_and_any_write_are_progress():
     assert not fruitless_reads([], seen)
 
 
+def test_the_same_answer_under_other_arguments_is_fruitless():
+    """Run 6: «поставка» paged by offset 1…18 returned the same contract."""
+    seen: set[str] = set()
+    assert fruitless_reads([("documents", SEARCH, FOUND)], seen) is False
+    for offset in (1, 2):
+        paged = {**SEARCH, "filters": {"offset": offset}}
+        assert fruitless_reads([("documents", paged, FOUND)], seen) is True
+
+
+def test_a_write_refused_for_a_missing_record_did_nothing():
+    seen: set[str] = set()
+    refused = {"status": "error", "error_code": "record_not_found", "message": "нет"}
+    reprocess = {"action": "reprocess", "document_id": "d1"}
+    assert fruitless_reads([("documents", reprocess, refused)], seen) is True
+
+
+def test_waiting_on_a_running_job_is_neither_progress_nor_a_failed_search():
+    """Run 6: three «загрузка идёт» polls ended the turn before crawl_site."""
+    seen: set[str] = set()
+    running = {"version": 1, "status": "succeeded", "data": {"in_progress": True, "done": 0}}
+    poll = {"action": "ingest_status", "supplier_id": "s1"}
+    for _ in range(3):
+        assert fruitless_reads([("tool_catalog", poll, running)], seen) is None
+
+
 @pytest.mark.asyncio
 async def test_the_turn_answers_after_three_fruitless_iterations(monkeypatch):
     config = BuiltinAgentConfig(

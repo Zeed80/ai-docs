@@ -241,3 +241,39 @@ async def test_documents_of_a_type_without_words_and_an_unknown_type(
     assert str(letter.id) in {d["id"] for d in listed.json()}
     bad = await client.post("/api/search/documents", json={"filters": {"doc_type": "письмо"}})
     assert bad.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_search_shows_only_documents_the_user_may_open(db_session):
+    """E52: a contract of another owner was found by name, documents.read on
+    it said 404, and the agent searched on for 40 model calls."""
+    from app.api.search import DocumentSearchBody, search_documents
+    from app.auth.models import UserInfo, UserRole
+
+    def doc(name: str, owner: str) -> Document:
+        return Document(
+            file_name=name,
+            file_hash=f"vis-{name}-{uuid.uuid4().hex[:6]}",
+            file_size=1,
+            mime_type="application/pdf",
+            storage_path=f"/{name}",
+            doc_type="contract",
+            owner_sub=owner,
+        )
+
+    db_session.add_all([doc("ДП-95 свой", "u:buyer"), doc("ДП-95 чужой", "u:other")])
+    await db_session.commit()
+    buyer = UserInfo(
+        sub="u:buyer", email="b@x", name="b", preferred_username="b", roles=[UserRole.buyer]
+    )
+
+    found = await search_documents(
+        q=None,
+        query_text=None,
+        limit=20,
+        doc_type=None,
+        body=DocumentSearchBody(query="ДП-95"),
+        db=db_session,
+        current_user=buyer,
+    )
+    assert {d.file_name for d in found} == {"ДП-95 свой"}
