@@ -50,6 +50,11 @@ celery_app.conf.update(
         "app.tasks.extraction.extract_generic_fields": {"queue": "gpu"},
         "app.tasks.extraction.auto_verify_document": {"queue": "gpu"},
         "app.tasks.embedding.embed_document": {"queue": "gpu"},
+        # Supplier catalogs that live in drawing_analysis.py by name: the glob
+        # below sent them to the gpu lane, behind document recognition, and a
+        # world without a gpu worker never ran them ("queued, 0 done" — E52).
+        "drawing_analysis.ingest_web_catalog_sources": {"queue": "catalog"},
+        "drawing_analysis.ingest_supplier_catalog": {"queue": "catalog"},
         # name= on @celery_app.task in drawing_analysis.py — VLM, GPU-bound
         "drawing_analysis.*": {"queue": "gpu"},
         "engineering_model_reader.*": {"queue": "gpu"},

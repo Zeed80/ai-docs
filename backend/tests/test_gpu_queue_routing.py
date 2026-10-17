@@ -50,3 +50,16 @@ def test_worker_config_defaults_sequential():
     # guarantee, but the config default should never silently allow parallelism).
     assert celery_app.conf.worker_concurrency == 1
     assert celery_app.conf.worker_prefetch_multiplier == 1
+
+
+@pytest.mark.parametrize(
+    "task_name",
+    [
+        "drawing_analysis.ingest_web_catalog_sources",
+        "drawing_analysis.ingest_supplier_catalog",
+    ],
+)
+def test_supplier_catalogs_named_in_drawing_analysis_run_on_the_catalog_queue(task_name):
+    """attach_web_catalog queued them to gpu through the drawing_analysis.* glob:
+    behind document recognition, and never in a world without a gpu worker."""
+    assert _queue_for(task_name) == "catalog"
