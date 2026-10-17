@@ -2707,10 +2707,55 @@ def _named_in(record: dict, words: set[str]) -> bool:
     )
 
 
+def _codes(text: str) -> set[str]:
+    return {c.lower().replace("-", "") for c in _CODE_RE.findall(text)}
+
+
+def _other_number(target: str, request: str, messages: list[dict], start: int) -> bool:
+    """The request names a record number and the target carries another number
+    of the same kind: EV-9998 for the asked EV-9999 (E52, files-link-missing-
+    invoice) — found as «the only invoice of the supplier», by a filter."""
+    asked = _codes(request)
+    if not asked:
+        return False
+    prefixes = {re.match(r"[a-zа-я]+", c).group() for c in asked}
+    for message in messages[start + 1 :]:
+        if message.get("role") != "tool":
+            continue
+        try:
+            records = _records(json.loads(message.get("content") or "null"))
+        except (TypeError, ValueError):
+            continue
+        for record in records or []:
+            if str(record.get("id")).lower() != target:
+                continue
+            own = set().union(
+                *(
+                    _codes(v)
+                    for v in record.values()
+                    if isinstance(v, str) and not _UUID_RE.match(v.strip())
+                ),
+                set(),
+            )
+            if any(o.startswith(a) or a.startswith(o) for o in own for a in asked):
+                return False  # EV-5701-1 is EV-5701 written longer
+            return any(re.match(r"[a-zа-я]+", c).group() in prefixes for c in own)
+    return False
+
+
 def _judge_target(target: str, definition, messages: list[dict], start: int) -> str | None:
     request = str(messages[start].get("content") or "") if start >= 0 else ""
     if target in request.lower():
         return None
+    reason = _judge_target_by_reads(target, definition, messages, start, request)
+    if reason is None and _other_number(target, request, messages, start):
+        return "other_number"
+    return reason
+
+
+def _judge_target_by_reads(
+    target: str, definition, messages: list[dict], start: int, request: str
+) -> str | None:
     request_words = _words(request)
     from app.ai.route_table import group_request_words
 
@@ -4471,6 +4516,30 @@ class AgentSession:
             original_name, execution_args, self.messages, self._turn_start()
         )
         if extra_fields:
+            # The model hears it first and may drop them: E52 lost whole
+            # changes to a confirmation card for a phone or a BIK written
+            # next to the requested e-mail or account. The same fields again
+            # are the model insisting — then they are the owner's call.
+            warned = getattr(self, "_unrequested_warned", None)
+            if warned is None:
+                warned = self._unrequested_warned = set()
+            warning_key = (self._turn_start(), original_name, tuple(extra_fields))
+            if warning_key not in warned:
+                warned.add(warning_key)
+                logger.info("unrequested_fields_returned", tool=original_name, fields=extra_fields)
+                result = {
+                    "status": "error",
+                    "error_code": "unrequested_fields",
+                    "message": (
+                        "Изменение НЕ выполнено: полей "
+                        + ", ".join(extra_fields)
+                        + " в просьбе пользователя нет. Повтори вызов без них. Если "
+                        "они действительно нужны, повтори с ними — тогда изменение "
+                        "уйдёт на подтверждение владельцу."
+                    ),
+                }
+                await self._send({"type": "tool_result", "tool": fn_name, "result": result})
+                return fn_name, result, tc_id
             current_gates.add(original_name)
             logger.info("unrequested_fields_gated", tool=original_name, fields=extra_fields)
         # T7a: a second copy of something that already exists (the recipient

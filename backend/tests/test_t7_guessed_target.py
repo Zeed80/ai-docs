@@ -512,3 +512,60 @@ def test_a_supplier_search_narrowed_by_amount_is_the_users_selection():
         request="Пометь «проверить НДС» счёт Эвал-Медь",
     )
     assert guessed_target("invoices", update, by_name) == "one_of_several"
+
+
+def test_another_number_of_the_same_kind_is_a_guess_even_by_a_filter():
+    """E52 files-link-missing-invoice: EV-9999 did not exist; the supplier's
+    only invoice, EV-9998, came from a supplier filter and got the contract."""
+    import json
+
+    from app.ai.agent_loop import guessed_target
+
+    invoice = "492445c4-7330-4cb2-87d7-70262ad152ba"
+    contract = "95b1f98e-19b6-4b05-ab43-4ee8bb9ff7cc"
+    listed = {
+        "version": 1,
+        "status": "succeeded",
+        "data": {"items": [{"id": invoice, "invoice_number": "EV-9998"}], "total": 1},
+    }
+    found = {
+        "version": 1,
+        "status": "succeeded",
+        "data": {"items": [{"id": contract, "file_name": "Договор ДП-240 Эвал-Сталь.pdf"}]},
+    }
+
+    def turn(request):
+        return [
+            {"role": "user", "content": request},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "function": {
+                            "name": "invoices",
+                            "arguments": {"action": "list", "filters": {"supplier_id": "s1"}},
+                        },
+                    },
+                    {
+                        "id": "c2",
+                        "function": {
+                            "name": "documents",
+                            "arguments": {"action": "search", "query": "ДП-240"},
+                        },
+                    },
+                ],
+            },
+            {"role": "tool", "tool_call_id": "c1", "content": json.dumps(listed)},
+            {"role": "tool", "tool_call_id": "c2", "content": json.dumps(found)},
+        ]
+
+    link = {
+        "action": "link",
+        "document_id": contract,
+        "body": {"linked_entity_id": invoice, "linked_entity_type": "invoice"},
+    }
+    asked_other = turn("Привяжи договор ДП-240 к счёту EV-9999")
+    assert guessed_target("documents", link, asked_other) == "other_number"
+    asked_this = turn("Привяжи договор ДП-240 к счёту EV-9998")
+    assert guessed_target("documents", link, asked_this) is None

@@ -302,3 +302,14 @@ async def test_confirm_receipt(client: AsyncClient, bolt_item, invoice_for_recei
     resp = await client.post(f"/api/warehouse/receipts/{receipt_id}/confirm")
     assert resp.status_code == 200
     assert resp.json()["status"] in ("confirmed", "received")
+
+
+@pytest.mark.asyncio
+async def test_inventory_search_finds_a_place_and_an_article(
+    client: AsyncClient, bolt_item, low_stock_item
+):
+    """E52: «всё со стеллажа A-01» searched names only and found nothing."""
+    by_place = await client.get("/api/warehouse/inventory", params={"search": "Стеллаж А-3"})
+    assert [i["sku"] for i in by_place.json()["items"]] == ["BOLT-M8-30"]
+    by_sku = await client.get("/api/warehouse/inventory", params={"search": "PAINT-RED"})
+    assert [i["sku"] for i in by_sku.json()["items"]] == ["PAINT-RED"]

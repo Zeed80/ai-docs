@@ -1019,3 +1019,59 @@ async def test_a_change_after_an_empty_search_waits_for_the_owner_unmarked(
         0,
     )
     assert len(asked) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("insists", [False, True])
+async def test_an_unrequested_field_goes_back_to_the_model_before_the_owner(
+    test_engine, monkeypatch, insists
+):
+    """T7c, E52: a phone written next to the requested e-mail sent the whole
+    change to the owner. The model hears it first and may drop the field; the
+    same fields again are the owner's call."""
+    from app.ai import agent_config
+
+    _, _, context = await _claimed_context(test_engine)
+    effects = []
+    _install_http(monkeypatch, [httpx.Response(200, json={"ok": True})], effects)
+    config = BuiltinAgentConfig(approval_gates=[])
+    monkeypatch.setattr(agent_config, "get_builtin_agent_config", lambda: config)
+
+    async def send(event):
+        return None
+
+    session = agent_loop.AgentSession(send)
+    session.set_work_budget_context(context)
+    session._skill_map = {
+        "suppliers": {"name": "suppliers", "method": "POST", "path": "/api/agent/cap/suppliers"}
+    }
+
+    async def no_log(**kwargs):
+        return None
+
+    session._log_action = no_log
+    asked: list[dict] = []
+
+    async def approve(skill_name, args):
+        asked.append(args)
+        return True
+
+    session._request_approval = approve
+    session.messages = [
+        {"role": "user", "content": "Запиши в карточку Эвал-Стали e-mail отдела продаж с сайта"}
+    ]
+    supplier = "00000000-0000-4000-8000-000000000001"
+    both = {"contact_email": "zakaz@eval-stal.example", "contact_phone": "+7 495 300-10-10"}
+
+    def call(body):
+        arguments = {"action": "update", "supplier_id": supplier, "body": body}
+        return {"id": f"upd-{len(body)}", "function": {"name": "suppliers", "arguments": arguments}}
+
+    _, first, _ = await session._execute_single_tool(call(both), 0)
+    assert first["error_code"] == "unrequested_fields"
+    assert effects == [] and asked == []
+
+    second_body = both if insists else {"contact_email": both["contact_email"]}
+    await session._execute_single_tool(call(second_body), 1)
+    assert len(asked) == (1 if insists else 0)
+    assert len(effects) == 1

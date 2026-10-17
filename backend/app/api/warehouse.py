@@ -18,7 +18,7 @@ import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -224,7 +224,16 @@ async def list_inventory(
     if location:
         q = q.where(InventoryItem.location.ilike(f"%{location}%"))
     if search:
-        q = q.where(InventoryItem.name.ilike(f"%{search}%"))
+        # Name, article and place: «всё со стеллажа A-01» searched names only,
+        # found nothing, and the agent picked rows from the full list (E52).
+        pattern = f"%{search}%"
+        q = q.where(
+            or_(
+                InventoryItem.name.ilike(pattern),
+                InventoryItem.sku.ilike(pattern),
+                InventoryItem.location.ilike(pattern),
+            )
+        )
 
     total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
     items = (
