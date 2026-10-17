@@ -22,7 +22,7 @@ from datetime import UTC, datetime, timedelta
 # Codes that stop a send until a human explicitly overrides it. Everything else
 # is advisory: "внешний домен" is the normal case for supplier mail and must
 # not turn into a wall.
-BLOCKING_CODES = frozenset({"sensitive_content", "lookalike_domain"})
+BLOCKING_CODES = frozenset({"sensitive_content", "lookalike_domain", "invalid_address"})
 
 
 @dataclass
@@ -198,6 +198,28 @@ def detect_sensitive_content(body: str) -> RiskFlagData | None:
     )
 
 
+# One "@", no spaces, a dot in the domain. Not RFC 5322 — the composer marks
+# the same shape red (RecipientInput EMAIL_RE), and anything outside it is a
+# typo, not an exotic but deliverable address.
+_ADDRESS_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def detect_invalid_address(recipients: list[str]) -> RiskFlagData | None:
+    """A draft may hold a half-typed address; a send must not. «zakaz@@eval-stal»
+    went to the owner's confirmation and would only have failed at SMTP."""
+    from email.utils import parseaddr
+
+    bad = [a for a in recipients if not _ADDRESS_RE.match(parseaddr(a)[1] or a.strip())]
+    if not bad:
+        return None
+    return RiskFlagData(
+        code="invalid_address",
+        severity="error",
+        message=f"Адрес получателя записан с ошибкой: {', '.join(bad[:3])}",
+        details={"addresses": bad[:10]},
+    )
+
+
 def detect_external_domain(recipients: list[str], known: set[str]) -> RiskFlagData | None:
     for addr in recipients:
         domain = _domain(addr)
@@ -283,10 +305,12 @@ def evaluate_draft_data(draft_data: dict, ctx: DraftRiskInput) -> list[RiskFlagD
     data = draft_data or {}
     recipients = [a for a in (data.get("to_addresses") or []) if a]
     recipients += [a for a in (data.get("cc_addresses") or []) if a]
+    bcc = [a for a in (data.get("bcc_addresses") or []) if a]
     body = data.get("body_text") or data.get("body_html") or ""
     attachment_count = len(data.get("attachment_ids") or [])
 
     flags: list[RiskFlagData | None] = [
+        detect_invalid_address(recipients + bcc),
         detect_lookalike_domain(recipients, ctx.known_domains),
         detect_sensitive_content(body),
         detect_external_domain(recipients, ctx.known_domains),

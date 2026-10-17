@@ -215,3 +215,23 @@ async def test_a_cancelled_draft_can_be_sent_again(client, db_session, _no_real_
 
     again = await _send(client, draft_id)
     assert again.status_code == 200, again.text
+
+
+async def test_a_misspelled_address_is_kept_in_the_draft_but_not_sent(
+    client, db_session, _no_real_send
+):
+    """«zakaz@@eval-stal» reached the owner's confirmation (E52) and could only
+    have failed at SMTP. The composer keeps such a chip red, so the draft stays."""
+    draft_id = await _draft(client, db_session, to="zakaz@@eval-stal")
+
+    resp = await _send(client, draft_id)
+    assert resp.status_code == 400, resp.text
+    assert "invalid_address" in resp.json()["detail"]["blocked_by"]
+
+
+def test_named_and_plain_addresses_are_not_misspelled():
+    from app.domain.email_risk import detect_invalid_address
+
+    assert detect_invalid_address(["Иван <ivan@eval-stal.example>", "a.b@c.ru"]) is None
+    flag = detect_invalid_address(["ok@c.ru", "zakaz@@eval-stal", "no-at.ru"])
+    assert flag is not None and flag.details["addresses"] == ["zakaz@@eval-stal", "no-at.ru"]
