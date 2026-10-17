@@ -11,7 +11,7 @@ import pytest
 
 from app.ai import agent_loop
 from app.ai.agent_config import BuiltinAgentConfig
-from app.ai.agent_loop import FRUITLESS_ITERATIONS, fruitless_reads
+from app.ai.agent_loop import FRUITLESS_ITERATIONS, FRUITLESS_STOP, fruitless_reads
 
 FOUND = {"version": 1, "status": "succeeded", "data": {"results": [{"id": "s1", "name": "Медь"}]}}
 EMPTY = {"version": 1, "status": "succeeded", "data": {"results": [], "total": 0}}
@@ -30,6 +30,15 @@ def test_an_empty_answer_or_a_missing_page_is_fruitless():
     assert fruitless_reads([("suppliers", {"action": "search", "query": "x"}, EMPTY)], seen)
     fetch = {"action": "browser_fetch", "target": "http://x/team.html"}
     assert fruitless_reads([("computer_use", fetch, PAGE_404)], seen)
+
+
+def test_empty_context_lookups_count_toward_the_hint():
+    """E52 run 7: invoices, requests and contracts of a supplier were all empty;
+    they count toward the hint, which still lets the model write the draft."""
+    seen: set[str] = set()
+    empty = {"version": 1, "status": "succeeded", "data": {"items": [], "total": 0}}
+    for name, action in (("procurement", "list_requests"), ("procurement", "list_contracts")):
+        assert fruitless_reads([(name, {"action": action}, empty)], seen) is True
 
 
 def test_a_poll_whose_answer_changes_and_any_write_are_progress():
@@ -72,7 +81,7 @@ def test_waiting_on_a_running_job_is_neither_progress_nor_a_failed_search():
 
 
 @pytest.mark.asyncio
-async def test_the_turn_answers_after_three_fruitless_iterations(monkeypatch):
+async def test_the_turn_is_told_then_answers_after_fruitless_iterations(monkeypatch):
     config = BuiltinAgentConfig(
         enabled=True,
         agent_name="Света",
@@ -110,7 +119,7 @@ async def test_the_turn_answers_after_three_fruitless_iterations(monkeypatch):
 
     async def fake_stream(messages, tools, system_prompt, config, on_token, **kw):
         if tools:
-            tool_rounds.append(1)
+            tool_rounds.append(any("новых сведений" in str(m.get("content")) for m in messages))
             return {
                 "tool_calls": [
                     {"type": "function", "function": {"name": "suppliers", "arguments": SEARCH}}
@@ -127,7 +136,11 @@ async def test_the_turn_answers_after_three_fruitless_iterations(monkeypatch):
 
     await agent_loop.AgentSession(collect).on_user_message("Напиши Эвал-Меди письмо")
 
-    # The first search is news, the next three repeat it.
-    assert len(tool_rounds) == 1 + FRUITLESS_ITERATIONS
+    # The first search is news, the rest repeat it. After FRUITLESS_ITERATIONS
+    # repeats the model hears the search is over and may still act (E52 run 7:
+    # a draft lost to three empty context lookups); after FRUITLESS_STOP it answers.
+    assert len(tool_rounds) == 1 + FRUITLESS_STOP
+    told = tool_rounds.index(True)
+    assert told == 1 + FRUITLESS_ITERATIONS
     texts = [e.get("content", "") for e in events if e.get("type") == "text"]
     assert any("Эвал-Меди" in t for t in texts)

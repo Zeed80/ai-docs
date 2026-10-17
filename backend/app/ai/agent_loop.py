@@ -2981,8 +2981,11 @@ def _not_found(result: Any) -> bool:
 
 
 # Iterations in a row that only re-read what the turn already read or found
-# nothing: then the search is over and the agent answers with what it has.
+# nothing: after FRUITLESS_ITERATIONS the model is told the search is over and
+# may still act (write the draft it gathered context for); after
+# FRUITLESS_STOP it answers with what it has.
 FRUITLESS_ITERATIONS = 3
+FRUITLESS_STOP = 6
 
 
 def _found_nothing(result: Any) -> bool:
@@ -3033,8 +3036,7 @@ def fruitless_reads(calls: list[tuple[str, Any, Any]], seen: set[str]) -> bool |
         args = arguments if isinstance(arguments, dict) else {}
         definition = _tool_definition(name, args)
         key = (
-            name
-            + "\n"
+            f"{name}.{args.get('action') or ''}\n"
             + hashlib.sha256(
                 json.dumps(_answer(result), sort_keys=True, default=str).encode()
             ).hexdigest()
@@ -4095,7 +4097,24 @@ class AgentSession:
                     fruitless_streak += 1
                 elif verdict is False:
                     fruitless_streak = 0
-                if fruitless_streak >= FRUITLESS_ITERATIONS:
+                if fruitless_streak == FRUITLESS_ITERATIONS:
+                    # E52 run 7: three empty context lookups (invoices, requests,
+                    # contracts of the supplier) ended a turn that only had the
+                    # draft left to write. Say so and let the model act.
+                    logger.info("agent_search_fruitless", iteration=iteration)
+                    self.messages.append(
+                        {
+                            "role": "system",
+                            "content": (
+                                "Последние вызовы повторяют уже полученное или ничего "
+                                "не находят — новых сведений этими поисками не будет. "
+                                "Если для задачи всё нужное уже есть — выполни её. "
+                                "Если нет — не ищи дальше, а ответь пользователю: что "
+                                "сделано, чего найти не удалось и что нужно от него."
+                            ),
+                        }
+                    )
+                if fruitless_streak >= FRUITLESS_STOP:
                     logger.info("agent_search_exhausted", iteration=iteration)
                     await self._force_final_answer(
                         instruction=(
