@@ -65,3 +65,28 @@ def test_the_last_steps_are_announced_in_the_prompt():
     assert "Осталось шагов" not in session._effective_system()
     session._steps_left = 3
     assert "Осталось шагов: 3" in session._effective_system()
+
+
+@pytest.mark.asyncio
+async def test_a_screenshot_does_not_crowd_the_session_out_of_history():
+    """E52: the base64 screenshot of desktop_start filled the trimmed result."""
+
+    async def send(event):
+        return None
+
+    session = agent_loop.AgentSession(send)
+    started = {
+        "status": "succeeded",
+        "data": {
+            "result": {
+                "ok": True,
+                "screenshot_b64": "iVBORw0KGgo" * 20000,
+                "session_id": "19094c69-2555-4bc5-8a7b-af5c0fdf2e37",
+                "title": "Прайс",
+            }
+        },
+    }
+    await session._tool_result_to_history(json.loads(json.dumps(started, sort_keys=True)), "c3")
+    content = session.messages[-1]["content"]
+    assert "19094c69-2555-4bc5-8a7b-af5c0fdf2e37" in content
+    assert "iVBORw0KGgo" not in content

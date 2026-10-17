@@ -128,6 +128,25 @@ _HEAVY_ITEM_FIELDS = {
 }
 
 
+def _without_inline_files(value: Any) -> Any:
+    """Base64 payloads (``screenshot_b64``, ``content_b64``) are bytes the model
+    cannot look at. Serialized with sorted keys, a desktop screenshot came
+    before ``session_id`` and the page text and filled the whole trimmed
+    result: the model invented a session id (E52 nickel, «session_not_found»)."""
+    if isinstance(value, dict):
+        return {
+            key: (
+                f"[{key}: {len(item)} симв. base64, модели не показывается]"
+                if key.endswith("_b64") and isinstance(item, str) and item
+                else _without_inline_files(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_without_inline_files(item) for item in value]
+    return value
+
+
 def _trim_tool_result(content: str) -> str:
     """Trim large tool result to fit within _MAX_TOOL_RESULT_CHARS.
 
@@ -4738,7 +4757,7 @@ class AgentSession:
         from app.ai.turn_vault import make_vault_envelope, should_vault, vault_store
 
         if not preserve_exact:
-            result = mark_untrusted(result)
+            result = mark_untrusted(_without_inline_files(result))
         content_json = json.dumps(result, ensure_ascii=False)
         if not preserve_exact and should_vault(content_json):
             try:

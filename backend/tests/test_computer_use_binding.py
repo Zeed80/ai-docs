@@ -75,3 +75,29 @@ def test_a_forged_fence_does_not_bind():
         _request({EFFECT_FENCE_HEADER: "forged.token"}),
     )
     assert shaped["work_order_id"] == "model-value"
+
+
+def test_the_session_named_as_session_id_becomes_the_target():
+    """E52: observe went out with the page URL as target and session_id aside."""
+    shaped = _bind_computer_use(
+        "desktop_observe",
+        "/api/computer-use/execute",
+        {
+            "work_order_id": str(uuid.uuid4()),
+            "target": "http://eval-sites/nikel/price.html",
+            "arguments": {"session_id": "19094c69-2555-4bc5-8a7b-af5c0fdf2e37"},
+        },
+        _request({}),
+    )
+    assert shaped["target"] == "19094c69-2555-4bc5-8a7b-af5c0fdf2e37"
+    assert shaped["body"] == {}
+
+
+def test_desktop_start_keeps_its_url():
+    shaped = _bind_computer_use(
+        "desktop_start",
+        "/api/computer-use/execute",
+        {"work_order_id": str(uuid.uuid4()), "target": "http://x/", "session_id": "s"},
+        _request({}),
+    )
+    assert shaped["target"] == "http://x/"

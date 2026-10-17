@@ -695,11 +695,20 @@ def _bind_computer_use(action: str, path_tpl: str, body: dict, request: Request)
         return shaped
     arguments = shaped.pop("arguments", None)
     extra = {k: shaped.pop(k) for k in list(shaped) if k not in _COMPUTER_USE_FIELDS}
-    return {
-        **shaped,
-        "action": action,
-        "body": {**extra, **(arguments if isinstance(arguments, dict) else {})},
-    }
+    merged = {**extra, **(arguments if isinstance(arguments, dict) else {})}
+    # desktop_start answers with ``session_id``; every later desktop action
+    # names the session in ``target``. The model passed it back as
+    # ``session_id`` with the page URL as target, and the browser answered
+    # session_not_found (E52 nickel).
+    session_id = merged.pop("session_id", None)
+    if (
+        action.startswith("desktop_")
+        and action != "desktop_start"
+        and isinstance(session_id, str)
+        and session_id.strip()
+    ):
+        shaped["target"] = session_id.strip()
+    return {**shaped, "action": action, "body": merged}
 
 
 def _relayed_handoff(capability_name: str, action: str, request: Request) -> dict[str, str]:

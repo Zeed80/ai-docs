@@ -1567,7 +1567,9 @@ async def attach_web_catalog(
 
         first_final_url = first_final_url or fetched.final_url
         text = (fetched.text or "").strip()
-        if len(text) < 200:
+        from app.tasks.drawing_analysis import catalog_text_unreadable
+
+        if catalog_text_unreadable(text):
             # Honest failure: a JS-only page or a blocked download must not look
             # like a successful attach with zero entries.
             sources.append(

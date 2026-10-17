@@ -1314,6 +1314,13 @@ text contains no products at all (a cover page, contacts, a foreword)."""
     return rows_out
 
 
+def catalog_text_unreadable(text: str) -> bool:
+    """Nothing a catalog row could be read from: no digit means no price, size
+    or article. Length was the old test — «< 200 chars» discarded a real price
+    page with two lines (E52 browser-nickel-price-notes) as a JS shell."""
+    return not re.search(r"\d", text or "")
+
+
 async def ingest_web_catalog_source(
     db: Any,
     supplier_id: str,
@@ -3128,7 +3135,7 @@ async def _ingest_web_catalog_sources_async(
             continue
 
         text = (fetched.text or "").strip()
-        if len(text) < 200:
+        if catalog_text_unreadable(text):
             record_source_status(
                 supplier_id,
                 url,

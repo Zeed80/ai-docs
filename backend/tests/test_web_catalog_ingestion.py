@@ -485,7 +485,7 @@ async def test_attach_web_catalog_by_supplier_name_creates_entries(
     with (
         patch(
             "app.api.web_search.fetch_page",
-            new=AsyncMock(return_value=_fetched("прайс-лист " * 60)),
+            new=AsyncMock(return_value=_fetched("прайс-лист: фреза 10 мм — 1 200 ₽. " * 10)),
         ),
         patch(
             "app.ai.ollama_client.generate_json",
@@ -672,7 +672,7 @@ async def test_attach_multiple_urls_reports_each_source(client: AsyncClient, par
             raise _HTTPException(status_code=502, detail={"message": "unreachable"})
         if "js-only" in payload.url:
             return _page(payload.url, text="Свяжитесь с нами")
-        return _page(payload.url, text="прайс-лист " * 60)
+        return _page(payload.url, text="прайс-лист: фреза 10 мм — 1 200 ₽. " * 10)
 
     with (
         patch("app.api.web_search.fetch_page", new=AsyncMock(side_effect=_fetch)),
@@ -709,7 +709,9 @@ async def test_attach_report_block_has_clickable_link_column(client: AsyncClient
         patch(
             "app.api.web_search.fetch_page",
             new=AsyncMock(
-                return_value=_page("https://mirstan.example/ok.pdf", text="прайс " * 100)
+                return_value=_page(
+                    "https://mirstan.example/ok.pdf", text="прайс: резец 16 мм — 850 ₽. " * 10
+                )
             ),
         ),
         patch("app.ai.ollama_client.generate_json", new=AsyncMock(return_value={"rows": [_row()]})),
@@ -1092,3 +1094,58 @@ async def test_a_counterparty_id_given_as_supplier_id_resolves(client, db_sessio
     assert resp.status_code == 200, resp.text
     assert resp.json()["resolved"] is True
     assert resp.json()["party_id"] == str(party.id)
+
+
+_SHORT_PRICE = (
+    "Прайс ООО «Эвал-Никель» Проволока НП2 Ø1 мм — 3 900 ₽/кг. Лента НП2 0,2 мм — 4 300 ₽/кг."
+)
+
+
+@pytest.mark.asyncio
+async def test_a_short_price_page_is_read_not_called_empty(client: AsyncClient, party):
+    """Two lines of a real price list are under 200 chars; the length test
+    reported them as a JS shell and never parsed them (E52 nickel)."""
+    assert len(_SHORT_PRICE) < 200
+    with (
+        patch("app.api.web_search.fetch_page", new=AsyncMock(return_value=_fetched(_SHORT_PRICE))),
+        patch("app.ai.ollama_client.generate_json", new=AsyncMock(return_value={"rows": [_row()]})),
+        patch("app.ai.model_resolver.get_reasoning_model", return_value=_FakeModel()),
+        patch("app.storage.upload_file"),
+    ):
+        resp = await client.post(
+            "/api/tool-catalog/attach-web-catalog",
+            json={
+                "supplier_name": "ООО Мир Станочника",
+                "url": "https://mirstan.example/price.html",
+                "wait": True,
+            },
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["entries_created"] == 1
+
+
+@pytest.mark.asyncio
+async def test_the_queued_path_reads_a_short_price_page_too(supplier):
+    from app.tasks import drawing_analysis
+
+    parsed = AsyncMock(
+        return_value={"entries_created": 2, "entries_conflicted": 0, "anomaly_ids": []}
+    )
+    with (
+        patch("app.api.web_search.fetch_page", new=AsyncMock(return_value=_fetched(_SHORT_PRICE))),
+        patch.object(drawing_analysis, "ingest_web_catalog_source", new=parsed),
+        patch("app.domain.catalog_ingest_status.record_source_status"),
+    ):
+        totals = await drawing_analysis._ingest_web_catalog_sources_async(
+            str(supplier.id), ["https://mirstan.example/price.html"], 0, 8
+        )
+    assert parsed.await_count == 1
+    assert totals["created"] == 2
+
+
+def test_a_page_without_a_single_number_has_nothing_to_read():
+    from app.tasks.drawing_analysis import catalog_text_unreadable
+
+    assert catalog_text_unreadable("Свяжитесь с нами")
+    assert catalog_text_unreadable("")
+    assert not catalog_text_unreadable(_SHORT_PRICE)
