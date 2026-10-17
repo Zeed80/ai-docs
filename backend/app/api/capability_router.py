@@ -6,6 +6,8 @@ Each capability accepts an `action` field plus context parameters.
 
 from __future__ import annotations
 
+import uuid
+
 import httpx
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -606,6 +608,8 @@ async def dispatch_capability(capability_name: str, request: Request) -> JSONRes
         )
 
     method, path_tpl, path_params = route
+    if capability_name == "tool_catalog" and "party_id" in path_params:
+        await _party_from_tool_supplier(body)
     _validate_capability_contract(capability_name, action, path_params, body)
     from app.ai.gateway_config import gateway_config
 
@@ -660,6 +664,28 @@ async def dispatch_capability(capability_name: str, request: Request) -> JSONRes
         extra_headers=_relayed_handoff(capability_name, action, request),
     )
     return JSONResponse(content=result)
+
+
+async def _party_from_tool_supplier(body: dict) -> None:
+    """resolve_supplier answers with both ids; list_entries and list_uploads
+    take the party. The model passed the catalog supplier as ``supplier_id``
+    and spent a step on «Missing required path parameters: ['party_id']» in
+    every E52 catalog run. Only fills a missing party_id, never replaces one."""
+    if body.get("party_id"):
+        return
+    filters = body.get("filters") if isinstance(body.get("filters"), dict) else {}
+    raw = body.get("supplier_id") or filters.get("supplier_id")
+    try:
+        supplier_id = uuid.UUID(str(raw))
+    except (TypeError, ValueError):
+        return
+    from app.db.models import ToolSupplier
+    from app.db.session import _get_session_factory
+
+    async with _get_session_factory()() as db:
+        supplier = await db.get(ToolSupplier, supplier_id)
+    if supplier is not None and supplier.main_supplier_id is not None:
+        body["party_id"] = str(supplier.main_supplier_id)
 
 
 _COMPUTER_USE_FIELDS = frozenset({"work_order_id", "step_id", "target", "arguments"})
