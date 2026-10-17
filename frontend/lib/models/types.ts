@@ -263,15 +263,8 @@ export interface StrataQuant {
   /** Имя варианта у setup Strata: «IQ3_S», «qwen36-UD-Q4_K_XL». */
   id: string;
   family: string;
-  /** Блок модели («flash-next», «qwen36») и её версия внутри блока. */
-  group: string;
-  version: string;
-  source: string;
   model: string;
   label: string;
-  bits: string;
-  badge: string;
-  about: string;
   download_gb: number;
   disk_need_gb: number;
   experts_gb: number;
@@ -290,17 +283,8 @@ export interface StrataQuant {
 export interface StrataFamily {
   family: string;
   title: string;
-  group: string;
-  version: string;
+  about: string;
   catalog_key: string;
-}
-
-export interface StrataModelGroup {
-  id: string;
-  title: string;
-  summary: string;
-  facts: string[];
-  versions: { id: string; title: string; about: string }[];
 }
 
 export interface StrataRamPlan {
@@ -386,7 +370,6 @@ export interface StrataStatus {
   installed_context: number | null;
   quants: StrataQuant[];
   families: StrataFamily[];
-  groups: StrataModelGroup[];
   served_catalog_key: string;
   ram_plan: StrataRamPlan;
   reserve_choices: number[];

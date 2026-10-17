@@ -303,6 +303,7 @@ def write_desired(
     ram: dict | None = None,
 ) -> None:
     vid = resolve_variant(family, model)
+    check_vram_fit(vid, context, vision=vision)
     lines = _env_lines(vid, context, vision, ram)
     if reinstall:
         # One-shot: the compose command drops this line before starting setup.
@@ -418,6 +419,53 @@ def ram_plan(
     return out
 
 
+# Qwen3.6's engine keeps fp32 K and V of its 10 attention layers + the MTP
+# block per context token (setup.py kv_bytes_per_token) and 0.07 GB of GDN
+# state per session — ~40x Flash-Next's 8-bit KV. Measured 2026-10-18 on the
+# RTX 3090 (UD-Q4_K_XL, images on): 13.71 GiB free for the sessions after the
+# weights, the image encoder and the buffers; 2 sessions at 256K wanted 22.1
+# GiB and the engine refused to start — the container exited while the GPU was
+# Strata's.
+OWN_KV_BYTES_PER_TOKEN = 11 * 2 * 256 * 2 * 4
+OWN_STATE_GB = 0.07
+OWN_TAKEN_GIB = {True: 10.3, False: 9.1}  # VRAM before the sessions, images on/off
+
+
+def recommended_context(vid: str, vram_gb: float | None = None) -> int | None:
+    """setup.py own_path_context: 32K up to 16 GB, 64K up to 24 GB, 128K above (own path only)."""
+    if FAMILIES[QUANTS[vid]["family"]]["kind"] != "own":
+        return None
+    vram = _vram_gb() if vram_gb is None else vram_gb
+    return 32768 if vram <= 16.5 else 65536 if vram <= 24.5 else 131072
+
+
+def check_vram_fit(
+    vid: str,
+    context: int,
+    *,
+    vision: bool = True,
+    parallel: int | None = None,
+    vram_gb: float | None = None,
+) -> None:
+    """Refuse an own-path setup whose sessions cannot fit the card (the engine would not start)."""
+    if FAMILIES[QUANTS[vid]["family"]]["kind"] != "own":
+        return
+    vram = _vram_gb() if vram_gb is None else vram_gb
+    n = read_runtime()["parallel"] if parallel is None else parallel
+    slot = context * OWN_KV_BYTES_PER_TOKEN / 2**30 + OWN_STATE_GB
+    free = vram - OWN_TAKEN_GIB[bool(vision)]
+    if n * slot > free:
+        fitting = [
+            c for c in CONTEXTS if n * (c * OWN_KV_BYTES_PER_TOKEN / 2**30 + OWN_STATE_GB) <= free
+        ]
+        hint = f"контекст не больше {max(fitting) // 1024}K" if fitting else "один запрос за раз"
+        raise StrataError(
+            f"{vid}: {n} × {slot:.1f} ГБ видеопамяти под кэш при контексте {context // 1024}K, "
+            f"а свободно ~{free:.1f} ГБ — Strata не запустится. Нужен {hint}"
+            + (" или один запрос за раз." if n > 1 and fitting else ".")
+        )
+
+
 def config_ram_mode(cfg: dict) -> str | None:
     """The expert placement a run config was set up with (None: unknown/none)."""
     args = list(cfg.get("args") or [])
@@ -504,6 +552,10 @@ def write_runtime(
     if parallel is not None:
         if parallel not in PARALLEL_CHOICES:
             raise StrataError("Параллельных запросов может быть 1 или 2")
+        desired = read_desired()
+        check_vram_fit(
+            desired["id"], desired["context"], vision=desired["vision"], parallel=parallel
+        )
         runtime["parallel"] = parallel
     if conversation_cache_mib is not None:
         if conversation_cache_mib not in CONVERSATION_CACHE_CHOICES:
@@ -878,7 +930,10 @@ async def status() -> dict:
     desired = read_desired()
     h = await health() if state == "running" and not desired["install_only"] else None
     logs: list[str] = []
-    if state == "running" and h is None:
+    # Running but not answering yet (setup, load) — or stopped while the GPU is
+    # Strata's: the tail says why (live: "not enough VRAM for 2 slots").
+    crashed = state not in (None, "running") and gpu_runtime.current_owner() == gpu_runtime.STRATA
+    if (state == "running" and h is None) or crashed:
         try:
             logs = await log_tail(40)
         except Exception:  # noqa: BLE001
@@ -1160,11 +1215,15 @@ async def install_strata(
         raise StrataError(
             f"Strata запущена с {vid} и скачивает её сама. Дождитесь, пока она загрузится."
         )
-    env_file = write_install_env(
-        vid,
-        context or desired["context"],
-        desired["vision"] if vision is None else vision,
-    )
+    context = context or desired["context"]
+    vision = desired["vision"] if vision is None else vision
+    rec = recommended_context(vid)
+    if rec and context > rec:
+        # The panel offers the loaded model's context (Flash-Next: up to 256K);
+        # Qwen3.6's cache is ~40x heavier per token — take setup's own pick.
+        context = rec
+    check_vram_fit(vid, context, vision=vision)
+    env_file = write_install_env(vid, context, vision)
     await strata_lifecycle.run_installer(vid, env_file)
     logger.info("strata_install_started", model=vid)
     return vid

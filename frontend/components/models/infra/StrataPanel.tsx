@@ -106,6 +106,19 @@ export function StrataPanel() {
     void load();
   }, [load]);
 
+  // Поля параметров идут за сервером: если настройки сменились не отсюда
+  // (загрузка другой модели, исправление на сервере), старое значение в
+  // форме не должно оставаться готовым к «Применить». Живой случай: форма
+  // держала 256K, пока сервер уже перевёл Qwen3.6 на 64K, и одно нажатие
+  // вернуло настройку, с которой Strata не запускается.
+  const serverContext = st?.desired.context;
+  const serverVision = st?.desired.vision;
+  const serverModel = st?.desired.id;
+  useEffect(() => {
+    if (serverContext === undefined || serverVision === undefined) return;
+    setParams({ context: serverContext, vision: serverVision });
+  }, [serverModel, serverContext, serverVision]);
+
   // Пока идёт установка/загрузка/сборка — опрашиваем часто, иначе редко.
   const active =
     st?.phase === "installing" ||
@@ -852,8 +865,6 @@ function StrataModels({
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [loadPlan, setLoadPlan] = useState<StrataLoadPlan | null>(null);
-  // Какая версия модели показана в блоке (по умолчанию — загруженная).
-  const [versionOf, setVersionOf] = useState<Record<string, string>>({});
   const installer = st.installer;
   const downloading =
     installer?.stage === "downloading" ? installer.variant : null;
@@ -924,36 +935,30 @@ function StrataModels({
 
   const running = st.container === "running";
 
-  const QuantRow = ({ q }: { q: StrataQuant }) => {
+  const renderRow = (q: StrataQuant) => {
     const selected = q.id === st.desired.id;
     const isDownloading = downloading === q.id;
     const tooOld = olderThan(st.server?.current?.version, q.min_version);
     return (
       <div
+        key={q.id}
         className={`flex flex-wrap items-start gap-2 rounded border p-2 text-xs min-w-0 ${
           selected ? "border-blue-600 bg-blue-950/30" : "border-slate-700"
         }`}
       >
-        <span className="flex-1 min-w-0 space-y-0.5">
-          <span className="block text-slate-100">
-            <span className="font-medium font-mono">{q.label}</span>
-            <span className="ml-2 text-slate-400">{q.bits}</span>
-            {q.badge && (
-              <span className="ml-2 px-1.5 rounded bg-slate-700 text-slate-200">
-                {q.badge}
-              </span>
-            )}
+        <span className="flex-1 min-w-0">
+          <span className="block text-slate-100 font-medium">
+            {q.label}
             {selected && (
-              <span className="ml-2 text-blue-300">
+              <span className="ml-2 text-blue-300 font-normal">
                 {running ? "загружена" : "выбрана"}
               </span>
             )}
             {q.installed && !selected && (
-              <span className="ml-2 text-emerald-300">скачана</span>
+              <span className="ml-2 text-emerald-300 font-normal">скачана</span>
             )}
           </span>
-          <span className="block text-slate-300">{q.about}</span>
-          <span className="block text-slate-500">
+          <span className="block text-slate-400">
             {isDownloading
               ? `скачивается: ${installer?.size_on_disk_gb ?? 0} из ~${Math.round(q.disk_need_gb)} ГБ`
               : q.installed
@@ -961,7 +966,6 @@ function StrataModels({
                 : `скачать ~${q.download_gb} ГБ, займёт ~${Math.round(q.disk_need_gb)} ГБ`}
             {" · "}ОЗУ ~{q.ram_gb} ГБ
             {RAM_MODE[q.ram_mode] && ` · ${RAM_MODE[q.ram_mode]}`}
-            {q.family === "unsloth" && ` · файлы ${q.source}`}
           </span>
           {tooOld && (
             <span className="block text-amber-300">
@@ -1101,87 +1105,19 @@ function StrataModels({
         </div>
       )}
 
-      {st.groups.map((group) => {
-        const items = st.quants.filter((q) => q.group === group.id);
+      {st.families.map((fam) => {
+        const items = st.quants.filter((q) => q.family === fam.family);
         if (!items.length) return null;
-        const loaded = items.find((q) => q.id === st.desired.id);
-        const version =
-          versionOf[group.id] ?? loaded?.version ?? group.versions[0].id;
-        const ver =
-          group.versions.find((v) => v.id === version) ?? group.versions[0];
-        const sizes = items.filter((q) => q.version === ver.id);
         return (
-          <section
-            key={group.id}
-            aria-label={group.title}
-            className="space-y-2 rounded border border-slate-700 p-3"
-          >
-            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-              <h3 className="text-sm font-medium text-slate-100">
-                {group.title}
-              </h3>
-              {loaded && (
-                <span className="text-xs text-blue-300">
-                  {running ? "загружена" : "выбрана"}:{" "}
-                  {loaded.version !== "original"
-                    ? `${group.versions.find((v) => v.id === loaded.version)?.title} `
-                    : ""}
-                  {loaded.model}
-                </span>
-              )}
+          <div key={fam.family} className="space-y-1">
+            <div className="text-xs text-slate-200">
+              <span className="font-medium">{fam.title}</span>{" "}
+              <span className="text-slate-500">— {fam.about}</span>
             </div>
-            <div className="text-xs text-slate-300">{group.summary}</div>
-            <ul className="text-xs text-slate-400 list-disc pl-5 space-y-0.5">
-              {group.facts.map((f) => (
-                <li key={f}>{f}</li>
-              ))}
-            </ul>
-            {group.versions.length > 1 && (
-              <div
-                role="radiogroup"
-                aria-label={`Версия ${group.title}`}
-                className="inline-flex flex-wrap rounded border border-slate-600 overflow-hidden"
-              >
-                {group.versions.map((v) => {
-                  const has = items.some(
-                    (q) => q.version === v.id && q.installed,
-                  );
-                  return (
-                    <button
-                      key={v.id}
-                      type="button"
-                      role="radio"
-                      aria-checked={v.id === ver.id}
-                      onClick={() =>
-                        setVersionOf({ ...versionOf, [group.id]: v.id })
-                      }
-                      className={`px-3 py-1 text-xs font-medium transition-colors ${
-                        v.id === ver.id
-                          ? "bg-blue-600 text-white"
-                          : "bg-slate-800 text-slate-300 hover:bg-slate-700"
-                      }`}
-                    >
-                      {v.title}
-                      {has && (
-                        <span
-                          className="ml-1 text-emerald-300"
-                          aria-label="есть скачанные"
-                        >
-                          ●
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-            <div className="text-xs text-slate-400">{ver.about}</div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {sizes.map((q) => (
-                <QuantRow key={q.id} q={q} />
-              ))}
+              {items.map((q) => renderRow(q))}
             </div>
-          </section>
+          </div>
         );
       })}
       {installer?.stage === "downloading" && installer.log_tail.length > 0 && (

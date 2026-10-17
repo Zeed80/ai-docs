@@ -386,3 +386,20 @@ def test_version_of_an_unlabelled_image_comes_from_its_build_json(monkeypatch):
     )
     assert out["version"] == "0.1.43.1" and out["commit"] == "a0116b2"
     assert seen["/containers/c1/archive"] == {"path": "/opt/strata/engine/BUILD.json"}
+
+
+def test_qwen36_sessions_must_fit_the_card(data):
+    """Live 2026-10-18: Qwen3.6 set up at 256K with 2 parallel sessions wanted
+    2 × 11 GiB of VRAM, 13.7 free — the engine refused, the container exited."""
+    vid = "qwen36-UD-Q4_K_XL"
+    with pytest.raises(strata_manager.StrataError, match="контекст не больше 128K"):
+        strata_manager.check_vram_fit(vid, 262144, parallel=2, vram_gb=24.0)
+    strata_manager.check_vram_fit(vid, 65536, parallel=2, vram_gb=24.0)
+    strata_manager.check_vram_fit(vid, 262144, parallel=1, vram_gb=24.0)
+    # Flash-Next's 8-bit KV is not this module's concern.
+    strata_manager.check_vram_fit("IQ3_XXS", 262144, parallel=2, vram_gb=24.0)
+    assert strata_manager.recommended_context(vid, 24.0) == 65536
+    assert strata_manager.recommended_context("IQ3_XXS", 24.0) is None
+    # The setting that would break the loaded model is refused before it is saved.
+    with pytest.raises(strata_manager.StrataError):
+        strata_manager.write_desired(model=vid, context=262144, vision=True, reinstall=False)
