@@ -437,7 +437,9 @@ class AIRouter:
                     from app.ai import gpu_runtime
 
                     gpu_runtime.check_call(
-                        model.provider.value, getattr(resolved, "base_url", None)
+                        model.provider.value,
+                        getattr(resolved, "base_url", None),
+                        model.provider_model,
                     )
             except (KeyError, ValueError, RuntimeError) as exc:
                 # RuntimeError сюда добавлен по живому разбору: «модель не

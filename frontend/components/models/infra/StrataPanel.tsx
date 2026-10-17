@@ -3,12 +3,15 @@
 /**
  * Видеокарта: Ollama ⇄ Strata.
  *
- * Strata держит одну большую модель (Qwen3.8-Flash-Next, 125B MoE) на GPU и в
- * оперативной памяти и занимает карту целиком, поэтому рядом с GPU-Ollama не
- * работает: оператор переключает видеокарту между ними. Переключение — явное
- * решение, и оно может переназначить слоты; что именно переедет, показывается
- * до нажатия. Здесь же выбирается квантование: новое скачивается при первом
- * запуске Strata (66–84 ГБ).
+ * Strata держит одну модель (Qwen3.8-Flash-Next 125B, Qwen3.6-35B и др.) на
+ * GPU и в оперативной памяти и занимает карту целиком, поэтому рядом с
+ * GPU-Ollama не работает: оператор переключает видеокарту между ними.
+ * Переключение — явное решение, и оно может переназначить слоты; что именно
+ * переедет, показывается до нажатия.
+ *
+ * Здесь же: установка, обновление и удаление самой Strata (сборка образа
+ * нового выпуска, пересоздание контейнера), скачивание моделей рядом с
+ * работающей Strata и быстрая смена загруженной модели, запас ОЗУ системе.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -20,18 +23,30 @@ import {
   select,
 } from "@/components/ui/primitives/tokens";
 import {
-  strataConfig,
   strataAccess,
+  strataCheckUpdate,
+  strataConfig,
   strataDeleteQuant,
+  strataDismissJob,
   strataInstall,
+  strataInstallServer,
+  strataLoad,
+  strataLoadPlan,
+  strataRetryApply,
   strataRuntime,
   strataSlotPlan,
   strataStatus,
+  strataStopInstall,
   strataSwitch,
+  strataUninstall,
+  strataUpdate,
 } from "@/lib/models/api";
 import type {
   StrataAccess,
+  StrataLoadPlan,
   StrataPhase,
+  StrataQuant,
+  StrataRamMode,
   StrataSlotPlanItem,
   StrataStatus,
 } from "@/lib/models/types";
@@ -41,7 +56,7 @@ const btnSecondary = `${btn} bg-slate-700 hover:bg-slate-600 text-slate-200 disa
 
 const PHASE: Record<StrataPhase, { text: string; cls: string }> = {
   not_created: {
-    text: "контейнер не создан",
+    text: "не установлена",
     cls: "bg-slate-700 text-slate-300",
   },
   stopped: { text: "выключена", cls: "bg-slate-700 text-slate-300" },
@@ -68,8 +83,8 @@ export function StrataPanel() {
   const [plan, setPlan] = useState<StrataSlotPlanItem[] | null>(null);
   const [moveSlots, setMoveSlots] = useState<Set<string>>(new Set());
   const [restore, setRestore] = useState(true);
-  const [draft, setDraft] = useState<{
-    model: string;
+  // Контекст и картинки: для выбранной модели (Применить) и для новых скачиваний.
+  const [params, setParams] = useState<{
     context: number;
     vision: boolean;
   } | null>(null);
@@ -79,7 +94,9 @@ export function StrataPanel() {
       const s = await strataStatus();
       setSt(s);
       setLoadError(null);
-      setDraft((d) => d ?? { ...s.desired });
+      setParams(
+        (d) => d ?? { context: s.desired.context, vision: s.desired.vision },
+      );
     } catch (e) {
       setLoadError(String((e as Error).message ?? e));
     }
@@ -89,8 +106,13 @@ export function StrataPanel() {
     void load();
   }, [load]);
 
-  // Пока идёт установка/загрузка — опрашиваем часто, иначе редко.
-  const active = st?.phase === "installing" || st?.phase === "loading";
+  // Пока идёт установка/загрузка/сборка — опрашиваем часто, иначе редко.
+  const active =
+    st?.phase === "installing" ||
+    st?.phase === "loading" ||
+    st?.installer?.stage === "downloading" ||
+    st?.server?.job?.stage === "building" ||
+    st?.server?.job?.stage === "built";
   useEffect(() => {
     const id = setInterval(() => void load(), active ? 5000 : 20000);
     return () => clearInterval(id);
@@ -144,23 +166,8 @@ export function StrataPanel() {
     }
   };
 
-  const install = async () => {
-    setBusy(true);
-    try {
-      const r = await strataInstall();
-      setSt(r.status);
-      toast.ok(
-        "Скачивание Strata началось",
-        "Видеокарта остаётся у Ollama. Прогресс — в журнале ниже; прерванная загрузка продолжится.",
-      );
-    } catch (e) {
-      toast.error("Скачивание не запущено", String((e as Error).message ?? e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const stopInstall = async () => {
+  // «Скачивание заранее» прежней схемы шло в самом контейнере Strata.
+  const stopLegacyInstall = async () => {
     setBusy(true);
     try {
       const r = await strataSwitch({ target: "ollama", restore_slots: false });
@@ -176,17 +183,20 @@ export function StrataPanel() {
     }
   };
 
-  const applyConfig = async () => {
-    if (!draft) return;
+  const applyParams = async () => {
+    if (!params || !st) return;
     setBusy(true);
     try {
-      const r = await strataConfig(draft);
+      const r = await strataConfig({ model: st.desired.id, ...params });
       setSt(r.status);
-      setDraft({ ...r.status.desired });
+      setParams({
+        context: r.status.desired.context,
+        vision: r.status.desired.vision,
+      });
       toast.ok(
         "Настройки Strata сохранены",
         r.restarted
-          ? "Strata перезапускается"
+          ? "Strata перенастраивается и перезапускается (без новой загрузки файлов)"
           : "Применятся при следующем включении",
       );
     } catch (e) {
@@ -217,14 +227,14 @@ export function StrataPanel() {
   const owner = st.owner ?? "ollama";
   const installOnly = st.desired.install_only && st.container === "running";
   const phase = PHASE[st.phase];
-  const desiredQuant = st.quants.find((q) => q.model === draft?.model);
-  const draftChanged =
-    !!draft &&
-    (draft.model !== st.desired.model ||
-      draft.context !== st.desired.context ||
-      draft.vision !== st.desired.vision);
-  const switchingTo = st.quants.find((q) => q.model === st.desired.model);
-  const needsDownload = !!switchingTo && !switchingTo.installed;
+  const current = st.quants.find((q) => q.id === st.desired.id);
+  const recorded = current?.installed_settings;
+  const paramsChanged =
+    !!params &&
+    (params.context !== (recorded?.context ?? st.desired.context) ||
+      params.vision !== (recorded?.vision ?? st.desired.vision));
+  const needsDownload = !!current && !current.installed;
+  const notCreated = st.phase === "not_created";
 
   return (
     <div className={card}>
@@ -237,6 +247,8 @@ export function StrataPanel() {
         </span>
       </div>
       <div className="p-4 space-y-4">
+        <StrataServerBlock st={st} onStatus={setSt} />
+
         {/* Переключатель */}
         <div className="flex flex-wrap items-center gap-3">
           <div
@@ -250,7 +262,7 @@ export function StrataPanel() {
                 type="button"
                 role="radio"
                 aria-checked={owner === t}
-                disabled={busy || st.phase === "not_created" || installOnly}
+                disabled={busy || notCreated || installOnly}
                 onClick={() => owner !== t && void openConfirm(t)}
                 className={`px-4 py-1.5 text-sm font-medium transition-colors ${
                   owner === t
@@ -269,16 +281,6 @@ export function StrataPanel() {
           </span>
         </div>
 
-        {st.phase === "not_created" && (
-          <div className="text-xs text-amber-200 bg-amber-950/40 border border-amber-900 rounded p-3">
-            Контейнер Strata ещё не создан. Один раз выполните на сервере:
-            <code className="block mt-1 break-all bg-slate-900 px-2 py-1 rounded text-slate-200">
-              docker compose -f infra/docker-compose.yml -f
-              infra/docker-compose.prod.yml --env-file infra/.env --profile
-              strata up -d strata
-            </code>
-          </div>
-        )}
         {st.down_while_owner && (
           <div className="text-xs text-red-200 bg-red-950/40 border border-red-900 rounded p-3">
             Видеокарта отдана Strata, но её контейнер не работает (сбой или
@@ -289,15 +291,15 @@ export function StrataPanel() {
         {installOnly && (
           <div className="flex flex-wrap items-center gap-3 text-xs text-amber-200 bg-amber-950/40 border border-amber-900 rounded p-3">
             <span className="min-w-0">
-              Скачивается {st.desired.model}
-              {switchingTo?.size_on_disk_gb != null &&
-                ` — ${switchingTo.size_on_disk_gb} из ~${switchingTo.disk_need_gb} ГБ`}
+              Скачивается {st.desired.id}
+              {current?.size_on_disk_gb != null &&
+                ` — ${current.size_on_disk_gb} из ~${current.disk_need_gb} ГБ`}
               . Видеокарта у Ollama, работа не прерывается.
             </span>
             <button
               className={btnSecondary}
               disabled={busy}
-              onClick={() => void stopInstall()}
+              onClick={() => void stopLegacyInstall()}
             >
               Остановить скачивание
             </button>
@@ -313,8 +315,8 @@ export function StrataPanel() {
         {confirm === "strata" && (
           <div className="rounded border border-blue-800 bg-blue-950/30 p-3 space-y-3">
             <div className="text-sm text-slate-100">
-              Отдать видеокарту Strata ({st.desired.model}, контекст{" "}
-              {ctxLabel(st.desired.context)}
+              Отдать видеокарту Strata ({familyTitle(st, st.desired.family)}{" "}
+              {st.desired.model}, контекст {ctxLabel(st.desired.context)}
               {st.desired.vision ? ", с картинками" : ""})
             </div>
             <ul className="text-xs text-slate-300 list-disc pl-5 space-y-0.5">
@@ -330,11 +332,12 @@ export function StrataPanel() {
                 Strata отвечает на один запрос за раз: слоты, отданные ей,
                 встают в общую очередь.
               </li>
-              {needsDownload && switchingTo && (
+              {needsDownload && current && (
                 <li className="text-amber-200">
-                  {switchingTo.model} ещё не скачана: первый запуск скачает ~
-                  {Math.round(switchingTo.disk_need_gb)} ГБ места (свободно{" "}
-                  {st.disk_free_gb?.toFixed(0) ?? "?"} ГБ).
+                  {current.id} ещё не скачана: первый запуск скачает её и займёт
+                  ~{Math.round(current.disk_need_gb)} ГБ (свободно{" "}
+                  {st.disk_free_gb?.toFixed(0) ?? "?"} ГБ). Быстрее — скачать
+                  заранее кнопкой «Скачать» ниже.
                 </li>
               )}
             </ul>
@@ -455,71 +458,25 @@ export function StrataPanel() {
           </pre>
         )}
 
-        {/* Квантование и параметры */}
-        {draft && (
-          <div className="space-y-2">
+        {/* Модели: семейства и размеры */}
+        {!notCreated && (
+          <StrataModels st={st} params={params} onStatus={setSt} />
+        )}
+
+        {/* Параметры выбранной модели (и новых скачиваний) */}
+        {params && !notCreated && (
+          <div className="space-y-2 border-t border-slate-800 pt-3">
             <div className="text-xs font-medium text-slate-300">
-              Квантование
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {st.quants.map((q) => (
-                <div
-                  key={q.model}
-                  className={`flex flex-wrap items-start gap-2 rounded border p-2 text-xs min-w-0 ${
-                    draft.model === q.model
-                      ? "border-blue-600 bg-blue-950/30"
-                      : "border-slate-700 hover:border-slate-500"
-                  }`}
-                >
-                  <label className="flex flex-1 items-start gap-2 cursor-pointer min-w-0">
-                    <input
-                      type="radio"
-                      name="strata-quant"
-                      className="mt-0.5"
-                      checked={draft.model === q.model}
-                      onChange={() => setDraft({ ...draft, model: q.model })}
-                    />
-                    <span className="min-w-0">
-                      <span className="block text-slate-100 font-medium">
-                        {q.label}
-                        {q.installed && (
-                          <span className="ml-2 text-emerald-300 font-normal">
-                            скачана
-                          </span>
-                        )}
-                        {st.desired.model === q.model && (
-                          <span className="ml-2 text-blue-300 font-normal">
-                            выбрана
-                          </span>
-                        )}
-                      </span>
-                      <span className="block text-slate-400">
-                        {q.installed
-                          ? `на диске ${q.size_on_disk_gb ?? "?"} ГБ`
-                          : `скачать ~${q.download_gb} ГБ, займёт ~${Math.round(q.disk_need_gb)} ГБ`}{" "}
-                        · эксперты {q.experts_gb} ГБ
-                        {q.low_ram_mode && " · режим нехватки ОЗУ (медленнее)"}
-                      </span>
-                    </span>
-                  </label>
-                  {q.installed && st.desired.model !== q.model && (
-                    <QuantDelete
-                      model={q.model}
-                      sizeGb={q.size_on_disk_gb}
-                      onDeleted={(next) => setSt(next)}
-                    />
-                  )}
-                </div>
-              ))}
+              Параметры модели
             </div>
             <div className="flex flex-wrap items-center gap-3">
               <label className="flex items-center gap-2 text-xs text-slate-300">
                 Контекст
                 <select
                   className={`${select} !w-auto`}
-                  value={draft.context}
+                  value={params.context}
                   onChange={(e) =>
-                    setDraft({ ...draft, context: Number(e.target.value) })
+                    setParams({ ...params, context: Number(e.target.value) })
                   }
                 >
                   {st.contexts.map((c) => (
@@ -532,56 +489,786 @@ export function StrataPanel() {
               <label className="flex items-center gap-2 text-xs text-slate-300">
                 <input
                   type="checkbox"
-                  checked={draft.vision}
+                  checked={params.vision}
                   onChange={(e) =>
-                    setDraft({ ...draft, vision: e.target.checked })
+                    setParams({ ...params, vision: e.target.checked })
                   }
                 />
                 Картинки (кодировщик изображений, ~1,2 ГБ видеопамяти)
               </label>
               <button
                 className={btnPrimary}
-                disabled={busy || !draftChanged}
-                onClick={() => void applyConfig()}
+                disabled={busy || !paramsChanged}
+                onClick={() => void applyParams()}
               >
-                Применить
+                Применить к {st.desired.id}
               </button>
-              {!st.installed.includes(st.desired.model) &&
-                !draftChanged &&
-                !installOnly && (
-                  <button
-                    className={btnSecondary}
-                    disabled={
-                      busy ||
-                      st.container === "running" ||
-                      st.phase === "not_created"
-                    }
-                    title={
-                      st.container === "running"
-                        ? "Strata запущена: верните видеокарту Ollama, затем скачивайте"
-                        : "Скачать, не отдавая видеокарту"
-                    }
-                    onClick={() => void install()}
-                  >
-                    Скачать {st.desired.model} заранее
-                  </button>
-                )}
             </div>
             <div className="text-xs text-slate-500">
-              Применяется перезапуском Strata (если она включена). Квантование,
-              которого ещё нет на диске, скачивается при запуске
-              {desiredQuant && !desiredQuant.installed
-                ? ` (займёт ~${Math.round(desiredQuant.disk_need_gb)} ГБ)`
-                : ""}
-              ; уже скачанные переключаются без загрузки. ОЗУ сервера:{" "}
+              Контекст и картинки записываются в настройку модели при её
+              установке: смена — это перенастройка Strata (несколько минут, без
+              новой загрузки файлов). Новые скачивания берут эти же значения;
+              уже скачанные модели загружаются со своими. ОЗУ сервера:{" "}
               {st.ram_total_gb?.toFixed(0) ?? "?"} ГБ, свободно на диске{" "}
               {st.disk_free_gb?.toFixed(0) ?? "?"} ГБ.
             </div>
           </div>
         )}
 
-        <StrataResidency st={st} onStatus={setSt} />
-        <StrataAccessBlock externalUrl={st.external_url} />
+        {!notCreated && <StrataResidency st={st} onStatus={setSt} />}
+        {!notCreated && <StrataMemory st={st} onStatus={setSt} />}
+        {!notCreated && <StrataAccessBlock externalUrl={st.external_url} />}
+      </div>
+    </div>
+  );
+}
+
+const familyTitle = (st: StrataStatus, family: string) =>
+  st.families.find((f) => f.family === family)?.title ?? family;
+
+const errText = (e: unknown) => String((e as Error).message ?? e);
+
+/** «0.1.43.1» < «0.1.45»; неизвестная версия ничего не запрещает. */
+const olderThan = (version: string | null | undefined, need: string | null) => {
+  if (!version || !need) return false;
+  const a = version.split(".").map(Number);
+  const b = need.split(".").map(Number);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const d = (a[i] ?? 0) - (b[i] ?? 0);
+    if (d !== 0) return d < 0;
+  }
+  return false;
+};
+
+const RAM_MODE: Record<StrataRamMode, string> = {
+  auto: "",
+  off: "все эксперты в ОЗУ",
+  resident: "режим нехватки ОЗУ: часть экспертов на видеокарте (медленнее)",
+  mmap: "эксперты читаются через файловый кэш (заметно медленнее)",
+  budget: "часть экспертов читается с SSD",
+  own: "почти целиком на видеокарте",
+};
+
+/** Версия Strata, обновление до нового выпуска, установка с нуля и удаление. */
+function StrataServerBlock({
+  st,
+  onStatus,
+}: {
+  st: StrataStatus;
+  onStatus: (s: StrataStatus) => void;
+}) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const [notes, setNotes] = useState(false);
+  const [uninstall, setUninstall] = useState(false);
+  const [wipe, setWipe] = useState(false);
+  const server = st.server ?? {
+    current: null,
+    latest: {},
+    update_available: false,
+    job: null,
+  };
+  const job = server.job;
+  const latest = server.latest ?? {};
+  const notCreated = st.phase === "not_created";
+  const modelsGb = st.quants
+    .filter((q) => q.installed)
+    .reduce((sum, q) => sum + (q.size_on_disk_gb ?? 0), 0);
+
+  const run = async (
+    fn: () => Promise<{ status: StrataStatus }>,
+    ok: [string, string?],
+    fail: string,
+  ) => {
+    setBusy(true);
+    try {
+      const r = await fn();
+      onStatus(r.status);
+      toast.ok(...ok);
+      return true;
+    } catch (e) {
+      toast.error(fail, errText(e));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const check = async () => {
+    setBusy(true);
+    try {
+      const info = await strataCheckUpdate();
+      onStatus({ ...st, server: info });
+      if (info.latest?.error)
+        toast.error("Проверка не удалась", info.latest.error);
+      else
+        toast.ok(
+          info.update_available
+            ? `Доступна Strata ${info.latest.version}`
+            : "Установлена последняя версия",
+        );
+    } catch (e) {
+      toast.error("Проверка не удалась", errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      {notCreated && !job && (
+        <div className="space-y-2 text-xs text-amber-200 bg-amber-950/40 border border-amber-900 rounded p-3">
+          <div className="text-sm text-slate-100">Strata не установлена</div>
+          <div>
+            Установка соберёт образ последнего выпуска
+            {latest.version ? ` (${latest.version})` : ""} под эту видеокарту —
+            20–40 минут, работа не прерывается — и создаст контейнер. Затем
+            скачайте модель в списке ниже и отдайте Strata видеокарту.
+          </div>
+          <button
+            className={btnPrimary}
+            disabled={busy || !!st.docker_error}
+            onClick={() =>
+              void run(
+                strataInstallServer,
+                ["Установка Strata началась", "Сборка образа идёт в фоне"],
+                "Установка не запущена",
+              )
+            }
+          >
+            Установить Strata
+          </button>
+        </div>
+      )}
+
+      {!notCreated && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-slate-300">
+          <span>
+            Strata{" "}
+            <span className="font-mono">
+              {server.current?.version ?? "версия неизвестна"}
+            </span>
+          </span>
+          {server.update_available && !job ? (
+            <>
+              <span className="px-2 py-0.5 rounded bg-emerald-900/60 text-emerald-200">
+                доступна {latest.version}
+              </span>
+              <button
+                className={btnPrimary}
+                disabled={busy}
+                title="Соберёт образ нового выпуска (20–40 мин, в фоне) и перезапустит Strata на нём; скачанные модели остаются"
+                aria-label={`Обновить Strata до ${latest.version}`}
+                onClick={() =>
+                  void run(
+                    strataUpdate,
+                    [
+                      `Обновление до ${latest.version} началось`,
+                      "Образ собирается в фоне; Strata перезапустится, когда он будет готов",
+                    ],
+                    "Обновление не запущено",
+                  )
+                }
+              >
+                Обновить
+              </button>
+              {latest.notes && (
+                <button
+                  type="button"
+                  className="text-blue-300 hover:text-blue-200"
+                  aria-expanded={notes}
+                  onClick={() => setNotes(!notes)}
+                >
+                  {notes ? "Скрыть, что нового" : "Что нового"}
+                </button>
+              )}
+            </>
+          ) : (
+            !job && (
+              <>
+                <span className="text-slate-500">
+                  {latest.error
+                    ? "не удалось проверить обновления"
+                    : latest.version
+                      ? "последняя версия"
+                      : ""}
+                </span>
+                <button
+                  type="button"
+                  className="text-blue-300 hover:text-blue-200 disabled:opacity-50"
+                  disabled={busy}
+                  onClick={() => void check()}
+                >
+                  Проверить обновления
+                </button>
+              </>
+            )
+          )}
+          <button
+            type="button"
+            className="ml-auto text-red-400 hover:text-red-300"
+            onClick={() => setUninstall(!uninstall)}
+          >
+            Удалить Strata…
+          </button>
+        </div>
+      )}
+      {notes && latest.notes && (
+        <pre className="text-[11px] leading-snug bg-slate-950 border border-slate-800 rounded p-2 max-h-56 overflow-auto whitespace-pre-wrap break-words text-slate-300">
+          {latest.notes}
+        </pre>
+      )}
+
+      {job && (
+        <div className="space-y-2 rounded border border-slate-700 p-3 text-xs">
+          <div className="text-slate-200">
+            {job.stage === "building" &&
+              `Собирается образ Strata ${job.version ?? ""} — ${
+                job.then === "create" ? "установка" : "обновление"
+              }. Работа не прерывается; по готовности Strata ${
+                job.then === "create"
+                  ? "будет создана"
+                  : "перезапустится на новой версии"
+              }.`}
+            {job.stage === "built" &&
+              "Образ собран, Strata переводится на него…"}
+            {job.stage === "failed" &&
+              `Сборка ${job.version ?? ""} не удалась (код ${job.exit_code}). Strata работает на прежней версии.`}
+            {job.stage === "apply_failed" &&
+              `Образ ${job.version ?? ""} собран, но перевести Strata на него не удалось: ${job.error}`}
+          </div>
+          {job.log_tail.length > 0 && (
+            <pre className="text-[11px] leading-snug font-mono bg-slate-950 border border-slate-800 rounded p-2 max-h-40 overflow-auto whitespace-pre-wrap break-all text-slate-400">
+              {job.log_tail.join("\n")}
+            </pre>
+          )}
+          <div className="flex flex-wrap gap-2">
+            {job.stage === "apply_failed" && (
+              <button
+                className={btnPrimary}
+                disabled={busy}
+                onClick={() =>
+                  void run(strataRetryApply, ["Повторяю"], "Не удалось")
+                }
+              >
+                Применить ещё раз
+              </button>
+            )}
+            {job.stage === "failed" && (
+              <button
+                className={btnPrimary}
+                disabled={busy}
+                onClick={() =>
+                  void run(
+                    notCreated ? strataInstallServer : strataUpdate,
+                    ["Сборка запущена заново"],
+                    "Не удалось запустить",
+                  )
+                }
+              >
+                Собрать заново
+              </button>
+            )}
+            <button
+              className={btnSecondary}
+              disabled={busy}
+              onClick={() =>
+                void run(
+                  strataDismissJob,
+                  [job.stage === "building" ? "Сборка остановлена" : "Скрыто"],
+                  "Не удалось",
+                )
+              }
+            >
+              {job.stage === "building" ? "Остановить сборку" : "Скрыть"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {uninstall && (
+        <div className="space-y-2 rounded border border-red-900 bg-red-950/30 p-3 text-xs text-red-100">
+          <div className="text-sm">Удалить Strata с сервера?</div>
+          <div>
+            Контейнер и образы Strata будут удалены; если видеокарта у Strata,
+            она вернётся Ollama вместе с перенесёнными слотами.
+          </div>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={wipe}
+              onChange={(e) => setWipe(e.target.checked)}
+            />
+            Удалить и скачанные модели (~{Math.round(modelsGb)} ГБ) — иначе
+            повторная установка найдёт их и не будет качать заново
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <button
+              className={`${btn} bg-red-700 hover:bg-red-600 text-white disabled:opacity-50`}
+              disabled={busy}
+              onClick={async () => {
+                const ok = await run(
+                  () => strataUninstall(wipe),
+                  ["Strata удалена"],
+                  "Не удалось удалить",
+                );
+                if (ok) setUninstall(false);
+              }}
+            >
+              {busy
+                ? "Удаляю…"
+                : wipe
+                  ? "Удалить вместе с моделями"
+                  : "Удалить Strata"}
+            </button>
+            <button
+              className={btnSecondary}
+              disabled={busy}
+              onClick={() => setUninstall(false)}
+            >
+              Отмена
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Модели Strata по семействам. Скачанная — «Загрузить» (старая выгружается,
+ * слоты на Strata переходят на новую одной ревизией), нескачанная —
+ * «Скачать» рядом с работающей Strata, без простоя.
+ */
+function StrataModels({
+  st,
+  params,
+  onStatus,
+}: {
+  st: StrataStatus;
+  params: { context: number; vision: boolean } | null;
+  onStatus: (s: StrataStatus) => void;
+}) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const [loadPlan, setLoadPlan] = useState<StrataLoadPlan | null>(null);
+  // Какая версия модели показана в блоке (по умолчанию — загруженная).
+  const [versionOf, setVersionOf] = useState<Record<string, string>>({});
+  const installer = st.installer;
+  const downloading =
+    installer?.stage === "downloading" ? installer.variant : null;
+
+  const openLoad = async (q: StrataQuant) => {
+    try {
+      setLoadPlan(await strataLoadPlan(q.id));
+    } catch (e) {
+      toast.error("Не удалось подготовить смену модели", errText(e));
+    }
+  };
+
+  const load = async () => {
+    if (!loadPlan) return;
+    setBusy(true);
+    try {
+      const r = await strataLoad(loadPlan.id);
+      onStatus(r.status);
+      setLoadPlan(null);
+      toast.ok(
+        `Выбрана ${loadPlan.id}`,
+        (r.restarted
+          ? r.setup_pass
+            ? "Strata перенастраивается и загружает её (несколько минут)"
+            : "Strata загружает её (1–3 мин)"
+          : "Загрузится при следующем включении Strata") +
+          (r.moved.length ? `; слотов перешло: ${r.moved.length}` : ""),
+      );
+    } catch (e) {
+      toast.error("Модель не загружена", errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const download = async (q: StrataQuant) => {
+    setBusy(true);
+    try {
+      const r = await strataInstall({
+        id: q.id,
+        context: params?.context,
+        vision: params?.vision,
+      });
+      onStatus(r.status);
+      toast.ok(
+        `Скачивание ${q.id} началось`,
+        "Strata продолжает работать; прерванная загрузка продолжится с места остановки",
+      );
+    } catch (e) {
+      toast.error("Скачивание не запущено", errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const stopDownload = async () => {
+    setBusy(true);
+    try {
+      const r = await strataStopInstall();
+      onStatus(r.status);
+      toast.ok("Скачивание остановлено", "Повторный запуск продолжит");
+    } catch (e) {
+      toast.error("Не удалось остановить", errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const running = st.container === "running";
+
+  const QuantRow = ({ q }: { q: StrataQuant }) => {
+    const selected = q.id === st.desired.id;
+    const isDownloading = downloading === q.id;
+    const tooOld = olderThan(st.server?.current?.version, q.min_version);
+    return (
+      <div
+        className={`flex flex-wrap items-start gap-2 rounded border p-2 text-xs min-w-0 ${
+          selected ? "border-blue-600 bg-blue-950/30" : "border-slate-700"
+        }`}
+      >
+        <span className="flex-1 min-w-0 space-y-0.5">
+          <span className="block text-slate-100">
+            <span className="font-medium font-mono">{q.label}</span>
+            <span className="ml-2 text-slate-400">{q.bits}</span>
+            {q.badge && (
+              <span className="ml-2 px-1.5 rounded bg-slate-700 text-slate-200">
+                {q.badge}
+              </span>
+            )}
+            {selected && (
+              <span className="ml-2 text-blue-300">
+                {running ? "загружена" : "выбрана"}
+              </span>
+            )}
+            {q.installed && !selected && (
+              <span className="ml-2 text-emerald-300">скачана</span>
+            )}
+          </span>
+          <span className="block text-slate-300">{q.about}</span>
+          <span className="block text-slate-500">
+            {isDownloading
+              ? `скачивается: ${installer?.size_on_disk_gb ?? 0} из ~${Math.round(q.disk_need_gb)} ГБ`
+              : q.installed
+                ? `на диске ${q.size_on_disk_gb ?? "?"} ГБ`
+                : `скачать ~${q.download_gb} ГБ, займёт ~${Math.round(q.disk_need_gb)} ГБ`}
+            {" · "}ОЗУ ~{q.ram_gb} ГБ
+            {RAM_MODE[q.ram_mode] && ` · ${RAM_MODE[q.ram_mode]}`}
+            {q.family === "unsloth" && ` · файлы ${q.source}`}
+          </span>
+          {tooOld && (
+            <span className="block text-amber-300">
+              нужна Strata {q.min_version} или новее — сначала обновите Strata
+            </span>
+          )}
+          {!q.fits_ram && (
+            <span className="block text-amber-300">
+              не помещается в память, оставленную Strata
+            </span>
+          )}
+        </span>
+        <span className="flex flex-wrap items-center gap-2">
+          {q.installed && !selected && (
+            <button
+              type="button"
+              className={btnSecondary}
+              disabled={busy || !!loadPlan || tooOld}
+              aria-label={`Загрузить ${q.id}`}
+              onClick={() => void openLoad(q)}
+            >
+              Загрузить
+            </button>
+          )}
+          {!q.installed && !isDownloading && (
+            <button
+              type="button"
+              className={btnSecondary}
+              disabled={busy || !!downloading || tooOld}
+              title={
+                downloading
+                  ? `Сейчас скачивается ${downloading}`
+                  : "Скачать рядом с работающей Strata, без простоя"
+              }
+              aria-label={`Скачать ${q.id}`}
+              onClick={() => void download(q)}
+            >
+              Скачать
+            </button>
+          )}
+          {isDownloading && (
+            <button
+              type="button"
+              className={btnSecondary}
+              disabled={busy}
+              onClick={() => void stopDownload()}
+            >
+              Остановить
+            </button>
+          )}
+          {q.installed && !selected && (
+            <QuantDelete
+              model={q.id}
+              sizeGb={q.size_on_disk_gb}
+              onDeleted={onStatus}
+            />
+          )}
+        </span>
+      </div>
+    );
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="text-xs font-medium text-slate-300">Модели</div>
+
+      {installer?.stage === "failed" && (
+        <div className="space-y-2 rounded border border-red-900 bg-red-950/30 p-3 text-xs text-red-100">
+          <div>
+            Скачивание {installer.variant} прервалось (код {installer.exit_code}
+            ). Повторный запуск продолжит с места остановки.
+          </div>
+          {installer.log_tail.length > 0 && (
+            <pre className="text-[11px] leading-snug font-mono bg-slate-950 border border-slate-800 rounded p-2 max-h-40 overflow-auto whitespace-pre-wrap break-all text-slate-400">
+              {installer.log_tail.join("\n")}
+            </pre>
+          )}
+          <button
+            className={btnSecondary}
+            disabled={busy}
+            onClick={() => void stopDownload()}
+          >
+            Закрыть
+          </button>
+        </div>
+      )}
+
+      {loadPlan && (
+        <div className="rounded border border-blue-800 bg-blue-950/30 p-3 space-y-2 text-xs text-slate-300">
+          <div className="text-sm text-slate-100">
+            {running ? "Выгрузить" : "Вместо"} {st.desired.id}{" "}
+            {running ? "и загрузить" : "выбрать"} {loadPlan.id}
+          </div>
+          <ul className="list-disc pl-5 space-y-0.5">
+            <li>
+              Контекст {ctxLabel(loadPlan.context)}
+              {loadPlan.vision ? ", с картинками" : ", без картинок"} — как
+              модель была установлена.
+            </li>
+            {running && (
+              <li>
+                Strata перезапустится:{" "}
+                {loadPlan.setup_pass
+                  ? "сначала перенастройка под запас ОЗУ (несколько минут), потом "
+                  : ""}
+                загрузка 1–3 минуты, запросы в это время ждут.
+              </li>
+            )}
+            {loadPlan.follow.length > 0 && (
+              <li>
+                Перейдут на {loadPlan.catalog_key}:{" "}
+                {loadPlan.follow.map((f) => f.label).join(", ")}
+              </li>
+            )}
+            {loadPlan.warnings.map((w) => (
+              <li key={w} className="text-amber-300">
+                {w}
+              </li>
+            ))}
+          </ul>
+          <div className="flex flex-wrap gap-2">
+            <button
+              className={btnPrimary}
+              disabled={busy}
+              onClick={() => void load()}
+            >
+              {busy ? "Загружаю…" : "Да, загрузить"}
+            </button>
+            <button
+              className={btnSecondary}
+              disabled={busy}
+              onClick={() => setLoadPlan(null)}
+            >
+              Отмена
+            </button>
+          </div>
+        </div>
+      )}
+
+      {st.groups.map((group) => {
+        const items = st.quants.filter((q) => q.group === group.id);
+        if (!items.length) return null;
+        const loaded = items.find((q) => q.id === st.desired.id);
+        const version =
+          versionOf[group.id] ?? loaded?.version ?? group.versions[0].id;
+        const ver =
+          group.versions.find((v) => v.id === version) ?? group.versions[0];
+        const sizes = items.filter((q) => q.version === ver.id);
+        return (
+          <section
+            key={group.id}
+            aria-label={group.title}
+            className="space-y-2 rounded border border-slate-700 p-3"
+          >
+            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+              <h3 className="text-sm font-medium text-slate-100">
+                {group.title}
+              </h3>
+              {loaded && (
+                <span className="text-xs text-blue-300">
+                  {running ? "загружена" : "выбрана"}:{" "}
+                  {loaded.version !== "original"
+                    ? `${group.versions.find((v) => v.id === loaded.version)?.title} `
+                    : ""}
+                  {loaded.model}
+                </span>
+              )}
+            </div>
+            <div className="text-xs text-slate-300">{group.summary}</div>
+            <ul className="text-xs text-slate-400 list-disc pl-5 space-y-0.5">
+              {group.facts.map((f) => (
+                <li key={f}>{f}</li>
+              ))}
+            </ul>
+            {group.versions.length > 1 && (
+              <div
+                role="radiogroup"
+                aria-label={`Версия ${group.title}`}
+                className="inline-flex flex-wrap rounded border border-slate-600 overflow-hidden"
+              >
+                {group.versions.map((v) => {
+                  const has = items.some(
+                    (q) => q.version === v.id && q.installed,
+                  );
+                  return (
+                    <button
+                      key={v.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={v.id === ver.id}
+                      onClick={() =>
+                        setVersionOf({ ...versionOf, [group.id]: v.id })
+                      }
+                      className={`px-3 py-1 text-xs font-medium transition-colors ${
+                        v.id === ver.id
+                          ? "bg-blue-600 text-white"
+                          : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                      }`}
+                    >
+                      {v.title}
+                      {has && (
+                        <span
+                          className="ml-1 text-emerald-300"
+                          aria-label="есть скачанные"
+                        >
+                          ●
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            <div className="text-xs text-slate-400">{ver.about}</div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {sizes.map((q) => (
+                <QuantRow key={q.id} q={q} />
+              ))}
+            </div>
+          </section>
+        );
+      })}
+      {installer?.stage === "downloading" && installer.log_tail.length > 0 && (
+        <pre className="text-[11px] leading-snug font-mono bg-slate-950 border border-slate-800 rounded p-2 max-h-32 overflow-auto whitespace-pre-wrap break-all text-slate-400">
+          {installer.log_tail.join("\n")}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+/** Сколько оперативной памяти Strata оставляет системе. */
+function StrataMemory({
+  st,
+  onStatus,
+}: {
+  st: StrataStatus;
+  onStatus: (s: StrataStatus) => void;
+}) {
+  const toast = useToast();
+  const [reserve, setReserve] = useState(st.runtime.ram_reserve_gb ?? 0);
+  const [busy, setBusy] = useState(false);
+  const total = st.ram_total_gb ?? 0;
+  const plan = st.ram_plan;
+
+  const apply = async () => {
+    setBusy(true);
+    try {
+      const r = await strataRuntime({ ram_reserve_gb: reserve });
+      onStatus(r.status);
+      toast.ok(
+        reserve
+          ? `Strata оставит системе ${reserve} ГБ`
+          : "Ограничение памяти снято",
+        r.restarted
+          ? r.setup_pass
+            ? "Strata перенастраивает размещение экспертов и перезапускается"
+            : "Strata перезапускается с новым ограничением"
+          : "Применится при следующем включении",
+      );
+    } catch (e) {
+      toast.error("Не удалось сохранить", errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2 border-t border-slate-800 pt-3">
+      <div className="text-xs font-medium text-slate-300">
+        Оперативная память
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="flex items-center gap-2 text-xs text-slate-300">
+          Оставлять системе
+          <select
+            className={`${select} !w-auto`}
+            value={reserve}
+            onChange={(e) => setReserve(Number(e.target.value))}
+          >
+            {st.reserve_choices.map((c) => (
+              <option key={c} value={c} disabled={!!c && total - c < 24}>
+                {c === 0 ? "без ограничения" : `${c} ГБ`}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          className={btnPrimary}
+          disabled={busy || reserve === (st.runtime.ram_reserve_gb ?? 0)}
+          onClick={() => void apply()}
+        >
+          Применить
+        </button>
+      </div>
+      <div className="text-xs text-slate-500">
+        {plan.limit_gb
+          ? `Strata может занять не больше ${plan.limit_gb} ГБ из ${total.toFixed(0)} (жёсткий предел контейнера). `
+          : `Strata берёт память по своим правилам (у ${st.desired.id} — около ${
+              st.quants.find((q) => q.id === st.desired.id)?.ram_gb ?? "?"
+            } ГБ). `}
+        {RAM_MODE[plan.mode] && `${st.desired.id}: ${RAM_MODE[plan.mode]}. `}
+        Чем больше запас, тем меньше экспертов в ОЗУ: модель переходит в режим
+        нехватки памяти и отвечает медленнее (для IQ3_XXS через файловый кэш —
+        примерно вдвое). Смена режима — перенастройка Strata без новой загрузки
+        файлов, режиму нехватки ОЗУ может понадобиться место на диске под копию
+        экспертов.
       </div>
     </div>
   );

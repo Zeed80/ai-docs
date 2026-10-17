@@ -124,6 +124,11 @@ x-backend-env: &backend-env
   STRATA_API_KEY: ${STRATA_API_KEY:-}
   STRATA_SERVICE_NAME: strata
   STRATA_PUBLIC_URL: ${STRATA_PUBLIC_URL:-}
+  # For a Strata container the backend creates itself (install/update from
+  # /settings/models): the published port and the image's GPU architectures.
+  STRATA_BIND: ${STRATA_BIND:-0.0.0.0}
+  STRATA_HOST_PORT: ${STRATA_HOST_PORT:-8090}
+  STRATA_CUDA_ARCHITECTURES: ${STRATA_CUDA_ARCHITECTURES:-86}
 
 x-authentik-env: &authentik-env
   AUTHENTIK_REDIS__HOST: redis
@@ -740,22 +745,28 @@ services:
       - app
 
   # === Backend API ===
-  # Strata — Qwen3.8-Flash-Next (125B MoE) split across the GPU and RAM
-  # (https://github.com/Niko1221/Strata), OpenAI-compatible on :8080.
-  # It takes the whole GPU and 30-50 GB of RAM, so it is never run beside
-  # GPU-Ollama: the backend starts/stops this container from the GPU switch on
-  # /settings/models. Create it once: docker compose ... --profile strata up -d strata
-  # The quantization/context/images come from /data/aiw.env, written by the
-  # backend (strata_manager); a quant not on the volume yet is downloaded by
-  # the first start (66-84 GB). The image is built from a pinned commit for the
-  # RTX 3090 (sm_86); other cards: STRATA_CUDA_ARCHITECTURES.
+  # Strata — local MoE models split across the GPU and RAM
+  # (https://github.com/Niko1221/Strata: Qwen3.8-Flash-Next 125B, Qwen3.6-35B,
+  # ...), OpenAI-compatible on :8080, one model at a time. It takes the whole
+  # GPU and 20-50 GB of RAM, so it is never run beside GPU-Ollama: the backend
+  # starts/stops this container from the GPU switch on /settings/models.
+  # Installed, updated (new release → image build → container recreated) and
+  # removed from the same screen (strata_lifecycle); this service is the same
+  # container for `docker compose --profile strata ...`. The model/context/
+  # images come from /data/aiw.env, written by the backend (strata_manager).
+  # The image: the release the panel last installed is tagged :current; the
+  # build below (v0.1.45, RTX 3090 = sm_86, other cards:
+  # STRATA_CUDA_ARCHITECTURES) is only for a compose-first install.
   strata:
-    image: ${STRATA_IMAGE:-ai-workspace/strata:a0116b2}
+    image: ${STRATA_IMAGE:-ai-workspace/strata:current}
     build:
-      context: https://github.com/Niko1221/Strata.git#a0116b2782a5b82622358c04a06496485d12b2d6
+      context: https://github.com/Niko1221/Strata.git#477ac13cbe8e582c20484871ce459d20d82df09d
       args:
         CUDA_ARCHITECTURES: ${STRATA_CUDA_ARCHITECTURES:-86}
         BUILD_VISION: "1"
+      labels:
+        aiw.strata.version: "0.1.45"
+        aiw.strata.commit: "477ac13cbe8e582c20484871ce459d20d82df09d"
     runtime: nvidia
     profiles:
       - strata
@@ -788,6 +799,9 @@ services:
     extra_hosts:
       - "host-gateway:host-gateway"
     entrypoint: ["/bin/sh", "-c"]
+    # The same script as strata_lifecycle.ENTRYPOINT_SCRIPT (the backend
+    # creates the container from that copy on install/update; a test keeps
+    # the two equal).
     command:
       - |
         # The backend (uid/gid 10001, appuser) writes aiw.env, aiw-runtime.json
@@ -799,11 +813,15 @@ services:
         chmod -R g+rwX /data 2>/dev/null
         find /data -type d -exec chmod g+s {} + 2>/dev/null
         umask 002
+        # The server reads /data/aiw.env; a side download (strata_lifecycle's
+        # installer container) names its own file, so it never changes what the
+        # server starts with.
+        envfile="$${AIW_ENV_FILE:-/data/aiw.env}"
         set -a
-        [ -f /data/aiw.env ] && . /data/aiw.env
+        [ -f "$$envfile" ] && . "$$envfile"
         set +a
         # REINSTALL is one-shot: drop it so the next restart just serves.
-        [ -f /data/aiw.env ] && sed -i '/^REINSTALL=/d' /data/aiw.env
+        [ -f "$$envfile" ] && sed -i '/^REINSTALL=/d' "$$envfile"
         case "$${FAMILY:-qwen}" in qwen) prefix="" ;; *) prefix="$${FAMILY}-" ;; esac
         tag="$${prefix}$$(printf '%s' "$${MODEL:-IQ2_XS}" | tr 'A-Z' 'a-z')"
         # Setup only: Strata's entrypoint minus its final "start the server" line.

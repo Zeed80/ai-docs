@@ -20,6 +20,8 @@ import type {
   Slot,
   SlotSmokeResult,
   StrataAccess,
+  StrataLoadPlan,
+  StrataServerInfo,
   StrataSlotPlanItem,
   StrataStatus,
   ThinkingLevel,
@@ -287,29 +289,105 @@ export const strataConfig = (body: {
   context: number;
   vision: boolean;
 }) =>
-  request<{ ok: boolean; restarted: boolean; status: StrataStatus }>(
-    "/api/local-models/strata/config",
-    { method: "PUT", body: JSON.stringify(body) },
+  request<{
+    ok: boolean;
+    restarted: boolean;
+    moved: string[];
+    status: StrataStatus;
+  }>("/api/local-models/strata/config", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+
+/** Скачать модель рядом с работающей Strata (видеокарта остаётся у того, у кого была). */
+export const strataInstall = (body: {
+  id: string;
+  context?: number;
+  vision?: boolean;
+}) =>
+  request<{ ok: boolean; id: string; status: StrataStatus }>(
+    "/api/local-models/strata/install",
+    { method: "POST", body: JSON.stringify(body) },
   );
 
-export const strataInstall = () =>
+export const strataStopInstall = () =>
   request<{ ok: boolean; status: StrataStatus }>(
     "/api/local-models/strata/install",
-    {
-      method: "POST",
-    },
+    { method: "DELETE" },
   );
+
+export const strataLoadPlan = (id: string) =>
+  request<StrataLoadPlan>(
+    `/api/local-models/strata/load-plan?id=${encodeURIComponent(id)}`,
+  );
+
+/** Загрузить в Strata другую скачанную модель (старая выгружается). */
+export const strataLoad = (id: string) =>
+  request<{
+    ok: boolean;
+    moved: string[];
+    restarted: boolean;
+    setup_pass: boolean;
+    status: StrataStatus;
+  }>("/api/local-models/strata/load", {
+    method: "POST",
+    body: JSON.stringify({ id }),
+  });
 
 export const strataRuntime = (body: {
   idle_unload_s?: number;
   free_comfyui?: boolean;
   parallel?: number;
   conversation_cache_mib?: number;
+  ram_reserve_gb?: number;
 }) =>
-  request<{ ok: boolean; restarted: boolean; status: StrataStatus }>(
-    "/api/local-models/strata/runtime",
-    { method: "PUT", body: JSON.stringify(body) },
+  request<{
+    ok: boolean;
+    restarted: boolean;
+    setup_pass?: boolean;
+    status: StrataStatus;
+  }>("/api/local-models/strata/runtime", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+
+export const strataCheckUpdate = () =>
+  request<StrataServerInfo>("/api/local-models/strata/update?refresh=true");
+
+export const strataUpdate = () =>
+  request<{ ok: boolean; status: StrataStatus }>(
+    "/api/local-models/strata/update",
+    { method: "POST" },
   );
+
+export const strataRetryApply = () =>
+  request<{ ok: boolean; status: StrataStatus }>(
+    "/api/local-models/strata/update/retry",
+    { method: "POST" },
+  );
+
+export const strataDismissJob = () =>
+  request<{ ok: boolean; status: StrataStatus }>(
+    "/api/local-models/strata/update/job",
+    { method: "DELETE" },
+  );
+
+export const strataInstallServer = () =>
+  request<{ ok: boolean; status: StrataStatus }>(
+    "/api/local-models/strata/server",
+    { method: "POST" },
+  );
+
+export const strataUninstall = (wipeModels: boolean) =>
+  request<{
+    ok: boolean;
+    restored: string[];
+    removed_images: string[];
+    freed_gb: number;
+    status: StrataStatus;
+  }>(`/api/local-models/strata/server?wipe_models=${wipeModels}`, {
+    method: "DELETE",
+  });
 
 export const strataAccess = () =>
   request<StrataAccess>("/api/local-models/strata/access");

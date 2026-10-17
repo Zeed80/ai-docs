@@ -23,7 +23,7 @@ providers:
     # before it, and a 125B MoE reading a long document takes minutes.
     timeout_seconds: 600
     is_local: true
-    notes: "Strata — Qwen3.8-Flash-Next (125B MoE) split across GPU+RAM, OpenAI-compatible. Owns the GPU while active: switched against GPU-Ollama on /settings/models → Провайдеры. Start once: docker compose --profile strata up -d strata"
+    notes: "Strata — local MoE models split across GPU+RAM (Qwen3.8-Flash-Next 125B, Qwen3.6-35B-A3B, …), OpenAI-compatible, one model at a time. Owns the GPU while active: switched against GPU-Ollama on /settings/models → Провайдеры, installed and updated there too."
   comfyui:
     base_url: "http://comfyui:8188"
     timeout_seconds: 300
@@ -169,6 +169,60 @@ models:
     quality_score: 0.95
     speed_score: 0.55
     notes: "Qwen3.8-Flash-Next 125B MoE via Strata (GPU expert cache + experts in RAM). Vision through the server's image encoder when it is installed with images. Exclusive with GPU-Ollama."
+  # The other model families Strata serves. Strata holds ONE model at a time
+  # and answers to any name: a slot points at the entry of the family loaded
+  # now (loading another family in the panel moves the slots along), and
+  # gpu_runtime refuses a call that names a family Strata does not hold.
+  strata_qwen3_6_35b:
+    provider: "strata"
+    provider_model: "qwen3.6-35b-a3b"
+    status: "production"
+    modalities: ["text", "vision", "tool_calling"]
+    max_context_tokens: 65536
+    supports_structured_output: true
+    supports_tool_calling: true
+    thinking_supported: true
+    thinking_enabled: true
+    thinking_level_default: "low"
+    local_only: true
+    # UD-Q4_K_XL is 23 GB: nearly every expert sits in VRAM, the rest is
+    # computed on the CPU from a RAM copy (Strata's hybrid mode).
+    vram_gb_estimate: 22.0
+    quality_score: 0.85
+    speed_score: 0.8
+    notes: "Qwen3.6-35B-A3B (35B MoE, 3B active) via Strata's own engine path. Pictures through Unsloth's mmproj (Strata 0.1.45+). Read invoices well as qwen3.6:35b on Ollama. Exclusive with GPU-Ollama."
+  strata_swift_1_5:
+    provider: "strata"
+    provider_model: "swift-1.5"
+    status: "production"
+    modalities: ["text", "vision", "tool_calling"]
+    max_context_tokens: 65536
+    supports_structured_output: true
+    supports_tool_calling: true
+    thinking_supported: true
+    thinking_enabled: true
+    thinking_level_default: "low"
+    local_only: true
+    vram_gb_estimate: 22.0
+    quality_score: 0.93
+    speed_score: 0.6
+    notes: "Swift 1.5 — UkisAI's fine-tune of Qwen3.8-Flash-Next via Strata: ~63% fewer thinking tokens by its authors' numbers. Exclusive with GPU-Ollama."
+  strata_qwen3_8_flash_next_coder:
+    provider: "strata"
+    provider_model: "qwen3.8-flash-next-coder"
+    status: "production"
+    modalities: ["text", "vision", "tool_calling"]
+    max_context_tokens: 65536
+    supports_structured_output: true
+    supports_tool_calling: true
+    thinking_supported: true
+    thinking_enabled: true
+    thinking_level_default: "low"
+    local_only: true
+    vram_gb_estimate: 22.0
+    quality_score: 0.85
+    speed_score: 0.65
+    notes: "Qwen3.8-Flash-Next Coder via Strata: half of the experts kept (code, tool use, vision); ~32 GB of RAM, weaker outside coding. Exclusive with GPU-Ollama."
   gemma4_e2b_ollama:
     provider: "ollama"
     provider_model: "gemma4:e2b"

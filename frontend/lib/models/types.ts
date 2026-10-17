@@ -256,9 +256,22 @@ export type GpuOwner = "ollama" | "strata";
 export type StrataPhase =
   "not_created" | "stopped" | "installing" | "loading" | "ready" | "unloaded";
 
+export type StrataRamMode =
+  "auto" | "off" | "resident" | "mmap" | "budget" | "own";
+
 export interface StrataQuant {
+  /** Имя варианта у setup Strata: «IQ3_S», «qwen36-UD-Q4_K_XL». */
+  id: string;
+  family: string;
+  /** Блок модели («flash-next», «qwen36») и её версия внутри блока. */
+  group: string;
+  version: string;
+  source: string;
   model: string;
   label: string;
+  bits: string;
+  badge: string;
+  about: string;
   download_gb: number;
   disk_need_gb: number;
   experts_gb: number;
@@ -266,10 +279,89 @@ export interface StrataQuant {
   installed: boolean;
   size_on_disk_gb: number | null;
   low_ram_mode: boolean;
+  ram_mode: StrataRamMode;
+  fits_ram: boolean;
+  catalog_key: string;
+  /** Strata, начиная с которой setup знает это семейство (Qwen3.6 — 0.1.45). */
+  min_version: string | null;
+  installed_settings: { context: number | null; vision: boolean | null } | null;
+}
+
+export interface StrataFamily {
+  family: string;
+  title: string;
+  group: string;
+  version: string;
+  catalog_key: string;
+}
+
+export interface StrataModelGroup {
+  id: string;
+  title: string;
+  summary: string;
+  facts: string[];
+  versions: { id: string; title: string; about: string }[];
+}
+
+export interface StrataRamPlan {
+  reserve_gb: number;
+  limit_gb: number | null;
+  low_ram: string;
+  resident_budget_gib: number | null;
+  mode: StrataRamMode;
+  fits: boolean;
+}
+
+export interface StrataRelease {
+  version?: string;
+  tag?: string;
+  commit?: string;
+  published_at?: string | null;
+  name?: string;
+  notes?: string;
+  url?: string | null;
+  error?: string;
+  checked_at?: number;
+}
+
+export interface StrataBuildJob {
+  stage: "building" | "built" | "failed" | "apply_failed";
+  version: string | null;
+  commit: string | null;
+  image: string | null;
+  then: "apply" | "create" | null;
+  started_at: string | null;
+  exit_code: number | null;
+  error: string | null;
+  log_tail: string[];
+}
+
+export interface StrataServerInfo {
+  current: {
+    version: string | null;
+    commit: string | null;
+    image: string;
+    image_id: string;
+  } | null;
+  latest: StrataRelease;
+  update_available: boolean;
+  job: StrataBuildJob | null;
+  error?: string;
+}
+
+export interface StrataInstaller {
+  variant: string | null;
+  stage: "downloading" | "failed";
+  exit_code?: number | null;
+  size_on_disk_gb?: number | null;
+  disk_need_gb?: number | null;
+  log_tail: string[];
 }
 
 export interface StrataStatus {
   owner: GpuOwner | null;
+  server: StrataServerInfo;
+  installer: StrataInstaller | null;
   container: string | null;
   docker_error: string | null;
   phase: StrataPhase;
@@ -280,15 +372,24 @@ export interface StrataStatus {
     max_context?: number;
   } | null;
   desired: {
+    id: string;
+    family: string;
     model: string;
     context: number;
     vision: boolean;
     reinstall_pending: boolean;
     install_only: boolean;
+    low_ram: string;
   };
   down_while_owner: boolean;
   installed: string[];
+  installed_context: number | null;
   quants: StrataQuant[];
+  families: StrataFamily[];
+  groups: StrataModelGroup[];
+  served_catalog_key: string;
+  ram_plan: StrataRamPlan;
+  reserve_choices: number[];
   contexts: number[];
   disk_free_gb: number | null;
   ram_total_gb: number | null;
@@ -300,11 +401,23 @@ export interface StrataStatus {
     min_free_vram_mib: number;
     parallel: number;
     conversation_cache_mib: number;
+    ram_reserve_gb: number;
   };
   idle_choices: number[];
   parallel_choices: number[];
   conversation_cache_choices: number[];
   external_url: string | null;
+}
+
+export interface StrataLoadPlan {
+  id: string;
+  catalog_key: string;
+  context: number;
+  vision: boolean;
+  setup_pass: boolean;
+  ram_plan: StrataRamPlan;
+  follow: StrataSlotPlanItem[];
+  warnings: string[];
 }
 
 export interface StrataAccess {

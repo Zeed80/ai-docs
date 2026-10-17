@@ -50,8 +50,11 @@ COPY . .
 
 RUN groupadd --gid 10001 appuser \
     && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin appuser \
-    && mkdir -p /app/backups /releases /lora-data \
-    && chown -R appuser:appuser /app /releases /lora-data
+    && mkdir -p /app/backups /releases /lora-data /strata-data \
+    && chown -R appuser:appuser /app /releases /lora-data /strata-data
+# /strata-data: a fresh named volume takes this mountpoint's owner, so on a
+# new server the backend can write Strata's settings before Strata ever ran
+# (the strata container then shares the volume with group 10001).
 
 RUN chmod +x entrypoint.sh
 

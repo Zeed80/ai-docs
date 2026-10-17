@@ -25,6 +25,10 @@ OWNER_KEY = "gpu_runtime:owner"
 OLLAMA = "ollama"
 STRATA = "strata"
 OWNERS = (OLLAMA, STRATA)
+# The model Strata serves (its family's served name, e.g. "qwen3.6-35b-a3b").
+# Strata answers to ANY model name, so a slot left on another Strata family
+# would silently get this one; the guard refuses it with the reason instead.
+STRATA_MODEL_KEY = "gpu_runtime:strata_model"
 
 
 class GpuRuntimeUnavailable(RuntimeError):
@@ -55,6 +59,26 @@ def set_owner(owner: str) -> None:
     logger.info("gpu_runtime_owner_set", owner=owner)
 
 
+def strata_model() -> str | None:
+    """The served model's name; None when never published or unreadable (= refuse nothing)."""
+    try:
+        from app.utils.redis_client import get_sync_redis
+
+        raw = get_sync_redis().get(STRATA_MODEL_KEY)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("gpu_runtime_strata_model_unreadable", error=str(exc)[:200])
+        return None
+    if not raw:
+        return None
+    return raw.decode() if isinstance(raw, bytes) else str(raw)
+
+
+def set_strata_model(name: str) -> None:
+    from app.utils.redis_client import get_sync_redis
+
+    get_sync_redis().set(STRATA_MODEL_KEY, name)
+
+
 def _norm(url: str | None) -> str:
     return (url or "").strip().rstrip("/").removesuffix("/v1").lower()
 
@@ -75,8 +99,12 @@ def is_gpu_ollama(base_url: str | None) -> bool:
     return _norm(base_url) == _norm(default)
 
 
-def check_call(provider: str, base_url: str | None = None) -> None:
-    """Raise ``GpuRuntimeUnavailable`` if ``provider`` may not be called now."""
+def check_call(provider: str, base_url: str | None = None, model: str | None = None) -> None:
+    """Raise ``GpuRuntimeUnavailable`` if ``provider`` may not be called now.
+
+    ``model`` (Strata only): the provider model the call asks for — refused
+    when Strata holds another one.
+    """
     if provider not in (OLLAMA, STRATA):
         return
     owner = current_owner()
@@ -93,3 +121,10 @@ def check_call(provider: str, base_url: str | None = None) -> None:
             "Назначьте слот на Strata или переключите видеокарту обратно на Ollama "
             "в «Модели → Провайдеры»."
         )
+    if provider == STRATA and model:
+        served = strata_model()
+        if served and model.strip().lower() != served.strip().lower():
+            raise GpuRuntimeUnavailable(
+                f"В Strata сейчас загружена {served}, а вызов просит {model}. Загрузите нужную "
+                "модель в Strata («Модели → Провайдеры») или переназначьте слот."
+            )

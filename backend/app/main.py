@@ -297,6 +297,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from app.ai.providers.strata_manager import reconcile_owner
 
         gpu_owner = await reconcile_owner()
+        # A Strata image build started before this restart keeps running in
+        # its own container; watch it again so its result is applied.
+        from app.ai.providers.strata_lifecycle import resume as resume_strata_build
+
+        await resume_strata_build()
     except Exception as exc:
         logger.warning("gpu_runtime_reconcile_failed", error=str(exc))
     try:

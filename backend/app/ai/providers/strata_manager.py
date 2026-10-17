@@ -35,37 +35,97 @@ logger = structlog.get_logger()
 
 _DOCKER_SOCK = "/var/run/docker.sock"
 ENV_FILE_NAME = "aiw.env"
+INSTALL_ENV_FILE_NAME = "aiw-install.env"
 
-# The original model's four GSQ-RCO sizes (Strata setup.py MODELS, family
-# "qwen"). experts_gb is what must sit in RAM+GPU expert cache; ram_gb is
-# setup's own "comfortable" RAM figure. On a PC below it setup switches to the
-# low-RAM mode by itself (the GPU holds the most-used experts, the rest is
-# copied into RAM), which is how IQ3_S runs with a 24 GB card and ~60 GB RAM.
+# Model families Strata's setup offers (setup.py FAMILIES + OWN_PATH_FAMILIES,
+# 0.1.45). "kind" is how setup lays a family out: "pack" — GSQ-RCO files with
+# an expert pack and the low-RAM mode; "budget" — Unsloth's GGUF read in
+# place, a RAM budget of experts and the rest from the SSD
+# (--resident-budget-gib); "own" — a model with its own engine path
+# (Qwen3.6-35B-A3B): no pack, no MTP download, every expert it can in VRAM and
+# a RAM copy of the rest. "tag" is setup's prefix of the pack, config and
+# model-folder names; the entrypoint derives it as "<family>-" too.
+# catalog_key is the model_registry.yaml entry slots point at while that
+# family is loaded: Unsloth's files are the same model as the original, so
+# they share its catalog entry.
+FAMILIES: dict[str, dict] = {
+    "qwen": {
+        "title": "Qwen3.8-Flash-Next",
+        "about": "исходная модель, 125B MoE",
+        "tag": "",
+        "kind": "pack",
+        "catalog_key": "strata_qwen3_8_flash_next",
+        "served_name": "qwen3.8-flash-next",
+    },
+    "swift": {
+        "title": "Swift 1.5",
+        "about": "дообучение Flash-Next: рассуждает на ~63% короче, отвечает в ~1,8 раза раньше",
+        "tag": "swift-",
+        "kind": "pack",
+        "catalog_key": "strata_swift_1_5",
+        "served_name": "swift-1.5",
+    },
+    "coder": {
+        "title": "Qwen3.8-Flash-Next Coder",
+        "about": "половина экспертов (код, инструменты, картинки): ~32 ГБ ОЗУ, быстрее, слабее вне кода",
+        "tag": "coder-",
+        "kind": "pack",
+        "catalog_key": "strata_qwen3_8_flash_next_coder",
+        "served_name": "qwen3.8-flash-next-coder",
+    },
+    "unsloth": {
+        "title": "Qwen3.8-Flash-Next (Unsloth)",
+        "about": "4-битные файлы Unsloth: точнее, но при ОЗУ меньше ~80 ГБ часть экспертов читается с SSD",
+        "tag": "unsloth-",
+        "kind": "budget",
+        "catalog_key": "strata_qwen3_8_flash_next",
+        "served_name": "qwen3.8-flash-next",
+    },
+    "qwen36": {
+        "title": "Qwen3.6-35B-A3B",
+        "about": "35B MoE, 3B активных: почти целиком на видеокарте, быстрая; читает картинки",
+        "tag": "qwen36-",
+        "kind": "own",
+        "catalog_key": "strata_qwen3_6_35b",
+        "served_name": "qwen3.6-35b-a3b",
+        # Setup knows the family from 0.1.44; pictures for it came in 0.1.45.
+        "min_version": "0.1.45",
+    },
+}
+DEFAULT_FAMILY = "qwen"
+
+# The sizes (setup.py MODELS / OWN_PATH_FAMILIES[*]["models"]). experts_gb is
+# what must sit in RAM+GPU expert cache (setup's arena_gb; for Qwen3.6 the
+# file itself); ram_gb is setup's own "comfortable" RAM figure. On a PC below
+# it a "pack" family switches to the low-RAM mode by itself (the GPU holds the
+# most-used experts, the rest is copied into RAM), which is how IQ3_S runs
+# with a 24 GB card and ~60 GB RAM.
+_SIZES: list[tuple[str, str, dict]] = [
+    ("qwen", "Q2_0", {"label": "Q2_0 — самая быстрая", "download_gb": 66.4, "experts_gb": 34.0, "ram_gb": 48}),
+    ("qwen", "IQ2_XS", {"label": "IQ2_XS — рекомендуемая", "download_gb": 68.0, "experts_gb": 35.5, "ram_gb": 48}),
+    ("qwen", "IQ3_XXS", {"label": "IQ3_XXS — точнее, медленнее", "download_gb": 75.8, "experts_gb": 42.9, "ram_gb": 60}),
+    ("qwen", "IQ3_S", {"label": "IQ3_S — лучшее качество", "download_gb": 83.6, "experts_gb": 50.3, "ram_gb": 62}),
+    ("swift", "IQ2_XS", {"label": "IQ2_XS — быстрая", "download_gb": 68.0, "experts_gb": 35.5, "ram_gb": 48}),
+    ("swift", "IQ3_XXS", {"label": "IQ3_XXS — точнее", "download_gb": 75.8, "experts_gb": 42.9, "ram_gb": 60}),
+    ("swift", "IQ3_S", {"label": "IQ3_S — лучшее качество", "download_gb": 83.6, "experts_gb": 50.3, "ram_gb": 62}),
+    ("coder", "IQ1_M", {"label": "IQ1_M — единственный размер", "download_gb": 58.4, "experts_gb": 23.4, "ram_gb": 32}),
+    ("unsloth", "UD-IQ4_XS", {"label": "UD-IQ4_XS — ~4 бита", "download_gb": 93.7, "experts_gb": 59.5, "ram_gb": 48}),
+    ("unsloth", "UD-Q4_K_XL", {"label": "UD-Q4_K_XL — 4 бита, K-кванты", "download_gb": 111.3, "experts_gb": 77.0, "ram_gb": 48}),
+    ("qwen36", "UD-Q4_K_XL", {"label": "UD-Q4_K_XL — 4 бита, самая лёгкая", "download_gb": 22.9, "experts_gb": 21.0, "ram_gb": 32}),
+    ("qwen36", "UD-Q6_K_XL", {"label": "UD-Q6_K_XL — 6 бит, ближе к полной", "download_gb": 32.6, "experts_gb": 30.0, "ram_gb": 44}),
+    ("qwen36", "Q8_0", {"label": "Q8_0 — 8 бит, ближе всего к полной", "download_gb": 37.8, "experts_gb": 35.0, "ram_gb": 52}),
+]  # fmt: skip
+
+
+def variant_id(family: str, model: str) -> str:
+    """Setup's name of a family+size ("IQ3_S", "qwen36-UD-Q4_K_XL"): model folder, pack, config."""
+    return FAMILIES[family]["tag"] + model
+
+
+# Keyed by variant id. The original family's ids are the bare size names, so
+# everything written before families existed ("IQ2_XS") keeps its meaning.
 QUANTS: dict[str, dict] = {
-    "Q2_0": {
-        "label": "Q2_0 — самая быстрая",
-        "download_gb": 66.4,
-        "experts_gb": 34.0,
-        "ram_gb": 48,
-    },
-    "IQ2_XS": {
-        "label": "IQ2_XS — рекомендуемая",
-        "download_gb": 68.0,
-        "experts_gb": 35.5,
-        "ram_gb": 48,
-    },
-    "IQ3_XXS": {
-        "label": "IQ3_XXS — точнее, медленнее",
-        "download_gb": 75.8,
-        "experts_gb": 42.9,
-        "ram_gb": 60,
-    },
-    "IQ3_S": {
-        "label": "IQ3_S — лучшее качество",
-        "download_gb": 83.6,
-        "experts_gb": 50.3,
-        "ram_gb": 62,
-    },
+    variant_id(fam, model): {**meta, "family": fam, "model": model} for fam, model, meta in _SIZES
 }
 # IQ2_XS: measured 2026-10-06 on the RTX 3090 + 59 GB, ~1.5x IQ3_S's decode
 # speed with the same results on known-answer tasks, half the disk (66 GB).
@@ -77,6 +137,50 @@ DEFAULT_CONTEXT = 65536
 # The MTP draft layer (~6 GB) and, with images, the encoder (~1 GB) come on
 # top of the model download on the first start.
 EXTRA_DOWNLOAD_GB = 7.0
+# setup.py: LOW_RAM_HEADROOM_GB (RAM beside the experts for the OS, the
+# engine's other buffers and the server) and UNSLOTH_RAM_LEFT_GB (beside an
+# Unsloth file's RAM budget, which also feeds the file cache it reads through).
+LOW_RAM_HEADROOM_GB = 10
+BUDGET_RAM_LEFT_GB = 24
+
+
+def resolve_variant(family: str | None, model: str) -> str:
+    """The variant id for an API's (family, model); a bare id is accepted as is."""
+    if family is None:
+        if model in QUANTS:
+            return model
+        family = DEFAULT_FAMILY
+    if family not in FAMILIES:
+        raise StrataError(f"Неизвестное семейство моделей Strata: {family}")
+    vid = variant_id(family, model)
+    if vid not in QUANTS:
+        raise StrataError(f"Неизвестное квантование: {model} ({FAMILIES[family]['title']})")
+    return vid
+
+
+def catalog_key(vid: str) -> str:
+    return FAMILIES[QUANTS[vid]["family"]]["catalog_key"]
+
+
+def catalog_keys() -> set[str]:
+    return {f["catalog_key"] for f in FAMILIES.values()}
+
+
+def served_name(vid: str) -> str:
+    return FAMILIES[QUANTS[vid]["family"]]["served_name"]
+
+
+def check_version(vid: str, version: str | None) -> None:
+    """Refuse a variant this Strata version cannot set up (setup would fail at its family)."""
+    from app.ai.providers.strata_lifecycle import version_tuple
+
+    need = FAMILIES[QUANTS[vid]["family"]].get("min_version")
+    if need and version and version_tuple(version) < version_tuple(need):
+        raise StrataError(
+            f"{FAMILIES[QUANTS[vid]['family']]['title']} работает со Strata {need} и новее, "
+            f"установлена {version}. Сначала обновите Strata."
+        )
+
 
 _SWITCH_REVISION_KEY = "strata:switch_revision"
 
@@ -103,7 +207,12 @@ DEFAULT_RUNTIME = {
     "min_free_vram_mib": 12000,
     "parallel": 2,
     "conversation_cache_mib": 6144,
+    # GB of RAM Strata must leave to the rest of the server (0: no limit). It
+    # becomes the container's memory limit and the expert placement setup is
+    # told to use (ram_plan).
+    "ram_reserve_gb": 0,
 }
+RESERVE_CHOICES = (0, 4, 8, 12, 16, 24, 32)
 
 
 class StrataError(RuntimeError):
@@ -121,10 +230,10 @@ def _env_path() -> Path:
     return data_dir() / ENV_FILE_NAME
 
 
-def read_desired() -> dict:
+def _read_env_file(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     try:
-        for line in _env_path().read_text(encoding="utf-8").splitlines():
+        for line in path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
@@ -132,37 +241,69 @@ def read_desired() -> dict:
             values[k.strip()] = v.strip().strip('"')
     except OSError:
         pass
+    return values
+
+
+def read_desired() -> dict:
+    values = _read_env_file(_env_path())
+    family = values.get("FAMILY", DEFAULT_FAMILY)
     model = values.get("MODEL", DEFAULT_QUANT)
+    vid = variant_id(family, model) if family in FAMILIES else model
+    if vid not in QUANTS:
+        vid = DEFAULT_QUANT
     try:
         context = int(values.get("CONTEXT", DEFAULT_CONTEXT))
     except ValueError:
         context = DEFAULT_CONTEXT
     return {
-        "model": model if model in QUANTS else DEFAULT_QUANT,
+        "id": vid,
+        "family": QUANTS[vid]["family"],
+        "model": QUANTS[vid]["model"],
         "context": context,
         "vision": values.get("VISION", "yes") != "no",
         "reinstall_pending": values.get("REINSTALL") == "1",
         # The container only downloads/sets up the quant and exits; it does
         # not serve and does not take the GPU from Ollama.
         "install_only": values.get("INSTALL_ONLY") == "1",
+        "low_ram": values.get("LOW_RAM", "auto"),
     }
 
 
-def write_desired(
-    *, model: str, context: int, vision: bool, reinstall: bool, install_only: bool = False
-) -> None:
-    if model not in QUANTS:
-        raise StrataError(f"Неизвестное квантование: {model}")
+def _env_lines(vid: str, context: int, vision: bool, ram: dict | None) -> list[str]:
+    if vid not in QUANTS:
+        raise StrataError(f"Неизвестное квантование: {vid}")
     if context not in CONTEXTS:
         raise StrataError(f"Контекст должен быть одним из {', '.join(map(str, CONTEXTS))}")
+    q = QUANTS[vid]
+    ram = ram or ram_plan(vid, context)
     lines = [
         "# Written by the AI workspace backend (strata_manager). Sourced by the",
         "# strata container before Strata's docker-entrypoint.sh.",
-        "FAMILY=qwen",
-        f"MODEL={model}",
+        f"FAMILY={q['family']}",
+        f"MODEL={q['model']}",
         f"CONTEXT={context}",
         f"VISION={'yes' if vision else 'no'}",
+        # setup.py reads the host's RAM, not the container's limit: with a
+        # reserve the mode it must pick is spelled out (see ram_plan).
+        f"LOW_RAM={ram['low_ram']}",
     ]
+    if ram.get("resident_budget_gib"):
+        lines.append(f"RESIDENT_BUDGET_GIB={ram['resident_budget_gib']}")
+    return lines
+
+
+def write_desired(
+    *,
+    model: str,
+    context: int,
+    vision: bool,
+    reinstall: bool,
+    install_only: bool = False,
+    family: str | None = None,
+    ram: dict | None = None,
+) -> None:
+    vid = resolve_variant(family, model)
+    lines = _env_lines(vid, context, vision, ram)
     if reinstall:
         # One-shot: the compose command drops this line before starting setup.
         lines.append("REINSTALL=1")
@@ -174,6 +315,163 @@ def write_desired(
             f"Том Strata не подключён к бэкенду ({path.parent}). Пересоберите стек с сервисом strata."
         )
     _atomic_write(path, "\n".join(lines) + "\n")
+    _publish_served(vid)
+
+
+def write_install_env(vid: str, context: int, vision: bool) -> str:
+    """The env file of a side download (strata_lifecycle's installer container).
+
+    A separate file, so a download never changes what the server starts with.
+    Returns its path inside the container.
+    """
+    lines = [*_env_lines(vid, context, vision, None), "INSTALL_ONLY=1"]
+    _atomic_write(data_dir() / INSTALL_ENV_FILE_NAME, "\n".join(lines) + "\n")
+    return f"/data/{INSTALL_ENV_FILE_NAME}"
+
+
+def _publish_served(vid: str) -> None:
+    """Tell every process (workers too) which model Strata serves: gpu_runtime refuses others."""
+    try:
+        gpu_runtime.set_strata_model(served_name(vid))
+    except Exception as exc:  # noqa: BLE001 — the guard then refuses nothing, as without an owner
+        logger.warning("strata_served_model_unpublished", error=str(exc)[:200])
+
+
+# ── RAM kept for the system ─────────────────────────────────────────────────
+
+
+def _vram_gb() -> float:
+    try:
+        return float(os.environ.get("GPU_TOTAL_VRAM_GB") or 24.0)
+    except ValueError:
+        return 24.0
+
+
+def ram_plan(
+    vid: str,
+    context: int,
+    *,
+    reserve_gb: float | None = None,
+    total_gb: float | None = None,
+    vram_gb: float | None = None,
+) -> dict:
+    """How the variant must be set up so Strata stays within RAM − reserve.
+
+    setup.py measures MemTotal (the host's, even in a capped container) and
+    sizes the expert placement from it, so a cap alone would get Strata
+    OOM-killed at load. With a reserve the placement is decided here with
+    setup's own rules (setup.py low_ram_needed / low_ram_resident /
+    resident_budget_gib) for the RAM that is left, and the container gets a
+    hard memory limit of that size:
+
+    * "off"      — every expert in RAM (the fastest);
+    * "resident" — the GPU's cache holds the hottest experts, the rest is
+      copied into RAM once (the low-RAM mode);
+    * "mmap"     — the rest is read through the OS file cache (slowest:
+      measured 2026-10-16, IQ3_XXS 28 tok/s instead of 52);
+    * Unsloth files: the RAM budget of experts (--resident-budget-gib);
+    * Qwen3.6: no such settings — only a warning when it does not fit.
+    """
+    q = QUANTS[vid]
+    kind = FAMILIES[q["family"]]["kind"]
+    total = ram_total_gb() if total_gb is None else total_gb
+    reserve = read_runtime()["ram_reserve_gb"] if reserve_gb is None else reserve_gb
+    vram = _vram_gb() if vram_gb is None else vram_gb
+    limit = round(total - reserve, 1) if (reserve and total) else None
+    ram = limit if limit is not None else total
+    out = {
+        "reserve_gb": reserve,
+        "limit_gb": limit,
+        "low_ram": "auto",
+        "resident_budget_gib": None,
+        "mode": "auto",
+        "fits": True,
+    }
+    if ram is None:
+        return out
+    arena = q["experts_gb"]
+    if kind == "own":
+        out["mode"] = "own"
+        out["fits"] = ram >= q["ram_gb"]
+        return out
+    if kind == "budget":
+        out["mode"] = "budget"
+        if limit is not None:
+            out["resident_budget_gib"] = max(
+                8, min(int(ram - BUDGET_RAM_LEFT_GB), int(arena / 1.0737))
+            )
+            out["fits"] = ram - BUDGET_RAM_LEFT_GB >= 8
+        return out
+    # setup.py low_ram_gpu_gb: VRAM minus ~5 GB (dense weights, buffers, a 32K
+    # KV cache) minus the KV of a longer context (13 layers × 1056 B/token).
+    gpu = max(0.0, min(arena, vram - 5 - max(0, context - 32768) * 13 * 1056 / 1e9))
+    if ram >= arena + LOW_RAM_HEADROOM_GB:
+        mode = "off"
+    elif ram >= arena - gpu + LOW_RAM_HEADROOM_GB:
+        mode = "resident"
+    else:
+        mode = "mmap"
+        out["fits"] = ram - 6 + max(0.0, vram - 5) >= arena  # setup.py low_ram_fits
+    out["mode"] = mode
+    if limit is not None:
+        out["low_ram"] = mode
+    return out
+
+
+def config_ram_mode(cfg: dict) -> str | None:
+    """The expert placement a run config was set up with (None: unknown/none)."""
+    args = list(cfg.get("args") or [])
+    if "--resident-budget-gib" in args:
+        return "budget"
+    if "--resident-experts" in args:
+        return "resident"
+    if "--mmap-experts" in args:
+        return "mmap"
+    return "off" if args else None
+
+
+def ram_setup_needed(vid: str, plan: dict) -> bool:
+    """Does the installed config place experts differently than ``plan`` wants?
+
+    A setup pass (no new download) rewrites it. Without a reserve setup's own
+    "auto" decides; only a config left in a low-RAM mode by an earlier
+    reserve, for a model that now fits RAM whole, is set up again.
+    """
+    cfg = _installed_config(vid)
+    current = config_ram_mode(cfg)
+    if current is None:
+        return False
+    if plan["mode"] == "budget":
+        want = plan.get("resident_budget_gib")
+        if not want:
+            return False
+        args = list(cfg.get("args") or [])
+        try:
+            have = float(args[args.index("--resident-budget-gib") + 1])
+        except (ValueError, IndexError):
+            return True
+        return abs(have - want) >= 1
+    if plan["mode"] not in ("off", "resident", "mmap"):
+        return False
+    if plan["low_ram"] == "auto":
+        return current in ("resident", "mmap") and plan["mode"] == "off"
+    return current != plan["mode"]
+
+
+def installed_settings(vid: str) -> dict:
+    """Context and images an installed variant was set up with (None: unknown)."""
+    cfg = _installed_config(vid)
+    args = list(cfg.get("args") or [])
+    context = None
+    if "--max-context" in args:
+        try:
+            context = int(args[args.index("--max-context") + 1])
+        except (ValueError, IndexError):
+            context = None
+    vision = None
+    if cfg:
+        vision = bool(cfg.get("vision")) or "--vision" in args
+    return {"context": context, "vision": vision}
 
 
 def read_runtime() -> dict:
@@ -193,6 +491,7 @@ def write_runtime(
     free_comfyui: bool | None = None,
     parallel: int | None = None,
     conversation_cache_mib: int | None = None,
+    ram_reserve_gb: int | None = None,
 ) -> dict:
     """Change some runtime settings; None leaves a setting as it is."""
     runtime = read_runtime()
@@ -213,6 +512,16 @@ def write_runtime(
                 + ", ".join(f"{c // 1024} ГБ" for c in CONVERSATION_CACHE_CHOICES)
             )
         runtime["conversation_cache_mib"] = conversation_cache_mib
+    if ram_reserve_gb is not None:
+        if ram_reserve_gb not in RESERVE_CHOICES:
+            raise StrataError("Запас ОЗУ: " + ", ".join(f"{c} ГБ" for c in RESERVE_CHOICES))
+        total = ram_total_gb()
+        if ram_reserve_gb and total and total - ram_reserve_gb < 24:
+            raise StrataError(
+                f"После запаса {ram_reserve_gb} ГБ Strata останется {total - ram_reserve_gb:.0f} ГБ "
+                f"из {total:.0f}: меньше 24 ГБ не хватит ни одной модели"
+            )
+        runtime["ram_reserve_gb"] = ram_reserve_gb
     _save_runtime(runtime)
     return runtime
 
@@ -418,18 +727,16 @@ async def _find_container() -> dict | None:
     async with _docker() as client:
         r = await client.get("/containers/json", params={"filters": filters, "all": "true"})
         r.raise_for_status()
-        rows = r.json()
+        rows = [
+            row for row in r.json() if not any("-retired-" in n for n in row.get("Names") or [])
+        ]
         return rows[0] if rows else None
 
 
 async def _container_action(action: str, timeout: int = 30) -> None:
     c = await _find_container()
     if not c:
-        raise StrataError(
-            "Контейнер Strata не создан. Один раз выполните на сервере: "
-            "docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml "
-            "--env-file infra/.env --profile strata up -d strata"
-        )
+        raise StrataError(NOT_INSTALLED)
     async with _docker() as client:
         r = await client.post(f"/containers/{c['Id']}/{action}", params={"t": str(timeout)})
         if r.status_code not in (204, 304):
@@ -452,13 +759,16 @@ def _demux_docker_logs(raw: bytes) -> str:
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
 
-async def log_tail(lines: int = 60) -> list[str]:
-    c = await _find_container()
-    if not c:
-        return []
+async def log_tail(lines: int = 60, container_id: str | None = None) -> list[str]:
+    """The last log lines of the Strata server (or of ``container_id``)."""
+    if container_id is None:
+        c = await _find_container()
+        if not c:
+            return []
+        container_id = c["Id"]
     async with _docker() as client:
         r = await client.get(
-            f"/containers/{c['Id']}/logs",
+            f"/containers/{container_id}/logs",
             params={"stdout": "1", "stderr": "1", "tail": str(lines)},
         )
         if r.status_code != 200:
@@ -575,28 +885,49 @@ async def status() -> dict:
             logs = []
     installed = installed_quants()
     ram = ram_total_gb()
-    active_cfg = _installed_config(desired["model"]) if desired["model"] in installed else {}
+    runtime = read_runtime()
+    active_cfg = _installed_config(desired["id"]) if desired["id"] in installed else {}
     quants = []
-    for model, meta in QUANTS.items():
+    for vid, meta in QUANTS.items():
+        plan = ram_plan(vid, desired["context"], reserve_gb=runtime["ram_reserve_gb"], total_gb=ram)
         quants.append(
             {
-                "model": model,
+                "id": vid,
+                "family": meta["family"],
+                "model": meta["model"],
                 "label": meta["label"],
                 "download_gb": meta["download_gb"],
-                "disk_need_gb": disk_need_gb(model),
+                "disk_need_gb": disk_need_gb(vid),
                 "experts_gb": meta["experts_gb"],
                 "ram_gb": meta["ram_gb"],
-                "installed": model in installed,
+                "installed": vid in installed,
                 # Model files + the expert pack built from them.
-                "size_on_disk_gb": _size_on_disk_gb(model),
+                "size_on_disk_gb": _size_on_disk_gb(vid),
                 # Below setup's own figure the model runs in the low-RAM mode
                 # (slower: the GPU holds the hot experts, the rest is in RAM).
-                "low_ram_mode": bool(ram and ram < meta["experts_gb"] + 10),
+                "low_ram_mode": plan["mode"] in ("resident", "mmap"),
+                "ram_mode": plan["mode"],
+                "fits_ram": plan["fits"],
+                "catalog_key": catalog_key(vid),
+                "min_version": FAMILIES[meta["family"]].get("min_version"),
+                "installed_settings": installed_settings(vid) if vid in installed else None,
             }
         )
     owner = gpu_runtime.current_owner()
+    from app.ai.providers import strata_lifecycle
+
+    try:
+        server = await strata_lifecycle.update_info()
+    except Exception as exc:  # noqa: BLE001 — the panel still shows the rest
+        server = {"error": str(exc)[:200]}
+    try:
+        installer = await strata_lifecycle.installer_status()
+    except Exception as exc:  # noqa: BLE001
+        installer = {"stage": "failed", "variant": None, "log_tail": [str(exc)[:200]]}
     return {
         "owner": owner,
+        "server": server,
+        "installer": installer,
         "container": state,
         "docker_error": docker_error,
         "phase": _phase(state, h, logs, desired["install_only"]),
@@ -612,7 +943,16 @@ async def status() -> dict:
         "disk_free_gb": disk_free_gb(),
         "ram_total_gb": ram,
         "log_tail": logs[-12:],
-        "runtime": read_runtime(),
+        "runtime": runtime,
+        "families": [
+            {"family": k, "title": v["title"], "about": v["about"], "catalog_key": v["catalog_key"]}
+            for k, v in FAMILIES.items()
+        ],
+        "served_catalog_key": catalog_key(desired["id"]),
+        "ram_plan": ram_plan(
+            desired["id"], desired["context"], reserve_gb=runtime["ram_reserve_gb"], total_gb=ram
+        ),
+        "reserve_choices": list(RESERVE_CHOICES),
         "idle_choices": list(IDLE_CHOICES),
         "parallel_choices": list(PARALLEL_CHOICES),
         "conversation_cache_choices": list(CONVERSATION_CACHE_CHOICES),
@@ -645,11 +985,18 @@ def set_switch_revision(revision_id: str | None) -> None:
 
 
 def disk_need_gb(model: str) -> float:
-    """Download + the expert pack setup builds from it (~experts_gb) + MTP/encoder.
+    """Download + what setup builds next to it.
 
-    Measured on IQ3_S: 79 GB of model files, a 49 GB pack, 6.5 GB of MTP.
+    "pack": the expert pack (~experts_gb) + MTP/encoder — measured on IQ3_S:
+    79 GB of model files, a 49 GB pack, 6.5 GB of MTP. "budget": the GGUF is
+    read in place, + MTP/encoder. "own" (Qwen3.6): the file + its encoder.
     """
     meta = QUANTS[model]
+    kind = FAMILIES[meta["family"]]["kind"]
+    if kind == "own":
+        return round(meta["download_gb"] + 1.0, 1)
+    if kind == "budget":
+        return round(meta["download_gb"] + EXTRA_DOWNLOAD_GB, 1)
     return round(meta["download_gb"] + meta["experts_gb"] + EXTRA_DOWNLOAD_GB, 1)
 
 
@@ -696,17 +1043,26 @@ async def start_strata() -> list[str]:
     and Strata sizing its expert cache from the free VRAM. Returns the unloaded
     Ollama models.
     """
+    from app.ai.providers import strata_lifecycle
+
     desired = read_desired()
-    check_quant_fits_disk(desired["model"])
+    downloading = await strata_lifecycle.installer_variant()
+    if downloading == desired["id"]:
+        raise StrataError(
+            f"{desired['id']} ещё скачивается. Дождитесь окончания — иначе Strata начнёт "
+            "качать те же файлы вторым потоком."
+        )
+    check_quant_fits_disk(desired["id"])
     container = await _find_container()
     if container is None:
-        await _container_action("start")  # raises the "create it once" hint
+        raise StrataError(NOT_INSTALLED)
     if desired["install_only"]:
-        if container and container.get("State") == "running":
+        if container.get("State") == "running":
             raise StrataError(
                 "Идёт скачивание Strata. Дождитесь окончания (или остановите его) и переключите снова."
             )
         write_desired(
+            family=desired["family"],
             model=desired["model"],
             context=desired["context"],
             vision=desired["vision"],
@@ -719,12 +1075,19 @@ async def start_strata() -> list[str]:
 
         unloaded = await unload_all_ollama_models(exclude_pinned=False)
         apply_runtime_keys()
-        await _container_action("start")
+        _publish_served(desired["id"])
+        await strata_lifecycle.start_server()
     except Exception:
         gpu_runtime.set_owner(previous or gpu_runtime.OLLAMA)
         raise
-    logger.info("strata_started", model=desired["model"], ollama_unloaded=unloaded)
+    logger.info("strata_started", model=desired["id"], ollama_unloaded=unloaded)
     return unloaded
+
+
+NOT_INSTALLED = (
+    "Strata не установлена: контейнера нет. Установите её кнопкой «Установить Strata» "
+    "в «Модели → Провайдеры»."
+)
 
 
 async def delete_quant(model: str) -> float:
@@ -736,13 +1099,15 @@ async def delete_quant(model: str) -> float:
     cannot be deleted (the next start would download it again), nor one that
     is being downloaded right now.
     """
+    from app.ai.providers import strata_lifecycle
+
     if model not in QUANTS:
         raise StrataError(f"Неизвестное квантование: {model}")
     desired = read_desired()
-    if model == desired["model"]:
-        raise StrataError(
-            f"{model} выбрана для запуска. Сначала выберите и примените другое квантование."
-        )
+    if model == desired["id"]:
+        raise StrataError(f"{model} выбрана для запуска. Сначала загрузите в Strata другую модель.")
+    if await strata_lifecycle.installer_variant() == model:
+        raise StrataError(f"{model} сейчас скачивается. Остановите скачивание, затем удаляйте.")
     targets = [
         data_dir() / "models" / model,
         data_dir() / "packs" / _tag(model),
@@ -766,31 +1131,43 @@ async def delete_quant(model: str) -> float:
     return freed
 
 
-async def install_strata() -> None:
-    """Download and set up the chosen quant without serving it.
+async def install_strata(
+    vid: str | None = None, *, context: int | None = None, vision: bool | None = None
+) -> str:
+    """Download and set up a variant without serving it, beside a running Strata.
 
-    The container runs Strata's setup only and exits; the GPU stays with
-    Ollama the whole time, so an hour-long download costs no downtime.
+    A separate one-shot container (strata_lifecycle's installer) runs Strata's
+    setup only, from its own env file, and exits: the server keeps serving
+    whatever it serves, and the GPU stays with whoever has it, so an
+    hour-long download costs no downtime. Returns the variant id.
     """
+    from app.ai.providers import strata_lifecycle
+
     desired = read_desired()
-    if desired["model"] in installed_quants() and not desired["reinstall_pending"]:
-        raise StrataError(f"{desired['model']} уже скачана")
-    check_quant_fits_disk(desired["model"])
+    vid = vid or desired["id"]
+    if vid not in QUANTS:
+        raise StrataError(f"Неизвестное квантование: {vid}")
+    if vid in installed_quants():
+        raise StrataError(f"{vid} уже скачана")
+    running = await strata_lifecycle.installer_variant()
+    if running:
+        raise StrataError(f"Уже скачивается {running}. Дождитесь окончания или остановите его.")
+    check_quant_fits_disk(vid)
     container = await _find_container()
-    if container and container.get("State") == "running":
+    current = await strata_lifecycle.server_version(container) if container else None
+    check_version(vid, (current or {}).get("version"))
+    if container and container.get("State") == "running" and vid == desired["id"]:
         raise StrataError(
-            "Strata сейчас запущена. Верните видеокарту Ollama, затем скачивайте — "
-            "или нажмите «Применить», и Strata скачает квантование при перезапуске."
+            f"Strata запущена с {vid} и скачивает её сама. Дождитесь, пока она загрузится."
         )
-    write_desired(
-        model=desired["model"],
-        context=desired["context"],
-        vision=desired["vision"],
-        reinstall=desired["reinstall_pending"],
-        install_only=True,
+    env_file = write_install_env(
+        vid,
+        context or desired["context"],
+        desired["vision"] if vision is None else vision,
     )
-    await _container_action("start")
-    logger.info("strata_install_started", model=desired["model"])
+    await strata_lifecycle.run_installer(vid, env_file)
+    logger.info("strata_install_started", model=vid)
+    return vid
 
 
 async def stop_strata() -> None:
@@ -804,11 +1181,13 @@ async def stop_strata() -> None:
 
 
 async def restart_if_running() -> bool:
+    from app.ai.providers import strata_lifecycle
+
     c = await _find_container()
     if c and c.get("State") == "running":
         if not read_desired()["install_only"]:
             apply_runtime_keys()
-        await _container_action("restart", timeout=60)
+        await strata_lifecycle.restart_server()
         return True
     return False
 
@@ -820,8 +1199,10 @@ async def reconcile_owner() -> str | None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("strata_reconcile_failed", error=str(exc)[:200])
         return None
-    serving = c and c.get("State") == "running" and not read_desired()["install_only"]
+    desired = read_desired()
+    serving = c and c.get("State") == "running" and not desired["install_only"]
     owner = gpu_runtime.STRATA if serving else gpu_runtime.OLLAMA
+    _publish_served(desired["id"])
     try:
         if gpu_runtime.current_owner() != owner:
             gpu_runtime.set_owner(owner)

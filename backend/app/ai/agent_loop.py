@@ -2088,7 +2088,11 @@ async def _call_provider_streaming(
             from app.ai import gpu_runtime
 
             try:
-                gpu_runtime.check_call(p, config.ollama_url if p == "ollama" else None)
+                gpu_runtime.check_call(
+                    p,
+                    config.ollama_url if p == "ollama" else None,
+                    (model_override or config.worker_model) if p == "strata" else None,
+                )
             except gpu_runtime.GpuRuntimeUnavailable as exc:
                 logger.warning("provider_gpu_runtime_unavailable", provider=p, error=str(exc))
                 last_exc = exc

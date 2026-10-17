@@ -55,8 +55,9 @@ def test_guard_error_is_a_runtime_error_the_router_skips():
 
 def test_desired_settings_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setenv("STRATA_DATA_DIR", str(tmp_path))
+    base = {"id": "IQ2_XS", "family": "qwen", "model": "IQ2_XS", "low_ram": "auto"}
     assert strata_manager.read_desired() == {
-        "model": "IQ2_XS",
+        **base,
         "context": 65536,
         "vision": True,
         "reinstall_pending": False,
@@ -66,7 +67,7 @@ def test_desired_settings_roundtrip(tmp_path, monkeypatch):
     text = (tmp_path / "aiw.env").read_text()
     assert "MODEL=IQ2_XS" in text and "VISION=no" in text and "REINSTALL=1" in text
     assert strata_manager.read_desired() == {
-        "model": "IQ2_XS",
+        **base,
         "context": 32768,
         "vision": False,
         "reinstall_pending": True,
@@ -76,6 +77,33 @@ def test_desired_settings_roundtrip(tmp_path, monkeypatch):
         model="IQ3_S", context=65536, vision=True, reinstall=False, install_only=True
     )
     assert strata_manager.read_desired()["install_only"] is True
+
+
+def test_other_families_are_named_like_setup_names_them(tmp_path, monkeypatch):
+    """FAMILY=qwen36 MODEL=UD-Q4_K_XL → setup's "qwen36-UD-Q4_K_XL" (config strata-qwen36-ud-q4_k_xl.json)."""
+    monkeypatch.setenv("STRATA_DATA_DIR", str(tmp_path))
+    strata_manager.write_desired(
+        family="qwen36", model="UD-Q4_K_XL", context=65536, vision=True, reinstall=False
+    )
+    text = (tmp_path / "aiw.env").read_text()
+    assert "FAMILY=qwen36" in text and "MODEL=UD-Q4_K_XL" in text
+    desired = strata_manager.read_desired()
+    assert desired["id"] == "qwen36-UD-Q4_K_XL" and desired["family"] == "qwen36"
+    # The id alone is accepted as well (the panel sends ids).
+    strata_manager.write_desired(model="qwen36-Q8_0", context=65536, vision=True, reinstall=False)
+    assert strata_manager.read_desired()["model"] == "Q8_0"
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "strata-qwen36-ud-q4_k_xl.json").write_text(
+        json.dumps({"args": ["--native", "x.gguf", "--max-context", "131072", "--vision"]})
+    )
+    assert strata_manager.installed_quants() == ["qwen36-UD-Q4_K_XL"]
+    assert strata_manager.installed_settings("qwen36-UD-Q4_K_XL") == {
+        "context": 131072,
+        "vision": True,
+    }
+    assert strata_manager.catalog_key("qwen36-UD-Q4_K_XL") == "strata_qwen3_6_35b"
+    # Unsloth's files are the original model: same catalog entry.
+    assert strata_manager.catalog_key("unsloth-UD-IQ4_XS") == "strata_qwen3_8_flash_next"
 
 
 def test_desired_rejects_unknown_quant_and_context(tmp_path, monkeypatch):
