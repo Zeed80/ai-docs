@@ -150,7 +150,10 @@ capabilities:
       Все записи черновые (draft-first): review_status=ingested, а при
       конфликте по артикулу — needs_review + AnomalyCard, старая запись не
       трогается. approve снимает review_status с одной записи после проверки
-      человеком (approval-gated — это решение о доверии данным).
+      человеком (approval-gated — это решение о доверии данным); заметки
+      карточки поставщика он не пишет — это suppliers.update (user_notes).
+      Цену со страницы по ссылке из задачи читай computer_use.browser_fetch;
+      attach_web_catalog — когда просят загрузить прайс в каталог.
     path: /api/agent/cap/tool_catalog
     method: POST
     gate_actions: [approve]
@@ -312,7 +315,7 @@ capabilities:
           description: "Фильтры для list: role (supplier — по умолчанию, только поставщики | buyer — наши юрлица | all — все контрагенты), limit (не больше 200), offset, sort_by (name | trust_score | total_invoices | total_amount; числа — по убыванию: «у кого больше всего счетов» = sort_by=total_invoices, limit=1). Других фильтров у list нет: поиск по имени или ИНН — action=search"
         body:
           type: object
-          description: "Данные для update"
+          description: "Данные для update. Заметки карточки поставщика — поле user_notes (просьба «запиши в заметки карточки»); пиши только по просьбе"
       required: [action]
 
   - name: warehouse
