@@ -188,6 +188,21 @@ async def test_update_invoice(client: AsyncClient, db_session: AsyncSession):
 
 
 @pytest.mark.asyncio
+async def test_an_unknown_invoice_field_is_refused_not_dropped(
+    client: AsyncClient, db_session: AsyncSession
+):
+    """An unknown field used to answer 200 and change nothing; the caller took it as saved."""
+    _, invoice_id = await _create_invoice(db_session)
+
+    resp = await client.patch(
+        f"/api/invoices/{invoice_id}",
+        json={"contract_document_id": "ce3a01c8-bb36-4750-b267-18c5564a11cf"},
+    )
+    assert resp.status_code == 422
+    assert "contract_document_id" in resp.text
+
+
+@pytest.mark.asyncio
 async def test_update_invoice_line(client: AsyncClient, db_session: AsyncSession):
     """invoice.line.update — patch a single line; amount recomputed from qty×price."""
     _, invoice_id = await _create_invoice(db_session)

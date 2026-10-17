@@ -740,8 +740,9 @@ async def test_known_tool_result_is_checkpointed_before_settlement_blocker(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mark", ["guess", "exact"])
+@pytest.mark.parametrize("inside_body", [False, True])
 async def test_a_guessed_target_waits_for_the_owner_and_the_mark_is_never_sent(
-    test_engine, monkeypatch, mark
+    test_engine, monkeypatch, mark, inside_body
 ):
     """T5: a change the model aimed at a record it chose itself is confirmed
     by the owner first; the agent's mark does not reach the recipient."""
@@ -777,8 +778,12 @@ async def test_a_guessed_target_waits_for_the_owner_and_the_mark_is_never_sent(
         "action": "update",
         "supplier_id": "00000000-0000-4000-8000-000000000001",
         "body": {"contact_phone": "+7 495 222-33-44"},
-        "target_match": mark,
     }
+    # E52 №15: the model also puts the mark inside body.
+    if inside_body:
+        arguments["body"]["target_match"] = mark
+    else:
+        arguments["target_match"] = mark
     await session._execute_single_tool(
         {"id": "upd-1", "function": {"name": "suppliers", "arguments": arguments}}, 0
     )

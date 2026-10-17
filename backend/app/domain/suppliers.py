@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # ── Party / Supplier ───────────────────────────────────────────────────────
 
@@ -163,6 +163,9 @@ class SupplierAlertsResponse(BaseModel):
 
 
 class SupplierUpdate(BaseModel):
+    # An unknown field is refused: dropping it answered 200 with nothing saved.
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = None
     inn: str | None = None
     kpp: str | None = None

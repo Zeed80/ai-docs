@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.db.models import InvoiceStatus
 from app.domain.documents import EmailSourceOut
@@ -124,6 +124,9 @@ class InvoiceValidationResponse(BaseModel):
 
 class InvoiceFieldUpdate(BaseModel):
     """Update specific invoice fields after review."""
+
+    # An unknown field is refused: dropping it answered 200 with nothing saved.
+    model_config = ConfigDict(extra="forbid")
 
     invoice_number: str | None = None
     invoice_date: datetime | None = None

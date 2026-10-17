@@ -225,6 +225,13 @@ async def test_update_supplier(client: AsyncClient, supplier):
 
 
 @pytest.mark.asyncio
+async def test_an_unknown_supplier_field_is_refused_not_dropped(client: AsyncClient, supplier):
+    resp = await client.patch(f"/api/suppliers/{supplier.id}", json={"phone": "+7 999 123 4567"})
+    assert resp.status_code == 422
+    assert "phone" in resp.text
+
+
+@pytest.mark.asyncio
 async def test_list_suppliers(client: AsyncClient, supplier):
     resp = await client.get("/api/suppliers")
     assert resp.status_code == 200

@@ -4510,6 +4510,14 @@ class AgentSession:
         target_match = execution_args.get("target_match")
         if target_match is None:
             target_match = args.get("target_match")
+        # The model also puts the mark inside body; there it used to reach the
+        # recipient, which dropped it, so the guess ran unconfirmed.
+        for holder in (execution_args, args):
+            body = holder.get("body")
+            if isinstance(body, dict) and "target_match" in body:
+                if target_match is None:
+                    target_match = body["target_match"]
+                holder["body"] = {k: v for k, v in body.items() if k != "target_match"}
         if target_match is not None:
             execution_args = {k: v for k, v in execution_args.items() if k != "target_match"}
             args = {k: v for k, v in args.items() if k != "target_match"}
