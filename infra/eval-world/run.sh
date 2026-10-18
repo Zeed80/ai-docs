@@ -51,6 +51,19 @@ fi
 
 SETUP=$(mktemp)
 docker exec -w /app infra-backend-1 python -m app.ai.evals.live_world export > "$SETUP"
+# EVAL_AGENT_CONFIG='{"department_enabled": false}' changes the agent config of
+# this world only (an A/B against the stack's setup); it enters the setup
+# digest, so such results never pass for the stack's own.
+if [ -n "${EVAL_AGENT_CONFIG:-}" ]; then
+  python3 - "$SETUP" "$EVAL_AGENT_CONFIG" <<'PY'
+import json, sys
+path, override = sys.argv[1], json.loads(sys.argv[2])
+setup = json.load(open(path))
+setup["agent_config"].update(override)
+setup.pop("digest", None)  # the import digests the changed content
+json.dump(setup, open(path, "w"))
+PY
+fi
 DIGEST=$(docker exec -i -w /app aiw-eval-eval-backend-1 python -m app.ai.evals.live_world import < "$SETUP" 2>/dev/null | tail -1)
 rm -f "$SETUP"
 
