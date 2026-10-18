@@ -1522,6 +1522,33 @@ class RecipeDecision(BaseModel):
     decided_by: str = "user"
 
 
+class ProcedureSummaryOut(BaseModel):
+    name: str
+    description: str
+
+
+class ProcedureOut(ProcedureSummaryOut):
+    text: str
+
+
+@router.get("/procedures", response_model=list[ProcedureSummaryOut])
+async def list_agent_procedures() -> list[ProcedureSummaryOut]:
+    """Procedures the agent reads on demand (index shown in its prompt)."""
+    from app.ai.procedures import list_procedures
+
+    return [ProcedureSummaryOut(name=p.name, description=p.description) for p in list_procedures()]
+
+
+@router.get("/procedures/{name}", response_model=ProcedureOut)
+async def get_agent_procedure(name: str) -> ProcedureOut:
+    from app.ai.procedures import read_procedure
+
+    proc = read_procedure(name)
+    if proc is None:
+        raise HTTPException(status_code=404, detail=f"Procedure '{name}' not found")
+    return ProcedureOut(name=proc.name, description=proc.description, text=proc.text)
+
+
 @router.get("/recipes", response_model=list[RecipeSkillOut])
 async def list_recipes(
     status: str | None = None,

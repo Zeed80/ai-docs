@@ -1270,6 +1270,27 @@ capabilities:
           description: "ID генерации (для get, get_ir, full_check)"
       required: [action]
 
+  - name: procedures
+    description: >
+      Процедуры — знания и порядок работы по темам: таблицы и отчёты, чертежи
+      и допуски, режущий инструмент, техпроцессы, нормоконтроль, закупки,
+      склад, почта, поиск по базе знаний, сводка для руководителя. Список с
+      описаниями — в разделе «Процедуры» системного промпта. action=read с
+      name возвращает текст процедуры; читай её до работы по этой теме.
+    path: /api/agent/cap/procedures
+    method: POST
+    gate_actions: []
+    parameters:
+      type: object
+      properties:
+        action:
+          type: string
+          description: "read"
+        name:
+          type: string
+          description: "Имя процедуры из раздела «Процедуры»"
+      required: [action, name]
+
   - name: vault
     description: >
       Получить данные из временного хранилища по vault_ref из предыдущего ответа.

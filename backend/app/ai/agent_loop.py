@@ -845,16 +845,28 @@ def _tone_style_hint(tone: str) -> str | None:
     return _TONE_STYLE_HINTS.get(tone)
 
 
+def _with_procedures(prompt: str) -> str:
+    """Append the procedures index; their text comes by procedures.read."""
+    from app.ai.procedures import procedures_index
+
+    try:
+        index = procedures_index()
+    except Exception as exc:  # noqa: BLE001 — a broken file must not stop the turn
+        log_degraded("agent_loop.procedures_index", exc)
+        index = ""
+    return f"{prompt}\n\n{index}" if index else prompt
+
+
 def _load_system_prompt(config: BuiltinAgentConfig | None = None) -> str:
     if config and config.system_prompt:
-        return f"{config.system_prompt.strip()}\n\n{_OPERATIONAL_POLICY}"
+        return f"{_with_procedures(config.system_prompt.strip())}\n\n{_OPERATIONAL_POLICY}"
     path = gateway_config.base_prompt_path
     if path.exists():
         raw = path.read_text()
         base_prompt = raw.replace(
             "[ИНСТРУМЕНТЫ ЗАГРУЖАЮТСЯ АВТОМАТИЧЕСКИ ИЗ РЕЕСТРА SKILLS]", ""
         ).strip()
-        return f"{base_prompt}\n\n{_OPERATIONAL_POLICY}"
+        return f"{_with_procedures(base_prompt)}\n\n{_OPERATIONAL_POLICY}"
     agent_name = config.agent_name if config else gateway_config.agent_name
     return (
         f"Ты — AI-ассистент производственного предприятия. Твоё имя: {agent_name}.\n\n"
@@ -3599,7 +3611,7 @@ class AgentSession:
 
     # Capabilities every role can always use, regardless of its allowlist.
     # sheets are a safe scratch area (no production DB writes) — available to all.
-    _CORE_CAPABILITIES = frozenset({"workspace", "memory", "search", "sheets"})
+    _CORE_CAPABILITIES = frozenset({"workspace", "memory", "search", "sheets", "procedures"})
 
     def _tools_for_turn(self) -> list[dict]:
         """Visible tools for the current turn, scoped by the active role.

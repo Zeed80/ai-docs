@@ -217,6 +217,10 @@ async def _perform(
                 max_chars=min(int(body.get("max_chars", 20000)), 50000),
                 wait_ms=min(int(body.get("wait_ms", 0)), 15000),
                 ocr=bool(body.get("ocr", False)),
+                # A catalog page lists items whose prices sit on linked pages;
+                # without its links the model saw "links": [] and, unable to
+                # follow them, wrote prices it had never read (E52).
+                include_links=True,
             )
         )
         result = response.model_dump()
