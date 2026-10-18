@@ -403,6 +403,8 @@ capabilities:
       action=compose генерирует черновик письма из intent+контекста (счёт/поставщик/
       тред) и возвращает draft_id — дальше как обычно risk_check → send [GATE].
       action=reply — черновик ответа в тред с корректными заголовками.
+      action=compose_assist — фоновая доработка текста для редактора (task_id),
+      черновика не создаёт; черновик письма — action=draft.
       action=label — пометить/переместить/навесить метку на треды (body:
       {thread_ids:[...], action:"read"|"archive"|"star"|"add_label", label_id?}).
     path: /api/agent/cap/email
