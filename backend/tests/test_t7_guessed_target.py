@@ -569,3 +569,65 @@ def test_another_number_of_the_same_kind_is_a_guess_even_by_a_filter():
     assert guessed_target("documents", link, asked_other) == "other_number"
     asked_this = turn("Привяжи договор ДП-240 к счёту EV-9998")
     assert guessed_target("documents", link, asked_this) is None
+
+
+def test_a_lookup_pruned_from_the_models_history_still_judges_the_reminder():
+    """E52: the empty lookup of EV-5801 was the 1st of 11 calls; the history
+    stubbed it for the model and the check saw nothing, so the reminder ran."""
+    from types import SimpleNamespace
+
+    from app.ai.agent_loop import AgentSession
+
+    empty = _envelope({"items": [], "total": 0})
+    other = _envelope({"items": [], "total": 0})
+    reads = [("invoices", {"action": "list", "filters": {"search": "EV-5801"}}, empty)]
+    reads += [("payments", {"action": "list_schedule", "limit": i}, other) for i in range(8)]
+    session = AgentSession.__new__(AgentSession)
+    session._config = SimpleNamespace(max_history_messages=200)
+    session.messages = _turn(*reads, request="Напомни в день срока про оплату счёта EV-5801.")
+    session._trim_history()
+
+    reminder = _reminder("Проверить оплату счёта EV-5801")
+    assert guessed_target("analytics", reminder, session.messages, 1) is None  # stubbed
+    assert (
+        guessed_target("analytics", reminder, session._judged_messages(), session._turn_start())
+        == "requested_record_not_found"
+    )
+
+
+def test_a_number_nothing_had_is_judged_beside_a_found_record():
+    """E52: the supplier was found, the invoice EV-4901 / contract ДП-95 was
+    not; the letter and the card note named it and were written anyway."""
+    found = _envelope({"results": [C_REC], "total": 1})
+    empty = _envelope({"items": [], "total": 0})
+    messages = _turn(
+        ("invoices", {"action": "list", "filters": {"search": "EV-4901"}}, empty),
+        ("suppliers", {"action": "search", "query": "Эвал-Медь"}, found),
+        request="Напиши поставщику по счёту EV-4901 письмо: просим прислать оригинал.",
+    )
+    draft = {
+        "action": "draft",
+        "body": {
+            "to_addresses": ["sales@eval-med.example"],
+            "subject": "Оригинал счёта EV-4901",
+            "body_html": "<p>Просим прислать оригинал счёта EV-4901.</p>",
+            "supplier_id": COPPER,
+        },
+    }
+    assert guessed_target("email", draft, messages) == "requested_record_not_found"
+    note = {
+        "action": "update",
+        "supplier_id": COPPER,
+        "body": {"user_notes": "Оригинал счёта EV-4901 запрошен"},
+    }
+    assert guessed_target("suppliers", note, messages) == "requested_record_not_found"
+
+
+def test_a_found_number_beside_its_record_passes():
+    one = _envelope({"items": [{"id": STEEL, "invoice_number": "EV-5301"}]})
+    messages = _turn(
+        ("invoices", {"action": "list", "filters": {"search": "EV-5301"}}, one),
+        request="Запиши в заметки счёта EV-5301: ждём оригинал.",
+    )
+    change = {"action": "update", "invoice_id": STEEL, "body": {"notes": "EV-5301: ждём оригинал"}}
+    assert guessed_target("invoices", change, messages) is None

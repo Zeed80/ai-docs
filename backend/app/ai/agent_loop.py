@@ -2499,13 +2499,14 @@ def guessed_target(
         reason = _judge_target(target, definition, messages, start)
         if reason is not None:
             return reason
-    if not path_ids and not body_ids:
-        # T8h: an unattached record names its subject in words ("оплата счёта
-        # EV-5701"); E52 set such reminders when two invoices had that number.
-        for code in _record_codes(args):
-            reason = _judge_code(code, messages, start)
-            if reason is not None:
-                return reason
+    # T8h: a record named in words ("оплата счёта EV-5701"); E52 set such
+    # reminders when two invoices had that number. The words count beside an
+    # id too: a letter to the found supplier about EV-4901 and a note «по
+    # договору ДП-95» on its card were written when nothing had that number.
+    for code in _record_codes(args):
+        reason = _judge_code(code, messages, start)
+        if reason is not None:
+            return reason
     return None
 
 
@@ -4363,7 +4364,7 @@ class AgentSession:
             # The silent model must not hide what already happened: a turn
             # that changed a record and then ran out of steps said only "could
             # not finish" (E49 live run), and the owner had no way to know.
-            done = performed_changes(self.messages, self._turn_start())
+            done = performed_changes(self._judged_messages(), self._turn_start())
             content = "Не удалось полностью завершить задачу за отведённое число шагов. "
             if done:
                 content += (
@@ -4477,7 +4478,7 @@ class AgentSession:
         ):
             missing = not_found_in_turn(
                 [str(execution_args[p]) for p in definition.path_params if execution_args.get(p)],
-                self.messages,
+                self._judged_messages(),
                 self._turn_start(),
             )
             if missing is not None:
@@ -4494,7 +4495,7 @@ class AgentSession:
         # T8c: after a refusal for lack of rights, no other change in this
         # turn — the employee reports the refusal instead of a substitute.
         if definition is not None and definition.effect != "read":
-            refused = denied_writes(self.messages, self._turn_start())
+            refused = denied_writes(self._judged_messages(), self._turn_start())
             if refused and definition.name not in refused:
                 result = {
                     "status": "blocked",
@@ -4530,21 +4531,21 @@ class AgentSession:
         # T7b: whether the target is a guess is judged from this turn's reads,
         # whatever the model marked (E52: it changed a look-alike unmarked).
         guess_reason = guessed_target(
-            original_name, execution_args, self.messages, self._turn_start()
+            original_name, execution_args, self._judged_messages(), self._turn_start()
         )
         if guess_reason is not None:
             current_gates.add(original_name)
             logger.info("guessed_target_gated", tool=original_name, reason=guess_reason)
         # T8b: a contact copied from someone else's or an outdated page.
         source_doubt = doubtful_source(
-            original_name, execution_args, self.messages, self._turn_start()
+            original_name, execution_args, self._judged_messages(), self._turn_start()
         )
         if source_doubt is not None:
             current_gates.add(original_name)
             logger.info("doubtful_source_gated", tool=original_name, reason=source_doubt)
         # T7c: a field the request never named is the owner's call.
         extra_fields = unrequested_fields(
-            original_name, execution_args, self.messages, self._turn_start()
+            original_name, execution_args, self._judged_messages(), self._turn_start()
         )
         if extra_fields:
             # The model hears it first and may drop them: E52 lost whole
@@ -4697,7 +4698,7 @@ class AgentSession:
         # addresses): a second create only reworded the first — seven reminders
         # for one invoice in a live run. Say so instead of creating again.
         key = creation_key(fn_name, args)
-        earlier = prior_creation(self.messages, key, self._turn_start()) if key else None
+        earlier = prior_creation(self._judged_messages(), key, self._turn_start()) if key else None
         if earlier is not None:
             data = earlier.get("data") if isinstance(earlier.get("data"), dict) else earlier
             result = {
@@ -5405,9 +5406,39 @@ class AgentSession:
         # Eagerly prune old tool results: keep last 6 verbatim, replace older
         # ones with a stub. This is free (no LLM call) and prevents tool result
         # payloads from accumulating across turns.
-        from app.ai.context_compressor import _prune_old_tool_results
+        from app.ai.context_compressor import _PRUNED, _prune_old_tool_results
 
+        # The checks of this turn judge by what was read, so they keep the
+        # full results the model no longer sees (E52: the empty lookup of
+        # EV-5801 was the 1st of 11 calls; stubbed, the reminder passed).
+        full = getattr(self, "_full_tool_results", None)
+        if full is None:
+            full = self._full_tool_results = {}
+        present: set[str] = set()
+        for message in self.messages:
+            call_id = message.get("tool_call_id")
+            if message.get("role") != "tool" or not call_id:
+                continue
+            present.add(str(call_id))
+            if message.get("content") != _PRUNED:
+                full.setdefault(str(call_id), message.get("content"))
+        for call_id in [c for c in full if c not in present]:
+            del full[call_id]
         self.messages = _prune_old_tool_results(self.messages, keep_last=6)
+
+    def _judged_messages(self) -> list[dict]:
+        """The history with pruned tool results restored, for the checks."""
+        from app.ai.context_compressor import _PRUNED
+
+        full = getattr(self, "_full_tool_results", None) or {}
+        return [
+            {**m, "content": full[str(m.get("tool_call_id"))]}
+            if m.get("role") == "tool"
+            and m.get("content") == _PRUNED
+            and str(m.get("tool_call_id")) in full
+            else m
+            for m in self.messages
+        ]
 
     async def _append_memory_context(self) -> None:
         if not self._config.memory_enabled:
