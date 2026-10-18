@@ -614,4 +614,27 @@ def test_a_dictated_number_nothing_has_is_the_users_words():
     }
     assert guessed_target("email", draft, messages) is None
     reminder = _reminder("Отгрузка по счёту EV-4101")
-    assert guessed_target("analytics", reminder, messages) is None
+    dated = _turn(
+        ("invoices", {"action": "list", "filters": {"search": "EV-4101"}}, empty),
+        request="Напомни мне в понедельник про отгрузку по счёту EV-4101.",
+    )
+    assert guessed_target("analytics", reminder, dated) is None
+
+
+def test_a_reminder_dated_by_an_unseen_record_waits_for_the_owner():
+    """T8i (owner, 2026-10-18): "в день срока" of EV-5801 that no lookup
+    found — the date can only be the model's own."""
+    empty = _envelope({"items": [], "total": 0})
+    reads = (("invoices", {"action": "list", "filters": {"search": "EV-5801"}}, empty),)
+    reminder = _reminder("Проверить оплату счёта EV-5801")
+    messages = _turn(*reads, request="Напомни мне в день срока проверить оплату счёта EV-5801.")
+    assert guessed_target("analytics", reminder, messages) == "requested_record_not_found"
+    for request in (
+        "Напомни мне в понедельник про оплату счёта EV-5801.",
+        "Через неделю напомни проверить оплату счёта EV-5801.",
+        "Напомни 25.10 проверить оплату счёта EV-5801.",
+        "Напомни 3 ноября проверить оплату счёта EV-5801.",
+    ):
+        assert guessed_target("analytics", reminder, _turn(*reads, request=request)) is None, (
+            request
+        )

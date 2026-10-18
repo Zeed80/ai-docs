@@ -404,7 +404,9 @@ capabilities:
       action=recognize_attachment сразу возвращает текст и поля вложения (счёт: №,
       сумма, срок); action=get_attachment отдаёт байты файла.
       action=compose генерирует черновик письма из intent+контекста (счёт/поставщик/
-      тред) и возвращает draft_id — дальше как обычно risk_check → send [GATE].
+      тред) и возвращает draft_id — дальше как обычно risk_check → send [GATE];
+      ему нужен mailbox — адрес из action=mailboxes, не придуманный. Обычное
+      письмо, текст которого пишешь сам, — action=draft, без ящика.
       action=reply — черновик ответа в тред с корректными заголовками.
       action=compose_assist — фоновая доработка текста для редактора (task_id),
       черновика не создаёт; черновик письма — action=draft.

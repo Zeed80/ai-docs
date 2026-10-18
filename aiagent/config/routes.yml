@@ -924,6 +924,12 @@ group_request_words: [все, всех, всем, всеми, каждый, ка
 # Normalized (lower, ё→е) substrings of the page text.
 stale_source_markers: [устарел, архивная страниц, не обновляется, не обслуживается, больше не действует, недействител]
 
+# T8i (owner 2026-10-18): stems by which a request names its own date. A
+# reminder about a record no lookup found, in a request without such a word
+# or a number ("в день срока"), can only take its date from the record —
+# it waits for the owner. Normalized (lower, ё→е) word prefixes.
+request_date_words: [понедельник, вторник, среду, среда, четверг, пятниц, суббот, воскресень, завтра, послезавтра, сегодня, через, январ, феврал, март, апрел, мая, июн, июл, август, сентябр, октябр, ноябр, декабр, утр, вечер, недел, месяц]
+
 # T7c (E52): a field of an existing record changes only when the request names
 # it. tool → field → word stems (normalized: lower, ё→е). A field changed
 # without any of its stems in the request waits for the owner. Fields not

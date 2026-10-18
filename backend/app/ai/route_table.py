@@ -395,6 +395,12 @@ def group_request_words() -> list[str]:
     return list(_table().get("group_request_words") or [])
 
 
+def request_date_words() -> list[str]:
+    """T8i: word stems by which a request names its own date ("в понедельник",
+    "через неделю", "15 ноября") — a reminder's date is then the user's."""
+    return list(_table().get("request_date_words") or [])
+
+
 def field_terms(tool: str) -> dict[str, list[str]]:
     """T7c: field → word stems the request must contain to change it."""
     return (_table().get("field_terms") or {}).get(tool) or {}

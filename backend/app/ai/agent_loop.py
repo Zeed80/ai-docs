@@ -776,8 +776,7 @@ _RU_MONTHS_GENITIVE = (
 )
 
 
-def _today_context() -> str:
-    """Live 'today is <date>' line for the system prompt — see _effective_system."""
+def _company_now():
     from datetime import UTC, datetime
     from zoneinfo import ZoneInfo
 
@@ -787,21 +786,35 @@ def _today_context() -> str:
         zone = ZoneInfo(_settings.default_timezone)
     except Exception:  # noqa: BLE001 — a bad setting falls back to UTC
         zone = UTC
-    now = datetime.now(UTC).astimezone(zone)
+    return datetime.now(UTC).astimezone(zone), zone
+
+
+def _today_context() -> str:
+    """Live 'today is <date>' line for the system prompt — see _effective_system.
+
+    The day only: the minute changed the head of every request, and Strata
+    re-read the whole prompt (130 of 231 calls an hour). The time goes in
+    the note at the end of each call (_now_note)."""
+    now, zone = _company_now()
     weekday = _RU_WEEKDAYS[now.weekday()]
     month = _RU_MONTHS_GENITIVE[now.month - 1]
     offset = now.strftime("%z")
     offset = f"{offset[:3]}:{offset[3:]}"
     return (
-        f"## Текущая дата и время\n"
-        f"Сегодня {now.day} {month} {now.year} г., {weekday}, "
-        f"{now.strftime('%H:%M')} ({zone}, UTC{offset}). "
-        f"ISO: {now.isoformat(timespec='minutes')}. Все относительные даты («завтра», «через неделю», "
+        f"## Текущая дата\n"
+        f"Сегодня {now.day} {month} {now.year} г., {weekday} ({zone}, UTC{offset}). "
+        f"ISO: {now.date().isoformat()}. Текущее время — в служебной заметке в конце "
+        f"диалога. Все относительные даты («завтра», «через неделю», "
         f"«в следующий понедельник») считай от этой даты, а не по памяти. Время, которое "
         f"называет человек, — в этом поясе: передавай его в инструменты в ISO 8601 со "
         f"смещением {offset} (например, {now.strftime('%Y-%m-%d')}T09:00:00{offset}), "
         f"а время из результатов (оно в UTC) показывай в этом поясе."
     )
+
+
+def _now_note() -> str:
+    now, zone = _company_now()
+    return f"Сейчас {now.strftime('%H:%M')} ({zone})."
 
 
 # Ф7 (AGENT_AUTONOMY_ROADMAP.md): pure wording/register guidance — must never
@@ -1380,8 +1393,11 @@ async def execute_skill(
 # ── Ollama client (streaming) ─────────────────────────────────────────────────
 
 
+SYSTEM_NOTE_PREFIX = "[Служебная заметка системы, не слова пользователя]"
+
+
 def _merge_system_messages(system_prompt: str, messages: list[dict]) -> list[dict]:
-    """Fold any inline ``system``-role entries into one leading system message.
+    """One leading system message; inline ``system`` entries stay in place.
 
     ``AgentSession.inject_orchestrator_hint`` (and other mid-turn hints) stash
     their text as a ``system``-role entry inside the rolling ``self.messages``
@@ -1391,13 +1407,18 @@ def _merge_system_messages(system_prompt: str, messages: list[dict]) -> list[dic
     message shows up anywhere but index 0 — which broke virtually every
     worker-dispatched turn. Mirrors the merge `_convert_messages_to_anthropic`
     already does for the Anthropic path.
+
+    Folding them into the leading message changed the head of the request
+    with every hint and the time note, so the server re-read the whole
+    prompt. They go in their place as notes in the user role instead.
     """
-    extra_system = [
-        m.get("content", "") for m in messages if m.get("role") == "system" and m.get("content")
-    ]
-    rest = [m for m in messages if m.get("role") != "system"]
-    merged_prompt = "\n\n".join([system_prompt, *extra_system]) if extra_system else system_prompt
-    return [{"role": "system", "content": merged_prompt}] + rest
+    out = [{"role": "system", "content": system_prompt}]
+    for m in messages:
+        if m.get("role") != "system":
+            out.append(m)
+        elif m.get("content"):
+            out.append({"role": "user", "content": f"{SYSTEM_NOTE_PREFIX}\n{m['content']}"})
+    return out
 
 
 async def _call_ollama_streaming(
@@ -2503,11 +2524,34 @@ def guessed_target(
     if not path_ids and not body_ids:
         # T8h: an unattached record names its subject in words ("оплата счёта
         # EV-5701"); E52 set such reminders when two invoices had that number.
+        unseen_ok = not _date_from_record(args, messages, start)
         for code in _record_codes(args):
-            reason = _judge_code(code, messages, start)
+            reason = _judge_code(code, messages, start, unseen_ok=unseen_ok)
             if reason is not None:
                 return reason
     return None
+
+
+_DATE_DIGITS_RE = re.compile(r"\b\d{1,2}([./:]\d{1,2})?\b")
+
+
+def _date_from_record(arguments: dict, messages: list[dict], start: int) -> bool:
+    """T8i: a reminder whose date the request does not name — it can only come
+    from the record ("в день срока"). E52: EV-5801 was not visible and the
+    employee set the reminder on a date of its own, saying so (owner,
+    2026-10-18: such a reminder waits for the owner)."""
+    from app.ai.route_table import request_date_words
+
+    body = arguments.get("body")
+    if not isinstance(body, dict) or not body.get("remind_at"):
+        return False
+    request = str(messages[start].get("content") or "") if start >= 0 else ""
+    text = _CODE_RE.sub(" ", _plain(request))
+    if _DATE_DIGITS_RE.search(text):
+        return False
+    words = re.findall(r"[0-9a-zа-я]+", text)
+    stems = [_plain(w) for w in request_date_words()]
+    return not any(w.startswith(stem) for w in words for stem in stems)
 
 
 def _contact_values(body: Any) -> list[tuple[str, str]]:
@@ -2627,8 +2671,12 @@ def _record_codes(arguments: Any) -> list[str]:
     return list(dict.fromkeys(m.group(0).lower() for t in texts for m in _CODE_RE.finditer(t)))
 
 
-def _judge_code(code: str, messages: list[dict], start: int) -> str | None:
-    """Judge a record number like a target id: by the reads that looked it up."""
+def _judge_code(
+    code: str, messages: list[dict], start: int, *, unseen_ok: bool = True
+) -> str | None:
+    """Judge a record number like a target id: by the reads that looked it up.
+    A number no lookup found is the user's words, unless the record itself is
+    needed (unseen_ok=False: a reminder's date comes from it)."""
     turn = messages[start + 1 :]
     results = {
         str(m["tool_call_id"]): m.get("content")
@@ -2666,6 +2714,8 @@ def _judge_code(code: str, messages: list[dict], start: int) -> str | None:
                 # Nothing answers to the number: it is the user's own words
                 # ("продлить договор ДП-77", a letter about EV-4101 not yet
                 # entered), not a record the model chose (owner, 2026-10-18).
+                if not unseen_ok:
+                    verdicts.append(0)
                 continue
             verdicts.append(sum(1 for r in records if _covers(needed, _record_words(r))))
     if not verdicts or 1 in verdicts:
@@ -3611,22 +3661,31 @@ class AgentSession:
         from app.ai.input_sanitizer import UNTRUSTED_NOTE
 
         system = f"{self._system}\n\n{_today_context()}\n\n{UNTRUSTED_NOTE}"
-        steps_left = getattr(self, "_steps_left", None)
-        if steps_left is not None and steps_left <= STEPS_LEFT_NUDGE:
-            # T8a (E52): drafts never got written — the steps went on side
-            # lookups (requisites, price history, document searches) until
-            # the turn ran out. Say so while there is still room to act.
-            system = (
-                f"{system}\n\nОсталось шагов: {steps_left}. Хватит собирать сведения: "
-                "выполни просьбу пользователя тем, что уже известно, а чего не хватает — "
-                "назови в ответе."
-            )
         tone_hint = _tone_style_hint(getattr(self._config, "agent_tone", "neutral"))
         if tone_hint:
             system = f"{system}\n\n{tone_hint}"
         if self._role_context:
             return f"{system}\n\n## Роль в этой задаче\n{self._role_context}"
         return system
+
+    def _call_note(self) -> str:
+        """What changes from call to call, said at the end of the request so
+        the head stays the same and the server reuses it."""
+        note = _now_note()
+        steps_left = getattr(self, "_steps_left", None)
+        if steps_left is not None and steps_left <= STEPS_LEFT_NUDGE:
+            # T8a (E52): drafts never got written — the steps went on side
+            # lookups (requisites, price history, document searches) until
+            # the turn ran out. Say so while there is still room to act.
+            note = (
+                f"{note} Осталось шагов: {steps_left}. Хватит собирать сведения: "
+                "выполни просьбу пользователя тем, что уже известно, а чего не хватает — "
+                "назови в ответе."
+            )
+        return note
+
+    def _messages_for_call(self) -> list[dict]:
+        return [*self.messages, {"role": "system", "content": self._call_note()}]
 
     async def on_user_message(self, content: str) -> None:
         self._restored_system = None
@@ -4041,7 +4100,7 @@ class AgentSession:
                 if self._turn_model_override and not _is_builder_turn(self.messages):
                     model_override = self._turn_model_override
                 message = await _call_provider_streaming(
-                    self.messages,
+                    self._messages_for_call(),
                     self._tools_for_turn(),
                     self._effective_system(),
                     self._config,
@@ -4340,7 +4399,7 @@ class AgentSession:
         msg: dict = {}
         try:
             msg = await _call_provider_streaming(
-                self.messages,
+                self._messages_for_call(),
                 [],  # no tools → forces a textual answer
                 self._effective_system(),
                 self._config,

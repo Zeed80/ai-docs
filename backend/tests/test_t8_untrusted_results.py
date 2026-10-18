@@ -62,9 +62,43 @@ def test_the_last_steps_are_announced_in_the_prompt():
 
     session = agent_loop.AgentSession(send)
     session._steps_left = 5
-    assert "Осталось шагов" not in session._effective_system()
+    assert "Осталось шагов" not in session._call_note()
     session._steps_left = 3
-    assert "Осталось шагов: 3" in session._effective_system()
+    assert "Осталось шагов: 3" in session._call_note()
+    assert "Осталось шагов" not in session._effective_system()
+    assert "Осталось шагов: 3" in session._messages_for_call()[-1]["content"]
+
+
+def test_the_head_of_the_request_stays_while_the_turn_goes_on(monkeypatch):
+    """Strata re-read the whole prompt when its head changed: the minute in
+    the system prompt, the steps nudge and inline hints folded into it."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    async def send(event):
+        return None
+
+    session = agent_loop.AgentSession(send)
+    session.messages = [{"role": "user", "content": "Привет"}]
+    zone = ZoneInfo("Europe/Moscow")
+    monkeypatch.setattr(
+        agent_loop, "_company_now", lambda: (datetime(2026, 10, 18, 9, 1, tzinfo=zone), zone)
+    )
+    first = agent_loop._merge_system_messages(
+        session._effective_system(), session._messages_for_call()
+    )
+    monkeypatch.setattr(
+        agent_loop, "_company_now", lambda: (datetime(2026, 10, 18, 9, 7, tzinfo=zone), zone)
+    )
+    session._steps_left = 2
+    session.messages.append({"role": "system", "content": "Продолжи выполнение задачи"})
+    later = agent_loop._merge_system_messages(
+        session._effective_system(), session._messages_for_call()
+    )
+    assert later[:2] == first[:2]
+    assert [m["role"] for m in later] == ["system", "user", "user", "user"]
+    assert later[2]["content"].endswith("Продолжи выполнение задачи")
+    assert "09:07" in later[-1]["content"] and "Осталось шагов: 2" in later[-1]["content"]
 
 
 @pytest.mark.asyncio
