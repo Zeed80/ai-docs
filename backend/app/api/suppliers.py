@@ -16,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.audit.service import log_action
+from app.auth.jwt import get_current_user
+from app.auth.models import UserInfo
 from app.db.models import (
     EmailThread,
     Invoice,
@@ -26,6 +28,7 @@ from app.db.models import (
     SupplierRequisiteHistory,
 )
 from app.db.session import get_db
+from app.domain.access import invoice_visibility_clause
 from app.domain.suppliers import (
     DuplicateCheckResult,
     DuplicateMatch,
@@ -264,6 +267,7 @@ async def create_supplier(
 async def get_supplier(
     supplier_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
 ):
     """Skill: supplier.get — Get supplier profile with aggregated stats."""
     result = await db.execute(
@@ -273,19 +277,17 @@ async def get_supplier(
     if not party:
         raise HTTPException(404, "Supplier not found")
 
-    # Aggregate recent stats
+    # Aggregate recent stats — over the invoices this user may see.
+    visible = await invoice_visibility_clause(db, current_user)
+    scope = [Invoice.supplier_id == supplier_id] + ([visible] if visible is not None else [])
     inv_count = (
-        await db.execute(
-            select(func.count()).select_from(
-                select(Invoice).where(Invoice.supplier_id == supplier_id).subquery()
-            )
-        )
+        await db.execute(select(func.count()).select_from(select(Invoice).where(*scope).subquery()))
     ).scalar() or 0
 
     open_amount = (
         await db.execute(
             select(func.coalesce(func.sum(Invoice.total_amount), 0.0)).where(
-                Invoice.supplier_id == supplier_id,
+                *scope,
                 Invoice.status.in_([InvoiceStatus.needs_review, InvoiceStatus.draft]),
             )
         )
@@ -405,16 +407,19 @@ async def search_suppliers(
 async def supplier_price_history(
     supplier_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
 ):
     """Skill: supplier.price_history — Get price history for all items from this supplier."""
     party = (await db.execute(select(Party).where(Party.id == supplier_id))).scalar_one_or_none()
     if not party:
         raise HTTPException(404, "Supplier not found")
 
-    # Get all invoices from this supplier with lines
+    # The supplier's invoices this user may see, with lines
+    visible = await invoice_visibility_clause(db, current_user)
     result = await db.execute(
         select(Invoice)
         .where(Invoice.supplier_id == supplier_id)
+        .where(*([visible] if visible is not None else []))
         .options(selectinload(Invoice.lines))
         .order_by(Invoice.invoice_date.asc())
     )
@@ -690,6 +695,7 @@ async def get_trust_score(
 async def supplier_alerts(
     supplier_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
 ):
     """Skill: supplier.alerts — Get alerts for a supplier."""
     party = (await db.execute(select(Party).where(Party.id == supplier_id))).scalar_one_or_none()
@@ -723,10 +729,12 @@ async def supplier_alerts(
             )
         )
 
-    # Alert: price increases
+    # Alert: price increases — between invoices this user may see
+    visible = await invoice_visibility_clause(db, current_user)
+    seen = [visible] if visible is not None else []
     result = await db.execute(
         select(Invoice)
-        .where(Invoice.supplier_id == supplier_id)
+        .where(Invoice.supplier_id == supplier_id, *seen)
         .options(selectinload(Invoice.lines))
         .order_by(Invoice.created_at.desc())
         .limit(2)
@@ -763,6 +771,7 @@ async def supplier_alerts(
                     Invoice.supplier_id == supplier_id,
                     Invoice.status == InvoiceStatus.needs_review,
                     Invoice.created_at < stale_cutoff,
+                    *seen,
                 )
                 .subquery()
             )

@@ -2499,14 +2499,13 @@ def guessed_target(
         reason = _judge_target(target, definition, messages, start)
         if reason is not None:
             return reason
-    # T8h: a record named in words ("оплата счёта EV-5701"); E52 set such
-    # reminders when two invoices had that number. The words count beside an
-    # id too: a letter to the found supplier about EV-4901 and a note «по
-    # договору ДП-95» on its card were written when nothing had that number.
-    for code in _record_codes(args):
-        reason = _judge_code(code, messages, start)
-        if reason is not None:
-            return reason
+    if not path_ids and not body_ids:
+        # T8h: an unattached record names its subject in words ("оплата счёта
+        # EV-5701"); E52 set such reminders when two invoices had that number.
+        for code in _record_codes(args):
+            reason = _judge_code(code, messages, start)
+            if reason is not None:
+                return reason
     return None
 
 
@@ -2662,7 +2661,10 @@ def _judge_code(code: str, messages: list[dict], start: int) -> str | None:
             except (TypeError, ValueError):
                 continue
             records = _records(result)
-            if records is None:
+            if not records:
+                # Nothing answers to the number: it is the user's own words
+                # ("продлить договор ДП-77", a letter about EV-4101 not yet
+                # entered), not a record the model chose (owner, 2026-10-18).
                 continue
             verdicts.append(sum(1 for r in records if _covers(needed, _record_words(r))))
     if not verdicts or 1 in verdicts:

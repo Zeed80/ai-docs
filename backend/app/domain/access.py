@@ -97,6 +97,23 @@ async def document_visibility_filter(db: AsyncSession, user: UserInfo) -> Column
     return or_(clause, Document.doc_type.in_(shared))
 
 
+async def invoice_visibility_clause(db: AsyncSession, user: UserInfo) -> ColumnElement | None:
+    """An invoice is visible when its source document is; one without a
+    document is legacy and visible to all. For queries over invoices that are
+    not the invoice list itself — a supplier's card summed every department's
+    invoices (E52: 88 000 of another department's invoice reached a letter)."""
+    from sqlalchemy import select
+
+    from app.db.models import Document, Invoice
+
+    clause = await document_visibility_filter(db, user)
+    if clause is None:
+        return None
+    return or_(
+        Invoice.document_id.is_(None), Invoice.document_id.in_(select(Document.id).where(clause))
+    )
+
+
 async def apply_visibility(
     db: AsyncSession,
     user: UserInfo,
