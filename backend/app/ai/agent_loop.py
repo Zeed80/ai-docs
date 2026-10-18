@@ -612,8 +612,9 @@ def _load_capabilities() -> tuple[list[dict], dict[str, dict]]:
                 "type": "function",
                 "function": {
                     "name": fn_name,
-                    # Keep the full curated description (actions + rules); 400 chars
-                    "description": description[:1200],
+                    # The full curated description: a cut at 1200 chars hid
+                    # the link, draft and compose rules from the model (E52).
+                    "description": description,
                     "parameters": {
                         "type": "object",
                         "properties": properties,

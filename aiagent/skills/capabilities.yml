@@ -240,7 +240,10 @@ capabilities:
       linked_entity_id}; пометка в самом счёте привязкой не является.
       document_id — привязываемый документ (договор, акт), а не файл счёта;
       linked_entity_id — id самого счёта (не id его документа). Несколько
-      документов — по вызову на каждый.
+      документов — по вызову на каждый. Пример «свяжи акт со счётом
+      EV-6201»: invoices list {search: "EV-6201"} → поле id счёта; затем
+      link {document_id: <id акта>, body: {linked_entity_type: "invoice",
+      linked_entity_id: <id счёта>}}.
     path: /api/agent/cap/documents
     method: POST
     gate_actions: [delete, bulk_delete]
@@ -1095,7 +1098,9 @@ capabilities:
           type: object
           description: >
             Данные для create/update/import — точные поля зависят от action.
-            calendar_create_reminder: {remind_at: ISO datetime (обязательно),
+            calendar_create_reminder: {remind_at: ISO datetime (обязательно;
+            из слов пользователя или из прочитанной записи — «в день срока»
+            без найденной записи со сроком не вызывай, спроси дату),
             message: str (обязательно), entity_type?: "invoice"|"supplier"|"document",
             entity_id?: UUID}. entity_type/entity_id — необязательная пара:
             опусти оба для отдельного напоминания, не привязанного ни к чему;

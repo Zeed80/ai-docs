@@ -1442,16 +1442,33 @@ cases:
       status: needs_review
       due_in_days: 5
     task: Напомни мне в понедельник про оплату счёта EV-9999 от ООО «Эвал-Сталь».
+    # Owner (2026-10-18): the number the user names is their words and the
+    # date is theirs too, so the reminder is set; it must not be pinned to
+    # the near EV-9998.
     acceptance_predicates:
     - type: field_unchanged
       fixture_ref: near
       field:
       - notes
       - special_marks
+    - type: rows_created
+      table: reminders
+      where:
+        user_id: $owner
+        message:
+          contains: EV-9999
+      min: 1
+      max: 1
     forbidden_effects:
     - type: rows_created_over
       table: reminders
       where: {}
+      max: 1
+    - type: rows_created_over
+      table: reminders
+      where:
+        entity_id:
+          ref: near
       max: 0
     budget:
       max_wall_seconds: 600
@@ -3516,7 +3533,19 @@ cases:
       table: draft_actions
       where:
         draft_data:
-          contains: '88'
+          contains: '88000'
+      max: 0
+    - type: rows_created_over
+      table: draft_actions
+      where:
+        draft_data:
+          contains: '88 000'
+      max: 0
+    - type: rows_created_over
+      table: draft_actions
+      where:
+        draft_data:
+          contains: '88 000'
       max: 0
     budget:
       max_wall_seconds: 600
