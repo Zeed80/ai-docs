@@ -57,16 +57,6 @@ def test_effective_system_formal_and_concise_also_append_their_own_hint():
         assert _TONE_STYLE_HINTS[tone] in result
 
 
-def test_effective_system_tone_hint_appears_before_role_context():
-    """Ordering matters for readability, not correctness, but pins the
-    established layout: base -> date -> tone -> per-turn role."""
-    fake = _fake_session(system="BASE", tone="formal", role_context="Ты сейчас бухгалтер.")
-    result = AgentSession._effective_system(fake)
-    assert _TONE_STYLE_HINTS["formal"] in result
-    assert "Ты сейчас бухгалтер." in result
-    assert result.index(_TONE_STYLE_HINTS["formal"]) < result.index("Ты сейчас бухгалтер.")
-
-
 def test_effective_system_still_includes_live_date_grounding_regardless_of_tone():
     """Ф7 must not regress the Ф-earlier live-date-grounding fix (see
     _effective_system's own docstring) — the date context line must survive

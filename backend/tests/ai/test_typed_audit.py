@@ -122,37 +122,6 @@ def test_can_retry_with_executor_uses_codes():
 
 
 @pytest.mark.asyncio
-async def test_tool_off_plan_is_advisory_and_does_not_fail_turn(monkeypatch):
-    """An equivalent-but-unplanned tool that publishes correctly passes the audit."""
-    clear_workspace_blocks()
-    config = BuiltinAgentConfig(
-        department_enabled=True,
-        audit_enabled=True,
-        model="mock-model",
-        backend_url="http://backend",
-        ollama_url="http://ollama",
-        exposed_skills=[],
-    )
-    monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
-
-    session = _orchestrator()
-    plan = _plan()
-    # Workspace was actually published and verified via another workspace tool.
-    upsert_workspace_block(
-        "agent:invoice-items", {"type": "table", "title": "Счета", "rows": [{"id": 1}]}
-    )
-    session._workspace_before = {}
-    session._trace.workspace_events.append(
-        {"type": "workspace.updated", "canvas_id": "agent:invoice-items"}
-    )
-    session._trace.tool_calls.append("workspace__another_equivalent_table")
-
-    report = await session._audit_turn(plan, config)
-    assert has_code(report.issues, AuditCode.TOOL_OFF_PLAN)
-    assert report.passed is True  # advisory must not flip `passed`
-
-
-@pytest.mark.asyncio
 async def test_filter_audit_checks_last_publish_not_first(monkeypatch):
     """A turn that publishes wrong first and corrects itself must pass."""
     clear_workspace_blocks()
@@ -196,40 +165,6 @@ async def test_filter_audit_checks_last_publish_not_first(monkeypatch):
     report = await session._audit_turn(plan, config)
     assert not has_code(report.issues, AuditCode.FILTER_MISSING, AuditCode.FILTER_MISMATCH)
     assert report.passed is True
-
-
-@pytest.mark.asyncio
-async def test_filter_mismatch_in_final_publish_is_flagged(monkeypatch):
-    clear_workspace_blocks()
-    config = BuiltinAgentConfig(
-        department_enabled=True,
-        audit_enabled=True,
-        model="mock-model",
-        backend_url="http://backend",
-        ollama_url="http://ollama",
-        exposed_skills=[],
-    )
-    monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
-
-    session = _orchestrator()
-    plan = _plan(filters={"supplier_query": "ООО Ромашка"})
-    upsert_workspace_block(
-        "agent:invoice-items", {"type": "table", "title": "Счета", "rows": [{"id": 1}]}
-    )
-    session._workspace_before = {}
-    session._trace.workspace_events.append(
-        {"type": "workspace.updated", "canvas_id": "agent:invoice-items"}
-    )
-    tool = "workspace__invoice_items_table"
-    session._trace.tool_calls.append(tool)
-    session._trace.tool_call_args[tool] = {"supplier_query": "ООО Лютик"}
-    session._trace.tool_results.append(
-        {"type": "tool_result", "tool": tool, "result": {"canvas_id": "agent:invoice-items"}}
-    )
-
-    report = await session._audit_turn(plan, config)
-    assert has_code(report.issues, AuditCode.FILTER_MISMATCH)
-    assert report.passed is False
 
 
 # ── Aux LLM budget ─────────────────────────────────────────────────────────────

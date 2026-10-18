@@ -1,7 +1,6 @@
 """A short follow-up is read in the context of the conversation.
 
-The router and the verifier both saw only the last message: «2» (the user
-picking an option) went as smalltalk, and «И?» or «Выбери сама путь» failed
+The verifier saw only the last message: «И?» or «Выбери сама путь» failed
 verification after correct work.
 """
 
@@ -9,24 +8,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from app.ai.turn_router import build_router_user
 from app.db.models import ChatMessage, ChatSession
 from app.domain.agent_intake import _preceding_dialogue
-
-
-def test_router_sees_the_preceding_exchange():
-    text = build_router_user(
-        "2",
-        has_open_spec_table=False,
-        history_summary="Ассистент: Варианты: 1) повторить позже 2) искать зеркало",
-    )
-    assert "искать зеркало" in text
-    assert "продолжает задачу" in text
-    assert text.endswith("Сообщение пользователя:\n2")
-
-
-def test_router_without_history_is_unchanged():
-    assert "Недавний контекст" not in build_router_user("Привет", has_open_spec_table=False)
 
 
 @pytest.mark.asyncio

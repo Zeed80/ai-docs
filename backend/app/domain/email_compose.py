@@ -7,8 +7,8 @@ Powers:
     drafts an email from an intent + context, then goes through the normal
     risk_check → send [GATE] path.
 
-Both run a REAL headless agent turn (app.ai.agent_loop.AgentSession) scoped to a
-worker role, so the model can look things up with tools — e.g. "выясни, какие
+Both run a REAL headless agent turn (app.ai.agent_loop.AgentSession) scoped to the
+e-mail capabilities, so the model can look things up with tools — e.g. "выясни, какие
 позиции были в счёте УТ-2562, и напиши про их наличие" makes the agent fetch the
 invoice, its line items and stock before writing. The model is the one
 configured for AITask.EMAIL_DRAFTING (Settings → Модели → Маршрутизация).
@@ -44,10 +44,11 @@ _FALLBACK_SYSTEM = (
     "(номера счетов, даты, суммы), профессиональное завершение. Никогда не отправляй "
     "письмо сам — всегда нужно подтверждение человека."
 )
-# The worker role whose capability allowlist the email turn runs under — needs
-# invoices / suppliers / procurement / documents / warehouse read access so the
-# agent can gather the facts a business email references.
-_EMAIL_TURN_ROLE = "procurement_specialist"
+# The capabilities the email turn may use: the facts a business email
+# references (invoices, suppliers, procurement, documents) and the mail itself.
+_EMAIL_TURN_CAPABILITIES = frozenset(
+    {"procurement", "suppliers", "invoices", "email", "documents", "analytics", "tool_catalog"}
+)
 _TURN_TIMEOUT_S = 150.0
 
 
@@ -288,7 +289,7 @@ _TOOL_LABELS = {
 async def _run_agent_email_turn(
     prompt: str, *, acting_user_sub: str | None, progress_cb=None
 ) -> str:
-    """One headless agent turn, scoped to the email/procurement role, on the
+    """One headless agent turn, scoped to the email capabilities, on the
     configured email model. Returns the agent's final text ('' on failure).
     ``progress_cb(str)`` is called with a short human label per tool call."""
     from app.ai.actor_context import get_acting_user, set_acting_user
@@ -318,7 +319,7 @@ async def _run_agent_email_turn(
     try:
         set_acting_user(acting_user_sub)
         session = AgentSession(collect)
-        session._active_role = _EMAIL_TURN_ROLE
+        session.set_capability_scope(set(_EMAIL_TURN_CAPABILITIES))
         session._response_budget = 3000
         session._turn_model_override = _email_model_override()
         await asyncio.wait_for(session.on_user_message(prompt), timeout=_TURN_TIMEOUT_S)

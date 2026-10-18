@@ -1,26 +1,11 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
-
 import pytest
 
 from app.ai import orchestrator as orchestrator_module
 from app.ai.agent_config import BuiltinAgentConfig
 from app.ai.orchestrator import AgentOrchestrator
-from app.domain.workspace import clear_workspace_blocks, upsert_workspace_block
-
-
-def _use_model_decision(monkeypatch, canvas_id=None, action=""):
-    from app.ai.turn_router import RecommendedTool, TurnDecision
-
-    decision = TurnDecision(
-        intent="analytical_table" if canvas_id else "specialist",
-        output_channel="workspace" if canvas_id else "chat",
-        workspace_canvas_id=canvas_id,
-        confidence=1.0,
-        recommended=[RecommendedTool(capability="workspace", action=action)] if action else [],
-    )
-    monkeypatch.setattr(AgentOrchestrator, "_decide_turn", AsyncMock(return_value=decision))
+from app.domain.workspace import clear_workspace_blocks
 
 
 class FakeExecutor:
@@ -37,25 +22,10 @@ class FakeExecutor:
     def inject_orchestrator_hint(self, hint: str) -> None:
         return None
 
-    def set_role_context(self, role_prompt) -> None:
-        return None
-
     def set_response_budget(self, max_tokens: int) -> None:
         return None
 
     def set_model_override(self, model) -> None:
-        return None
-
-    def set_active_role(self, role) -> None:
-        return None
-
-    def set_excluded_tools(self, tools) -> None:
-        return None
-
-    def set_recommended_capabilities(self, names) -> None:
-        return None
-
-    def set_workspace_expected(self, expected: bool) -> None:
         return None
 
     def record_external_turn(self, user_text: str, assistant_text: str) -> None:
@@ -75,532 +45,12 @@ class FakeExecutor:
             await self._send(event)
 
 
-@pytest.mark.asyncio
-async def test_orchestrator_assigns_worker_and_audits_workspace(monkeypatch):
-    _use_model_decision(monkeypatch, "agent:invoice-items-grouped", "invoice_items_grouped_table")
-    clear_workspace_blocks()
-    upsert_workspace_block(
-        "agent:invoice-items-grouped",
-        {"type": "table", "title": "Товары", "rows": [{"id": 1}]},
-    )
-    config = BuiltinAgentConfig(
-        department_enabled=True,
-        audit_enabled=True,
-        model="mock-model",
-        backend_url="http://backend",
-        ollama_url="http://ollama",
-        exposed_skills=[],
-    )
-    monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
-    monkeypatch.setattr(orchestrator_module.ai_router, "run", _raise_ai)
-    sent: list[dict] = []
-
-    async def capture(message: dict):
-        sent.append(message)
-
-    session = AgentOrchestrator(capture)
-    session._executor = FakeExecutor(
-        session._send_from_executor,
-        [
-            lambda: upsert_workspace_block(
-                "agent:invoice-items-grouped",
-                {"type": "table", "title": "Товары", "rows": [{"id": 1}, {"id": 2}]},
-            ),
-            {
-                "type": "tool_result",
-                "tool": "workspace__invoice_items_grouped_table",
-                "result": {"canvas_id": "agent:invoice-items-grouped"},
-            },
-            {"type": "text", "content": "Открыл таблицу на Рабочем столе."},
-            {"type": "done"},
-        ],
-    )
-
-    await session.on_user_message("Выведи все товары в таблицу, сгруппируй по счетам")
-
-    assert [event["type"] for event in sent[:3]] == [
-        "orchestrator.status",
-        "worker.assigned",
-        "workspace.publish_started",
-    ]
-    assert any(event["type"] == "workspace.publish_verified" for event in sent)
-    assert any(event["type"] == "audit.passed" for event in sent)
-    assert sent[-1]["type"] == "done"
-    assert sum(1 for event in sent if event["type"] == "done") == 1
-
-
-@pytest.mark.asyncio
-async def test_orchestrator_reports_capability_gap_when_workspace_missing(monkeypatch):
-    _use_model_decision(monkeypatch, "agent:document-list", "document_table")
-    clear_workspace_blocks()
-    config = BuiltinAgentConfig(
-        department_enabled=True,
-        audit_enabled=True,
-        allow_capability_builder=True,
-        capability_builder_requires_approval=True,
-        model="mock-model",
-        backend_url="http://backend",
-        ollama_url="http://ollama",
-        exposed_skills=[],
-    )
-    monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
-    monkeypatch.setattr(orchestrator_module.ai_router, "run", _raise_ai)
-    sent: list[dict] = []
-
-    async def capture(message: dict):
-        sent.append(message)
-
-    session = AgentOrchestrator(capture)
-    session._executor = FakeExecutor(
-        session._send_from_executor,
-        [{"type": "text", "content": "Готово"}, {"type": "done"}],
-    )
-
-    await session.on_user_message("Выведи полный список документов в таблицу")
-
-    assert any(event["type"] == "audit.failed" for event in sent)
-    assert not any(event["type"] == "capability_gap.builder_draft" for event in sent)
-    assert sent[-1]["type"] == "done"
-
-
-@pytest.mark.asyncio
-async def test_orchestrator_rejects_stale_workspace_block(monkeypatch):
-    _use_model_decision(monkeypatch, "agent:invoice-items-grouped", "invoice_items_grouped_table")
-    clear_workspace_blocks()
-    upsert_workspace_block(
-        "agent:invoice-items-grouped",
-        {"type": "table", "title": "Старый блок", "rows": [{"id": 1}]},
-    )
-    config = BuiltinAgentConfig(
-        department_enabled=True,
-        audit_enabled=True,
-        allow_capability_builder=True,
-        model="mock-model",
-        backend_url="http://backend",
-        ollama_url="http://ollama",
-        exposed_skills=[],
-    )
-    monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
-    monkeypatch.setattr(orchestrator_module.ai_router, "run", _raise_ai)
-    sent: list[dict] = []
-
-    async def capture(message: dict):
-        sent.append(message)
-
-    session = AgentOrchestrator(capture)
-    session._executor = FakeExecutor(
-        session._send_from_executor,
-        [
-            {
-                "type": "tool_result",
-                "tool": "workspace__invoice_items_grouped_table",
-                "result": {"canvas_id": "agent:invoice-items-grouped"},
-            },
-            {"type": "text", "content": "Готово"},
-            {"type": "done"},
-        ],
-    )
-
-    await session.on_user_message("Выведи все товары в таблицу, сгруппируй по счетам")
-
-    assert any(event["type"] == "audit.failed" for event in sent)
-    assert not any(event["type"] == "workspace.publish_verified" for event in sent)
-
-
-def test_orchestrator_treats_column_edit_as_workspace_request(monkeypatch):
-    config = BuiltinAgentConfig(
-        department_enabled=True,
-        audit_enabled=True,
-        model="mock-model",
-        backend_url="http://backend",
-        ollama_url="http://ollama",
-        exposed_skills=[],
-    )
-    monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
-    monkeypatch.setattr(orchestrator_module.ai_router, "run", _raise_ai)
-
-    async def capture(message: dict):
-        return None
-
-    session = AgentOrchestrator(capture)
-    plan = session._plan_turn("Добавь столбец с названием поставщика перед номером счета")
-
-    assert plan.worker.role == "invoice_specialist"
-    assert plan.workspace.required is True
-    assert plan.workspace.output_type == "table"
-    assert plan.workspace.canvas_id == "agent:invoice-items-grouped"
-
-
-def test_orchestrator_plan_turn_prefers_techdraw_for_precise_part_request(monkeypatch):
-    config = BuiltinAgentConfig(
-        department_enabled=True,
-        audit_enabled=True,
-        model="mock-model",
-        backend_url="http://backend",
-        ollama_url="http://ollama",
-        exposed_skills=[],
-    )
-    monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
-    monkeypatch.setattr(orchestrator_module.ai_router, "run", _raise_ai)
-
-    async def capture(message: dict):
-        return None
-
-    session = AgentOrchestrator(capture)
-    plan = session._plan_turn("начерти вал 50h6 длиной 120 с шероховатостью Ra0.8")
-
-    assert plan.intent == "image_studio"
-    assert plan.worker.recommended_skills[0] == "image_studio.techdraw"
-
-
-def test_orchestrator_plan_turn_keeps_generate_for_plain_sketch(monkeypatch):
-    config = BuiltinAgentConfig(
-        department_enabled=True,
-        audit_enabled=True,
-        model="mock-model",
-        backend_url="http://backend",
-        ollama_url="http://ollama",
-        exposed_skills=[],
-    )
-    monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
-    monkeypatch.setattr(orchestrator_module.ai_router, "run", _raise_ai)
-
-    async def capture(message: dict):
-        return None
-
-    session = AgentOrchestrator(capture)
-    plan = session._plan_turn("нарисуй эскиз установки детали на станке")
-
-    assert plan.intent == "image_studio"
-    assert "image_studio.techdraw" not in plan.worker.recommended_skills
-
-
-def test_orchestrator_targets_latest_open_table_for_vague_followup(monkeypatch):
-    clear_workspace_blocks()
-    upsert_workspace_block(
-        "agent:invoice-items-grouped",
-        {"type": "table", "title": "Товары", "rows": [{"id": 1}]},
-    )
-    config = BuiltinAgentConfig(
-        department_enabled=True,
-        audit_enabled=True,
-        model="mock-model",
-        backend_url="http://backend",
-        ollama_url="http://ollama",
-        exposed_skills=[],
-    )
-    monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
-    monkeypatch.setattr(orchestrator_module.ai_router, "run", _raise_ai)
-
-    async def capture(message: dict):
-        return None
-
-    session = AgentOrchestrator(capture)
-    plan = session._plan_turn("Добавь еще информацию по поставщикам в уже открытую таблицу")
-
-    assert plan.workspace.required is True
-    assert plan.workspace.canvas_id == "agent:invoice-items-grouped"
-
-
-@pytest.mark.asyncio
-async def test_orchestrator_retries_when_executor_uses_wrong_workspace_tool(monkeypatch):
-    _use_model_decision(
-        monkeypatch, "agent:invoice-items-by-supplier", "invoice_items_by_supplier_table"
-    )
-    clear_workspace_blocks()
-    config = BuiltinAgentConfig(
-        department_enabled=True,
-        audit_enabled=True,
-        allow_capability_builder=True,
-        max_audit_retries=1,
-        model="mock-model",
-        backend_url="http://backend",
-        ollama_url="http://ollama",
-        exposed_skills=[],
-    )
-    monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
-    monkeypatch.setattr(orchestrator_module.ai_router, "run", _raise_ai)
-    sent: list[dict] = []
-    calls = 0
-
-    class RetryExecutor(FakeExecutor):
-        async def on_user_message(self, content: str):
-            nonlocal calls
-            calls += 1
-            if calls == 1:
-                await self._send(
-                    {
-                        "type": "tool_call",
-                        "tool": "workspace__invoice_items_grouped_table",
-                        "args": {},
-                    }
-                )
-                await self._send(
-                    {
-                        "type": "tool_result",
-                        "tool": "workspace__invoice_items_grouped_table",
-                        "result": {"canvas_id": "agent:invoice-items-grouped"},
-                    }
-                )
-                return
-            upsert_workspace_block(
-                "agent:invoice-items-by-supplier",
-                {"type": "table", "title": "По поставщикам", "rows": [{"id": 1}]},
-            )
-            await self._send(
-                {
-                    "type": "tool_call",
-                    "tool": "workspace__invoice_items_by_supplier_table",
-                    "args": {},
-                }
-            )
-            await self._send(
-                {
-                    "type": "tool_result",
-                    "tool": "workspace__invoice_items_by_supplier_table",
-                    "result": {"canvas_id": "agent:invoice-items-by-supplier"},
-                }
-            )
-
-    async def capture(message: dict):
-        sent.append(message)
-
-    session = AgentOrchestrator(capture)
-    session._executor = RetryExecutor(session._send_from_executor, [])
-
-    await session.on_user_message("Выведи товары в таблицу, сгруппируй по поставщикам")
-
-    assert calls == 2
-    assert any(event["type"] == "audit.retry_started" for event in sent)
-    assert any(event["type"] == "audit.passed" for event in sent)
-    assert not any(event["type"] == "capability_gap.detected" for event in sent)
-
-
-@pytest.mark.asyncio
-async def test_orchestrator_does_not_execute_heuristic_repair_when_retry_disabled(monkeypatch):
-    _use_model_decision(
-        monkeypatch, "agent:invoice-items-by-supplier", "invoice_items_by_supplier_table"
-    )
-    clear_workspace_blocks()
-    config = BuiltinAgentConfig(
-        department_enabled=True,
-        audit_enabled=True,
-        allow_capability_builder=True,
-        max_audit_retries=0,
-        model="mock-model",
-        backend_url="http://backend",
-        ollama_url="http://ollama",
-        exposed_skills=[],
-    )
-    monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
-    monkeypatch.setattr(orchestrator_module.ai_router, "run", _raise_ai)
-    posted: list[tuple[str, dict]] = []
-    sent: list[dict] = []
-
-    class Response:
-        status_code = 200
-        text = ""
-
-        def json(self):
-            return {
-                "status": "published",
-                "canvas_id": "agent:invoice-items-by-supplier",
-                "total": 1,
-                "shown": 1,
-                "message": "Открыл таблицу по поставщикам.",
-            }
-
-    class FakeHttpClient:
-        def __init__(self, *args, **kwargs):
-            return None
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            return None
-
-        async def post(self, url: str, json: dict = None, headers=None, **kwargs):
-            posted.append((url, json))
-            upsert_workspace_block(
-                "agent:invoice-items-by-supplier",
-                {"type": "table", "title": "По поставщикам", "rows": [{"id": 1}]},
-            )
-            return Response()
-
-    monkeypatch.setattr(orchestrator_module.httpx, "AsyncClient", FakeHttpClient)
-
-    async def capture(message: dict):
-        sent.append(message)
-
-    session = AgentOrchestrator(capture)
-    session._executor = FakeExecutor(
-        session._send_from_executor,
-        [
-            {
-                "type": "tool_call",
-                "tool": "workspace__invoice_table",
-                "args": {},
-            },
-            {
-                "type": "tool_result",
-                "tool": "workspace__invoice_table",
-                "result": {"canvas_id": "agent:invoice-list"},
-            },
-        ],
-    )
-
-    await session.on_user_message("Выведи товары в таблицу, сгруппируй по поставщикам")
-
-    assert not posted
-    assert not any(event["type"] == "orchestrator.direct_tool_started" for event in sent)
-    assert any(event["type"] == "audit.failed" for event in sent)
-
-
-@pytest.mark.asyncio
-async def test_orchestrator_uses_model_plan(monkeypatch):
-    clear_workspace_blocks()
-    config = BuiltinAgentConfig(
-        department_enabled=True,
-        audit_enabled=False,
-        model="mock-model",
-        backend_url="http://backend",
-        ollama_url="http://ollama",
-        exposed_skills=[],
-    )
-    model_plan = orchestrator_module.OrchestratorPlan(
-        goal="Показать договоры",
-        intent="procurement_contracts",
-        worker=orchestrator_module.WorkerAssignment(
-            role="procurement_specialist",
-            task="Показать договоры",
-            recommended_skills=["procurement.list_contracts"],
-        ),
-        workspace=orchestrator_module.WorkspaceOutputSpec(
-            channel="workspace",
-            output_type="table",
-            required=True,
-            canvas_id="agent:contracts",
-        ),
-    )
-
-    class Response:
-        data = model_plan
-
-    async def fake_run(request):
-        return Response()
-
-    async def capture(message: dict):
-        return None
-
-    monkeypatch.setattr(orchestrator_module.ai_router, "run", fake_run)
-    session = AgentOrchestrator(capture)
-    plan = await session._plan_turn_with_model("Покажи договоры поставщиков таблицей", config)
-
-    assert plan.worker.role == "procurement_specialist"
-    assert plan.workspace.canvas_id == "agent:contracts"
-
-
-@pytest.mark.asyncio
-async def test_orchestrator_prompt_includes_dialog_history(monkeypatch):
-    clear_workspace_blocks()
-    config = BuiltinAgentConfig(
-        department_enabled=True,
-        audit_enabled=False,
-        model="mock-model",
-        backend_url="http://backend",
-        ollama_url="http://ollama",
-        exposed_skills=[],
-    )
-    captured_prompt = ""
-
-    class Response:
-        data = orchestrator_module.OrchestratorPlan(
-            goal="Обновить таблицу",
-            intent="invoice_data",
-            worker=orchestrator_module.WorkerAssignment(
-                role="invoice_specialist",
-                task="Обновить таблицу",
-                recommended_skills=["workspace.invoice_items_by_supplier_table"],
-            ),
-            workspace=orchestrator_module.WorkspaceOutputSpec(
-                channel="workspace",
-                output_type="table",
-                required=True,
-                canvas_id="agent:invoice-items-by-supplier",
-            ),
-        )
-
-    async def fake_run(request):
-        nonlocal captured_prompt
-        captured_prompt = request.messages[-1].content
-        return Response()
-
-    async def capture(message: dict):
-        return None
-
-    monkeypatch.setattr(orchestrator_module.ai_router, "run", fake_run)
-    session = AgentOrchestrator(capture)
-    session.hydrate_history(
-        [
-            {"role": "user", "content": "Выведи товары по счетам"},
-            {"role": "assistant", "content": "Открыл таблицу."},
-        ]
-    )
-    await session._plan_turn_with_model("Теперь сгруппируй по поставщикам", config)
-
-    assert "Выведи товары по счетам" in captured_prompt
-    assert "Теперь сгруппируй по поставщикам" in captured_prompt
-
-
 async def _raise_ai(*args, **kwargs):
     raise RuntimeError("AI unavailable in test")
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_loads_role_context_and_flags_degraded(monkeypatch):
-    """When LLM planning fails, the turn degrades to the heuristic planner and
-    still loads the role-specific system prompt for the executor."""
-    clear_workspace_blocks()
-    config = BuiltinAgentConfig(
-        department_enabled=True,
-        audit_enabled=False,
-        model="mock-model",
-        backend_url="http://backend",
-        ollama_url="http://ollama",
-        exposed_skills=[],
-    )
-    monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
-    # Force LLM planning path, then make it fail → heuristic fallback (degraded).
-    monkeypatch.setattr(orchestrator_module.ai_router, "run", _raise_ai)
-    sent: list[dict] = []
-
-    async def capture(message: dict):
-        sent.append(message)
-
-    role_contexts: list[str] = []
-
-    class RoleRecordingExecutor(FakeExecutor):
-        def set_role_context(self, role_prompt) -> None:
-            role_contexts.append(role_prompt or "")
-
-    session = AgentOrchestrator(capture)
-    session._executor = RoleRecordingExecutor(
-        session._send_from_executor,
-        [{"type": "text", "content": "Готово."}, {"type": "done"}],
-    )
-
-    # "проанализируй" is a high-complexity signal → forces the model planning path.
-    await session.on_user_message("Проанализируй и сравни цены поставщиков подробно")
-
-    assert any(e.get("error_code") == "model_unavailable" for e in sent)
-    assert not role_contexts
-    assert not any(e["type"] == "tool_call" for e in sent)
-
-
-@pytest.mark.asyncio
 async def test_semantic_audit_emits_soft_warning(monkeypatch):
-    _use_model_decision(monkeypatch)
     """The semantic audit surfaces a soft quality warning without failing the turn."""
     from types import SimpleNamespace
 
@@ -648,7 +98,6 @@ async def test_semantic_audit_emits_soft_warning(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_reactive_refine_revises_flagged_generative_answer(monkeypatch):
-    _use_model_decision(monkeypatch)
     """A failed semantic audit on a text answer triggers one revise pass."""
     from types import SimpleNamespace
 
@@ -695,7 +144,6 @@ async def test_reactive_refine_revises_flagged_generative_answer(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_tier_based_model_routing(monkeypatch):
-    _use_model_decision(monkeypatch)
     """Simple turns route to fast_model; complex turns use the default model."""
     config = BuiltinAgentConfig(
         department_enabled=True,
@@ -734,3 +182,45 @@ async def test_tier_based_model_routing(monkeypatch):
     )
     await session2.on_user_message("проанализируй и сравни подробно динамику цен поставщиков")
     assert overrides[-1] is None
+
+
+@pytest.mark.asyncio
+async def test_a_turn_goes_to_the_employee_without_a_routing_call(monkeypatch):
+    """One employee: no router call before the executor, no role, no plan hint."""
+    config = BuiltinAgentConfig(
+        audit_enabled=True,
+        model="mock-model",
+        backend_url="http://backend",
+        ollama_url="http://ollama",
+        exposed_skills=[],
+    )
+    monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
+    monkeypatch.setattr(orchestrator_module.ai_router, "run", _raise_ai)
+
+    hints: list[str] = []
+    received: list[str] = []
+
+    class RecordingExecutor(FakeExecutor):
+        def inject_orchestrator_hint(self, hint: str) -> None:
+            hints.append(hint)
+
+        async def on_user_message(self, content: str):
+            received.append(content)
+            await super().on_user_message(content)
+
+    sent: list[dict] = []
+
+    async def capture(msg):
+        sent.append(msg)
+
+    session = AgentOrchestrator(capture)
+    session._executor = RecordingExecutor(
+        session._send_from_executor,
+        [{"type": "text", "content": "Напоминание создано."}, {"type": "done"}],
+    )
+    await session.on_user_message("Напомни в пятницу позвонить в Эвал-Никель")
+
+    assert received == ["Напомни в пятницу позвонить в Эвал-Никель"]
+    assert hints == []
+    assert not any(e["type"] in ("orchestrator.status", "worker.assigned") for e in sent)
+    assert sent[-1]["type"] == "done"

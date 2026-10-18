@@ -336,10 +336,3 @@ def test_a_call_site_cannot_open_a_confidential_task(monkeypatch: pytest.MonkeyP
     assert _run_planning(
         monkeypatch, routing=routing, allow_cloud=True, task=AITask.CAD_SPEC_READ
     ) == {"confidential": True, "allow_cloud": False}
-
-
-def test_turn_router_recognises_a_cloud_model_by_catalog() -> None:
-    from app.ai.turn_router import _is_cloud_model
-
-    assert _is_cloud_model(None) is False
-    assert _is_cloud_model("не-существующая-модель") is False

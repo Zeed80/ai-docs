@@ -12,18 +12,13 @@ import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 import httpx
 import structlog
 from pydantic import BaseModel, Field
 
 logger = structlog.get_logger()
-
-
-# Slow retrieval tools a structured (SQL/table) turn must not wander into.
-STRUCTURED_TURN_HIDDEN_TOOLS = frozenset({"memory", "search"})
 
 
 def _agent_headers() -> dict:
@@ -50,7 +45,7 @@ def _agent_headers() -> dict:
 
 from app.ai import route_table
 from app.ai.agent_config import BuiltinAgentConfig, get_builtin_agent_config
-from app.ai.agent_loop import AgentSession, execute_skill, extract_list_count
+from app.ai.agent_loop import AgentSession
 from app.ai.audit import (
     RETRYABLE,
     AuditCode,
@@ -77,14 +72,10 @@ from app.ai.flow_awareness import format_flow_summary_human, get_flow_snapshot
 from app.ai.model_tier import (
     Tier,
     aux_quality_budget,
-    has_action_intent,
-    inject_chain_of_draft,
     score_complexity,
-    should_use_cod,
 )
 from app.ai.orchestrator_memory import (
     TurnFeedback,
-    build_tool_preference_hint,
     record_turn_feedback,
 )
 from app.ai.policy_engine import check_tool_execution
@@ -95,9 +86,6 @@ from app.domain.workspace import get_workspace_block, list_workspace_blocks
 # Только для аннотаций: имена стоят в строковых типах, поэтому в рантайме
 # не вычисляются — но без импорта их не видят ни type checker, ни IDE, и
 # опечатка в такой аннотации не находится ничем.
-if TYPE_CHECKING:
-    from app.ai.turn_router import TurnDecision
-
 SendFn = Callable[[dict], Awaitable[None]]
 
 
@@ -134,81 +122,8 @@ def _response_budget_for(tier: Tier, plan: OrchestratorPlan) -> int:
     return default
 
 
-# role → (mtime, text) — avoids re-reading role-*.md from disk on every turn.
-_role_prompt_cache: dict[str, tuple[float, str]] = {}
-
-
-def _load_role_prompt(role: str) -> str:
-    """Return the role-specific prompt text with mtime-based caching.
-
-    Returns "" when the role has no prompt file (e.g. builder roles not defined
-    in gateway.yml) — the executor then runs with the base system prompt only.
-    """
-    from app.ai.gateway_config import gateway_config
-
-    try:
-        path = gateway_config.role_prompt_path(role)
-        if not path or not path.exists():
-            return ""
-        mtime = path.stat().st_mtime
-        cached = _role_prompt_cache.get(role)
-        if cached is None or cached[0] != mtime:
-            text = path.read_text(encoding="utf-8").strip()
-            _role_prompt_cache[role] = (mtime, text)
-            return text
-        return cached[1]
-    except Exception as exc:
-        log_degraded("orchestrator.role_prompt", exc, role=role)
-        return ""
-
-
-# Specialist workers the secretary front-agent can dispatch to. Each role is
-# declared in gateway.yml (prompt + capability allowlist). The secretary itself
-# is NOT a worker: flow-status questions are answered by the orchestrator
-# directly (see _answer_flow_status_directly). Builder is not a chat role —
-# capability drafting runs through the proposal flow with builder_model.
-WorkerRole = Literal[
-    "data_analyst",
-    "invoice_specialist",
-    "warehouse_specialist",
-    "procurement_specialist",
-    "accountant",
-    "mail_assistant",
-    "engineer",
-    "technologist",
-    "memory_researcher",
-]
-
 OutputChannel = Literal["chat", "workspace"]
 OutputType = Literal["text", "table", "document", "links", "chart", "drawing", "script"]
-
-_ORCHESTRATOR_SYSTEM_BASE = """Ты — {agent_name}, секретарь-оркестратор отдела ИИ-сотрудников.
-Ты держишь документооборот под контролем и распределяешь задачи специалистам.
-Верни только JSON по заданной схеме. Не отвечай пользователю текстом.
-
-Задача: понять цель пользователя, выбрать подходящие инструменты и исполнителя.
-Исполнитель самостоятельно решит порядок вызовов и детали — не расписывай шаги.
-
-Ключевые решения:
-- workspace.required=true когда нужна таблица, список, документ, файл, график или
-  изменение уже открытой таблицы. Иначе false (короткий ответ в чат).
-- recommended_skills: укажи 1-3 наиболее подходящих инструмента как отправную
-  точку; исполнитель может вызвать дополнительные сам.
-- Если НИ ОДИН skill не подходит: intent="capability_gap".
-- Роли только из enum схемы.
-"""
-
-
-def _orchestrator_system() -> str:
-    """System prompt for the planner: static base + domain sections from routes.yml.
-
-    The persona name is the configured agent name (settings → default «Света»).
-    """
-    base = _ORCHESTRATOR_SYSTEM_BASE.format(agent_name=get_builtin_agent_config().agent_name)
-    sections = route_table.prompt_sections()
-    if sections:
-        return f"{base}\n{sections}\n"
-    return base
 
 
 class WorkspaceOutputSpec(BaseModel):
@@ -221,7 +136,7 @@ class WorkspaceOutputSpec(BaseModel):
 
 
 class WorkerAssignment(BaseModel):
-    role: WorkerRole
+    role: str
     task: str
     recommended_skills: list[str] = Field(default_factory=list)
     allow_skill_expansion: bool = True
@@ -289,7 +204,6 @@ class AgentOrchestrator:
         self._turn_content: str = ""
         # A state-changing call already made in THIS turn (survives the trace
         # reset a retry does) — the action must not be demanded twice.
-        self._turn_action_done: bool = False
         self._last_spec_request: str = ""
         self._last_spec_source: str = ""
         # Last successfully-replayed recipe — penalised if the user corrects it.
@@ -305,13 +219,7 @@ class AgentOrchestrator:
         # подтверждения. Флаг отличает одно от другого.
         self._last_direct_tool_blocked: bool = False
         self._plan_source: str = "unplanned"
-        # Set by _decide_turn: True when the LLM router produced no usable
-        # decision (degrade to the heuristic planner this turn).
-        self._route_unavailable: bool = False
         self._tier: Tier = Tier.NANO
-        # Grounding mode for the current turn (from TurnDecision). Controls
-        # whether the worker may touch slow RAG tools. "none" on the legacy path.
-        self._turn_grounding: str = "none"
         # Per-turn LLM call accounting. Lives on the instance (not the trace)
         # because the trace is reset on every retry/repair within a turn.
         # _llm_calls — telemetry of all orchestrator-visible LLM calls;
@@ -360,16 +268,6 @@ class AgentOrchestrator:
         except Exception:  # noqa: BLE001 — приоритет не должен ломать ход
             pass
         config = get_builtin_agent_config()
-        if not config.department_enabled:
-            # No department planning → clear any stale per-turn overrides.
-            self._executor.set_role_context("")
-            self._executor.set_response_budget(2048)
-            self._executor.set_model_override(None)
-            self._executor.set_active_role(None)
-            self._executor.set_excluded_tools(set())
-            self._executor.set_recommended_capabilities(set())
-            await self._executor.on_user_message(content)
-            return
 
         turn_started_at = time.time()
         self._trace = _TurnTrace()
@@ -381,22 +279,14 @@ class AgentOrchestrator:
         context_tokens = sum(len(m.get("content", "")) // 4 for m in history)
         tier = score_complexity(content, context_tokens=context_tokens)
         self._tier = tier
-        self._turn_grounding = "none"  # reset per turn; router sets it below
 
         # Phase 3 — if the user is correcting the result of a just-replayed recipe,
         # penalise that recipe so the fail-rate retire logic demotes it.
         await self._penalise_recipe_on_correction(content)
 
-        # Learned recipes are deterministic plans. Check them before the turn
-        # router so trusted repeated tasks run with 0 planner calls.
-        from app.ai.turn_router import safe_default_decision
-
-        recipe_result = await self._try_recipe_for_turn(
-            content,
-            config,
-            turn_started_at,
-            safe_default_decision(content),
-        )
+        # Learned recipes are deterministic plans: trusted repeated tasks run
+        # with no model call at all.
+        recipe_result = await self._try_recipe_for_turn(content, config, turn_started_at)
         if recipe_result is True:
             return
         # A draft (or below-replay-score) recipe is not executed — it travels on
@@ -419,20 +309,11 @@ class AgentOrchestrator:
             return
 
         await self._wait_for_strata_load()
-        decision = await self._decide_turn(content, config)
-        if self._route_unavailable:
-            await self._outer_send(
-                {
-                    "type": "error",
-                    "error_code": "model_unavailable",
-                    "content": "Модель планирования недоступна. Выполнение не начато; повторите запрос после восстановления модели.",
-                }
-            )
-            return
-        self._turn_grounding = decision.grounding
-        plan = _decision_to_plan(decision, content)
+        # One employee: the executor reads the request itself, with one
+        # constant prompt and every tool — no routing call, no role.
+        self._plan_source = "employee"
         await self._run_planned_turn(
-            content, plan, config, turn_started_at, reasoning_mode, recipe_hint
+            content, _employee_plan(content), config, turn_started_at, reasoning_mode, recipe_hint
         )
 
     async def _run_planned_turn(
@@ -446,14 +327,12 @@ class AgentOrchestrator:
     ) -> None:
         """Run the worker for a settled plan, then audit/retry/repair/finish.
 
-        Shared by the legacy keyword path and the TurnDecision path so the
-        worker-run + audit + recipe + telemetry tail lives in exactly one place.
+        The worker-run + audit + recipe + telemetry tail of every model turn.
         """
         tier = self._tier
         # Remembered for the audit below: whether the user asked to DO something
         # is a property of the request, not of the plan the model produced.
         self._turn_content = content
-        self._turn_action_done = False
         # Phase 2 — adaptive clarify: a gated (expensive/external) action with an
         # ambiguous target asks BEFORE acting instead of guessing. Cheap turns are
         # never gated here — they build the best result and show assumptions.
@@ -468,46 +347,8 @@ class AgentOrchestrator:
         self._workspace_before = _workspace_updated_at_snapshot()
         await self._announce_plan(plan)
 
-        # Inject Chain-of-Draft hint for medium/complex tasks on local models
-        hint = _build_worker_hint(plan)
         if recipe_hint:
-            hint = f"{hint}\n{recipe_hint}"
-        worker_model = config.worker_model or ""
-        if reasoning_mode == "strict" or should_use_cod(tier, worker_model):
-            hint = inject_chain_of_draft(hint)
-        self._executor.inject_orchestrator_hint(hint)
-        # Load the role-specific system prompt so the worker actually adopts the
-        # assigned role (accountant vs technologist, ...). Replaced per turn —
-        # never accumulated in history.
-        role_context = _load_role_prompt(plan.worker.role)
-        self._executor.set_role_context(role_context)
-        # Scope the visible tool set to the role's capability allowlist — plus
-        # whatever the router/planner explicitly recommended for THIS turn, so a
-        # tool chosen by meaning is never hidden by a role allowlist chosen by job.
-        self._executor.set_active_role(plan.worker.role)
-        self._executor.set_recommended_capabilities(
-            {skill.split(".", 1)[0] for skill in plan.worker.recommended_skills}
-        )
-        # Structured-data turns (spec_table) must not touch slow RAG tools — the
-        # 35B worker otherwise "searches" for line items in documents (minutes).
-        # Hard-hide them so it has no choice but to build the table from SQL.
-        # RAG gate: structured-data turns must not touch slow RAG tools — the
-        # worker otherwise "searches" for line items in documents (minutes). This
-        # now keys off the router's grounding too, not just the spec-table canvas.
-        structured_only = (
-            plan.workspace.canvas_id == "agent:spec-table" or self._turn_grounding == "structured"
-        )
-        if structured_only:
-            # Only the slow RAG tools. documents (search/get/read) is SQL and the
-            # one way to what a contract or letter says: hidden here, "take the
-            # e-mail from contract ДП-77 and put it on the supplier" could not
-            # be done on any turn that also named an invoice (E50 live run).
-            self._executor.set_excluded_tools(STRUCTURED_TURN_HIDDEN_TOOLS)
-        else:
-            self._executor.set_excluded_tools(set())
-        # Reliable desktop output: tell the worker this turn is routed to the
-        # workspace so a structural result auto-publishes by intent, not keyword.
-        self._executor.set_workspace_expected(plan.workspace.required)
+            self._executor.inject_orchestrator_hint(recipe_hint)
         # Size the response budget to the task: cheap/fast for short answers,
         # roomy for reports/tables. Avoids the old hardcoded 4096 on every turn.
         self._executor.set_response_budget(_response_budget_for(tier, plan))
@@ -552,21 +393,6 @@ class AgentOrchestrator:
                 begin()
             await self._executor.on_user_message(_build_correction_request(plan, audit))
             audit = await self._audit_turn(plan, config)
-        # Adaptive-by-risk: a cheap (desktop) turn that STILL has an empty/mismatched
-        # table after retries must not ship a blank board silently — be honest and
-        # invite a one-line clarification instead.
-        if (
-            not audit.passed
-            and _has_code(audit.issues, AuditCode.INTENT_MISMATCH)
-            and risk_class(plan) == "cheap"
-        ):
-            await self._explain_intent_mismatch(plan, content)
-        # The requested action never happened, even after the retry. Say so and
-        # ask ONE question instead of letting a report stand in for the action —
-        # silently substituting a table is exactly what the user has to catch
-        # manually otherwise.
-        if not audit.passed and _has_code(audit.issues, AuditCode.ACTION_NOT_PERFORMED):
-            await self._explain_action_not_performed(plan, content)
         # Semantic correctness check on the settled answer (advisory; runs once).
         await self._run_semantic_audit(plan, config, audit)
         # Reactive self-refine: only when the auditor flagged a generative answer.
@@ -632,14 +458,12 @@ class AgentOrchestrator:
         content: str,
         config: BuiltinAgentConfig,
         turn_started_at: float,
-        decision: TurnDecision,
     ) -> bool | str:
-        """Recipe replay/hint for the router path.
+        """Recipe replay or hint before the model turn.
 
         Returns ``True`` if a recipe was replayed deterministically (turn done),
         otherwise a hint string (possibly empty) for the worker. Matching is
-        vector-based; the precision gate also checks the router's intent so a
-        recipe learned for one channel/intent is not replayed on a drifted turn.
+        vector-based and gated by ``replay_gate_ok``.
         """
         from app.ai import recipes as recipes_module
 
@@ -649,15 +473,8 @@ class AgentOrchestrator:
         recipe, score, margin = recipe_hit
         replay_on = bool(getattr(config, "recipe_replay_enabled", False))
         if replay_on and score >= recipes_module.REPLAY_SCORE and recipe.status == "active":
-            slots = recipes_module.resolve_slots(
-                recipe.param_slots, content, extra_entities=decision.entities
-            )
+            slots = recipes_module.resolve_slots(recipe.param_slots, content)
             gate_ok, gate_reason = recipes_module.replay_gate_ok(recipe, score, margin, content)
-            # Channel-drift guard: don't replay a workspace recipe on a chat turn.
-            rec_channel = getattr(recipe, "output_channel", None)
-            router_confident = decision.confidence >= float(config.turn_router_min_confidence)
-            if rec_channel and rec_channel != decision.output_channel and router_confident:
-                gate_ok, gate_reason = False, "channel_drift"
             if slots is not None and gate_ok:
                 if await self._replay_recipe(recipe, slots, content, config, turn_started_at):
                     return True
@@ -701,244 +518,6 @@ class AgentOrchestrator:
         )
         if not await strata_manager.ensure_loaded():
             logger.warning("strata_load_wait_timed_out")
-
-    def _router_history(self, content: str) -> str:
-        """The last exchanges, short, for the turn router.
-
-        Without them a follow-up is routed blind: «2» (the user picking an
-        option) and «Выбери сама путь» went as smalltalk, «Сгруппируй их» lost
-        what «их» is (live 2026-10-13/14).
-        """
-        turns = self._recent_dialogue()
-        if (
-            turns
-            and turns[-1]["role"] == "user"
-            and turns[-1]["content"].strip() == content.strip()
-        ):
-            turns = turns[:-1]
-        lines = []
-        for turn in turns[-4:]:
-            who = "Пользователь" if turn["role"] == "user" else "Ассистент"
-            text = " ".join(turn["content"].split())
-            lines.append(f"{who}: {text[:300]}{'…' if len(text) > 300 else ''}")
-        return "\n".join(lines)
-
-    async def _decide_turn(self, content: str, config: BuiltinAgentConfig) -> TurnDecision:
-        """Route the turn via the LLM router (two-tier: fast → orchestrator model).
-
-        Never falls back to keyword heuristics — on low confidence / failure it
-        escalates to the larger model, then to a keyword-free structural default.
-        """
-        from app.ai import turn_router
-
-        has_open_spec = _latest_spec_block() is not None
-        history = self._router_history(content)
-        fast = _registry_model_name(config.fast_model)
-        big = _registry_model_name(config.orchestrator_model or config.worker_model or config.model)
-        min_conf = float(config.turn_router_min_confidence)
-        # The router gets its own budget: sharing the planner's 8s default meant
-        # a 27B model in the fast slot timed out on every single turn and the
-        # heuristic planner quietly took over (live finding).
-        timeout = float(
-            getattr(config, "turn_router_timeout_seconds", None)
-            or config.orchestrator_plan_timeout_seconds
-        )
-        routing_started_at = time.time()
-        # Per-assignment thinking: the router IS the fast/agent_fast slot, so its
-        # reasoning toggle comes from fast_disable_thinking (tri-state) — passed
-        # explicitly so it's independent of the orchestrator slot's setting.
-        fast_thinking = _thinking_from_disable(config.fast_disable_thinking)
-        big_thinking = _thinking_from_disable(config.orchestrator_disable_thinking)
-        # Reasoning-effort level, same tier pairing as the bool override above.
-        # Only takes effect when thinking resolves ON and the model declares
-        # thinking_levels (AIRouter.run clamps/ignores it otherwise).
-        fast_level = config.fast_thinking_level
-        big_level = config.orchestrator_thinking_level
-
-        # Tier 1 — cheap fast model.
-        decision, source = await turn_router.route_turn(
-            content,
-            preferred_model=fast or big,
-            timeout=timeout,
-            has_open_spec_table=has_open_spec,
-            history_summary=history,
-            thinking=fast_thinking if fast else big_thinking,
-            thinking_level=fast_level if fast else big_level,
-        )
-        # Tier 2 — escalate to the orchestrator model on failure/low confidence.
-        if (decision is None or decision.confidence < min_conf) and big and big != (fast or big):
-            esc, esc_source = await turn_router.route_turn(
-                content,
-                preferred_model=big,
-                timeout=timeout,
-                has_open_spec_table=has_open_spec,
-                history_summary=history,
-                thinking=big_thinking,
-                thinking_level=big_level,
-            )
-            if esc is not None:
-                decision, source = esc, f"escalated_{esc_source}"
-
-        # A DEFAULTED shell (specialist / conf 0.0 / no tools) means the model
-        # ignored the schema — it is NOT a real classification and must not be
-        # dispatched as a blind chat specialist. Rescue an obvious table request
-        # deterministically (catalog-grounded), else treat as unavailable and
-        # degrade to the heuristic planner.
-        if decision is not None and turn_router._looks_defaulted(decision):
-            from app.domain.table_spec import is_spec_table_request
-
-            if is_spec_table_request(content):
-                decision = decision.model_copy(
-                    update={
-                        "intent": "analytical_table",
-                        "output_channel": "workspace",
-                        "grounding": "structured",
-                        "confidence": 0.5,
-                    }
-                )
-                source = "rescued_table"
-                logger.info("router_defaulted_rescued_table", content=content[:80])
-            else:
-                decision = None  # → heuristic planner below
-
-        self._route_unavailable = decision is None
-        if decision is None:
-            decision = turn_router.safe_default_decision(content)
-            source = "safe_default"
-        self._plan_source = f"router:{source}:{decision.intent}"
-        routing_ms = int((time.time() - routing_started_at) * 1000)
-        if routing_ms > 15_000 or self._route_unavailable:
-            # Visible, actionable signal instead of a silent degrade: routing
-            # this slow (or failing) means the fast slot holds a heavy model.
-            logger.warning(
-                "turn_router_slow",
-                duration_ms=routing_ms,
-                unavailable=self._route_unavailable,
-                timeout_seconds=timeout,
-                hint="assign a small model to the fast slot in /settings/models",
-            )
-        logger.info(
-            "turn_router_decision",
-            duration_ms=routing_ms,
-            intent=decision.intent,
-            role=decision.role,
-            channel=decision.output_channel,
-            grounding=decision.grounding,
-            confidence=decision.confidence,
-            source=source,
-            recommended=[(r.capability, r.action) for r in decision.recommended],
-        )
-        return decision
-
-    async def _run_heuristic_degraded(
-        self,
-        content: str,
-        config: BuiltinAgentConfig,
-        turn_started_at: float,
-        reasoning_mode: str,
-    ) -> None:
-        """Degraded planner: build a heuristic plan with NO LLM and run it.
-
-        Used only when the LLM turn-router is unavailable. The heuristic is a
-        last resort — it never runs on a successful route — so it can't hijack
-        normal turns the way a hot-path keyword cascade would. ``_plan_turn`` +
-        ``_normalize_model_plan`` resolve the specialised canvas and inject the
-        matching workspace skill so a table turn still lands on the desktop.
-        """
-        from app.ai.turn_router import safe_default_decision
-
-        recipe_hint = await self._try_recipe_for_turn(
-            content,
-            config,
-            turn_started_at,
-            safe_default_decision(content),
-        )
-        if recipe_hint is True:
-            return
-        recipe_hint = recipe_hint or ""
-
-        plan = _normalize_model_plan(self._plan_turn(content), content)
-        self._plan_source = "heuristic"
-        await self._run_planned_turn(
-            content, plan, config, turn_started_at, reasoning_mode, recipe_hint
-        )
-
-    async def _dispatch_decision(
-        self,
-        content: str,
-        decision: TurnDecision,
-        config: BuiltinAgentConfig,
-        turn_started_at: float,
-        reasoning_mode: str,
-    ) -> None:
-        """Dispatch a typed TurnDecision to the right executor.
-
-        Deterministic executors (flow-status, spec-table patch) are still used —
-        but they are selected by the router's intent, not by substring matching.
-        Everything else builds a plan and runs the worker (the catch-all).
-        """
-        self._turn_grounding = decision.grounding
-        # Deterministic override: an unmistakable table request over catalog data
-        # («покажи фрезы по поставщику») must be built from SQL, never answered via
-        # slow RAG — even if the LLM router guessed grounding="rag". Suppresses the
-        # RAG tools downstream (structured_only gate).
-        if self._turn_grounding != "structured":
-            from app.domain.table_spec import is_spec_table_request
-
-            if is_spec_table_request(content):
-                self._turn_grounding = "structured"
-                logger.info("grounding_forced_structured", content=content[:80])
-        if decision.intent == "flow_status":
-            if await self._answer_flow_status_directly(content, config, turn_started_at):
-                return
-        elif decision.intent == "count":
-            if await self._answer_count_directly(content, config, turn_started_at):
-                return
-
-        # Table edit — deterministic patch of the open spec table. The router
-        # gates intent (killing the old "и…"/"добавь…" false-positives); the
-        # regex parser only extracts the operation. False → not a real patch.
-        if decision.intent == "table_edit":
-            if await self._try_sheet_edit_directly(content, config, turn_started_at):
-                return
-            if await self._try_spec_table_patch_directly(content, config, turn_started_at):
-                return
-            # Neither a sheet nor a spec-table patch applied → there is no table to
-            # edit (a mis-route, e.g. «выведи фрезы по поставщику» classified as
-            # table_edit). Build a fresh analytical table instead of running a
-            # confused "edit" plan that targets the wrong source.
-            if _latest_spec_block() is None:
-                decision = decision.model_copy(
-                    update={
-                        "intent": "analytical_table",
-                        "output_channel": "workspace",
-                        "grounding": "structured",
-                    }
-                )
-                self._turn_grounding = "structured"
-                logger.info("table_edit_without_table_downgraded", content=content[:80])
-
-        # Learned recipes — same machinery as the legacy path, gated by a
-        # tool-shaped intent instead of a keyword workspace check.
-        recipe_hint = ""
-        if decision.intent in (
-            "analytical_table",
-            "document_op",
-            "specialist",
-            "answer_self",
-            "count",
-        ):
-            recipe_hint = await self._try_recipe_for_turn(
-                content, config, turn_started_at, decision
-            )
-            if recipe_hint is True:  # replayed deterministically
-                return
-            recipe_hint = recipe_hint or ""
-
-        plan = _decision_to_plan(decision, content)
-        await self._run_planned_turn(
-            content, plan, config, turn_started_at, reasoning_mode, recipe_hint
-        )
 
     async def _answer_flow_status_directly(
         self,
@@ -1008,95 +587,6 @@ class AgentOrchestrator:
             pass
         chips = route_table.chips_for("flow_status", content)
         await self._outer_send({"type": "done", "action_chips": chips})
-        return True
-
-    async def _answer_count_directly(
-        self,
-        content: str,
-        config: BuiltinAgentConfig,
-        turn_started_at: float,
-    ) -> bool:
-        """Secretary front-agent: answer an unambiguous entity-count question
-        ("Сколько счетов?", "Сколько документов?") from one cheap
-        ``list?limit=1`` call — 0 planner/worker LLM calls.
-
-        Distinct from ``_answer_flow_status_directly``: that one always
-        renders the fixed 5-metric dashboard snapshot (pending approvals,
-        needs_review, anomalies, quarantine, unread mail), which answers a
-        different question than "how many invoices/documents/suppliers are
-        there" — it used to intercept *both* intents and reply with the
-        snapshot regardless of what was actually asked. Returns False for
-        anything ``match_fast_intent`` does not recognise (ambiguous entity,
-        no matching capability) so the normal planner/worker path still
-        handles it with real tool calls.
-        """
-        intent = route_table.match_fast_intent(content)
-        if intent is None:
-            return False
-        skill = self._executor._skill_map.get(intent.capability)
-        if not skill:
-            return False  # capability not exposed / registry mode → defer to LLM
-
-        from app.ai.result_cache import cache_get, cache_set
-
-        cache_key = f"{intent.capability}:{intent.action}:{intent.search_term or ''}"
-        answer = cache_get(cache_key)
-        if answer is None:
-            result = await execute_skill(skill, intent.args, config)
-            if isinstance(result, dict) and result.get("error"):
-                return False  # never answer with a wrong count on error — defer to LLM
-            total = extract_list_count(result)
-            if total is None:
-                return False  # unreadable/failed result — never answer a wrong count
-            if intent.capability == "warehouse":
-                answer = f"{intent.entity_label[:1].upper()}{intent.entity_label[1:]}: {total}."
-            else:
-                answer = f"Всего {intent.entity_label}: {total}."
-            cache_set(cache_key, answer)
-
-        await self._outer_send(
-            {
-                "type": "orchestrator.status",
-                "content": "Секретарь: считаю напрямую из данных.",
-                "plan_source": "direct",
-                "degraded": False,
-            }
-        )
-        await self._outer_send(
-            {
-                "type": "worker.assigned",
-                "content": "Исполнитель: secretary (прямой ответ, без LLM).",
-                "role": "secretary",
-                "skills": [],
-            }
-        )
-        await self._outer_send({"type": "text", "content": answer})
-        try:
-            self._executor.record_external_turn(content, answer)
-        except Exception as exc:
-            log_degraded("orchestrator.count_record_turn", exc)
-
-        duration_ms = int((time.time() - turn_started_at) * 1000)
-        logger.info(
-            "agent_turn_complete",
-            intent="count",
-            plan_source="direct",
-            tools_called=[intent.capability],
-            tool_count=1,
-            audit_passed=True,
-            retries=0,
-            llm_calls=0,
-            aux_llm_calls=0,
-            duration_ms=duration_ms,
-        )
-        try:
-            from app.core.metrics import agent_turn_duration_seconds, agent_turns_total
-
-            agent_turns_total.labels(outcome="success").inc()
-            agent_turn_duration_seconds.observe(duration_ms / 1000)
-        except Exception:
-            pass
-        await self._outer_send({"type": "done", "action_chips": []})
         return True
 
     async def _try_spec_table_patch_directly(
@@ -1622,103 +1112,6 @@ class AgentOrchestrator:
         except Exception as exc:
             log_degraded("orchestrator.reflection_record", exc)
 
-    async def _plan_turn_with_model(
-        self,
-        content: str,
-        config: BuiltinAgentConfig,
-    ) -> OrchestratorPlan:
-        # Build heuristic plan as a lightweight hint (not an anchor).
-        heuristic_plan = self._plan_turn(content)
-        preference_hint = build_tool_preference_hint(
-            intent_text=content,
-            intent_category=heuristic_plan.worker.role,
-            candidate_skills=list(heuristic_plan.worker.recommended_skills),
-        )
-        skill_context = _build_skill_registry_context(content)
-        prompt = _build_orchestrator_prompt(
-            content=content,
-            heuristic_hint=heuristic_plan,
-            history=self._recent_dialogue(),
-            preference_hint=preference_hint,
-            skill_context=skill_context,
-        )
-        _plan_timeout = float(config.orchestrator_plan_timeout_seconds)
-        fallback_reason = "invalid_schema"
-        self._llm_calls += 1
-        try:
-            response = await asyncio.wait_for(
-                ai_router.run(
-                    AIRequest(
-                        task=AITask.ORCHESTRATOR_PLANNING,
-                        messages=[
-                            ChatMessage(role="system", content=_orchestrator_system()),
-                            ChatMessage(role="user", content=prompt),
-                        ],
-                        response_schema=OrchestratorPlan,
-                        confidential=False,
-                        allow_cloud=True,
-                        preferred_model=_registry_model_name(
-                            config.orchestrator_model or config.worker_model or config.model
-                        ),
-                        # A slow, thinking-capable planning model (raised
-                        # orchestrator_plan_timeout_seconds above) is a
-                        # deliberate operator choice; give it room to see the
-                        # full prompt (history + skill registry + hint) rather
-                        # than truncating it to whatever Ollama's own default
-                        # context happens to be.
-                        inference_params={"num_ctx": 65536},
-                    )
-                ),
-                timeout=_plan_timeout,
-            )
-            if isinstance(response.data, OrchestratorPlan):
-                plan = _normalize_model_plan(response.data, content)
-                logger.info(
-                    "orchestrator_plan_model_ok",
-                    intent=plan.intent,
-                    skills=plan.worker.recommended_skills,
-                    workspace=plan.workspace.required,
-                    canvas=plan.workspace.canvas_id,
-                    filters=plan.workspace.filters,
-                )
-                return plan
-        except TimeoutError:
-            fallback_reason = "timeout"
-            logger.warning(
-                "orchestrator_plan_model_timeout",
-                timeout=_plan_timeout,
-                model=config.orchestrator_model or config.worker_model,
-            )
-        except Exception as exc:
-            fallback_reason = "error"
-            logger.warning(
-                "orchestrator_plan_model_failed",
-                model=config.orchestrator_model or config.worker_model,
-                error=str(exc),
-            )
-
-        # Reached only on timeout / error / invalid schema — degrade to heuristic.
-        self._plan_source = "heuristic"
-        try:
-            from app.core.metrics import orchestrator_plan_fallback_total
-
-            orchestrator_plan_fallback_total.labels(reason=fallback_reason).inc()
-        except Exception:
-            pass
-        return heuristic_plan
-
-    async def _background_refine_plan(self, content: str, config: BuiltinAgentConfig) -> None:
-        """Run LLM orchestrator plan in background — result logged for future use."""
-        try:
-            plan = await self._plan_turn_with_model(content, config)
-            logger.debug(
-                "orchestrator_background_plan_ready",
-                intent=plan.intent,
-                skills=plan.worker.recommended_skills,
-            )
-        except Exception as exc:
-            log_degraded("orchestrator.background_plan", exc)
-
     async def _send_from_executor(self, data: dict) -> None:
         msg_type = str(data.get("type") or "")
         if msg_type == "done":
@@ -1767,157 +1160,7 @@ class AgentOrchestrator:
             plan.intent, content, workspace_required=plan.workspace.required
         )
 
-    def _plan_turn(self, content: str) -> OrchestratorPlan:
-        """Degraded-mode routing: pick a role, a canvas and candidate skills.
-
-        Deliberately NOT a full plan any more. It used to derive *requirements*
-        from phrasing — "the text says «найди все», so a desktop table is
-        required"; "a supplier is named, so filter by supplier_query" — and the
-        audit then enforced those invented requirements: it failed turns for a
-        missing filter nobody asked for and let the repair path overwrite the
-        agent's real answer with a generic table (both reproduced live).
-
-        Now only an explicit route from ``routes.yml`` (or a canvas it resolves)
-        can mark a turn as a desktop turn, and no filters are invented at all —
-        the worker decides those from the request itself. This runs only when
-        the LLM router is unavailable; it should stay a routing hint, not a
-        second, dumber product opinion.
-        """
-        text = _norm(content)
-        # Phrasing may still say "show me a table" — that stays a table turn.
-        # What it may no longer do is turn an ACTION into one ("найди все
-        # каталоги … и прикрепи их" tripped the listing markers and was served
-        # as an invoice-items table).
-        workspace_required = _is_workspace_request(text) and not has_action_intent(content)
-        output_type: OutputType = "table" if workspace_required else "text"
-        canvas_id: str | None = None
-
-        # Broad domain detection for role hint only — not binding.
-        # Flow-status (secretary) questions never reach this point: the
-        # front-agent answers them directly in on_user_message.
-        role: WorkerRole = "data_analyst"
-        intent = "general"
-        matched_route = _match_intent_route(text)
-        if matched_route:
-            role = matched_route.get("role", role)
-            intent = matched_route.get("intent", intent)
-            canvas_id = _resolve_canvas_from_route(matched_route, text)
-            # If the route declares workspace_required or resolves a canvas_id,
-            # mark this as a workspace request so the LLM hint is correct.
-            if matched_route.get("workspace_required") or canvas_id:
-                workspace_required = True
-                output_type = "table"
-
-        # References to an already open table take priority over grouping
-        if not canvas_id and _references_existing_table(text):
-            canvas_id = _latest_workspace_table_id()
-
-        # Supplier grouping: "сгруппируй по поставщикам" → dedicated canvas
-        if not canvas_id and _is_supplier_grouping_request(text):
-            sg = route_table.supplier_grouping()
-            workspace_required = True
-            output_type = "table"
-            canvas_id = sg.get("canvas_id", "agent:invoice-items-by-supplier")
-
-        # A supplier name is a hint for skill choice below — never a filter the
-        # audit will demand and never a reason to turn the request into a table.
-        workspace_filters: dict[str, str] = {}
-        supplier_name = _extract_supplier_name(text)
-
-        # Resolve canvas_id from workspace state or JSON fallback rules if still unset
-        if workspace_required and not canvas_id:
-            canvas_id = _fallback_canvas_id(content)
-
-        # Pass just 1-2 broad skills as a starting hint; LLM picks the exact ones
-        skills: list[str] = []
-        if matched_route:
-            skills = list(matched_route.get("skills", []))[:2]
-        # Precise part request ("начерти вал 50h6 Ra0.8") → prefer the exact
-        # deterministic techdraw renderer over the default diffusion generate,
-        # otherwise the heuristic-route fast path (no real LLM planning call)
-        # would never surface techdraw as a candidate skill.
-        # Digitize request ("оцифруй чертёж", "переведи в DXF") wins over the
-        # techdraw check: such a phrase often also contains precision markers
-        # (ГОСТ/размеры) but means scan→CAD, not rendering a new part.
-        if (
-            matched_route
-            and matched_route.get("intent") == "image_studio"
-            and _is_vectorize_request(text)
-        ):
-            skills = ["image_studio.generate", "image_studio.get_ir"]
-        elif (
-            matched_route
-            and matched_route.get("intent") == "image_studio"
-            and _is_techdraw_request(text)
-        ):
-            skills = ["image_studio.techdraw", "image_studio.prompt_help"]
-        if not skills:
-            if supplier_name:
-                # A named supplier on a table turn resolves via SQL
-                # (ILIKE/pg_trgm inside spec_table / suppliers.search), so
-                # memory.search here only adds a redundant embedding+reranking
-                # round trip. Found via live agent test: "Сколько всего счетов
-                # от поставщика ЦНК" burned a full memory/RAG call and its
-                # GPU-bound reranking fallback chain (~minutes on a shared GPU)
-                # resolving a name SQL already covers on its own.
-                skills = ["workspace.spec_table"]
-            elif workspace_required:
-                # Bulk/listing turns ("выведи все...", "список...") need the real
-                # SQL-backed table engine, not a vector/text search round-trip —
-                # without this hint a degraded (heuristic-only) turn wanders
-                # through memory/search/documents and reports false negatives on
-                # data that's actually there (smart-filter would have found it).
-                skills = ["workspace.spec_table", "memory.search"]
-            else:
-                skills = ["memory.search"]
-
-        return OrchestratorPlan(
-            goal=content.strip()[:500],
-            intent=intent,
-            worker=WorkerAssignment(
-                role=role,
-                task=content.strip(),
-                recommended_skills=skills,
-                allow_skill_expansion=True,
-            ),
-            workspace=WorkspaceOutputSpec(
-                channel="workspace" if workspace_required else "chat",
-                output_type=output_type,
-                required=workspace_required,
-                canvas_id=canvas_id,
-                filters=workspace_filters,
-            ),
-            audit_required=True,
-        )
-
     async def _announce_plan(self, plan: OrchestratorPlan) -> None:
-        degraded = self._route_unavailable
-        status_text = (
-            f"Оркестратор: понял задачу, назначаю роль {plan.worker.role}."
-            if not degraded
-            else f"Оркестратор (упрощённый режим): назначаю роль {plan.worker.role}."
-        )
-        await self._outer_send(
-            {
-                "type": "orchestrator.status",
-                "content": status_text,
-                "plan": plan.model_dump(mode="json"),
-                "plan_source": self._plan_source,
-                "degraded": degraded,
-            }
-        )
-        await self._outer_send(
-            {
-                "type": "worker.assigned",
-                "content": (
-                    "Исполнитель: "
-                    f"{plan.worker.role}; рекомендованные инструменты: "
-                    f"{', '.join(plan.worker.recommended_skills[:5])}."
-                ),
-                "role": plan.worker.role,
-                "skills": plan.worker.recommended_skills,
-            }
-        )
         if plan.workspace.required:
             await self._outer_send(
                 {
@@ -1939,130 +1182,10 @@ class AgentOrchestrator:
                 final_channel=plan.workspace.channel,
             )
 
+        # What the turn did, not what a router expected: an empty answer,
+        # failed tools, a table claiming more rows than it shows.
         issues: list[AuditIssue] = []
-        workspace_verified = False
-        if plan.workspace.required:
-            workspace_verified = await self._verify_workspace(plan)
-            if not workspace_verified and self._has_not_found_tool_result():
-                # A workspace tool DID run and correctly determined the named
-                # entity doesn't exist (status="not_found" — see
-                # AGENT_LIVE_TEST_FINDINGS.md #5's fix in workspace.py /
-                # spec_tables.py, which deliberately skips publishing in this
-                # case). That's a completed, correct turn, not a missing
-                # capability — without this check the gap-detection path
-                # below fired and proposed building a whole new
-                # "supplier_invoice_summary_publish" tool for a request that
-                # was already fully answered in the chat text.
-                workspace_verified = True
-            elif not workspace_verified:
-                issues.append(
-                    AuditIssue(
-                        code=AuditCode.WORKSPACE_NOT_PUBLISHED,
-                        message="Запрошен rich-вывод, но публикация на Рабочий стол не подтверждена.",
-                    )
-                )
-            if _looks_like_chat_table(self._trace.final_text):
-                issues.append(
-                    AuditIssue(
-                        code=AuditCode.CHAT_TABLE_LEAK,
-                        message="Табличный результат попал в чат вместо Рабочего стола.",
-                    )
-                )
-            expected_canvas = plan.workspace.canvas_id
-            published_canvas_ids = {
-                str(canvas_id)
-                for canvas_id in (_event_canvas_id(event) for event in self._trace.workspace_events)
-                if canvas_id
-            }
-            if (
-                expected_canvas
-                and published_canvas_ids
-                and expected_canvas not in published_canvas_ids
-            ):
-                # Advisory: the planned canvas is a heuristic guess. A verified
-                # publication to another canvas is a fine answer — re-publishing
-                # the «правильный» блок duplicates the table the user already
-                # sees. Recorded for the learning loop only.
-                issues.append(
-                    AuditIssue(
-                        code=AuditCode.WRONG_CANVAS,
-                        severity="advisory",
-                        message=(
-                            "Опубликован другой workspace-блок: план предлагал "
-                            f"{expected_canvas}, опубликовано {sorted(published_canvas_ids)}."
-                        ),
-                        context={
-                            "expected": expected_canvas,
-                            "published": sorted(published_canvas_ids),
-                        },
-                    )
-                )
-
-        expected_from_canvas = _expected_workspace_skill_for_canvas(plan.workspace.canvas_id)
-        expected_workspace_skills = (
-            {expected_from_canvas.replace(".", "__")}
-            if expected_from_canvas
-            else {
-                skill.replace(".", "__")
-                for skill in plan.worker.recommended_skills
-                if skill.startswith("workspace.")
-            }
-        )
-        used_workspace_skills = {
-            tool for tool in self._trace.tool_calls if tool.startswith("workspace__")
-        }
-        if (
-            expected_workspace_skills
-            and used_workspace_skills
-            and not expected_workspace_skills.intersection(used_workspace_skills)
-        ):
-            # Advisory: the plan is a hint, not ground truth — a semantically
-            # equivalent tool choice must not fail the turn by itself. The
-            # workspace/filter checks above catch actually-wrong results.
-            issues.append(
-                AuditIssue(
-                    code=AuditCode.TOOL_OFF_PLAN,
-                    severity="advisory",
-                    message=(
-                        "Исполнитель выбрал инструмент вне плана: "
-                        f"ожидались {sorted(expected_workspace_skills)}, "
-                        f"использованы {sorted(used_workspace_skills)}."
-                    ),
-                    context={
-                        "expected": sorted(expected_workspace_skills),
-                        "used": sorted(used_workspace_skills),
-                    },
-                )
-            )
-
-        # Broad tool-selection sanity (advisory): the worker used tools but none
-        # of the recommended capabilities. The plan is a hint, so this never
-        # blocks — it feeds the learning loop and surfaces a soft warning.
-        recommended_caps = {
-            s.split(".", 1)[0].split("__", 1)[0] for s in plan.worker.recommended_skills if s
-        }
-        used_caps = {t.split("__", 1)[0] for t in self._trace.tool_calls if t}
-        if (
-            recommended_caps
-            and used_caps
-            and not (recommended_caps & used_caps)
-            and not used_workspace_skills  # workspace divergence already reported above
-        ):
-            issues.append(
-                AuditIssue(
-                    code=AuditCode.TOOL_OFF_PLAN,
-                    severity="advisory",
-                    message=(
-                        "Использованы инструменты вне рекомендаций оркестратора: "
-                        f"рекомендованы {sorted(recommended_caps)}, "
-                        f"использованы {sorted(used_caps)}."
-                    ),
-                    context={
-                        "recommended": sorted(recommended_caps),
-                        "used": sorted(used_caps),
-                    },
-                )
-            )
+        workspace_verified = bool(self._trace.workspace_events)
 
         # ── Does the published table deliver what its title promises? ──────────
         # A hand-built block can claim any number: live, the agent published 3
@@ -2094,132 +1217,6 @@ class AgentOrchestrator:
                     )
                 )
                 break
-
-        # ── Requested action actually performed? ───────────────────────────────
-        # A turn that asked the agent to DO something ("загрузи каталог",
-        # "прикрепи прайс к поставщику", "отправь письмо") but only produced
-        # reads/reports did not do the job — however good the published table
-        # looks. Found live: "найди каталоги и загрузи в его каталог" ended as
-        # a summary table on the desktop and nothing attached anywhere.
-        # Table/report intents are excluded: "обнови таблицу", "отсортируй" are
-        # action verbs whose action IS the publication, so requiring a
-        # state-changing call there would fail every legitimate table turn.
-        if has_action_intent(self._turn_content) and plan.intent not in _REPORTING_INTENTS:
-            performed = [
-                tool
-                for tool, args in self._trace.tool_call_seq
-                if _is_state_changing_call(tool, args)
-            ]
-            if performed:
-                self._turn_action_done = True
-            if not performed and not self._turn_action_done:
-                issues.append(
-                    AuditIssue(
-                        code=AuditCode.ACTION_NOT_PERFORMED,
-                        message=(
-                            "Пользователь просил выполнить действие, но ни один "
-                            "изменяющий инструмент не был вызван — выполнено только "
-                            "чтение/публикация отчёта."
-                        ),
-                        context={"tools_used": sorted(set(self._trace.tool_calls))},
-                    )
-                )
-
-        # ── Filter compliance check ────────────────────────────────────────────
-        # Only enforce filter compliance when:
-        #   a) the plan specifies required filters (e.g. supplier_query=X), AND
-        #   b) the workspace tool that was actually called targets the SAME canvas_id
-        #      as the plan (so we don't penalise the executor for choosing a
-        #      semantically-equivalent but differently-shaped tool)
-        if plan.workspace.filters and plan.workspace.canvas_id:
-            # Audit the LAST tool result that targets the planned canvas — that
-            # publish defines what the user sees. (The old code checked only the
-            # FIRST match, so a turn that started wrong and self-corrected was
-            # punished, and one that started right and then overwrote the canvas
-            # with unfiltered data passed.)
-            last_match: dict[str, Any] | None = None
-            for item in self._trace.tool_results:
-                result = item.get("result")
-                if isinstance(result, dict) and result.get("canvas_id") == plan.workspace.canvas_id:
-                    last_match = item
-            if last_match is not None:
-                result = last_match["result"]
-                matched_tool_args = self._trace.tool_call_args.get(last_match.get("tool", "")) or {}
-                result_filters: dict[str, Any] = result.get("filters") or {}
-                published_spec = result.get("spec") or matched_tool_args.get("spec")
-                nested_args = (
-                    matched_tool_args.get("filters")
-                    if isinstance(matched_tool_args.get("filters"), dict)
-                    else {}
-                )
-                # A hand-built block (workspace.general / sql_table) carries no
-                # spec and no filters argument — the caller already narrowed the
-                # data, and naming the entity in the title is the only evidence
-                # it can offer. Live: «Каталог поставщика — ООО Мир Станочника»
-                # was failed for a "missing" filter and cost a retry.
-                published_title = str(
-                    (published_spec or {}).get("title")
-                    or (matched_tool_args.get("body") or {}).get("title")
-                    or result.get("title")
-                    or ""
-                )
-                for fk, fv in plan.workspace.filters.items():
-                    # The filter may arrive top-level or inside `filters` —
-                    # both shapes are legal for capability calls, and reading
-                    # only the top level reported a passed filter as missing.
-                    actual = matched_tool_args.get(fk, nested_args.get(fk))
-                    if _filter_satisfied_by_spec(fk, fv, published_spec):
-                        continue  # the spec-table filters by the real column
-                    if _entity_named_in_title(fv, published_title):
-                        continue  # hand-built block, entity named in its title
-                    if actual is None and result_filters.get(fk) is None:
-                        issues.append(
-                            AuditIssue(
-                                code=AuditCode.FILTER_MISSING,
-                                message=(
-                                    f"фильтр не применён: исполнитель не передал {fk}={fv!r} "
-                                    "в инструмент. Повтори вызов с правильными аргументами."
-                                ),
-                                context={"filter": fk, "expected": str(fv)},
-                            )
-                        )
-                    elif (
-                        actual is not None
-                        and str(actual).strip().lower() != str(fv).strip().lower()
-                    ):
-                        issues.append(
-                            AuditIssue(
-                                code=AuditCode.FILTER_MISMATCH,
-                                message=(
-                                    f"неверный фильтр: ожидалось {fk}={fv!r}, "
-                                    f"передано {fk}={actual!r}. Повтори с правильным значением."
-                                ),
-                                context={
-                                    "filter": fk,
-                                    "expected": str(fv),
-                                    "actual": str(actual),
-                                    "source": "args",
-                                },
-                            )
-                        )
-                    # Cross-check reported filters in the result
-                    rf = result_filters.get(fk)
-                    if rf is not None and str(rf).strip().lower() != str(fv).strip().lower():
-                        issues.append(
-                            AuditIssue(
-                                code=AuditCode.FILTER_MISMATCH,
-                                message=(
-                                    f"Рабочий стол показывает {fk}={rf!r} вместо {fv!r}: "
-                                    "показаны данные от другого запроса. Требуется перезапрос."
-                                ),
-                                context={
-                                    "filter": fk,
-                                    "expected": str(fv),
-                                    "actual": str(rf),
-                                    "source": "result",
-                                },
-                            )
-                        )
 
         for item in self._trace.tool_results:
             result = item.get("result")
@@ -2255,24 +1252,6 @@ class AgentOrchestrator:
                     message="Ход завершился без ответа: нет текста и нет вывода на Рабочий стол.",
                 )
             )
-        # Ungrounded factual answer: a data-shaped intent answered from the
-        # model's parametric memory with no tool call. Advisory for now (promote
-        # to blocking by metrics) so legitimate conceptual replies aren't punished.
-        if (
-            plan.intent in ("answer_self", "analytical_table", "document_op", "count")
-            and not self._trace.tool_calls
-            and len(final_text) > 80
-        ):
-            issues.append(
-                AuditIssue(
-                    code=AuditCode.UNGROUNDED_ANSWER,
-                    severity="advisory",
-                    message=(
-                        "Фактический ответ дан без вызова инструментов — "
-                        "возможен ответ из памяти модели без проверки данных проекта."
-                    ),
-                )
-            )
         # Tool errors (recovered or not) — advisory signal for the learning loop.
         for item in self._trace.tool_results:
             result = item.get("result")
@@ -2291,27 +1270,6 @@ class AgentOrchestrator:
                     )
                 )
                 break
-
-        # ── Intent-match on the published artifact ─────────────────────────────
-        # Publishing an EMPTY table to the desktop for a show/list request is the
-        # core "опубликовал не то" bug: the user asked to see data and got a blank
-        # board. Deterministic and cheap; the semantic critic (below) catches
-        # subtler content mismatches (wrong source/columns). Excludes `count`
-        # (0 is a valid answer) and gated actions (no desktop table there).
-        if plan.workspace.required and plan.intent in _LISTING_INTENTS:
-            published = _last_published_table(self._trace)
-            if published is not None and published.get("total") == 0:
-                issues.append(
-                    AuditIssue(
-                        code=AuditCode.INTENT_MISMATCH,
-                        message=(
-                            "На Рабочий стол опубликована ПУСТАЯ таблица — по запросу "
-                            "ничего не найдено. Проверь источник и фильтры (условия "
-                            "могут пересекаться как И вместо ИЛИ) или уточни запрос."
-                        ),
-                        context={"total": 0, "spec": published.get("spec")},
-                    )
-                )
 
         return AuditReport(
             passed=not _blocking_issues(issues),
@@ -2343,48 +1301,6 @@ class AgentOrchestrator:
         except Exception:
             pass
         return "; ".join(str(p) for p in parts)[:800]
-
-    async def _explain_intent_mismatch(self, plan: OrchestratorPlan, content: str) -> None:
-        """When a cheap (desktop) turn still has an empty/mismatched table after
-        retries, be honest instead of leaving a blank board: say what was searched
-        and invite a one-line clarification (adaptive-by-risk: no silent garbage)."""
-        pub = _last_published_table(self._trace)
-        spec = (pub or {}).get("spec") or {}
-        filters = spec.get("filters") or []
-        src = spec.get("source") or "данные"
-        await self._outer_send(
-            {
-                "type": "text",
-                "content": (
-                    f"По запросу «{content[:120]}» в источнике «{src}» ничего не нашлось "
-                    f"(фильтры: {filters or 'без фильтров'}). Я не стал публиковать пустую "
-                    "таблицу как ответ. Уточните условие (период, поставщика, формулировку) "
-                    "— и я перестрою."
-                ),
-            }
-        )
-
-    async def _explain_action_not_performed(self, plan: OrchestratorPlan, content: str) -> None:
-        """Honest close-out for an action turn that produced only reads.
-
-        Names what was actually done, states plainly that the requested action
-        was not performed, and asks the single question most likely to unblock
-        it. No apology theatre, no substitute artifact presented as success.
-        """
-        used = sorted({t.split("__", 1)[0] for t in self._trace.tool_calls if t})
-        used_text = ", ".join(used) if used else "ничего"
-        await self._outer_send(
-            {
-                "type": "text",
-                "content": (
-                    f"Действие по запросу «{content[:120]}» я не выполнила — "
-                    f"использовала только просмотр данных ({used_text}). "
-                    "Чтобы довести до конца, уточните, пожалуйста, одно: "
-                    "к какому именно объекту (поставщик, счёт, документ) и "
-                    "с каким источником (ссылка, файл) нужно выполнить действие?"
-                ),
-            }
-        )
 
     async def _run_semantic_audit(
         self,
@@ -2570,20 +1486,6 @@ class AgentOrchestrator:
         for event in self._trace.workspace_events:
             canvas_id = _event_canvas_id(event)
             if canvas_id and self._workspace_block_changed(str(canvas_id)):
-                return True
-        return False
-
-    def _has_not_found_tool_result(self) -> bool:
-        """Did any tool this turn come back with status="not_found"?
-
-        Used by _audit_turn to distinguish "the agent correctly determined
-        the requested entity doesn't exist" (workspace.invoice_items_table /
-        workspace.spec_table return this instead of publishing — see
-        AGENT_LIVE_TEST_FINDINGS.md #5) from a genuine capability gap.
-        """
-        for item in self._trace.tool_results:
-            result = item.get("result")
-            if isinstance(result, dict) and result.get("status") == "not_found":
                 return True
         return False
 
@@ -2837,242 +1739,6 @@ class AgentOrchestrator:
 # aiagent/config/routes.yml (see app.ai.route_table) — do not add markers here.
 _norm = route_table.normalize
 _is_secretary_query = route_table.is_flow_status_query
-_is_workspace_request = route_table.is_workspace_request
-_is_table_edit_request = route_table.is_table_edit_request
-_references_existing_table = route_table.references_existing_table
-_match_intent_route = route_table.match_route
-_resolve_canvas_from_route = route_table.resolve_canvas_from_route
-_extract_supplier_name = route_table.extract_supplier_name
-_is_supplier_grouping_request = route_table.is_supplier_grouping_request
-_is_techdraw_request = route_table.is_techdraw_request
-_is_vectorize_request = route_table.is_vectorize_request
-
-
-def _build_orchestrator_prompt(
-    *,
-    content: str,
-    heuristic_hint: OrchestratorPlan,
-    history: list[dict[str, str]],
-    preference_hint: str = "",
-    skill_context: str = "",
-) -> str:
-    blocks = list_workspace_blocks()[:8]
-    workspace_summary = [
-        {
-            "id": str(block.get("id") or ""),
-            "type": str(block.get("type") or ""),
-            "title": str(block.get("title") or ""),
-            "source": str(block.get("source") or ""),
-            "columns": [
-                str(column.get("header") or column.get("key") or "")
-                for column in block.get("columns") or []
-                if isinstance(column, dict)
-            ][:20],
-        }
-        for block in blocks
-        if isinstance(block, dict)
-    ]
-    parts: list[str] = []
-
-    # Conversation context
-    if history:
-        recent = history[-6:]
-        parts.append(
-            "## Контекст диалога\n"
-            + "\n".join(f"{m.get('role', '?')}: {str(m.get('content', ''))[:200]}" for m in recent)
-        )
-
-    # Available skills grouped by domain
-    if skill_context:
-        parts.append("## Доступные инструменты\n" + skill_context)
-
-    # Current workspace state (only non-empty)
-    if workspace_summary:
-        parts.append("## Открытые блоки Рабочего стола\n" + str(workspace_summary))
-
-    # Adaptive hints from past outcomes
-    if preference_hint:
-        parts.append("## Статистика инструментов (успешность)\n" + preference_hint)
-
-    # The actual request
-    parts.append("## Запрос\n" + content[:2000])
-
-    # Heuristic hint as soft suggestion only
-    hint_dict = heuristic_hint.model_dump(mode="json")
-    hint_str = str({k: hint_dict[k] for k in ("intent", "worker") if k in hint_dict})
-    parts.append(f"## Эвристическая подсказка (не обязательно точная)\n{hint_str}")
-
-    parts.append(
-        "## Что нужно сделать\n"
-        "Верни OrchestratorPlan JSON.\n"
-        "- goal: одна фраза — что должен сделать исполнитель.\n"
-        "- recommended_skills: 1-3 инструмента как отправная точка (исполнитель может взять дополнительные).\n"
-        "- workspace.required=true если нужна таблица, список, файл, документ или обновление открытого блока.\n"
-        "- Если НИ ОДИН инструмент не подходит: intent=capability_gap, recommended_skills=[]."
-    )
-    return "\n\n".join(parts)
-
-
-def _invalidate_skill_hints_if_changed(registry_path: Path) -> None:
-    """Flush orchestrator:skill:* Redis keys when registry file hash changes."""
-    try:
-        import hashlib
-
-        current_hash = hashlib.md5(registry_path.read_bytes()).hexdigest()
-        from app.ai.orchestrator_memory import _redis
-
-        r = _redis()
-        if r is None:
-            return
-        # get_sync_redis() is decode_responses=True — stored_hash is already
-        # str, not bytes. The previous `.decode()` here always raised
-        # AttributeError, silently caught below, so this cache-invalidation
-        # check never actually ran — found while verifying the durable-
-        # runtime remediation plan's test suite against a real Redis.
-        stored_hash = r.get("orchestrator:registry_hash")
-        if stored_hash and stored_hash == current_hash:
-            return
-        # Hash changed — flush stale skill hint cache
-        keys = r.keys("orchestrator:skill:*")
-        if keys:
-            r.delete(*keys)
-        r.setex("orchestrator:registry_hash", 86400, current_hash)
-    except Exception as exc:
-        log_degraded("orchestrator.registry_hash_flush", exc)
-
-
-def _build_skill_registry_context(user_text: str) -> str:
-    """Return skills grouped by domain, with top relevant ones highlighted."""
-    try:
-        from app.ai.gateway_config import gateway_config as _gw_cfg
-
-        registry_path = _gw_cfg.registry_path
-        if not registry_path.exists():
-            return ""
-        _invalidate_skill_hints_if_changed(registry_path)
-        import yaml as _yaml
-
-        data = _yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
-        skills: list[dict] = data.get("tools") or data.get("skills") or []
-
-        text_lower = user_text.lower()
-
-        def _relevance(skill: dict) -> int:
-            name = skill.get("name", "").lower()
-            desc = skill.get("description", "").lower()
-            score = 0
-            for word in text_lower.split():
-                if len(word) < 3:
-                    continue
-                if word in name:
-                    score += 3
-                elif word in desc:
-                    score += 1
-            return score
-
-        # Top-12 most relevant skills shown individually with descriptions
-        scored = sorted(skills, key=_relevance, reverse=True)
-        top12 = scored[:12]
-        top12_names = {s["name"] for s in top12}
-
-        lines = ["### Наиболее релевантные"]
-        for s in top12:
-            lines.append(f"- {s['name']}: {(s.get('description') or '')[:100]}")
-
-        # Remaining skills grouped by category (names only)
-        from collections import defaultdict
-
-        by_cat: dict[str, list[str]] = defaultdict(list)
-        for s in skills:
-            if s["name"] not in top12_names:
-                cat = s.get("category") or "other"
-                by_cat[cat].append(s["name"])
-
-        # Generated skills always shown fully
-        generated = [
-            s
-            for s in skills
-            if s.get("category") == "agent_generated" and s["name"] not in top12_names
-        ]
-        if generated:
-            lines.append("\n### Созданные агентом")
-            for s in generated:
-                lines.append(f"- {s['name']}: {(s.get('description') or '')[:100]}")
-
-        if by_cat:
-            lines.append("\n### Все остальные (по группам)")
-            for cat, names in sorted(by_cat.items()):
-                if cat == "agent_generated":
-                    continue
-                lines.append(f"**{cat}**: {', '.join(names)}")
-
-        return "\n".join(lines)
-    except Exception:
-        return ""
-
-
-def _normalize_model_plan(plan: OrchestratorPlan, content: str) -> OrchestratorPlan:
-    """Fill in the desktop details a plan left unset (canvas, table skills).
-
-    Only for turns that are actually about showing data. A turn that asks the
-    agent to DO something ("загрузи каталог ООО …", "отправь письмо …") is left
-    alone: deriving a canvas and a supplier_query filter from the mere presence
-    of a supplier name is what made the audit fail such turns for a "missing"
-    filter nobody asked for, and what let the repair path replace the agent's
-    real answer with an invoice-items table (both reproduced live 2026-08-21).
-    """
-    text = _norm(content)
-    if has_action_intent(content) and not plan.workspace.required:
-        return plan.model_copy(update={"goal": plan.goal or content[:500]})
-
-    workspace_required = plan.workspace.required or _is_workspace_request(text)
-    output_type = plan.workspace.output_type
-    if workspace_required and output_type == "text":
-        output_type = "table" if _is_table_edit_request(text) else "document"
-    canvas_id = plan.workspace.canvas_id
-    recommended_skills = list(plan.worker.recommended_skills)
-    workspace_filters = dict(plan.workspace.filters)
-
-    # Specific-supplier filter takes priority over group-by
-    supplier_name = _extract_supplier_name(text)
-    if supplier_name:
-        workspace_required = True
-        output_type = "table"
-        canvas_id = "agent:invoice-items"
-        workspace_filters["supplier_query"] = supplier_name
-        for skill in ("workspace.invoice_items_table", "supplier.search"):
-            if skill not in recommended_skills:
-                recommended_skills.insert(0, skill)
-        # Remove group-by skill if it crept in
-        recommended_skills = [
-            s for s in recommended_skills if s != "workspace.invoice_items_by_supplier_table"
-        ]
-    elif _is_supplier_grouping_request(text):
-        sg = route_table.supplier_grouping()
-        workspace_required = True
-        output_type = "table"
-        canvas_id = sg.get("canvas_id", "agent:invoice-items-by-supplier")
-        supplier_skill = sg.get("skill", "workspace.invoice_items_by_supplier_table")
-        if supplier_skill not in recommended_skills:
-            recommended_skills.insert(0, supplier_skill)
-
-    if workspace_required and not canvas_id:
-        canvas_id = _fallback_canvas_id(content)
-    return plan.model_copy(
-        update={
-            "goal": plan.goal or content[:500],
-            "worker": plan.worker.model_copy(update={"recommended_skills": recommended_skills}),
-            "workspace": plan.workspace.model_copy(
-                update={
-                    "channel": "workspace" if workspace_required else plan.workspace.channel,
-                    "required": workspace_required,
-                    "output_type": output_type,
-                    "canvas_id": canvas_id,
-                    "filters": workspace_filters,
-                }
-            ),
-        }
-    )
 
 
 def _unwrap_succeeded_tool_result(data: dict[str, Any]) -> dict[str, Any]:
@@ -3104,17 +1770,6 @@ def _workspace_updated_at_snapshot() -> dict[str, str]:
         if block_id:
             snapshot[block_id] = updated_at
     return snapshot
-
-
-def _thinking_from_disable(disable: bool | None) -> bool | None:
-    """Tri-state *_disable_thinking → AIRequest.thinking.
-
-    None → None (defer to per-task/model default); True → thinking OFF;
-    False → thinking ON.
-    """
-    if disable is None:
-        return None
-    return not disable
 
 
 def _registry_model_name(model_name: str | None) -> str | None:
@@ -3256,14 +1911,6 @@ def _parse_sheet_edit_command(
     return None
 
 
-def _fallback_canvas_id(content: str) -> str | None:
-    if _references_existing_table(content):
-        latest_table = _latest_workspace_table_id()
-        if latest_table:
-            return latest_table
-    return route_table.fallback_canvas(content)
-
-
 def _expected_workspace_skill_for_canvas(canvas_id: str | None) -> str | None:
     return route_table.canvas_to_skill(canvas_id)
 
@@ -3285,60 +1932,6 @@ def _workspace_tool_spec_for_plan(plan: OrchestratorPlan) -> dict[str, Any] | No
         "path": spec_entry["path"],
         "args": args,
     }
-
-
-def _build_worker_hint(plan: OrchestratorPlan) -> str:
-    """Build a concise orchestrator hint injected into the worker's message history."""
-    skills = plan.worker.recommended_skills[:5]
-    # Fallback case: only memory.search — make the call mandatory so the model
-    # doesn't answer from parametric knowledge instead of real project data.
-    only_memory_fallback = skills == ["memory.search"]
-    if only_memory_fallback:
-        skill_directive = "ОБЯЗАТЕЛЬНО вызови memory.search перед ответом — не отвечай из памяти модели без проверки данных проекта."
-    elif skills:
-        skill_directive = f"Используй инструменты: {', '.join(skills)}."
-    else:
-        # Router gave no specific recommendation — let the worker pick from its
-        # enum-constrained catalog rather than printing an empty directive.
-        skill_directive = "Выбери подходящий инструмент из доступного набора и проверь данные проекта перед ответом."
-    lines = [
-        f"[ОРКЕСТРАТОР] Роль: {plan.worker.role}. Задача: {plan.goal[:200]}",
-        skill_directive,
-    ]
-    if len(plan.worker.recommended_skills) >= 2:
-        lines.append(
-            "Если нужно несколько НЕЗАВИСИМЫХ справочных данных (list/get/search) — "
-            "запроси все нужные инструменты ОДНИМ сообщением (несколько tool_calls сразу), "
-            "а не по очереди: они выполнятся параллельно и ответ будет быстрее."
-        )
-    if plan.workspace.required and plan.workspace.canvas_id:
-        lines.append(
-            f"Результат ОБЯЗАТЕЛЬНО опубликовать на Рабочий стол (canvas_id={plan.workspace.canvas_id}). "
-            "Используй workspace.* инструмент. В чат — только краткое резюме."
-        )
-        # Structured-data guard: spec_table builds the answer from SQL (columns,
-        # filters, sort over a whitelisted catalog). For price/amount comparisons
-        # the model is tempted to "search" for items in documents — that's slow
-        # RAG over unstructured text and the data isn't there. Forbid it.
-        if plan.workspace.canvas_id == "agent:spec-table":
-            lines.append(
-                "Данные счетов и позиций УЖЕ структурированы в БД. Реши задачу ОДНИМ "
-                "вызовом workspace.spec_table: выбери источник, колонки, фильтр (по "
-                "наименованию товара), сортировку (по цене/сумме/дате) и при «объедини/"
-                'сгруппируй по X» — group_by:["X"] (например group_by:["supplier_name"]). '
-                "Несколько видов товаров («фрезы и резцы») → отдельный contains-фильтр на "
-                "поле наименования для каждого (они объединяются по ИЛИ). "
-                "КАТЕГОРИЧЕСКИ НЕ вызывай memory, search, documents — там этих данных нет."
-            )
-        if plan.workspace.filters:
-            f_str = ", ".join(f"{k}={v!r}" for k, v in plan.workspace.filters.items())
-            lines.append(f"Обязательные фильтры: {f_str}.")
-    else:
-        lines.append(
-            "Формат вывода: текст в чат. "
-            "НЕ используй workspace.*, canvas.publish — это простой запрос без rich-вывода."
-        )
-    return "\n".join(lines)
 
 
 def _build_correction_request(plan: OrchestratorPlan, audit: AuditReport) -> str:
@@ -3502,9 +2095,6 @@ def needs_clarification(content: str, plan: OrchestratorPlan) -> str | None:
 
 # Intents that must yield ≥1 row on the desktop — an empty published table is the
 # "опубликовал не то" bug. ``count`` is excluded (0 is a valid count answer).
-_LISTING_INTENTS = frozenset({"analytical_table", "invoice_list", "table_edit"})
-
-
 def _last_published_table(trace: _TurnTrace) -> dict[str, Any] | None:
     """Latest spec-table publish result in the trace (what the user actually sees)."""
     out: dict[str, Any] | None = None
@@ -3519,58 +2109,17 @@ def _last_published_table(trace: _TurnTrace) -> dict[str, Any] | None:
     return out
 
 
-def _latest_workspace_table_id() -> str | None:
-    for block in list_workspace_blocks():
-        if block.get("type") == "table" and block.get("id"):
-            return str(block["id"])
-    return None
+def _employee_plan(content: str) -> OrchestratorPlan:
+    """The plan of every model turn: one employee, chat channel, no role.
 
-
-def _latest_spec_block() -> dict | None:
-    """Latest workspace block backed by a spec (an editable spec table), or None."""
-    blocks = [
-        b
-        for b in list_workspace_blocks()
-        if isinstance(b, dict) and isinstance(b.get("spec"), dict)
-    ]
-    if not blocks:
-        return None
-    return max(blocks, key=lambda b: str(b.get("updated_at") or ""))
-
-
-def _decision_to_plan(decision: TurnDecision, content: str) -> OrchestratorPlan:
-    """Map a typed TurnDecision onto the OrchestratorPlan the worker tail expects.
-
-    Keeps the downstream (hint, audit, recipe) contract unchanged so the router
-    path reuses the exact same machinery as the legacy planner path.
+    The executor reads the request itself and publishes to the desktop when
+    the result needs it; the audit judges what the turn actually did.
     """
-    workspace_required = decision.output_channel == "workspace"
-    canvas_id: str | None = None
-    if workspace_required:
-        # The router's canvas, else the generic spec-table. Keywords no longer
-        # pick a template table and a supplier filter on top of the model's
-        # decision: «по поставщикам» sent «Выведи все фрезы, сгруппируй…» to a
-        # fixed template, a name pulled from the text became a filter the audit
-        # demanded (owner's audit 2026-10-16).
-        canvas_id = decision.workspace_canvas_id or "agent:spec-table"
-    recommended_skills = [
-        f"{r.capability}.{r.action}" if r.action else r.capability for r in decision.recommended
-    ]
     return OrchestratorPlan(
-        goal=decision.goal or content[:200],
-        intent=decision.intent,
-        worker=WorkerAssignment(
-            role=decision.role,
-            task=decision.goal or content[:200],
-            recommended_skills=recommended_skills,
-        ),
-        workspace=WorkspaceOutputSpec(
-            channel=decision.output_channel,
-            output_type="table" if workspace_required else "text",
-            required=workspace_required,
-            canvas_id=canvas_id,
-            filters={},
-        ),
+        goal=content[:200],
+        intent="employee",
+        worker=WorkerAssignment(role="employee", task=content[:200]),
+        workspace=WorkspaceOutputSpec(),
     )
 
 
@@ -3637,8 +2186,6 @@ def _event_canvas_id(event: dict[str, Any]) -> str | None:
 # Capabilities whose calls only produce views/notes — never a change to the
 # business data the user asked to change. A turn that asked for an ACTION and
 # only touched these did not do what was asked.
-_REPORTING_CAPABILITIES = frozenset({"workspace", "sheets", "search", "memory", "analytics"})
-
 # Turn intents whose whole point is a view: the "action" is the publication.
 _REPORTING_INTENTS = frozenset(
     {
@@ -3655,63 +2202,6 @@ _REPORTING_INTENTS = frozenset(
 )
 
 # Read-only action prefixes shared by every capability (list/get/search/…).
-_READ_ONLY_ACTION_PREFIXES = (
-    "list",
-    "get",
-    "search",
-    "query",
-    "find",
-    "read",
-    "browse",
-    "web",
-    "research",
-    "explain",
-    "status",
-    "verify",
-    "catalog",
-    "similar",
-    "neighborhood",
-    "path",
-    "resolve",
-    "suggest",
-    "check",
-    "upcoming",
-    "today",
-    "history",
-    "compare",
-    # discover_* only searches and reads pages — finding a catalog is not
-    # attaching it, and the audit must keep telling those two apart.
-    "discover",
-    "ingest_status",
-    "preview",
-    "stats",
-    "summary",
-    "summarize",
-    "risk_",
-    "extract",
-    "classify",
-)
-
-
-def _is_state_changing_call(tool: str, args: dict[str, Any]) -> bool:
-    """True when this executor call actually changed something for the user.
-
-    Deliberately conservative in the "changed" direction: an unknown action on
-    a non-reporting capability counts as a change, so the audit below only
-    fires when the turn was demonstrably all-reads.
-    """
-    capability = str(tool or "").split("__", 1)[0]
-    if not capability or capability in _REPORTING_CAPABILITIES:
-        return False
-    action = str((args or {}).get("action") or "")
-    if not action and "__" in str(tool):
-        action = str(tool).split("__", 1)[1]
-    action = action.strip().lower()
-    if not action:
-        return False
-    return not action.startswith(_READ_ONLY_ACTION_PREFIXES)
-
-
 # Plan filter key → the spec-table fields that satisfy it. A spec table
 # expresses "only this supplier" as a filter on a real column, not as the
 # plan's shorthand argument name.
@@ -3724,15 +2214,6 @@ _PLAN_FILTER_SPEC_FIELDS: dict[str, tuple[str, ...]] = {
 _PLAN_FILTER_ID_FIELDS: dict[str, tuple[str, ...]] = {
     "supplier_query": ("supplier_id", "party_id"),
 }
-
-
-def _normalise_entity_value(value: Any) -> str:
-    """Comparable form of an entity name: no legal form, no quotes, no case."""
-    import re as _re
-
-    text = _norm(str(value or ""))
-    text = _re.sub(r"\b(ооо|оао|зао|пао|ао|ип)\b", " ", text)
-    return " ".join(text.replace('"', " ").replace("«", " ").replace("»", " ").split())
 
 
 _CLAIMED_TOTAL_RE = re.compile(
@@ -3755,91 +2236,3 @@ def _claimed_total_in_title(title: str) -> int | None:
             continue
         best = value if best is None else max(best, value)
     return best
-
-
-def _entity_named_in_title(expected: Any, title: str) -> bool:
-    """True when a published block's title names the required entity.
-
-    The only filter evidence a hand-built block (workspace.general, sql_table)
-    can offer: its rows were narrowed by the caller, not by a spec the audit
-    can read. Compared without case or legal form, like the spec check below.
-    """
-    expected_norm = _normalise_entity_value(expected)
-    title_norm = _normalise_entity_value(title)
-    return bool(expected_norm) and expected_norm in title_norm
-
-
-def _filter_satisfied_by_spec(filter_key: str, expected: Any, spec: Any) -> bool:
-    """True when a published spec-table already applies the required filter.
-
-    The audit used to look only for the plan's own argument name
-    (``supplier_query``) among the tool's kwargs. A spec table filters by real
-    column instead (``supplier_name contains "Мир Станочника"``), so a
-    correctly-filtered table was reported as "фильтр не применён" — and the
-    retry that followed cost ~19 minutes on a live turn for nothing.
-    """
-    if not isinstance(spec, dict):
-        return False
-    filters = spec.get("filters")
-    if not isinstance(filters, list):
-        return False
-    wanted_fields = _PLAN_FILTER_SPEC_FIELDS.get(filter_key, (filter_key,))
-    expected_norm = _normalise_entity_value(expected)
-    if not expected_norm:
-        return False
-    # An id-based filter identifies the entity exactly — stricter than the
-    # name match below, so accept it without comparing the human name.
-    id_fields = _PLAN_FILTER_ID_FIELDS.get(filter_key, ())
-    for entry in filters:
-        if (
-            isinstance(entry, dict)
-            and str(entry.get("field") or "") in id_fields
-            and str(entry.get("value") or "").strip()
-        ):
-            return True
-    for entry in filters:
-        if not isinstance(entry, dict):
-            continue
-        field = str(entry.get("field") or "")
-        if field not in wanted_fields:
-            continue
-        actual_norm = _normalise_entity_value(entry.get("value"))
-        if not actual_norm:
-            continue
-        # Either side may be the fuller phrasing ("ооо мир станочника" vs
-        # "мир станочника") — both mean the same supplier.
-        if expected_norm in actual_norm or actual_norm in expected_norm:
-            return True
-    return False
-
-
-def _looks_like_chat_table(text: str) -> bool:
-    """Heuristic: does the chat text contain a rendered table that belongs on the
-    desktop? Detects markdown pipe-tables, markdown separator rows (---|---) and
-    tab-separated multi-column rows — not just any two lines containing '|'.
-    """
-    import re
-
-    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
-    sep_re = re.compile(r"^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?$")
-
-    def _cells(line: str, sep: str) -> int:
-        # Number of non-empty cells when splitting on `sep` (≥2 means tabular).
-        parts = [p.strip() for p in line.split(sep)]
-        nonempty = [p for p in parts if p]
-        return len(nonempty) if len(parts) >= 2 else 0
-
-    for idx in range(len(lines) - 1):
-        a, b = lines[idx], lines[idx + 1]
-        # Markdown separator row (---|---) is an unambiguous table marker.
-        if sep_re.match(a) or sep_re.match(b):
-            return True
-        # Two consecutive rows with the SAME number of ≥2 pipe-delimited cells.
-        ca, cb = _cells(a, "|"), _cells(b, "|")
-        if ca >= 2 and ca == cb:
-            return True
-        # Two consecutive tab-separated multi-column rows.
-        ta, tb = _cells(a, "\t"), _cells(b, "\t")
-        if ta >= 2 and ta == tb:
-            return True
-    return False

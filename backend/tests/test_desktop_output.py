@@ -1,7 +1,7 @@
-"""Phase 5 — desktop output by intent, not by keyword.
+"""Desktop output: a table in the reply is published, other text stays in chat.
 
-When the orchestrator routes a turn to the workspace, a structural result is
-auto-published to the desktop even if the user's phrasing has no trigger word.
+Whether a long answer belongs on the desktop is the model's call; keywords in
+the request («без таблицы» contains «таблиц») no longer move it.
 """
 
 from unittest.mock import AsyncMock
@@ -20,18 +20,8 @@ def _session_with_user(text: str) -> AgentSession:
 
 
 @pytest.mark.asyncio
-async def test_workspace_expected_publishes_without_keyword():
-    s = _session_with_user("разложи затраты по месяцам")  # no "таблица"/"список" marker
-    s.set_workspace_expected(True)
-    long_text = "Январь — 100; Февраль — 200; Март — 300. " * 8  # >200 chars, not markdown
-    await s._deliver_final_content(long_text)
-    s._publish_canvas.assert_awaited_once()
-
-
-@pytest.mark.asyncio
 async def test_chat_channel_no_publish():
     s = _session_with_user("спасибо за помощь")
-    s.set_workspace_expected(False)
     await s._deliver_final_content("Пожалуйста! Рад помочь." * 10)
     s._publish_canvas.assert_not_awaited()
 
@@ -39,27 +29,17 @@ async def test_chat_channel_no_publish():
 @pytest.mark.asyncio
 async def test_markdown_table_always_publishes():
     s = _session_with_user("что-нибудь")
-    s.set_workspace_expected(False)
     table = "| Поставщик | Сумма |\n|---|---|\n| Ромашка | 100 |\n| Берёзка | 200 |"
     await s._deliver_final_content(table)
     s._publish_canvas.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_chat_decision_beats_the_keyword_gate():
-    """'без таблицы' contains 'таблиц'; the router's chat decision must win."""
+async def test_a_table_word_in_the_request_does_not_move_the_answer():
+    """'без таблицы' contains 'таблиц'; the answer stays in the chat."""
     s = _session_with_user("Назови в чате трёх поставщиков, без таблицы")
-    s.set_workspace_expected(False)
     await s._deliver_final_content("Больше всего счетов у: Ромашка, Берёзка, Ёлочка. " * 6)
     s._publish_canvas.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_keyword_fallback_only_without_a_decision():
-    s = _session_with_user("выведи таблицу затрат")
-    assert s._workspace_expected is None
-    await s._deliver_final_content("Январь — 100; Февраль — 200; Март — 300. " * 8)
-    s._publish_canvas.assert_awaited_once()
 
 
 _PUBLISHED_V1 = {
@@ -92,7 +72,8 @@ async def test_after_a_publish_the_model_answers_the_whole_request(monkeypatch):
     seen = {}
 
     async def _fake(messages, tools, system, config, on_token, **_kw):
-        seen["tools"], seen["last"] = tools, messages[-1]["content"]
+        # The last message is the per-call note (time); the instruction precedes it.
+        seen["tools"], seen["last"] = tools, messages[-2]["content"]
         await on_token("Таблица на столе. Запросите email у трёх поставщиков.")
         return {}
 
@@ -200,7 +181,6 @@ async def test_sql_table_answer_is_a_sentence_and_the_query_is_kept_whole(monkey
 async def test_a_table_reply_keeps_the_words_about_what_was_done():
     """E49 live: "marked 2 invoices" + a table became only "opened a table"."""
     s = _session_with_user("пометь счета и покажи их")
-    s.set_workspace_expected(False)
     text = "Пометила 2 счёта «запросить акт».\n\n| Счёт | Сумма |\n|---|---|\n| A | 1 |\n| B | 2 |"
     reply = await s._deliver_final_content(text)
     s._publish_canvas.assert_awaited_once()

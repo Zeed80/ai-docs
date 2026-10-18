@@ -12,7 +12,7 @@ import pytest
 
 from app.ai import orchestrator as orchestrator_module
 from app.ai.agent_config import BuiltinAgentConfig
-from app.ai.audit import RETRYABLE, AuditCode, has_code, retryable
+from app.ai.audit import RETRYABLE, AuditCode, retryable
 from app.ai.orchestrator import (
     AgentOrchestrator,
     OrchestratorPlan,
@@ -102,83 +102,6 @@ def _publish_event(
 # ── Core: empty published table for a listing intent is flagged ────────────────
 
 
-@pytest.mark.asyncio
-async def test_empty_published_table_flags_intent_mismatch(monkeypatch):
-    """«добавь резцы» → пустая таблица: gate ловит INTENT_MISMATCH, ход не passed."""
-    clear_workspace_blocks()
-    config = _config()
-    monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
-    session = _orchestrator()
-    _publish_event(session, total=0)
-    report = await session._audit_turn(_plan(), config)
-    assert has_code(report.issues, AuditCode.INTENT_MISMATCH)
-    assert report.passed is False
-
-
-@pytest.mark.asyncio
-async def test_non_empty_table_passes(monkeypatch):
-    """8 групп фрез → НЕ ложное срабатывание."""
-    clear_workspace_blocks()
-    config = _config()
-    monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
-    session = _orchestrator()
-    _publish_event(session, total=8)
-    report = await session._audit_turn(_plan(), config)
-    assert not has_code(report.issues, AuditCode.INTENT_MISMATCH)
-    assert report.passed is True
-
-
-@pytest.mark.asyncio
-async def test_count_intent_empty_is_valid(monkeypatch):
-    """count → 0 («счетов от X нет») — валидный ответ, НЕ mismatch."""
-    clear_workspace_blocks()
-    config = _config()
-    monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
-    session = _orchestrator()
-    _publish_event(session, total=0)
-    report = await session._audit_turn(_plan(intent="count"), config)
-    assert not has_code(report.issues, AuditCode.INTENT_MISMATCH)
-
-
-@pytest.mark.asyncio
-async def test_self_correction_last_publish_wins(monkeypatch):
-    """Hardest: первый publish пустой, второй — исправленный (8 строк). Берём
-    ПОСЛЕДНИЙ → mismatch не выставляется (ход сам себя починил)."""
-    clear_workspace_blocks()
-    config = _config()
-    monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
-    session = _orchestrator()
-    _publish_event(session, total=0)
-    _publish_event(session, total=8)  # corrected republish — last wins
-    report = await session._audit_turn(_plan(), config)
-    assert not has_code(report.issues, AuditCode.INTENT_MISMATCH)
-    assert report.passed is True
-
-
-@pytest.mark.asyncio
-async def test_non_spectable_publish_ignored(monkeypatch):
-    """Опубликован блок без spec (другой инструмент) → intent-match не трогает."""
-    clear_workspace_blocks()
-    config = _config()
-    monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
-    session = _orchestrator()
-    upsert_workspace_block("agent:spec-table", {"type": "note", "rows": []})
-    session._workspace_before = {}
-    session._trace.workspace_events.append(
-        {"type": "workspace.updated", "canvas_id": "agent:spec-table"}
-    )
-    session._trace.tool_calls.append("workspace__pin_note")
-    session._trace.tool_results.append(
-        {
-            "type": "tool_result",
-            "tool": "workspace__pin_note",
-            "result": {"canvas_id": "agent:spec-table", "status": "published"},  # no 'spec'
-        }
-    )
-    report = await session._audit_turn(_plan(), config)
-    assert not has_code(report.issues, AuditCode.INTENT_MISMATCH)
-
-
 # ── Risk classification ────────────────────────────────────────────────────────
 
 
@@ -247,18 +170,3 @@ async def test_published_table_brief_for_critic(monkeypatch):
     assert "invoice_items" in brief
     assert "группировка" in brief and "supplier_name" in brief
     assert "строк=8" in brief
-
-
-@pytest.mark.asyncio
-async def test_adaptive_honest_message_on_empty(monkeypatch):
-    """Cheap turn, пустая таблица → честное сообщение, а не молчаливая пустышка."""
-    clear_workspace_blocks()
-    config = _config()
-    monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
-    captured: list = []
-    session = _orchestrator(captured)
-    _publish_event(session, total=0)
-    await session._explain_intent_mismatch(_plan(), "выведи все фрезы")
-    texts = [m["content"] for m in captured if m.get("type") == "text"]
-    assert texts and "ничего не нашлось" in texts[0]
-    assert "invoice_items" in texts[0]

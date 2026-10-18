@@ -245,35 +245,6 @@ def _agent_canvas_id(kind: str) -> str:
     return f"agent:{kind}"
 
 
-def _is_workspace_output_request(text: str) -> bool:
-    t = _normalize_ru_yo((text or "").lower())
-    return any(
-        marker in t
-        for marker in (
-            "таблиц",
-            "полный список",
-            "все списком",
-            "выведи список",
-            "ссылк",
-            "документ",
-            "чертеж",
-            "чертёж",
-            "график",
-            "диаграм",
-            "excel",
-            "скача",
-            "файл",
-            "столбец",
-            "столбц",
-            "колонк",
-            "добавь поле",
-            "убери поле",
-            "отсортируй",
-            "сортировк",
-        )
-    )
-
-
 def _get_agent_model(
     config: BuiltinAgentConfig | None = None,
     *,
@@ -2270,6 +2241,35 @@ SendFn = Callable[[dict], Awaitable[None]]
 GUESSED_TARGET_MARKS = frozenset({"guess", "similar", "inferred"})
 STEPS_LEFT_NUDGE = 3
 
+# Asked once when a turn is about to end having changed nothing. Without the
+# router's audit a reply "Проверю, есть ли счёт…" ended the turn with no call
+# at all (E52 step 0): the model announced the work and stopped. The model,
+# not a keyword list, judges whether the request asked for an action.
+COMPLETION_CHECK_NOTE = (
+    "Перед тем как закончить: в этом ходе ты ничего не изменила, только читала. "
+    "Если человек просил что-то сделать (создать, изменить, записать, привязать, "
+    "загрузить, подготовить черновик), ты этого ещё не сделала и данных для этого "
+    "хватает — вызови нужный инструмент сейчас. Если ответ выше — уже итог (ответ "
+    "на вопрос, уточняющий вопрос человеку или объяснение, почему сделать нельзя), "
+    "ответь одним словом: ГОТОВО. Сверх просьбы ничего не создавай."
+)
+
+
+def _changes_something(tool_call: dict) -> bool:
+    """A call whose catalog effect is not a read (unknown tools count as changes)."""
+    from app.ai.tool_catalog import get_tool
+
+    fn = tool_call.get("function") or {}
+    name = str(fn.get("name") or "")
+    raw = fn.get("arguments")
+    try:
+        args = json.loads(raw) if isinstance(raw, str) else (raw or {})
+    except (TypeError, ValueError):
+        return True
+    action = str(args.get("action") or "") if isinstance(args, dict) else ""
+    tool = get_tool(name.replace("__", "."), action) if action else None
+    return tool is None or tool.effect != "read"
+
 
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -3272,27 +3272,19 @@ class AgentSession:
         self._granted_approvals: set[str] = set()
         self._session_id = str(uuid.uuid4())
         self._iteration = 0
-        # Role-specific system prompt fragment, set per turn by the orchestrator.
-        # Replaced (not accumulated) each turn so it never bloats history.
-        self._role_context: str = ""
         # Per-turn response token budget, set by the orchestrator from task tier.
         # Keeps simple answers cheap (fast on local models) and lets reports grow.
         self._response_budget: int = 2048
         # Per-turn worker model override, set by the orchestrator from task tier
         # (e.g. a small fast model for simple turns). None → use configured model.
         self._turn_model_override: str | None = None
-        # Worker role for the current turn — scopes the visible tool set to the
-        # role's capability allowlist from gateway.yml. None → no scoping.
-        self._active_role: str | None = None
-        # Per-turn hard tool exclusions (set by the orchestrator). Used to keep
-        # the worker off slow RAG tools (memory/search/documents) when the task
-        # is structured-data only (e.g. a spec_table). Reset each turn.
-        self._excluded_tools: set[str] = set()
-        self._recommended_capabilities: set[str] = set()
-        # Orchestrator routed this turn to the desktop — reliable auto-publish
-        # fallback in _deliver_final_content (by intent, not keyword). Reset each turn.
-        # None: no orchestrator decision this turn (keyword fallback applies).
-        self._workspace_expected: bool | None = None
+        # Capabilities a narrow headless session may see (an e-mail draft turn);
+        # None — the chat employee, who sees every tool.
+        self._capability_scope: frozenset[str] | None = None
+        # The once-per-turn "did you do what was asked" check (see
+        # COMPLETION_CHECK_NOTE): whether it ran and the answer it holds back.
+        self._completion_checked = True
+        self._completion_draft: str | None = None
         self._work_budget_context: WorkBudgetContext | None = None
 
         self._config = get_builtin_agent_config()
@@ -3342,13 +3334,13 @@ class AgentSession:
                         "config_sha256": hashlib.sha256(
                             self._config.model_dump_json().encode()
                         ).hexdigest(),
-                        "role_context": self._role_context,
-                        "active_role": self._active_role,
+                        "capability_scope": (
+                            sorted(self._capability_scope)
+                            if self._capability_scope is not None
+                            else None
+                        ),
                         "model_override": self._turn_model_override,
                         "response_budget": self._response_budget,
-                        "excluded_tools": sorted(self._excluded_tools),
-                        "recommended_capabilities": sorted(self._recommended_capabilities),
-                        "workspace_expected": self._workspace_expected,
                     },
                 }
             )
@@ -3548,58 +3540,17 @@ class AgentSession:
         """Inject an orchestrator plan hint as a system message before the next user turn."""
         self.messages.append({"role": "system", "content": hint})
 
-    def set_role_context(self, role_prompt: str | None) -> None:
-        """Set the role-specific system prompt fragment for the next turn.
+    def set_capability_scope(self, names: set[str] | None) -> None:
+        """Limit a headless session to these capabilities (plus the core set).
 
-        Replaces the previous value rather than accumulating, so switching roles
-        between turns never leaves stale role guidance in the system prompt.
+        The chat employee has no scope and sees every tool; a narrow job such
+        as drafting an e-mail keeps to the tools it needs.
         """
-        self._role_context = (role_prompt or "").strip()
-
-    def set_active_role(self, role: str | None) -> None:
-        """Set the worker role for the next turn — scopes the visible tool set.
-
-        Tools are filtered to the role's capability allowlist from gateway.yml
-        (plus the always-available core: workspace, memory, search). A role
-        without a declared allowlist sees every tool (back-compat).
-        """
-        self._active_role = (role or "").strip() or None
-
-    def set_excluded_tools(self, names: set[str] | None) -> None:
-        """Hard-hide these capabilities from the worker for the next turn.
-
-        Overrides even the always-available core set — used by the orchestrator
-        to keep structured-data turns (spec_table) off slow RAG tools. Reset
-        (passed empty) each turn by the orchestrator.
-        """
-        self._excluded_tools = set(names or ())
-
-    def set_recommended_capabilities(self, names: set[str] | None) -> None:
-        """Capabilities the router/planner chose for this turn — always visible.
-
-        The role allowlist scopes tools by JOB, but the turn router picks the
-        tool by MEANING of the request; when the two disagreed the worker simply
-        never saw the recommended capability and improvised with whatever was in
-        the allowlist (live finding: "прикрепи каталог к поставщику" → the
-        catalog tool was invisible, so the worker published a summary table
-        instead). A capability the planner explicitly chose is in scope for that
-        turn by construction. Reset each turn by the orchestrator; ``exclude``
-        still wins (that gate is about cost, not scope).
-        """
-        self._recommended_capabilities = {str(n).strip() for n in (names or ()) if str(n).strip()}
+        self._capability_scope = frozenset(names) if names is not None else None
 
     def set_response_budget(self, max_tokens: int) -> None:
         """Set the per-turn max response tokens (clamped to a sane range)."""
         self._response_budget = max(256, min(int(max_tokens), 16384))
-
-    def set_workspace_expected(self, expected: bool) -> None:
-        """Tell the worker the orchestrator routed this turn to the desktop.
-
-        Used as a reliable fallback in ``_deliver_final_content``: a structural
-        result is auto-published to the desktop by *intent*, not by keyword
-        markers in the user's phrasing. Reset each turn by the orchestrator.
-        """
-        self._workspace_expected = bool(expected)
 
     def set_model_override(self, model: str | None) -> None:
         """Set a per-turn worker model (tier-based fast/strong routing).
@@ -3609,44 +3560,30 @@ class AgentSession:
         """
         self._turn_model_override = (model or "").strip() or None
 
-    # Capabilities every role can always use, regardless of its allowlist.
-    # sheets are a safe scratch area (no production DB writes) — available to all.
+    # Capabilities a scoped session can always use.
+    # sheets are a safe scratch area (no production DB writes).
     _CORE_CAPABILITIES = frozenset({"workspace", "memory", "search", "sheets", "procedures"})
 
     def _tools_for_turn(self) -> list[dict]:
-        """Visible tools for the current turn, scoped by the active role.
+        """Every tool, or the scoped set for a narrow headless session.
 
-        Only applies in capabilities mode (tool name == capability name).
         MCP tools and tools outside the capability registry pass through.
-        A role with no declared allowlist sees the full set.
         """
+        scope = self._capability_scope
+        if scope is None or gateway_config.skills_mode != "capabilities":
+            return self._tools
 
         def _tool_name(tool: dict) -> str:
             fn = tool.get("function") if isinstance(tool.get("function"), dict) else tool
             return str(fn.get("name") or "")
 
-        def _apply_exclusions(tools: list[dict]) -> list[dict]:
-            if not self._excluded_tools:
-                return tools
-            return [t for t in tools if _tool_name(t) not in self._excluded_tools]
-
-        role = self._active_role
-        if not role or gateway_config.skills_mode != "capabilities":
-            return _apply_exclusions(self._tools)
-        allowed = gateway_config.role_capabilities(role)
-        if not allowed:
-            return _apply_exclusions(self._tools)
-        # Names of registry capabilities (excludes MCP tools, which pass through).
         capability_names = set(_load_capabilities()[1].keys())
-        visible = set(allowed) | self._CORE_CAPABILITIES | self._recommended_capabilities
-
-        return _apply_exclusions(
-            [
-                tool
-                for tool in self._tools
-                if _tool_name(tool) not in capability_names or _tool_name(tool) in visible
-            ]
-        )
+        visible = scope | self._CORE_CAPABILITIES
+        return [
+            tool
+            for tool in self._tools
+            if _tool_name(tool) not in capability_names or _tool_name(tool) in visible
+        ]
 
     def _effective_system(self) -> str:
         """Base system prompt plus live date grounding plus the per-turn role
@@ -3676,8 +3613,6 @@ class AgentSession:
         tone_hint = _tone_style_hint(getattr(self._config, "agent_tone", "neutral"))
         if tone_hint:
             system = f"{system}\n\n{tone_hint}"
-        if self._role_context:
-            return f"{system}\n\n## Роль в этой задаче\n{self._role_context}"
         return system
 
     def _call_note(self) -> str:
@@ -3697,7 +3632,30 @@ class AgentSession:
         return note
 
     def _messages_for_call(self) -> list[dict]:
+        draft = getattr(self, "_completion_draft", None)
+        if draft is not None:
+            # The answer the model was about to give, then the check: kept out
+            # of the history, so a reply "ГОТОВО" leaves no trace in it.
+            return [
+                *self.messages,
+                {"role": "assistant", "content": draft},
+                {"role": "system", "content": f"{self._call_note()}\n\n{COMPLETION_CHECK_NOTE}"},
+            ]
         return [*self.messages, {"role": "system", "content": self._call_note()}]
+
+    def _needs_completion_check(self) -> bool:
+        """The turn is ending, has changed nothing and was not checked yet."""
+        if getattr(self, "_completion_checked", True):
+            return False
+        if self._capability_scope is not None:
+            # A narrow headless job (an e-mail text) returns text by design.
+            return False
+        if (getattr(self, "_steps_left", 0) or 0) < 2:
+            return False
+        for message in self.messages[self._turn_start() + 1 :]:
+            if any(_changes_something(call) for call in message.get("tool_calls") or []):
+                return False
+        return True
 
     async def on_user_message(self, content: str) -> None:
         self._restored_system = None
@@ -3710,6 +3668,8 @@ class AgentSession:
         self.messages.append(message)
         if not getattr(self, "_next_is_continuation", False):
             self._turn_user_message = message
+        self._completion_checked = False
+        self._completion_draft = None
         self._next_is_continuation = False
         self._trim_history()
         await self._run()
@@ -3742,13 +3702,10 @@ class AgentSession:
         runtime = payload["runtime"]
         self._restored_system = runtime["system_prompt"]
         self.messages = json.loads(json.dumps(payload["messages"]))
-        self._role_context = runtime["role_context"]
-        self._active_role = runtime["active_role"]
+        scope = runtime.get("capability_scope")
+        self._capability_scope = frozenset(scope) if scope is not None else None
         self._turn_model_override = runtime["model_override"]
         self._response_budget = runtime["response_budget"]
-        self._excluded_tools = set(runtime["excluded_tools"])
-        self._recommended_capabilities = set(runtime["recommended_capabilities"])
-        self._workspace_expected = runtime["workspace_expected"]
         self.total_tokens = dict(payload["tokens_used"])
         self._iteration = int(payload["iteration"])
         self._granted_approvals.clear()
@@ -4175,6 +4132,13 @@ class AgentSession:
                         self._trim_history()
                         continue
                     consecutive_empty_responses = 0
+                    if self._completion_draft is not None:
+                        # The check got no call: the answer it asked about stands.
+                        full_text, self._completion_draft = self._completion_draft, None
+                    elif self._needs_completion_check():
+                        self._completion_checked = True
+                        self._completion_draft = full_text
+                        continue
                     if budget_context is not None:
                         budget_context.raise_if_stopped()
                     delivered_text = await self._deliver_final_content(full_text)
@@ -4183,6 +4147,8 @@ class AgentSession:
                     self._remember_latest_turn(delivered_text)
                     break
 
+                # The check led to a call: the draft was not the answer.
+                self._completion_draft = None
                 self.messages.append(message)
 
                 # План — ДО выполнения, а не по факту. Раньше о замысле агента
@@ -4325,10 +4291,10 @@ class AgentSession:
         if not text:
             return ""
 
-        latest_user = next(
-            (str(m.get("content", "")) for m in reversed(self.messages) if m.get("role") == "user"),
-            "",
-        )
+        # A table in the reply goes to the desktop; any other text stays in the
+        # chat. Whether a long answer belongs on the desktop is the model's
+        # call (workspace.general): keywords read «без таблицы» as a table
+        # request and moved the answer away (live 2026-10-05).
         parsed_table = _parse_markdown_table(text)
         if parsed_table and self._turn_published_tool_table():
             # The real block is already on the desktop; the text stays a reply.
@@ -4354,29 +4320,6 @@ class AgentSession:
             ).strip()
             pointer = f"Таблицу ({len(rows)} строк) открыл на Рабочем столе."
             summary = f"{prose}\n\n{pointer}" if prose else pointer
-            await self._send({"type": "text", "content": summary})
-            return summary
-
-        # Reliable fallback: when the orchestrator routed this turn to the desktop
-        # (by intent), a substantial non-table result is still published there —
-        # no dependency on keyword markers in the user's phrasing. The legacy
-        # keyword gate remains for turns the orchestrator didn't classify.
-        # The orchestrator's channel decision wins when there is one: the keyword
-        # gate read "в чате, без таблицы" as a table request ("таблиц") and
-        # moved the answer to the desktop (live 2026-10-05). Keywords remain
-        # only for turns nobody classified.
-        publish_to_desktop = (
-            self._workspace_expected
-            if self._workspace_expected is not None
-            else _is_workspace_output_request(latest_user)
-        )
-        if publish_to_desktop and len(text) > 200:
-            await self._publish_canvas(
-                {"type": "markdown", "title": "Результат", "content": text},
-                canvas_id=_agent_canvas_id("llm-result"),
-                append=False,
-            )
-            summary = "Открыл результат на Рабочем столе."
             await self._send({"type": "text", "content": summary})
             return summary
 

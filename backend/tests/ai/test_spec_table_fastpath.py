@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from app.ai import orchestrator as orchestrator_module
-from app.ai import turn_router
 from app.ai.agent_config import BuiltinAgentConfig
 from app.ai.orchestrator import AgentOrchestrator
 from app.domain.workspace import clear_workspace_blocks, upsert_workspace_block
@@ -95,13 +94,6 @@ def _config() -> BuiltinAgentConfig:
 
 def _legacy_config() -> BuiltinAgentConfig:
     return _config()
-
-
-async def _routed_to_specialist(content, **_kwargs):
-    return (
-        turn_router.TurnDecision(intent="specialist", role="data_analyst", confidence=0.9),
-        "model",
-    )
 
 
 @pytest.mark.asyncio
@@ -329,7 +321,6 @@ async def test_no_spec_table_falls_through(monkeypatch):
 
     # A real router decision: since f9b1e7dd an unavailable router stops the
     # turn instead of falling back to heuristics, so it must not raise here.
-    monkeypatch.setattr(turn_router, "route_turn", _routed_to_specialist)
 
     sent: list[dict] = []
 
@@ -354,7 +345,6 @@ async def test_failed_patch_falls_through(monkeypatch):
 
     # A real router decision: since f9b1e7dd an unavailable router stops the
     # turn instead of falling back to heuristics, so it must not raise here.
-    monkeypatch.setattr(turn_router, "route_turn", _routed_to_specialist)
 
     class FakeResponse:
         status_code = 500

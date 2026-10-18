@@ -337,46 +337,6 @@ scenarios:
     type: manual
 prompts:
   base: ./prompts/base.md
-  # Роли-специалисты. У каждой: prompt (системный промпт роли) и capabilities —
-  # allowlist видимых инструментов (core workspace/memory/search доступны всегда).
-  # Секретарь больше не worker-роль: он объединён с оркестратором (front-agent).
-  roles:
-    invoice_specialist:
-      prompt: ./prompts/role-invoice-specialist.md
-      capabilities: [invoices, documents, suppliers, payments, anomalies, normalization, analytics, tool_catalog, email]
-      default_canvases: ["agent:invoices", "agent:invoice-items"]
-    data_analyst:
-      prompt: ./prompts/role-data-analyst.md
-      capabilities: [invoices, documents, suppliers, warehouse, procurement, payments, anomalies, analytics, agent_control, tool_catalog]
-    warehouse_specialist:
-      prompt: ./prompts/role-warehouse.md
-      capabilities: [warehouse, documents, procurement, analytics, tool_catalog]
-    procurement_specialist:
-      prompt: ./prompts/role-procurement.md
-      capabilities: [procurement, suppliers, invoices, email, documents, analytics, tool_catalog]
-    mail_assistant:
-      # Ф6.9 — личную и общую переписку разбирал персонаж снабженца: на
-      # «ответь маме» он предлагал запросить коммерческое предложение.
-      prompt: ./prompts/role-mail-assistant.md
-      capabilities: [email, documents, analytics, tool_catalog]
-    accountant:
-      prompt: ./prompts/role-accountant.md
-      capabilities: [invoices, payments, documents, suppliers, normalization, analytics, email]
-    engineer:
-      prompt: ./prompts/role-engineer.md
-      capabilities: [documents, tech, analytics, image_studio, tool_catalog]
-      default_canvases: ["agent:image-studio"]
-    technologist:
-      prompt: ./prompts/role-technologist.md
-      capabilities: [tech, documents, analytics, image_studio, tool_catalog]
-      default_canvases: ["agent:image-studio"]
-    memory_researcher:
-      prompt: ./prompts/role-memory-researcher.md
-      capabilities: [documents, analytics]
-    normcontroller:
-      prompt: ./prompts/role-normcontroller.md
-      capabilities: [cad_review, documents, analytics]
-      default_canvases: ["agent:image-studio"]
 auth:
   provider: authentik
   oauth2:
