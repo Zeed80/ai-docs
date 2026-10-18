@@ -83,7 +83,7 @@ def _digest(value: Any) -> str:
 def export_model_setup() -> dict[str, Any]:
     """The agent config and routing overlay of the stack this runs in."""
     from app.ai.agent_config import get_builtin_agent_config
-    from app.ai.gpu_runtime import current_owner
+    from app.ai.gpu_runtime import current_owner, strata_model
     from app.ai.provider_registry import list_instances
     from app.ai.schemas import ProviderKind
     from app.ai.task_routing import _redis_get
@@ -93,6 +93,10 @@ def export_model_setup() -> dict[str, Any]:
         "task_routing": _redis_get() or {},
         # Who holds the GPU decides whether Strata or GPU Ollama may answer.
         "gpu_owner": current_owner(),
+        # The model Strata serves: the world's own startup publishes its empty
+        # volume's default, and the guard then refused every other model
+        # (E52 B: 69/69 model_unavailable on Swift 1.5).
+        "strata_model": strata_model(),
         # Named local nodes a route may pin (the CPU node for embeddings);
         # the world runs its own copy of each under the same name.
         "local_nodes": sorted(
@@ -113,6 +117,7 @@ def import_model_setup(setup: dict[str, Any]) -> str:
         "agent_config": setup["agent_config"],
         "task_routing": setup["task_routing"],
         "gpu_owner": setup.get("gpu_owner"),
+        "strata_model": setup.get("strata_model"),
         "local_nodes": setup.get("local_nodes"),
     }
     digest = _digest(body)
@@ -143,6 +148,10 @@ def import_model_setup(setup: dict[str, Any]) -> str:
         from app.ai.gpu_runtime import set_owner
 
         set_owner(body["gpu_owner"])
+    if body["strata_model"]:
+        from app.ai.gpu_runtime import set_strata_model
+
+        set_strata_model(body["strata_model"])
     if "ollama-cpu" in (body["local_nodes"] or []):
         _register_world_node("ollama-cpu", EVAL_OLLAMA_CPU_URL)
     if skipped:

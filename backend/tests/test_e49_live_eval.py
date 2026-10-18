@@ -486,3 +486,28 @@ async def test_an_anomaly_card_raised_by_an_invoice_check_is_not_unrequested():
     created = {"anomaly_cards": ["a1"]}
     assert await runner._unrequested_creations(case, created, validated=True) == {}
     assert await runner._unrequested_creations(case, created) == {"anomaly_cards": ["a1"]}
+
+
+def test_the_world_takes_the_model_strata_serves(monkeypatch):
+    """E52 B: the world's startup published its empty volume's default model,
+    so every call naming the model Strata really served was refused."""
+    from app.ai import agent_config, gpu_runtime, task_routing
+    from app.ai.evals import live_world
+    from app.config import settings
+
+    served = {"model": "swift-1.5"}
+    monkeypatch.setattr(gpu_runtime, "strata_model", lambda: served["model"])
+    monkeypatch.setattr(gpu_runtime, "set_strata_model", lambda name: served.update(model=name))
+    monkeypatch.setattr(gpu_runtime, "current_owner", lambda: None)
+    monkeypatch.setattr(task_routing, "_redis_get", lambda: {})
+    monkeypatch.setattr(live_world, "list_instances", lambda kind: [], raising=False)
+    setup = live_world.export_model_setup()
+    assert setup["strata_model"] == "swift-1.5"
+
+    served["model"] = "qwen3.8-flash-next"  # what the world's own startup published
+    monkeypatch.setenv("EMPLOYEE_EVAL_WORLD", "isolated")
+    monkeypatch.setattr(settings, "postgres_host", live_world.EVAL_DB_HOST)
+    monkeypatch.setattr(live_world, "assert_eval_world", lambda: None)
+    monkeypatch.setattr(agent_config, "save_builtin_agent_config", lambda config: None)
+    live_world.import_model_setup(setup)
+    assert served["model"] == "swift-1.5"
