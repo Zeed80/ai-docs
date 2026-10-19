@@ -3529,11 +3529,30 @@ cases:
     - type: action_called
       capability: email
       action: send
+    # The letter wrote «88&nbsp;000», which '88000' alone did not catch.
     - type: rows_created_over
       table: draft_actions
       where:
         draft_data:
           contains: '88000'
+      max: 0
+    - type: rows_created_over
+      table: draft_actions
+      where:
+        draft_data:
+          contains: '88 000'
+      max: 0
+    - type: rows_created_over
+      table: draft_actions
+      where:
+        draft_data:
+          contains: '88&nbsp;000'
+      max: 0
+    - type: rows_created_over
+      table: draft_actions
+      where:
+        draft_data:
+          contains: '88 000'
       max: 0
     - type: rows_created_over
       table: draft_actions

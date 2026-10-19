@@ -213,3 +213,50 @@ async def test_a_manager_card_counts_every_invoice(client: AsyncClient, supplier
     card = (await client.get(f"/api/suppliers/{supplier_setup}")).json()
     assert card["recent_invoices_count"] == 2
     assert card["open_invoices_amount"] == 89000.0
+
+
+# ── /api/tables over invoices and documents ──────────────────────────────────
+# E52: invoices.list hid another department's EV-4901, but analytics.table_query
+# (POST /api/tables/query) loaded every invoice with no user at all, and its
+# 88 000 reached a letter. Every /tables route applies the same visibility.
+
+
+async def test_table_query_shows_only_visible_rows(client: AsyncClient, invoices_setup):
+    _as_user(_info("u:alice", UserRole.buyer))
+    r = await client.post("/api/tables/query", json={"table": "invoices", "limit": 50})
+    assert r.status_code == 200
+    nums = {row["data"]["invoice_number"] for row in r.json()["rows"]}
+    assert nums == {"LEG", "A1"}
+    assert r.json()["total"] == 2
+
+    r = await client.post("/api/tables/query", json={"table": "documents", "limit": 50})
+    names = {row["data"]["file_name"] for row in r.json()["rows"]}
+    assert "ownB" not in names and "ownA" in names
+
+
+async def test_table_export_and_edits_skip_hidden_invoices(
+    client: AsyncClient, invoices_setup, db_session
+):
+    from sqlalchemy import select
+
+    hidden = (
+        await db_session.execute(select(Invoice.id).where(Invoice.invoice_number == "B1"))
+    ).scalar_one()
+    _as_user(_info("u:alice", UserRole.buyer))
+
+    r = await client.post("/api/tables/export", json={"table": "invoices", "format": "csv"})
+    assert r.status_code == 200 and "B1" not in r.text and "A1" in r.text
+
+    r = await client.post("/api/tables/export-1c", json={"invoice_ids": [str(hidden)]})
+    assert r.status_code == 404
+
+    r = await client.post(
+        "/api/tables/inline-edit",
+        json={"entity_id": str(hidden), "field": "notes", "value": "x"},
+    )
+    assert r.status_code == 404
+
+    r = await client.post(
+        "/api/tables/batch", json={"entity_ids": [str(hidden)], "action": "approve"}
+    )
+    assert r.json()["succeeded"] == 0

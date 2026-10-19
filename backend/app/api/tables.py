@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.audit.service import log_action
-from app.auth.jwt import require_role
+from app.auth.jwt import get_current_user, require_role
 from app.auth.models import UserInfo, UserRole
 from app.db.models import (
     Document,
@@ -28,6 +28,7 @@ from app.db.models import (
 )
 from app.db.session import get_db
 from app.db.text_search import text_search_condition
+from app.domain.access import document_visibility_filter, invoice_visibility_clause
 from app.domain.table_spec import invoice_items_list_subquery
 from app.domain.tables import (
     Export1CRequest,
@@ -150,14 +151,23 @@ DOCUMENT_COLUMNS = [
 async def table_query(
     payload: TableQueryRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
 ):
     """Skill: table.query — Query table with filters, sort, pagination."""
     if payload.table == "invoices":
-        return await _query_invoices(payload, db)
+        return await _query_invoices(payload, db, current_user)
     elif payload.table == "documents":
-        return await _query_documents(payload, db)
+        return await _query_documents(payload, db, current_user)
     else:
         raise HTTPException(400, f"Unknown table: {payload.table}")
+
+
+async def _visible(query, db: AsyncSession, user: UserInfo, clause_for):
+    """Row visibility for every /tables route: they loaded invoices and
+    documents with no user at all, so another department's invoice reached a
+    letter through table_query (E52: EV-4901 with its 88 000)."""
+    clause = await clause_for(db, user)
+    return query if clause is None else query.where(clause)
 
 
 def _supplier_name_subq():
@@ -170,13 +180,16 @@ def _supplier_name_subq():
     )
 
 
-async def _query_invoices(req: TableQueryRequest, db: AsyncSession) -> TableQueryResponse:
+async def _query_invoices(
+    req: TableQueryRequest, db: AsyncSession, user: UserInfo
+) -> TableQueryResponse:
     items_subq = invoice_items_list_subquery()
     query = select(Invoice, items_subq.label("items_list")).options(
         selectinload(Invoice.lines),
         selectinload(Invoice.supplier),
         selectinload(Invoice.buyer),
     )
+    query = await _visible(query, db, user, invoice_visibility_clause)
 
     # Apply filters
     for f in req.filters:
@@ -334,8 +347,10 @@ def _get_invoice_sort_column(key: str):
     return mapping.get(key)
 
 
-async def _query_documents(req: TableQueryRequest, db: AsyncSession) -> TableQueryResponse:
-    query = select(Document)
+async def _query_documents(
+    req: TableQueryRequest, db: AsyncSession, user: UserInfo
+) -> TableQueryResponse:
+    query = await _visible(select(Document), db, user, document_visibility_filter)
 
     for f in req.filters:
         col_map = {
@@ -401,6 +416,7 @@ async def _query_documents(req: TableQueryRequest, db: AsyncSession) -> TableQue
 async def export_excel(
     payload: ExportRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
 ):
     """Skill: table.export_excel — Export table to Excel/CSV."""
     # Exports must be COMPLETE — never cap to a small page. Use a high safety
@@ -414,9 +430,9 @@ async def export_excel(
     )
 
     if payload.table == "invoices":
-        data = await _query_invoices(query_req, db)
+        data = await _query_invoices(query_req, db, current_user)
     else:
-        data = await _query_documents(query_req, db)
+        data = await _query_documents(query_req, db, current_user)
 
     if payload.format == "csv":
         return _export_csv(data)
@@ -616,6 +632,7 @@ def _csv_cell_value(value, key: str, data_type: str) -> str:
 async def export_1c(
     payload: Export1CRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
 ):
     """Skill: table.export_1c — Export invoices to 1С CommerceML XML format."""
     query = select(Invoice).options(
@@ -623,6 +640,7 @@ async def export_1c(
         selectinload(Invoice.supplier),
         selectinload(Invoice.buyer),
     )
+    query = await _visible(query, db, current_user, invoice_visibility_clause)
 
     if payload.invoice_ids:
         query = query.where(Invoice.id.in_(payload.invoice_ids))
@@ -960,7 +978,13 @@ async def apply_diff(
 
         try:
             if row.action == "update" and row.entity_id:
-                result = await db.execute(select(Invoice).where(Invoice.id == row.entity_id))
+                found = await _visible(
+                    select(Invoice).where(Invoice.id == row.entity_id),
+                    db,
+                    _user,
+                    invoice_visibility_clause,
+                )
+                result = await db.execute(found)
                 invoice = result.scalar_one_or_none()
                 if not invoice:
                     errors.append(f"Invoice {row.entity_id} not found")
@@ -1009,11 +1033,13 @@ class InlineEditResponse(BaseModel):
 async def inline_edit(
     payload: InlineEditRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
 ):
     """Skill: table.inline_edit — Edit a single cell value."""
     from app.db.models import Invoice as InvoiceModel
 
-    result = await db.execute(select(InvoiceModel).where(InvoiceModel.id == payload.entity_id))
+    found = select(InvoiceModel).where(InvoiceModel.id == payload.entity_id)
+    result = await db.execute(await _visible(found, db, current_user, invoice_visibility_clause))
     invoice = result.scalar_one_or_none()
     if not invoice:
         raise HTTPException(404, "Entity not found")
@@ -1075,6 +1101,7 @@ class BatchActionResponse(BaseModel):
 async def batch_action(
     payload: BatchActionRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
 ):
     """Skill: table.batch_action — Apply action to multiple invoices."""
     from app.audit.service import add_timeline_event as ate
@@ -1085,7 +1112,10 @@ async def batch_action(
     errors: list[str] = []
 
     for eid in payload.entity_ids:
-        result = await db.execute(select(InvoiceModel).where(InvoiceModel.id == eid))
+        found = select(InvoiceModel).where(InvoiceModel.id == eid)
+        result = await db.execute(
+            await _visible(found, db, current_user, invoice_visibility_clause)
+        )
         inv = result.scalar_one_or_none()
         if not inv:
             errors.append(f"{eid}: not found")
