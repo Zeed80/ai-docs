@@ -855,6 +855,46 @@ async def health() -> dict | None:
     return None
 
 
+async def busy(*, quiet_s: float = 5.0) -> bool:
+    """True while Strata serves a request or finished one less than ``quiet_s`` ago.
+
+    A chat turn leaves short gaps between its model calls while tools run; the
+    quiet window keeps background work out of them. Unreadable metrics mean
+    "not busy": waiting on a down Strata would only delay the caller's own error.
+    """
+    import time
+
+    from app.ai.provider_registry import select_instance
+    from app.ai.schemas import ProviderKind
+
+    headers: dict[str, str] = {}
+    try:
+        node = select_instance(ProviderKind.STRATA)
+        if node.api_key:
+            headers["Authorization"] = f"Bearer {node.api_key}"
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            r = await client.get(f"{_base_url()}/metrics", headers=headers)
+        r.raise_for_status()
+        data = r.json()
+    except Exception:  # noqa: BLE001
+        return False
+    live = data.get("live") or {}
+    if any(live.get(key) for key in ("running", "waiting", "admitting", "queued")):
+        return True
+    # ``time`` is when a request started; it ended ``duration_s`` later.
+    last = max(
+        (
+            float(req.get("time") or 0) + float(req.get("duration_s") or 0)
+            for req in data.get("requests") or []
+        ),
+        default=0.0,
+    )
+    return time.time() - last < quiet_s
+
+
 async def ensure_loaded(*, timeout_s: float = 300.0, poll_s: float = 3.0) -> bool:
     """Wait until Strata's model is loaded; start the load when it is unloaded.
 

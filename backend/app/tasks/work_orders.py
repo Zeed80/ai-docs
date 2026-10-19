@@ -935,6 +935,13 @@ async def verify_completed_step(step_id: uuid.UUID, *, session_factory: Any | No
             return False
         passed = await verify_nonempty_result(db, order=order, step=step)
         await db.commit()
+    if not passed and session_factory is None and await _verifier_should_wait():
+        verify_order_semantics.apply_async(
+            args=[str(step.work_order_id), 1],
+            countdown=_VERIFY_DEFER_SECONDS,
+            queue="scheduler",
+        )
+        return False
     completed = passed or await verify_semantic_criteria(
         step.work_order_id, session_factory=factory
     )
@@ -1165,6 +1172,39 @@ async def _persist_verifier_stop(
         )
         await db.commit()
         return True
+
+
+# The verdict is not on the person's path: the chat answer is saved before it.
+# On Strata it takes one of the two batch slots, so it waits for a quiet GPU
+# instead of halving someone's turn; after ten minutes it runs regardless.
+_VERIFY_DEFER_SECONDS = 5
+_VERIFY_MAX_DEFERRALS = 120
+
+
+async def _verifier_should_wait() -> bool:
+    from app.ai.model_resolver import get_reasoning_model
+
+    if get_reasoning_model(confidential=True).provider != "strata":
+        return False
+    from app.ai.providers import strata_manager
+
+    return await strata_manager.busy()
+
+
+async def verify_order_semantics_later(work_order_id: uuid.UUID, deferrals: int) -> bool:
+    """The deferred semantic verdict of an order already in ``verifying``."""
+    if deferrals < _VERIFY_MAX_DEFERRALS and await _verifier_should_wait():
+        verify_order_semantics.apply_async(
+            args=[str(work_order_id), deferrals + 1],
+            countdown=_VERIFY_DEFER_SECONDS,
+            queue="scheduler",
+        )
+        return False
+    logger.info("work_verifier_quiet_gpu", work_order_id=str(work_order_id), deferrals=deferrals)
+    completed = await verify_semantic_criteria(work_order_id)
+    if completed:
+        learn_work_order.apply_async(args=[str(work_order_id)], queue="scheduler")
+    return completed
 
 
 async def verify_semantic_criteria(
@@ -2480,6 +2520,18 @@ def execute_work_step(step_id: str, attempt_id: str) -> None:
 )
 def verify_work_step(step_id: str) -> None:
     run_async(verify_completed_step(uuid.UUID(step_id)))
+
+
+@celery_app.task(
+    name="work.verify_order_semantics",
+    queue="scheduler",
+    max_retries=0,
+    ignore_result=True,
+    soft_time_limit=120,
+    time_limit=150,
+)
+def verify_order_semantics(work_order_id: str, deferrals: int) -> None:
+    run_async(verify_order_semantics_later(uuid.UUID(work_order_id), deferrals))
 
 
 @celery_app.task(
