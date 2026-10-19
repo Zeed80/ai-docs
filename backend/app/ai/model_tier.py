@@ -156,19 +156,6 @@ _LOW_COMPLEXITY_SIGNALS = frozenset(
 )
 
 
-def has_high_complexity_signal(text: str) -> bool:
-    """True when the text contains an explicit deep-reasoning marker.
-
-    Distinct from tier: a request can be tier MEDIUM/LARGE purely from stacked
-    analytical words ("популярнее", "больше всего") yet still be a plain
-    pivot/table. Only a HIGH-complexity verb ("сравни", "проанализируй",
-    "построй план") signals work that genuinely needs the worker LLM rather
-    than a deterministic workspace tool.
-    """
-    lower = text.lower()
-    return any(kw in lower for kw in _HIGH_COMPLEXITY_SIGNALS)
-
-
 # Action verbs: the user wants something DONE to a record (check arithmetic,
 # approve, send…), not a table shown. Such turns must reach the worker even when
 # an entity resolves a workspace canvas — otherwise a proactive table silently
@@ -235,17 +222,6 @@ _ACTION_SIGNALS = frozenset(
         "update record",
     }
 )
-
-
-def has_action_intent(text: str) -> bool:
-    """True when the request asks to act on a record, not just view data.
-
-    Action turns must go to the worker (they may need a data-flow chain:
-    find the record → operate on it), so the proactive table fast-path is
-    skipped for them.
-    """
-    lower = text.lower()
-    return any(kw in lower for kw in _ACTION_SIGNALS)
 
 
 def score_complexity(
@@ -353,67 +329,6 @@ _TIER_CLOUD_MODELS: dict[Tier, list[str]] = {
 }
 
 
-def select_models(
-    tier: Tier,
-    *,
-    confidential: bool = False,
-    allow_cloud: bool = True,
-    preferred_local_model: str | None = None,
-    preferred_cloud_model: str | None = None,
-) -> list[str]:
-    """Return ordered list of model names to try for the given tier.
-
-    Local models are always tried first. Cloud models follow if allow_cloud=True
-    and confidential=False.
-    """
-    local = list(_TIER_LOCAL_MODELS.get(tier, _TIER_LOCAL_MODELS[Tier.MEDIUM]))
-    cloud = list(_TIER_CLOUD_MODELS.get(tier, _TIER_CLOUD_MODELS[Tier.MEDIUM]))
-
-    # Override with runtime settings if available
-    if preferred_local_model:
-        if tier <= Tier.SMALL:
-            local = [preferred_local_model]
-        else:
-            local = [preferred_local_model] + [m for m in local if m != preferred_local_model]
-
-    if preferred_cloud_model:
-        cloud = [preferred_cloud_model] + [m for m in cloud if m != preferred_cloud_model]
-
-    chain = local[:]
-    if allow_cloud and not confidential:
-        chain.extend(cloud)
-
-    return chain
-
-
-def update_tier_models(
-    local_fast: str | None = None,
-    local_smart: str | None = None,
-    cloud_model: str | None = None,
-) -> None:
-    """Update tier table from runtime ai_config. Called on config change."""
-    if local_fast:
-        _TIER_LOCAL_MODELS[Tier.NANO] = [local_fast]
-        _TIER_LOCAL_MODELS[Tier.MICRO] = [local_fast]
-        _TIER_LOCAL_MODELS[Tier.SMALL] = [local_fast, local_smart or local_fast]
-
-    if local_smart:
-        _TIER_LOCAL_MODELS[Tier.MEDIUM] = [local_smart]
-        _TIER_LOCAL_MODELS[Tier.LARGE] = [local_smart]
-        _TIER_LOCAL_MODELS[Tier.EXPERT] = [local_smart]
-
-    if cloud_model:
-        for tier in Tier:
-            _TIER_CLOUD_MODELS[tier] = [cloud_model]
-
-    logger.info(
-        "model_tier_updated",
-        local_fast=local_fast,
-        local_smart=local_smart,
-        cloud=cloud_model,
-    )
-
-
 # ── Chain-of-Draft prompt injection ───────────────────────────────────────────
 
 _COD_SUFFIX = (
@@ -425,22 +340,3 @@ _COD_SUFFIX_RU = (
     "\n\nДумай пошагово, но кратко: ≤6 слов на шаг рассуждения. "
     "Покажи шаги, затем дай финальный ответ."
 )
-
-
-def inject_chain_of_draft(prompt: str, *, russian: bool = True) -> str:
-    """Append Chain-of-Draft reasoning instruction to a prompt.
-
-    Reduces token waste vs full Chain-of-Thought while retaining step clarity.
-    Use for Tier.SMALL and Tier.MEDIUM tasks on weak local models.
-    """
-    suffix = _COD_SUFFIX_RU if russian else _COD_SUFFIX
-    if suffix.strip() in prompt:
-        return prompt  # already injected
-    return prompt + suffix
-
-
-def should_use_cod(tier: Tier, model: str) -> bool:
-    """Return True if Chain-of-Draft should be injected for this tier+model combo."""
-    local_models = {"gemma4:e4b", "gemma4:12b", "gemma4:26b", "gemma4:27b"}
-    is_local = any(lm in model for lm in local_models)
-    return is_local and tier in (Tier.MEDIUM, Tier.LARGE)

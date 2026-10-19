@@ -140,11 +140,6 @@ class GatewayConfig:
         )
         return _resolve_env(raw)
 
-    @property
-    def ocr_model(self) -> str:
-        raw = self._raw.get("models", {}).get("ocr", {}).get("model", "qwen3.5:9b")
-        return _resolve_env(raw)
-
     # ── Backend ───────────────────────────────────────────────────────────────
 
     @property

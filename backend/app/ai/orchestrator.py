@@ -996,65 +996,6 @@ class AgentOrchestrator:
             log_degraded("orchestrator.recipe_penalty", exc)
         self._last_recipe_id = ""
 
-    def _maybe_record_recipe(
-        self, content: str, plan: OrchestratorPlan, audit: AuditReport
-    ) -> None:
-        """Schedule recording of a successful turn as a draft recipe.
-
-        Criteria: mechanical audit passed, no explicit semantic failure,
-        2–6 tool calls, all from the capability dispatcher (plain names),
-        no approval-gated actions (checked inside the recorder).
-        """
-        if not audit.passed or audit.semantic_passed is False:
-            return
-        seq = list(self._trace.tool_call_seq)
-        # Length bounds live in recipes._MIN_STEPS/_MAX_STEPS; the reproducibility
-        # gate inside record_candidate is the real safety check (rejects chains
-        # with runtime data-flow regardless of length).
-        from app.ai import recipes as _recipes
-
-        if not (_recipes._MIN_STEPS <= len(seq) <= _recipes._MAX_STEPS):
-            return
-        # Only plain capability-dispatcher calls compose into recipes.
-        if any("__" in name or "." in name for name, _ in seq):
-            return
-        steps = [
-            {
-                "capability": name,
-                "action": str(args.get("action") or ""),
-                "args_template": dict(args),
-            }
-            for name, args in seq
-        ]
-        # Per-step results (same order as the calls) so data-flow args can become
-        # {{step.N.path}} references — enables recording chains where a later step
-        # consumes an earlier step's output.
-        step_results = [r.get("result") for r in self._trace.tool_results if isinstance(r, dict)]
-        from app.ai import recipes as recipes_module
-
-        async def _record() -> None:
-            try:
-                # Component 1 — passive validation: if this worker turn reproduced
-                # an existing draft's exact steps, count a confirmation (and maybe
-                # promote it to active). Cheap — no shadow run.
-                await recipes_module.confirm_draft_from_worker(content, steps)
-                # Then record/enrich the draft for this trigger as before.
-                await recipes_module.record_candidate(
-                    user_text=content,
-                    role=plan.worker.role,
-                    intent=plan.intent,
-                    steps=steps,
-                    step_results=step_results,
-                    output_channel=plan.workspace.channel,
-                )
-            except Exception as exc:
-                log_degraded("orchestrator.recipe_record", exc)
-
-        try:
-            asyncio.get_event_loop().create_task(_record())
-        except Exception as exc:
-            log_degraded("orchestrator.recipe_record", exc)
-
     def _maybe_record_reflection_lesson(
         self,
         original_issues: list[AuditIssue],
@@ -1543,42 +1484,6 @@ class AgentOrchestrator:
             return False
         return _issues_retryable(audit.issues)
 
-    async def _try_execute_planned_workspace_tool(
-        self,
-        plan: OrchestratorPlan,
-        audit: AuditReport,
-        config: BuiltinAgentConfig,
-    ) -> bool:
-        if not plan.workspace.required:
-            return False
-        if not _issues_retryable(audit.issues):
-            return False
-        spec = _workspace_tool_spec_for_plan(plan)
-        if not spec:
-            return False
-        # Never overwrite a canvas the agent already published to in this turn:
-        # the "repair" then destroys the real answer (live: a report of attached
-        # supplier catalogs was replaced by a generic invoice-items table).
-        target_canvas = str(
-            (spec.get("args") or {}).get("canvas_id") or plan.workspace.canvas_id or ""
-        )
-        published_now = {
-            str(canvas_id)
-            for canvas_id in (_event_canvas_id(event) for event in self._trace.workspace_events)
-            if canvas_id
-        }
-        if target_canvas and target_canvas in published_now:
-            logger.info("workspace_repair_skipped_already_published", canvas_id=target_canvas)
-            return False
-        return await self._execute_workspace_spec(
-            spec,
-            config,
-            announce=(
-                "Оркестратор: исполнитель выбрал не тот инструмент, "
-                "запускаю правильный workspace tool напрямую."
-            ),
-        )
-
     # Canvases whose skill has self-sufficient default_args — the orchestrator
     # can run them deterministically (0 worker-LLM) the moment the plan resolves
     # the canvas. spec-table is intentionally excluded: it needs the LLM to
@@ -1594,32 +1499,6 @@ class AgentOrchestrator:
             "agent:invoice-items-grouped",
         }
     )
-
-    async def _try_proactive_workspace_execution(
-        self,
-        plan: OrchestratorPlan,
-        config: BuiltinAgentConfig,
-    ) -> bool:
-        """Run a self-sufficient workspace tool directly, before the worker LLM.
-
-        When the plan resolves to a safe canvas (table/pivot with usable
-        defaults), the orchestrator already knows exactly which skill to call —
-        spinning up the 35B worker just to emit that one tool call costs ~12s
-        of prefill for nothing. Execute it here; on any miss fall through to the
-        normal worker loop. Skipped for spec-table (needs LLM-chosen columns).
-        """
-        if not plan.workspace.required:
-            return False
-        if plan.workspace.canvas_id not in self._PROACTIVE_SAFE_CANVASES:
-            return False
-        spec = _workspace_tool_spec_for_plan(plan)
-        if not spec:
-            return False
-        return await self._execute_workspace_spec(
-            spec,
-            config,
-            announce="Готовлю результат на Рабочем столе…",
-        )
 
     async def _execute_workspace_spec(
         self,
@@ -1911,29 +1790,6 @@ def _parse_sheet_edit_command(
     return None
 
 
-def _expected_workspace_skill_for_canvas(canvas_id: str | None) -> str | None:
-    return route_table.canvas_to_skill(canvas_id)
-
-
-def _workspace_tool_spec_for_plan(plan: OrchestratorPlan) -> dict[str, Any] | None:
-    skill = _expected_workspace_skill_for_canvas(plan.workspace.canvas_id)
-    if not skill:
-        return None
-    spec_entry = route_table.skill_spec(skill)
-    if not spec_entry:
-        return None
-    tool = skill.replace(".", "__")
-    canvas_id = plan.workspace.canvas_id
-    args: dict[str, Any] = {**spec_entry.get("default_args", {}), "canvas_id": canvas_id}
-    if plan.workspace.filters:
-        args.update(plan.workspace.filters)
-    return {
-        "tool": tool,
-        "path": spec_entry["path"],
-        "args": args,
-    }
-
-
 def _build_correction_request(plan: OrchestratorPlan, audit: AuditReport) -> str:
     skill_hint = ", ".join(plan.worker.recommended_skills)
     # Build a precise correction — avoid leaking audit issue text to the LLM
@@ -1972,35 +1828,6 @@ def _build_correction_request(plan: OrchestratorPlan, audit: AuditReport) -> str
 # email.send, invoice.approve, table.apply_diff, payment.mark_paid, bom.approve,
 # doc.bulk_delete and the rest) must never be shipped on a mismatch — they
 # require explicit human confirmation first.
-
-
-def _gated_skill_markers() -> tuple[str, ...]:
-    """Every approval gate from gateway.yml, dotted and double-underscore form.
-
-    Read live off ``gateway_config`` (A2) instead of a hand-maintained tuple —
-    a hardcoded copy of this list previously covered only 4 of gateway.yml's
-    15 gates (whatever anyone remembered to add), silently under-classifying
-    the rest as "cheap" for self-correction purposes. Deriving it means there
-    is nothing left to keep in sync: a gate added to gateway.yml is picked up
-    on the next call, no restart and no matching edit here required. The
-    double-underscore form matches the ``tool`` name fast-paths build (see
-    A1 / ``_workspace_tool_spec_for_plan``: ``skill.replace(".", "__")``).
-    """
-    from app.ai.gateway_config import gateway_config as _gw_cfg
-
-    markers: list[str] = []
-    for gate in _gw_cfg.approval_gates:
-        markers.append(gate)
-        markers.append(gate.replace(".", "__"))
-    return tuple(markers)
-
-
-def risk_class(plan: OrchestratorPlan) -> str:
-    """'gated' for expensive/external/approval-gated actions, else 'cheap'."""
-    skills = " ".join(plan.worker.recommended_skills or []).lower()
-    if any(marker in skills for marker in _gated_skill_markers()):
-        return "gated"
-    return "cheap"
 
 
 # Reflection loop (see Orchestrator._maybe_record_reflection_lesson): generic,
@@ -2054,43 +1881,6 @@ _VAGUE_REFS = (
     "тем",
     "той",
 )
-
-
-def _has_concrete_target(text: str) -> bool:
-    """True when a gated request names a concrete target (number, quote, org,
-    or a mid-sentence proper noun) rather than relying on context."""
-    import re as _re
-
-    if _re.search(r"\d", text):
-        return True
-    if any(q in text for q in ('"', "«", "»", "'")):
-        return True
-    if _re.search(r"\b(ООО|АО|ЗАО|ПАО|ИП|ОАО)\b", text):
-        return True
-    words = text.split()
-    return any(i > 0 and w[:1].isupper() for i, w in enumerate(words))
-
-
-def needs_clarification(content: str, plan: OrchestratorPlan) -> str | None:
-    """Adaptive-by-risk: for an EXPENSIVE/external (gated) action that is
-    ambiguous about its target, return a clarifying question so the agent asks
-    BEFORE acting instead of guessing. Cheap actions never reach here (they
-    build the best result + show assumptions)."""
-    if risk_class(plan) != "gated":
-        return None
-    t = (content or "").strip().lower()
-    if not t:
-        return None
-    padded = f" {t} "
-    vague = any(f" {ref} " in padded for ref in _VAGUE_REFS)
-    no_target_short = (not _has_concrete_target(content)) and len(t.split()) <= 6
-    if vague or no_target_short:
-        return (
-            "Это внешнее/важное действие, и я не хочу выполнить его не так. "
-            "Уточните, пожалуйста, к кому/чему оно относится "
-            "(поставщик, номер счёта или документа)?"
-        )
-    return None
 
 
 # Intents that must yield ≥1 row on the desktop — an empty published table is the

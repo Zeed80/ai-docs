@@ -56,7 +56,6 @@ async def test_semantic_audit_emits_soft_warning(monkeypatch):
 
     clear_workspace_blocks()
     config = BuiltinAgentConfig(
-        department_enabled=True,
         audit_enabled=True,
         model="mock-model",
         backend_url="http://backend",
@@ -105,7 +104,6 @@ async def test_reactive_refine_revises_flagged_generative_answer(monkeypatch):
 
     clear_workspace_blocks()
     config = BuiltinAgentConfig(
-        department_enabled=True,
         audit_enabled=True,
         model="mock-model",
         backend_url="http://backend",
@@ -146,7 +144,6 @@ async def test_reactive_refine_revises_flagged_generative_answer(monkeypatch):
 async def test_tier_based_model_routing(monkeypatch):
     """Simple turns route to fast_model; complex turns use the default model."""
     config = BuiltinAgentConfig(
-        department_enabled=True,
         audit_enabled=False,
         model="qwen3.6:35b",
         fast_model="qwen3.5:9b",

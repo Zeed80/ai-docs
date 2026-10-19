@@ -87,7 +87,6 @@ def _recipe(
 def _config(*, replay: bool = True) -> BuiltinAgentConfig:
     return BuiltinAgentConfig(
         recipe_replay_enabled=replay,
-        department_enabled=True,
         audit_enabled=True,
         model="mock",
         backend_url="http://backend",

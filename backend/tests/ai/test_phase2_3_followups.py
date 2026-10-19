@@ -7,7 +7,6 @@ from app.ai.orchestrator import (
     OrchestratorPlan,
     WorkerAssignment,
     WorkspaceOutputSpec,
-    needs_clarification,
 )
 from app.ai.orchestrator_memory import SkillScore, rank_skills_by_success
 
@@ -22,29 +21,6 @@ def _plan(skills):
 
 
 # ── Clarify on gated + ambiguous ───────────────────────────────────────────────
-
-
-def test_clarify_gated_vague_reference_asks():
-    q = needs_clarification("отправь ему письмо", _plan(["email.send"]))
-    assert q and "уточните" in q.lower()
-
-
-def test_clarify_gated_short_no_target_asks():
-    assert needs_clarification("утверди счёт", _plan(["invoices.approve"])) is not None
-
-
-def test_no_clarify_gated_with_concrete_target():
-    # Names a concrete target → proceed (approval gate still confirms later).
-    assert (
-        needs_clarification('отправь письмо в ООО "Ромашка" по счёту 145', _plan(["email.send"]))
-        is None
-    )
-    assert needs_clarification("утверди счёт 145", _plan(["invoices.approve"])) is None
-
-
-def test_no_clarify_for_cheap_action():
-    # Cheap (desktop) actions never block — they assume + show assumptions.
-    assert needs_clarification("покажи это", _plan(["workspace.spec_table"])) is None
 
 
 # ── Skill ranking by learned success ───────────────────────────────────────────

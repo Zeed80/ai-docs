@@ -115,7 +115,6 @@ class _Executor:
 async def test_secretary_answers_flow_status_directly(monkeypatch):
     """Flow-status question → direct answer from live data: no executor turn."""
     config = BuiltinAgentConfig(
-        department_enabled=True,
         audit_enabled=True,
         model="mock",
         backend_url="http://backend",
@@ -126,7 +125,6 @@ async def test_secretary_answers_flow_status_directly(monkeypatch):
     # живую Ollama: 100 секунд вместо 17, а когда та не отвечала — бесконечное
     # ожидание, съедавшее весь прогон. Соседний тест в этом же файле глушит
     # ai_router; здесь достаточно выключить роутер хода.
-    config.use_turn_router = False
     monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
 
     async def _no_llm(request, *a, **k):
@@ -175,7 +173,6 @@ async def test_secretary_answers_flow_status_directly(monkeypatch):
 async def test_secretary_falls_through_when_snapshot_unavailable(monkeypatch):
     """No snapshot → the turn goes through normal dispatch (specialist fetches data)."""
     config = BuiltinAgentConfig(
-        department_enabled=True,
         audit_enabled=False,
         model="mock",
         backend_url="http://backend",

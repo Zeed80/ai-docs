@@ -126,7 +126,6 @@ async def test_filter_audit_checks_last_publish_not_first(monkeypatch):
     """A turn that publishes wrong first and corrects itself must pass."""
     clear_workspace_blocks()
     config = BuiltinAgentConfig(
-        department_enabled=True,
         audit_enabled=True,
         model="mock-model",
         backend_url="http://backend",
@@ -228,7 +227,6 @@ def test_response_budget_reads_routes_yml_not_hardcoded(monkeypatch):
 async def test_semantic_audit_respects_budget(monkeypatch):
     """When the aux budget is exhausted, no further LLM audit calls are made."""
     config = BuiltinAgentConfig(
-        department_enabled=True,
         audit_enabled=True,
         model="mock-model",
         backend_url="http://backend",
@@ -259,7 +257,6 @@ async def test_semantic_audit_respects_budget(monkeypatch):
 @pytest.mark.asyncio
 async def test_semantic_audit_infra_failure_leaves_verdict_unknown(monkeypatch):
     config = BuiltinAgentConfig(
-        department_enabled=True,
         audit_enabled=True,
         model="mock-model",
         backend_url="http://backend",

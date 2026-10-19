@@ -108,7 +108,6 @@ interface AgentConfig {
   enabled: boolean;
   agent_name: string;
   model: string;
-  department_enabled: boolean;
   orchestrator_model: string | null;
   orchestrator_provider: string | null;
   orchestrator_disable_thinking: boolean;
@@ -2460,22 +2459,6 @@ export default function SettingsPage() {
                     );
                   })()}
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <label className="flex items-start gap-3 rounded-md bg-slate-900/50 border border-slate-700 p-3">
-                      <input
-                        type="checkbox"
-                        className="mt-0.5"
-                        checked={agentConfig.department_enabled}
-                        onChange={(e) =>
-                          setAgentConfig({
-                            ...agentConfig,
-                            department_enabled: e.target.checked,
-                          })
-                        }
-                      />
-                      <span className="text-sm text-slate-200">
-                        Включить оркестратор отдела
-                      </span>
-                    </label>
                     <label className="flex items-start gap-3 rounded-md bg-slate-900/50 border border-slate-700 p-3">
                       <input
                         type="checkbox"

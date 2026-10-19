@@ -51,7 +51,7 @@ fi
 
 SETUP=$(mktemp)
 docker exec -w /app infra-backend-1 python -m app.ai.evals.live_world export > "$SETUP"
-# EVAL_AGENT_CONFIG='{"department_enabled": false}' changes the agent config of
+# EVAL_AGENT_CONFIG='{"max_worker_steps": 20}' changes the agent config of
 # this world only (an A/B against the stack's setup); it enters the setup
 # digest, so such results never pass for the stack's own.
 if [ -n "${EVAL_AGENT_CONFIG:-}" ]; then

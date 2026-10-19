@@ -491,7 +491,6 @@ async def apply_stable_local_agent_preset(
             auditor_disable_thinking=True,
             builder_disable_thinking=False,
             fast_disable_thinking=True,
-            department_enabled=True,
             audit_enabled=True,
             context_compression_enabled=True,
         )

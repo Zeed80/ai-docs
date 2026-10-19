@@ -21,7 +21,6 @@ const agentConfig = {
   enabled: true,
   agent_name: "Света",
   model: "qwen3.5:9b",
-  department_enabled: true,
   orchestrator_model: null,
   orchestrator_provider: null,
   orchestrator_disable_thinking: false,

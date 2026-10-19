@@ -190,9 +190,8 @@ def test_verifier_requires_real_boolean():
 
 
 def test_persisted_config_cannot_reactivate_generated_capabilities():
-    config = BuiltinAgentConfig(allow_capability_builder=True, use_turn_router=False)
+    config = BuiltinAgentConfig(allow_capability_builder=True)
     assert not config.allow_capability_builder
-    assert config.use_turn_router
 
 
 def test_parallel_execution_requires_known_read_effects():

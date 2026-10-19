@@ -14,7 +14,7 @@ from tests.test_work_budget_usage_airouter import _receipts, _summary
 
 
 def _config(provider="ollama", *, fallback=None) -> BuiltinAgentConfig:
-    config = BuiltinAgentConfig(department_enabled=False, provider=provider)
+    config = BuiltinAgentConfig(provider=provider)
     if fallback:
         # Test-only mutation of the retired fallback chain (see
         # test_work_budget_provider) to prove each attempt is accounted.

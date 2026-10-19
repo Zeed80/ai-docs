@@ -771,7 +771,7 @@ async def test_worker_persists_budget_stop_as_nonretryable_blocker(test_engine, 
             self.history = history
 
         async def on_user_message(self, prompt, **kwargs):
-            config = BuiltinAgentConfig(department_enabled=False, provider="ollama")
+            config = BuiltinAgentConfig(provider="ollama")
             await agent_loop._call_provider_streaming(
                 [{"role": "user", "content": prompt}],
                 [],
@@ -841,7 +841,7 @@ async def test_two_workers_for_same_attempt_dispatch_only_one_provider(test_engi
             self.history = history
 
         async def on_user_message(self, prompt, **kwargs):
-            config = BuiltinAgentConfig(department_enabled=False, provider="ollama")
+            config = BuiltinAgentConfig(provider="ollama")
             result = await agent_loop._call_provider_streaming(
                 [{"role": "user", "content": prompt}],
                 [],

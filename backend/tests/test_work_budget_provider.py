@@ -44,7 +44,7 @@ async def _claimed_context(test_engine):
 
 
 def _config(*, fallback: bool = False) -> BuiltinAgentConfig:
-    config = BuiltinAgentConfig(department_enabled=False, provider="ollama")
+    config = BuiltinAgentConfig(provider="ollama")
     if fallback:
         # The production validator retires implicit fallback configuration.
         # This explicit test-only mutation exercises the still-supported
@@ -241,7 +241,7 @@ async def test_duplicate_contexts_with_different_providers_dispatch_only_once(
         _dispatch(first, _config()),
         _dispatch(
             second,
-            BuiltinAgentConfig(department_enabled=False, provider="openai"),
+            BuiltinAgentConfig(provider="openai"),
         ),
         return_exceptions=True,
     )

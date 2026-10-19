@@ -28,68 +28,6 @@ _SEND_ARGS = {
 }
 
 
-def test_order_to_send_without_showing_the_letter_asks_for_approval():
-    """Живой дефект: «отправь поставщику письмо…» выдавало разрешение до того,
-    как человек увидел хоть строчку текста."""
-    session = _session(
-        [
-            {"role": "user", "content": "Отправь поставщику письмо с просьбой прислать счёт"},
-        ]
-    )
-    assert session._explicit_send_authorized("email", _SEND_ARGS) is False
-
-
-def test_order_to_send_after_showing_the_letter_is_authorization():
-    session = _session(
-        [
-            {"role": "user", "content": "Отправь поставщику письмо с просьбой прислать счёт"},
-            {
-                "role": "assistant",
-                "content": (
-                    "Подготовила письмо на sales@romex.example, тема «Запрос счёта». Отправляю?"
-                ),
-            },
-        ]
-    )
-    assert session._explicit_send_authorized("email", _SEND_ARGS) is True
-
-
-def test_negation_inside_the_order_is_not_an_order():
-    """Проверялась одна подстрока «не отправл», поэтому «не нужно отправлять»
-    считалось приказом отправить."""
-    session = _session(
-        [
-            {"role": "user", "content": "Не нужно отправлять письмо поставщику, просто подготовь"},
-            {"role": "assistant", "content": "Письмо для sales@romex.example, тема «Запрос счёта»"},
-        ]
-    )
-    assert session._explicit_send_authorized("email", _SEND_ARGS) is False
-
-
-def test_agent_cannot_acknowledge_a_blocking_risk_on_its_own():
-    """Признать риск приемлемым — решение человека: такой вызов обязан пройти
-    через явное подтверждение, а не через авто-разрешение."""
-    args = {**_SEND_ARGS, "acknowledged_risks": ["sensitive_content"]}
-    shown = [
-        {"role": "user", "content": "Отправь письмо на sales@romex.example"},
-        {"role": "assistant", "content": "Письмо на sales@romex.example, тема «Запрос счёта»"},
-    ]
-    assert _session(shown)._explicit_send_authorized("email", args) is False
-
-    confirmed = [
-        {
-            "role": "assistant",
-            "content": (
-                "Вот что будет отправлено: sales@romex.example, тема «Запрос счёта». "
-                "Подтверждаете отправку?"
-            ),
-        },
-        {"role": "user", "content": "да"},
-    ]
-    assert _session(confirmed)._confirms_pending_send("email", args) is False
-    assert _session(confirmed)._confirms_pending_send("email", _SEND_ARGS) is True
-
-
 # ── 2. Одобрение привязано к тексту письма, а не к идентификатору ──────────
 
 

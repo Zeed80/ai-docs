@@ -1,14 +1,17 @@
 """Declarative request-routing table (aiagent/config/routes.yml).
 
-Single source of truth for keyword routing. Consumers:
+Single source of truth for the keywords of the paths that run without the
+model. Consumers:
 
-- the orchestrator's heuristic planner (``match_route`` + request-type markers),
 - the deterministic fast path (``match_fast_intent`` re-exported through
-  ``fast_intent_router``),
-- the domain sections of the orchestrator system prompt (``prompt_sections``),
-- post-turn action chips (``chips_for``).
+  ``fast_intent_router``) and the flow-status / retrieval markers,
+- post-turn action chips (``chips_for``),
+- thresholds and word lists the turn reads (response budgets, field terms).
 
-The YAML is reloaded on mtime change (same pattern as the role-prompt cache);
+The turn itself is not routed: one employee with one prompt takes every
+request that no fast path answered.
+
+The YAML is reloaded on mtime change;
 ``invalidate_cache`` forces a reload on the next access (wired to the Redis
 ``skill_reload`` event).
 """
@@ -70,16 +73,9 @@ def _table() -> dict[str, Any]:
 def _validate(table: dict[str, Any]) -> None:
     """Fail fast on structural mistakes a YAML edit can introduce."""
     problems: list[str] = []
-    for route in table.get("routes") or []:
-        if not route.get("intent"):
-            problems.append("route without intent")
-        if not route.get("keywords"):
-            problems.append(f"route {route.get('intent')!r} has no keywords")
-        if not route.get("role"):
-            problems.append(f"route {route.get('intent')!r} has no role")
-    for canvas_id, skill in (table.get("canvas_to_skill") or {}).items():
-        if skill not in (table.get("skill_to_spec") or {}):
-            problems.append(f"canvas {canvas_id!r} maps to {skill!r} which has no skill_to_spec")
+    for name, spec in (table.get("skill_to_spec") or {}).items():
+        if not isinstance(spec, dict) or not spec.get("path"):
+            problems.append(f"skill {name!r} has no path")
     if problems:
         logger.warning("route_table_invalid", problems=problems)
 
@@ -94,16 +90,6 @@ def _markers(key: str) -> tuple[str, ...]:
 def is_workspace_request(text: str) -> bool:
     t = normalize(text)
     return any(marker in t for marker in _markers("workspace_request_markers"))
-
-
-def is_table_edit_request(text: str) -> bool:
-    t = normalize(text)
-    return any(marker in t for marker in _markers("table_edit_markers"))
-
-
-def references_existing_table(text: str) -> bool:
-    t = normalize(text)
-    return any(marker in t for marker in _markers("existing_table_markers"))
 
 
 def is_flow_status_query(text: str) -> bool:
@@ -138,44 +124,6 @@ def needs_document_retrieval(text: str) -> bool:
 
 
 # ── Intent routes ──────────────────────────────────────────────────────────────
-
-
-def match_route(text: str) -> dict[str, Any] | None:
-    """Return the first route whose keywords match the normalized text."""
-    t = normalize(text)
-    for route in _table().get("routes") or []:
-        if any(kw in t for kw in route.get("keywords") or []):
-            return route
-    return None
-
-
-def resolve_canvas_from_route(route: dict[str, Any], text: str) -> str | None:
-    """Walk canvas_rules of the route to pick a canvas for the given text."""
-    t = normalize(text)
-    for rule in route.get("canvas_rules") or []:
-        if any(kw in t for kw in rule.get("require_any") or []):
-            for sub in rule.get("sub_rules") or []:
-                if any(kw in t for kw in sub.get("require_any") or []):
-                    return sub["canvas_id"]
-            return rule["canvas_id"]
-    return route.get("default_canvas")
-
-
-def fallback_canvas(text: str) -> str | None:
-    """Pick a canvas via fallback_canvas_rules when no route resolved one."""
-    t = normalize(text)
-    for rule in _table().get("fallback_canvas_rules") or []:
-        if not any(kw in t for kw in rule.get("require_any") or []):
-            continue
-        if rule.get("require_table_edit") and not is_table_edit_request(text):
-            continue
-        if rule.get("require_extra_any") and not any(kw in t for kw in rule["require_extra_any"]):
-            continue
-        for sub in rule.get("sub_rules") or []:
-            if any(kw in t for kw in sub.get("require_any") or []):
-                return sub["canvas_id"]
-        return rule["canvas_id"]
-    return None
 
 
 # ── Supplier helpers ───────────────────────────────────────────────────────────
@@ -264,120 +212,11 @@ def extract_supplier_name(text: str) -> str | None:
     return None
 
 
-def supplier_grouping() -> dict[str, Any]:
-    return dict(_table().get("supplier_grouping") or {})
-
-
-def has_specific_filter_content(text: str, route: dict | None = None) -> bool:
-    """Return True when the message contains filter-specific content beyond routing vocabulary.
-
-    Mechanism: build a set of "claimed" token stems from all routing vocabulary
-    sources (workspace markers, entity markers, coverage stopwords, plus the
-    matched route's own keywords). Then tokenise the message into 3+ char tokens
-    and check whether any token is NOT explained by a claimed stem via prefix
-    matching (handles Russian inflection: "таблиц" covers "таблице"/"таблицу"
-    etc., "счет" covers "счетов"/"счетам").
-
-    True  → message has a specific filter ("фрезы", "за май", "из Москвы")
-            that a static skill cannot express → skip proactive path, use LLM.
-    False → message is fully explained by routing vocabulary → static skill ok.
-
-    Examples::
-
-        has_specific_filter_content("выведи все счета")                  → False
-        has_specific_filter_content("выведи все фрезы со всех счетов")   → True
-        has_specific_filter_content("список счетов за май")              → True
-        has_specific_filter_content("таблицу поставщиков из Москвы")     → True
-        has_specific_filter_content("покажи всех поставщиков")           → False
-    """
-    t = normalize(text)
-
-    # Collect "claimed" token stems from all routing vocabulary sources.
-    claimed: set[str] = set()
-
-    # workspace_request_markers + entity_domain_markers cover core listing vocab.
-    for marker in (*_markers("workspace_request_markers"), *_markers("entity_domain_markers")):
-        for tok in marker.split():
-            if len(tok) >= 3:
-                claimed.add(tok)
-
-    # coverage_stopwords: domain routing targets + Russian function words
-    # that are NOT filter criteria (maintained in routes.yml for easy tuning).
-    for tok in _markers("coverage_stopwords"):
-        if len(tok) >= 3:
-            claimed.add(tok)
-
-    # If a specific route was matched, also claim its own keyword stems.
-    if route:
-        for kw in route.get("keywords") or []:
-            for tok in normalize(kw).split():
-                if len(tok) >= 3:
-                    claimed.add(tok)
-
-    # Find all 3+ char tokens in the normalized message.
-    msg_tokens = re.findall(r"[а-яёa-z0-9]{3,}", t)
-
-    def _covered(tok: str) -> bool:
-        # A token is covered if any claimed stem is a prefix of it.
-        return any(tok.startswith(stem) for stem in claimed if len(stem) >= 3)
-
-    return any(not _covered(tok) for tok in msg_tokens)
-
-
-def is_supplier_grouping_request(text: str) -> bool:
-    sg = supplier_grouping()
-    t = normalize(text)
-    has_trigger = any(kw in t for kw in sg.get("trigger_keywords") or [])
-    has_items = any(kw in t for kw in sg.get("item_keywords") or [])
-    if not (has_trigger and has_items):
-        return False
-    # A specific supplier name makes this a filter request, not a group-by.
-    return extract_supplier_name(text) is None
-
-
-def is_techdraw_request(text: str) -> bool:
-    """Точный ЕСКД-чертёж (techdraw, детерминированный рендер) vs diffusion-эскиз.
-
-    AND-семантика: деталь-существительное + признак точности (допуск/ГОСТ/
-    размеры/разрез/...), либо самодостаточная фраза ("точный чертёж") без
-    существительного. Используется маршрутизатором, чтобы «начерти вал 50h6»
-    уходило в capability action=techdraw, а «нарисуй эскиз установки» — в
-    диффузионную генерацию (image_studio.generate).
-    """
-    cfg = _table().get("image_studio_techdraw") or {}
-    t = normalize(text)
-    has_standalone = any(kw in t for kw in cfg.get("standalone_markers") or [])
-    if has_standalone:
-        return True
-    has_part = any(kw in t for kw in cfg.get("part_nouns") or [])
-    has_precision = any(kw in t for kw in cfg.get("precision_markers") or [])
-    has_chertezh = "чертеж" in t or "начерти" in t
-    return has_precision and (has_part or has_chertezh)
-
-
-def is_vectorize_request(text: str) -> bool:
-    """Оцифровка скана/фото в редактируемый CAD (vectorize) vs рендер новой
-    детали (techdraw) vs диффузия. OR-семантика по маркерам («оцифруй»,
-    «в DXF», «векторизуй»). Проверяется ДО is_techdraw_request — «оцифруй
-    чертёж по ГОСТ» содержит и precision-маркер, но остаётся оцифровкой."""
-    cfg = _table().get("image_studio_vectorize") or {}
-    t = normalize(text)
-    return any(kw in t for kw in cfg.get("markers") or [])
-
-
 # ── Canvas/skill mappings (audit + direct repair) ──────────────────────────────
-
-
-def canvas_to_skill(canvas_id: str | None) -> str | None:
-    return (_table().get("canvas_to_skill") or {}).get(canvas_id or "")
 
 
 def skill_spec(skill: str) -> dict[str, Any] | None:
     return (_table().get("skill_to_spec") or {}).get(skill)
-
-
-def capability_output_type(capability: str) -> str | None:
-    return (_table().get("capability_output_types") or {}).get(capability)
 
 
 def response_budgets() -> dict[str, Any]:
@@ -571,14 +410,3 @@ def chips_for(intent: str, text: str, *, workspace_required: bool = False) -> li
     if workspace_required:
         chips.append({"label": "Рабочий стол", "action": "navigate", "target": "/"})
     return chips[:4]
-
-
-def prompt_sections() -> str:
-    """Domain sections rendered into the orchestrator system prompt."""
-    parts: list[str] = []
-    for section in _table().get("prompt_sections") or []:
-        title = str(section.get("title") or "").strip()
-        text = str(section.get("text") or "").strip()
-        if title and text:
-            parts.append(f"{title}:\n  {text}")
-    return "\n\n".join(parts)

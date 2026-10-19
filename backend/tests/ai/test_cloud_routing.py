@@ -77,7 +77,6 @@ def test_auditor_allow_cloud_is_protected_and_off_by_default():
 @pytest.mark.parametrize("cloud_enabled", [False, True])
 async def test_semantic_audit_propagates_auditor_allow_cloud(monkeypatch, cloud_enabled):
     config = BuiltinAgentConfig(
-        department_enabled=True,
         audit_enabled=True,
         auditor_allow_cloud=cloud_enabled,
         model="mock",

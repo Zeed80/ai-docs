@@ -258,7 +258,7 @@ def _get_agent_model(
     """
     if model_override and model_override.strip():
         return model_override.strip()
-    if config and config.department_enabled and config.worker_model:
+    if config and config.worker_model:
         return config.worker_model
     if config and config.model:
         return config.model
@@ -286,7 +286,7 @@ def _get_agent_provider(
 ) -> str:
     if provider_override and provider_override.strip():
         return provider_override.strip()
-    if config.department_enabled and config.worker_provider:
+    if config.worker_provider:
         return config.worker_provider
     return config.provider or "ollama"
 
@@ -507,23 +507,6 @@ async def deliver_external_approval(db_id: str, approved: bool) -> bool:
         except Exception as exc:  # noqa: BLE001
             logger.warning("approval_delivery_failed", db_id=db_id, error=str(exc))
     return False
-
-
-def reload_all_sessions() -> int:
-    """Tell every live AgentSession to reload its skill map from the registry.
-
-    Called by CapabilityBuilder after writing a new generated skill.
-    Returns the number of sessions reloaded.
-    """
-    count = 0
-    for session in list(_ACTIVE_SESSIONS):
-        try:
-            session.reload_skills()
-            count += 1
-        except Exception as exc:
-            logger.warning("session_reload_failed", error=str(exc))
-    logger.info("reload_all_sessions_done", count=count)
-    return count
 
 
 def _load_capabilities() -> tuple[list[dict], dict[str, dict]]:
@@ -1598,14 +1581,6 @@ def _provider_instance_extra(provider: str) -> dict[str, Any]:
         return select_instance(ProviderKind(provider)).extra or {}
     except Exception:
         return {}
-
-
-def _reasoning_disable_params(provider: str) -> dict[str, Any]:
-    """Hard-off CoT params for a provider family. Kept as a thin, stable
-    wrapper (existing tests call it directly) delegating to the shared
-    ``thinking_request_params`` in app.ai.thinking_params.
-    """
-    return _thinking_request_params(provider, False, None)
 
 
 def _reasoning_params(provider: str, thinking: bool, level: str | None) -> dict[str, Any]:
@@ -3357,19 +3332,6 @@ class AgentSession:
         except Exception as exc:
             raise ChatCheckpointError("Chat checkpoint could not be persisted") from exc
 
-    def reload_skills(self) -> None:
-        """Hot-reload skill map from registry — used by CapabilityBuilder after new skill creation."""
-        exposed = set(self._config.exposed_skills)
-        self._tools, self._skill_map = _load_agent_skills(
-            expose_filter=exposed if exposed else None
-        )
-        self._registry_mtime = _registry_mtime()
-        logger.info(
-            "agent_session_skills_reloaded",
-            session_id=self._session_id,
-            skill_count=len(self._skill_map),
-        )
-
     async def _call_for_compression(
         self,
         messages: list[dict],
@@ -5095,76 +5057,6 @@ class AgentSession:
         re.IGNORECASE,
     )
 
-    def _confirms_pending_send(self, skill_name: str, args: dict) -> bool:
-        """True, когда человек только что ответил «да» на показанный черновик.
-
-        Живой случай: агент показал письмо и спросил «Подтверждаю отправку?»,
-        человек ответил «да» — и получил ещё шесть запросов разрешения на то
-        же самое письмо. Ответ на вопрос и есть разрешение; спрашивать снова —
-        значит спрашивать о том, на что уже ответили.
-
-        Условия намеренно жёсткие, потому что это гейт внешнего действия:
-        предыдущий ход агента должен заканчиваться предложением отправить,
-        ответ человека должен быть коротким согласием без отрицания, а если
-        вызов несёт получателя и тему — они обязаны совпасть с тем, что было
-        показано. Иначе подтверждали бы одно письмо, а уходило бы другое.
-        """
-        if skill_name not in ("email", "email.send"):
-            return False
-        if args.get("action") not in (None, "send"):
-            return False
-        # «Да» подтверждает показанное письмо, но не снимает блокирующий риск:
-        # признать риск приемлемым человек должен явно, глядя на его причину.
-        if args.get("acknowledged_risks"):
-            return False
-
-        last_user = next(
-            (
-                str(m.get("content") or "")
-                for m in reversed(self.messages)
-                if m.get("role") == "user"
-            ),
-            "",
-        )
-        if not last_user.strip() or len(last_user) > 64:
-            return False
-        if self._NEGATION_RE.search(last_user):
-            return False
-        if not self._CONFIRMATION_RE.match(last_user.strip()):
-            return False
-
-        # Предложение агента ищем ДО этого сообщения человека: подтверждать
-        # можно только уже показанное.
-        proposal = ""
-        seen_user = False
-        for m in reversed(self.messages):
-            role = m.get("role")
-            if role == "user" and not seen_user:
-                seen_user = True
-                continue
-            if seen_user and role == "assistant" and m.get("content"):
-                proposal = str(m.get("content"))
-                break
-        if not proposal or not self._SEND_PROPOSAL_RE.search(proposal):
-            return False
-
-        # Привязка к содержимому: то, что видно в аргументах, должно быть в
-        # показанном тексте. Для вызова с одним draft_id подмену содержимого
-        # ловит content_digest на стороне API.
-        body = args.get("body")
-        if isinstance(body, str):
-            try:
-                body = json.loads(body)
-            except Exception:
-                body = {}
-        payload = body if isinstance(body, dict) else {}
-        recipients = payload.get("to_addresses") or args.get("to_addresses") or []
-        low_proposal = proposal.lower()
-        for addr in recipients if isinstance(recipients, list) else [recipients]:
-            if str(addr).lower() not in low_proposal:
-                return False
-        return True
-
     @staticmethod
     def _approval_key(skill_name: str, args: dict) -> str:
         """Что именно человек одобрил — чтобы не спрашивать об этом дважды.
@@ -5210,125 +5102,6 @@ class AgentSession:
                 sort_keys=True,
             )
         return f"{skill_name}:{args.get('action') or ''}:{ident}"
-
-    def _explicit_send_authorized(self, skill_name: str, args: dict) -> bool:
-        """True, когда человек в этом ходе прямо велел ОТПРАВИТЬ письмо,
-        которое он уже видел.
-
-        Ключевое слово — «видел». Раньше здесь хватало приказа: фраза вроде
-        «отправь поставщику письмо с просьбой прислать счёт» выдавала
-        разрешение, и наружу уходил текст, который человеку никто не показывал.
-        Это ровно то, что запрещает draft-first: подтверждают письмо, а не
-        намерение написать письмо. Теперь требуется и приказ, и показанное
-        содержимое (``_draft_shown_in_turn``); если письма ещё не показывали,
-        вызов идёт обычным путём — человек увидит превью и решит сам.
-
-        Второе исправление — отрицание. Проверялась одна подстрока «не отправл»,
-        поэтому «не нужно отправлять письмо поставщику, просто подготовь»
-        считалось приказом отправить. Теперь работает общий ``_NEGATION_RE``.
-        """
-        if skill_name not in ("email", "email.send"):
-            return False
-        if args.get("action") not in (None, "send"):
-            return False
-        # Признание блокирующего риска — решение человека, а не модели: такой
-        # вызов всегда идёт через явный запрос подтверждения.
-        if args.get("acknowledged_risks"):
-            return False
-        last_user = next(
-            (
-                str(m.get("content") or "")
-                for m in reversed(self.messages)
-                if m.get("role") == "user"
-            ),
-            "",
-        )
-        if not last_user or not self._EXPLICIT_SEND_RE.search(last_user):
-            return False
-        low = last_user.lower()
-        if "черновик" in low or "draft" in low:
-            return False
-        if self._NEGATION_RE.search(last_user):
-            return False
-        has_recipient = "@" in last_user or any(
-            w in low for w in ("поставщик", "клиент", "контрагент", "заказчик", "адрес")
-        )
-        return has_recipient and self._draft_shown_in_turn(args)
-
-    def _draft_snapshot(self, args: dict) -> dict:
-        """Получатели и тема письма, которое отправляет этот вызов.
-
-        Либо прямо из аргументов, либо — когда в вызове только ``draft_id`` —
-        из результата инструмента, которым этот черновик был создан/прочитан в
-        текущей сессии.
-        """
-        body = args.get("body")
-        if isinstance(body, str):
-            try:
-                body = json.loads(body)
-            except Exception:  # noqa: BLE001
-                body = {}
-        payload = body if isinstance(body, dict) else {}
-        recipients = payload.get("to_addresses") or args.get("to_addresses")
-        subject = payload.get("subject") or args.get("subject")
-        if recipients:
-            return {
-                "to": [
-                    str(a) for a in (recipients if isinstance(recipients, list) else [recipients])
-                ],
-                "subject": str(subject or ""),
-            }
-
-        draft_id = str(args.get("draft_id") or args.get("id") or "")
-        if not draft_id:
-            return {"to": [], "subject": ""}
-        for msg in reversed(self.messages):
-            if msg.get("role") != "tool":
-                continue
-            content = str(msg.get("content") or "")
-            if draft_id not in content:
-                continue
-            try:
-                data = json.loads(content)
-            except Exception:  # noqa: BLE001
-                continue
-            if not isinstance(data, dict):
-                continue
-            to = data.get("to_addresses")
-            if to:
-                return {
-                    "to": [str(a) for a in (to if isinstance(to, list) else [to])],
-                    "subject": str(data.get("subject") or ""),
-                }
-        return {"to": [], "subject": ""}
-
-    def _draft_shown_in_turn(self, args: dict) -> bool:
-        """Показывал ли агент это письмо человеку в текущем ходе.
-
-        «Показывал» — значит в тексте, который агент вывел после последнего
-        сообщения человека, есть и получатель, и тема письма. Пустой снимок
-        (ни получателей, ни темы) показанным не считается: тогда сверять
-        нечего, и правильный ответ — спросить.
-        """
-        snapshot = self._draft_snapshot(args)
-        recipients = [a for a in snapshot["to"] if a]
-        if not recipients:
-            return False
-
-        shown: list[str] = []
-        for msg in reversed(self.messages):
-            if msg.get("role") == "user":
-                break
-            if msg.get("role") == "assistant" and msg.get("content"):
-                shown.append(str(msg["content"]))
-        if not shown:
-            return False
-        haystack = "\n".join(shown).lower()
-
-        if not all(str(a).lower() in haystack for a in recipients):
-            return False
-        subject = snapshot["subject"].strip().lower()
-        return not subject or subject in haystack
 
     async def _request_approval(self, skill_name: str, args: dict) -> bool:
         from app.ai.approval_preview import build_preview

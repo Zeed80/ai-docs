@@ -81,14 +81,12 @@ def _spec_block() -> dict:
 
 def _config() -> BuiltinAgentConfig:
     cfg = BuiltinAgentConfig(
-        department_enabled=True,
         audit_enabled=True,
         model="mock",
         backend_url="http://backend",
         ollama_url="http://ollama",
         exposed_skills=[],
     )
-    cfg.use_turn_router = False
     return cfg
 
 
@@ -391,7 +389,7 @@ async def test_gated_patch_never_applies_directly(monkeypatch):
     clear_workspace_blocks()
     upsert_workspace_block("agent:spec-table", _spec_block())
     config = _config()
-    # Double-underscore form: matches _workspace_tool_spec_for_plan's
+    # Double-underscore form: matches the
     # skill.replace(".", "__") and the tool_name the fast-path builds.
     config.approval_gates = ["workspace__spec_table_patch"]
     monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)

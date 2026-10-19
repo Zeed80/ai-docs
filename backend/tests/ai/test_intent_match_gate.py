@@ -18,14 +18,12 @@ from app.ai.orchestrator import (
     OrchestratorPlan,
     WorkerAssignment,
     WorkspaceOutputSpec,
-    risk_class,
 )
 from app.domain.workspace import clear_workspace_blocks, upsert_workspace_block
 
 
 def _config() -> BuiltinAgentConfig:
     return BuiltinAgentConfig(
-        department_enabled=True,
         audit_enabled=True,
         model="mock-model",
         backend_url="http://backend",
@@ -103,50 +101,6 @@ def _publish_event(
 
 
 # ── Risk classification ────────────────────────────────────────────────────────
-
-
-def test_risk_class_cheap_for_spec_table():
-    assert risk_class(_plan(skills=["workspace.spec_table"])) == "cheap"
-
-
-def test_risk_class_gated_for_external_actions():
-    assert risk_class(_plan(skills=["email.send"])) == "gated"
-    assert risk_class(_plan(skills=["invoices.approve"])) == "gated"
-    assert risk_class(_plan(skills=["anomalies.resolve", "workspace.spec_table"])) == "gated"
-
-
-def test_risk_class_covers_every_approval_gate_of_the_manifest():
-    """risk_class обязан узнавать КАЖДЫЙ гейт, а не выборку из них.
-
-    Источник правды переехал: `gateway_config.approval_gates` в режиме
-    capabilities считается по `gate_actions` манифеста — по тому же списку,
-    которым руководствуется HTTP-граница. Список в gateway.yml остался от
-    registry-режима и пользовался другой схемой имён (`invoice.approve`
-    против `invoices.approve`): из 31 записи с манифестом совпадали 8, и
-    оркестратор просто не находил большинство гейтов.
-    """
-    from app.ai.gateway_config import gateway_config
-
-    gates = gateway_config.approval_gates
-    assert "payments.mark_paid" in gates, "манифест обязан объявлять этот гейт"
-    for gate in gates:
-        assert risk_class(_plan(skills=[gate])) == "gated", f"{gate} не признан gated"
-
-
-def test_risk_class_picks_up_a_new_gate_without_code_changes(monkeypatch):
-    """Добавить гейт в манифест достаточно — правка orchestrator.py не нужна.
-
-    `approval_gates` — вычисляемое свойство, поэтому подменяем источник
-    (загрузку манифеста), а не само свойство.
-    """
-    from app.ai import gateway_config as gateway_config_module
-
-    monkeypatch.setattr(
-        type(gateway_config_module.gateway_config),
-        "approval_gates",
-        property(lambda self: {"widget.self_destruct"}),
-    )
-    assert risk_class(_plan(skills=["widget.self_destruct"])) == "gated"
 
 
 def test_intent_mismatch_is_retryable():
