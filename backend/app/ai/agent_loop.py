@@ -2256,12 +2256,20 @@ COMPLETION_CHECK_NOTE = (
 )
 
 
+_PRESENTATION_CAPABILITIES = frozenset({"workspace"})
+
+
 def _changes_something(tool_call: dict) -> bool:
-    """A call whose catalog effect is not a read (unknown tools count as changes)."""
+    """A call whose catalog effect is not a read (unknown tools count as changes).
+
+    Showing a result on the desktop is not doing the work: a turn published a
+    table of small invoices, said «создам черновики» and stopped (E52 №4)."""
     from app.ai.tool_catalog import get_tool
 
     fn = tool_call.get("function") or {}
     name = str(fn.get("name") or "")
+    if name.split("__")[0].split(".")[0] in _PRESENTATION_CAPABILITIES:
+        return False
     raw = fn.get("arguments")
     try:
         args = json.loads(raw) if isinstance(raw, str) else (raw or {})

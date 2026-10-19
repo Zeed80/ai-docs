@@ -172,3 +172,20 @@ def test_a_scoped_session_sees_only_its_capabilities():
     session.set_capability_scope({"email", "invoices"})
     names = {t["function"]["name"] for t in session._tools_for_turn()}
     assert names == {"email", "invoices", "procedures"}
+
+
+@pytest.mark.asyncio
+async def test_a_desktop_table_alone_does_not_count_as_done(harness):
+    session, state, events, executed = harness
+    state["replies"] = [
+        _call("workspace", "spec_table"),
+        "Таблица на Рабочем столе. Сейчас создам черновики писем.",
+        _call("email", "draft"),
+        "Черновики готовы.",
+    ]
+
+    await session.on_user_message("Подготовь письма поставщикам по мелким счетам")
+
+    assert ("email", "draft") in executed
+    assert sum(_has_check(seen) for seen in state["seen"]) == 1
+    assert _texts(events)[-1] == "Черновики готовы."
