@@ -47,7 +47,6 @@ from app.ai import route_table
 from app.ai.agent_config import BuiltinAgentConfig, get_builtin_agent_config
 from app.ai.agent_loop import AgentSession
 from app.ai.audit import (
-    RETRYABLE,
     AuditCode,
     AuditIssue,
 )
@@ -58,13 +57,7 @@ from app.ai.audit import (
     codes as _issue_codes,
 )
 from app.ai.audit import (
-    has_code as _has_code,
-)
-from app.ai.audit import (
     messages as _issue_messages,
-)
-from app.ai.audit import (
-    retryable as _issues_retryable,
 )
 from app.ai.corrections import is_correction, record_correction
 from app.ai.degradation import log_degraded
@@ -333,17 +326,6 @@ class AgentOrchestrator:
         # Remembered for the audit below: whether the user asked to DO something
         # is a property of the request, not of the plan the model produced.
         self._turn_content = content
-        # Phase 2 — adaptive clarify: a gated (expensive/external) action with an
-        # ambiguous target asks BEFORE acting instead of guessing. Cheap turns are
-        # never gated here — they build the best result and show assumptions.
-        question = None  # Clarifications are model decisions, not keyword predicates.
-        if question is not None:
-            await self._outer_send({"type": "text", "content": question})
-            await self._outer_send({"type": "done", "action_chips": []})
-            return
-        # Phase 3 — order the worker's candidate skills by learned success so the
-        # historically-reliable tool is tried first (deterministic link from the
-        # feedback memory to routing).
         self._workspace_before = _workspace_updated_at_snapshot()
         await self._announce_plan(plan)
 
@@ -364,35 +346,12 @@ class AgentOrchestrator:
         # whenever a spec-table was actually published this turn — not only when the
         # PLAN's canvas was agent:spec-table (the worker often publishes there while
         # the plan guessed another canvas, which previously skipped reconcile).
+        # The turn is not re-run after the audit: a turn that announced work
+        # and stopped is caught inside the executor (COMPLETION_CHECK_NOTE),
+        # and the audit codes left (empty answer, tool errors, overstated total)
+        # are facts for the verifier and the learning loop, not a reason to
+        # ask the model the same thing again.
         audit = await self._audit_turn(plan, config)
-        # Snapshot before any retry mutates `audit` — the reflection loop
-        # needs to know what was WRONG originally to credit a later fix.
-        _original_audit_issues = list(audit.issues)
-        retry_count = 0
-        while (
-            not audit.passed
-            and retry_count < config.max_audit_retries
-            and self._can_retry_with_executor(plan, audit)
-        ):
-            retry_count += 1
-            await self._outer_send(
-                {
-                    "type": "audit.retry_started",
-                    "content": "Аудит: инструмент/вывод не соответствуют задаче, запускаю исправление.",
-                    "audit": audit.model_dump(mode="json"),
-                    "issue_codes": audit.issue_codes,
-                }
-            )
-            self._trace = _TurnTrace()
-            self._workspace_before = _workspace_updated_at_snapshot()
-            self._llm_calls += 1
-            # Same human turn: what the first attempt created still counts
-            # (a retry re-created reminders the first pass had made).
-            begin = getattr(self._executor, "begin_continuation", None)
-            if callable(begin):
-                begin()
-            await self._executor.on_user_message(_build_correction_request(plan, audit))
-            audit = await self._audit_turn(plan, config)
         # Semantic correctness check on the settled answer (advisory; runs once).
         await self._run_semantic_audit(plan, config, audit)
         # Reactive self-refine: only when the auditor flagged a generative answer.
@@ -405,14 +364,9 @@ class AgentOrchestrator:
             plan=plan,
             trace=self._trace,
             audit=audit,
-            retries=retry_count,
+            retries=0,
             duration_ms=int((time.time() - turn_started_at) * 1000),
         )
-        # Self-learning: a clean multi-step turn becomes a draft recipe.
-        # Experience is recorded as instructions, never executable recipe replay.
-        # Reflection loop: a retry that actually fixed the turn becomes a
-        # behavioural lesson for future similar mistakes.
-        self._maybe_record_reflection_lesson(_original_audit_issues, audit, retry_count, config)
 
         # Structured agent trace log — every turn execution logged with full detail
         duration_ms = int((time.time() - turn_started_at) * 1000)
@@ -428,7 +382,6 @@ class AgentOrchestrator:
             workspace_required=plan.workspace.required,
             audit_passed=audit.passed,
             audit_issues=audit.issue_codes,
-            retries=retry_count,
             llm_calls=self._llm_calls,
             aux_llm_calls=self._aux_llm_calls,
             duration_ms=duration_ms,
@@ -996,63 +949,6 @@ class AgentOrchestrator:
             log_degraded("orchestrator.recipe_penalty", exc)
         self._last_recipe_id = ""
 
-    def _maybe_record_reflection_lesson(
-        self,
-        original_issues: list[AuditIssue],
-        final_audit: AuditReport,
-        retry_count: int,
-        config: BuiltinAgentConfig,
-    ) -> None:
-        """Reflection loop: a correction that actually fixed the turn becomes
-        a short behavioural lesson, surfaced on future similar turns by
-        agent_loop._inject_learning_rules (system-prompt injection, already
-        battle-tested for nomenclature rules — this just adds a writer for
-        rule_type="behavior" grounded in a *confirmed* self-correction rather
-        than requiring a human to author one by hand).
-
-        Fires only when a retry was needed AND it demonstrably worked — a
-        first-try success has no lesson to teach, and a code that's still
-        present after retries has no confirmed fix to teach either (nothing
-        is recorded for those; a still-failing turn already surfaces via the
-        capability-gap path instead).
-        """
-        if retry_count <= 0 or not final_audit.passed or not original_issues:
-            return
-        still_present = {issue.code for issue in final_audit.issues}
-        fixed_codes = {
-            issue.code
-            for issue in original_issues
-            if issue.code in RETRYABLE and issue.code not in still_present
-        }
-        lessons = [
-            (code, _REFLECTION_LESSONS[code]) for code in fixed_codes if code in _REFLECTION_LESSONS
-        ]
-        if not lessons:
-            return
-
-        async def _reflect() -> None:
-            try:
-                async with httpx.AsyncClient(
-                    timeout=float(config.backend_timeout_seconds)
-                ) as client:
-                    for code, lesson in lessons:
-                        await client.post(
-                            f"{config.backend_url.rstrip('/')}/api/technology/learning-rules/reflect",
-                            json={
-                                "entity_type": "agent_turn",
-                                "field_name": code.value,
-                                "lesson": lesson,
-                            },
-                            headers=_agent_headers(),
-                        )
-            except Exception as exc:
-                log_degraded("orchestrator.reflection_record", exc)
-
-        try:
-            asyncio.get_event_loop().create_task(_reflect())
-        except Exception as exc:
-            log_degraded("orchestrator.reflection_record", exc)
-
     async def _send_from_executor(self, data: dict) -> None:
         msg_type = str(data.get("type") or "")
         if msg_type == "done":
@@ -1470,20 +1366,6 @@ class AgentOrchestrator:
                 }
             )
 
-    def _can_retry_with_executor(self, plan: OrchestratorPlan, audit: AuditReport) -> bool:
-        if _has_code(audit.issues, AuditCode.UNKNOWN_SKILL):
-            return False  # retrying cannot invent a missing tool
-        # An unperformed action is worth one more pass regardless of the output
-        # channel: action turns are usually chat turns, and the old
-        # workspace-only gate meant they were never retried at all.
-        if _has_code(audit.issues, AuditCode.ACTION_NOT_PERFORMED):
-            return True
-        if not plan.workspace.required:
-            return False
-        if not plan.worker.recommended_skills:
-            return False
-        return _issues_retryable(audit.issues)
-
     # Canvases whose skill has self-sufficient default_args — the orchestrator
     # can run them deterministically (0 worker-LLM) the moment the plan resolves
     # the canvas. spec-table is intentionally excluded: it needs the LLM to
@@ -1789,81 +1671,6 @@ def _parse_sheet_edit_command(
 
     return None
 
-
-def _build_correction_request(plan: OrchestratorPlan, audit: AuditReport) -> str:
-    skill_hint = ", ".join(plan.worker.recommended_skills)
-    # Build a precise correction — avoid leaking audit issue text to the LLM
-    # since it may contain misleading fragments (e.g. "другого запроса")
-    lines = [
-        "Предыдущий результат не соответствует задаче. Повтори вызов с исправлениями.",
-        "",
-        "Требования:",
-        f"- цель: {plan.goal}",
-        f"- используй один из skills: {skill_hint}",
-        f"- canvas_id: {plan.workspace.canvas_id or 'auto'}",
-    ]
-    if plan.workspace.filters:
-        filter_str = ", ".join(f"{k}={v!r}" for k, v in plan.workspace.filters.items())
-        lines.append(f"- ОБЯЗАТЕЛЬНЫЕ фильтры: {filter_str}")
-    if plan.workspace.required:
-        lines.append("- Результат должен быть опубликован в Рабочий стол (не только текст в чат).")
-    if _has_code(audit.issues, AuditCode.ACTION_NOT_PERFORMED):
-        lines.append(
-            "- ГЛАВНОЕ: пользователь просил ВЫПОЛНИТЬ действие, а не показать данные. "
-            "Вызови инструмент, который реально его выполняет (например "
-            "tool_catalog.attach_web_catalog — прикрепить каталог к поставщику). "
-            "Публикация таблицы/отчёта действием НЕ считается."
-        )
-        lines.append(
-            "- Если подходящего инструмента нет или не хватает данных (какой "
-            "поставщик, какая ссылка) — НЕ подменяй действие отчётом: напиши "
-            "прямо, что именно мешает, и задай один короткий уточняющий вопрос."
-        )
-    return "\n".join(lines)
-
-
-# ── Risk classification (adaptive-by-risk behaviour) ───────────────────────────
-# Cheap/reversible artifacts (a table on the desktop) can be (re)built freely and
-# self-corrected. Expensive/external actions (approval gates from gateway.yml —
-# email.send, invoice.approve, table.apply_diff, payment.mark_paid, bom.approve,
-# doc.bulk_delete and the rest) must never be shipped on a mismatch — they
-# require explicit human confirmation first.
-
-
-# Reflection loop (see Orchestrator._maybe_record_reflection_lesson): generic,
-# domain-independent phrasing per retryable AuditCode — deliberately not
-# parameterized by the specific plan/turn, so the lesson generalises to future
-# similar mistakes rather than repeating this one turn's details.
-_REFLECTION_LESSONS: dict[AuditCode, str] = {
-    AuditCode.WORKSPACE_NOT_PUBLISHED: (
-        "Если результат — таблица, список или файл, публикуй его на Рабочий "
-        "стол через workspace.*-инструмент сразу с первого хода, а не только "
-        "текстом в чат."
-    ),
-    AuditCode.CHAT_TABLE_LEAK: (
-        "Не выводи markdown-таблицу прямо в чат — публикуй её на Рабочий "
-        "стол через workspace.*-инструмент, в чат — только краткое резюме."
-    ),
-    AuditCode.FILTER_MISSING: (
-        "Передавай инструменту ВСЕ фильтры, которые упомянул пользователь "
-        "(поставщик, статус, период и т.д.) — не сокращай условия запроса."
-    ),
-    AuditCode.FILTER_MISMATCH: (
-        "Значение фильтра, которое передаётся инструменту, должно точно "
-        "совпадать с тем, что просил пользователь, а не с похожим или "
-        "дефолтным значением."
-    ),
-    AuditCode.EMPTY_ANSWER: (
-        "Не возвращай пустой ответ: если данных нет — скажи об этом прямо; "
-        "если инструмент не сработал — попробуй другой из рекомендованных, "
-        "не молчи."
-    ),
-    AuditCode.INTENT_MISMATCH: (
-        "Перед публикацией сверяй, что артефакт (таблица/файл) реально "
-        "отвечает на ТЕКУЩИЙ запрос — не переиспользуй результат прошлого "
-        "хода по инерции."
-    ),
-}
 
 # Vague references that signal the gated action's target is unclear.
 _VAGUE_REFS = (

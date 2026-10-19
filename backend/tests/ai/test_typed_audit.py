@@ -7,12 +7,10 @@ import pytest
 from app.ai import orchestrator as orchestrator_module
 from app.ai.agent_config import BuiltinAgentConfig
 from app.ai.audit import (
-    RETRYABLE,
     AuditCode,
     AuditIssue,
     blocking,
     has_code,
-    retryable,
 )
 from app.ai.model_tier import Tier, aux_quality_budget
 from app.ai.orchestrator import (
@@ -22,7 +20,6 @@ from app.ai.orchestrator import (
     WorkerAssignment,
     WorkspaceOutputSpec,
 )
-from app.domain.workspace import clear_workspace_blocks, upsert_workspace_block
 
 
 def _issue(code: AuditCode, severity: str = "blocking") -> AuditIssue:
@@ -58,112 +55,16 @@ def _orchestrator() -> AgentOrchestrator:
 # ── audit.py primitives ────────────────────────────────────────────────────────
 
 
-def test_retryable_is_code_driven_not_text_driven():
-    # The message deliberately contains none of the old Russian markers.
-    issues = [_issue(AuditCode.FILTER_MISSING)]
-    assert retryable(issues) is True
-
-    # A non-retryable code with marker-like text must NOT trigger retry.
-    weird = AuditIssue(
-        code=AuditCode.UNKNOWN_SKILL,
-        message="фильтр не применён, публикация не подтверждена",  # red herring
-    )
-    assert retryable([weird]) is False
-
-
 def test_blocking_excludes_advisory():
     issues = [
-        _issue(AuditCode.TOOL_OFF_PLAN, severity="advisory"),
-        _issue(AuditCode.WRONG_CANVAS),
+        _issue(AuditCode.TOOL_ERROR, severity="advisory"),
+        _issue(AuditCode.EMPTY_ANSWER),
     ]
-    assert [i.code for i in blocking(issues)] == [AuditCode.WRONG_CANVAS]
-    assert has_code(issues, AuditCode.TOOL_OFF_PLAN)
-
-
-def test_retryable_set_contents():
-    assert AuditCode.UNKNOWN_SKILL not in RETRYABLE
-    assert AuditCode.TOOL_OFF_PLAN not in RETRYABLE
-    # The planned canvas is a heuristic guess — a verified publication to
-    # another canvas must NOT trigger a duplicate re-publish.
-    assert AuditCode.WRONG_CANVAS not in RETRYABLE
-    for code in (
-        AuditCode.WORKSPACE_NOT_PUBLISHED,
-        AuditCode.CHAT_TABLE_LEAK,
-        AuditCode.FILTER_MISSING,
-        AuditCode.FILTER_MISMATCH,
-    ):
-        assert code in RETRYABLE
+    assert [i.code for i in blocking(issues)] == [AuditCode.EMPTY_ANSWER]
+    assert has_code(issues, AuditCode.TOOL_ERROR)
 
 
 # ── Orchestrator control flow on codes ─────────────────────────────────────────
-
-
-def test_can_retry_with_executor_uses_codes():
-    session = _orchestrator()
-    plan = _plan()
-
-    report = AuditReport(passed=False, issues=[_issue(AuditCode.WORKSPACE_NOT_PUBLISHED)])
-    assert session._can_retry_with_executor(plan, report) is True
-
-    # UNKNOWN_SKILL blocks the retry even when paired with a retryable issue.
-    report = AuditReport(
-        passed=False,
-        issues=[_issue(AuditCode.WORKSPACE_NOT_PUBLISHED), _issue(AuditCode.UNKNOWN_SKILL)],
-    )
-    assert session._can_retry_with_executor(plan, report) is False
-
-    # A verified-but-different canvas must NOT cause a duplicate re-publish.
-    report = AuditReport(passed=True, issues=[_issue(AuditCode.WRONG_CANVAS, severity="advisory")])
-    assert session._can_retry_with_executor(plan, report) is False
-
-    # Advisory-only report → nothing to fix by retrying.
-    report = AuditReport(passed=True, issues=[_issue(AuditCode.TOOL_OFF_PLAN, severity="advisory")])
-    assert session._can_retry_with_executor(plan, report) is False
-
-
-@pytest.mark.asyncio
-async def test_filter_audit_checks_last_publish_not_first(monkeypatch):
-    """A turn that publishes wrong first and corrects itself must pass."""
-    clear_workspace_blocks()
-    config = BuiltinAgentConfig(
-        audit_enabled=True,
-        model="mock-model",
-        backend_url="http://backend",
-        ollama_url="http://ollama",
-        exposed_skills=[],
-    )
-    monkeypatch.setattr(orchestrator_module, "get_builtin_agent_config", lambda: config)
-
-    session = _orchestrator()
-    plan = _plan(filters={"supplier_query": "ООО Ромашка"})
-    upsert_workspace_block(
-        "agent:invoice-items", {"type": "table", "title": "Счета", "rows": [{"id": 1}]}
-    )
-    session._workspace_before = {}
-    session._trace.workspace_events.append(
-        {"type": "workspace.updated", "canvas_id": "agent:invoice-items"}
-    )
-    tool = "workspace__invoice_items_table"
-    session._trace.tool_calls.append(tool)
-    # First publish: filter forgotten. Second publish: corrected.
-    session._trace.tool_results.append(
-        {"type": "tool_result", "tool": tool, "result": {"canvas_id": "agent:invoice-items"}}
-    )
-    session._trace.tool_call_args[tool] = {"supplier_query": "ООО Ромашка"}
-    session._trace.tool_results.append(
-        {
-            "type": "tool_result",
-            "tool": tool,
-            "result": {
-                "canvas_id": "agent:invoice-items",
-                "filters": {"supplier_query": "ООО Ромашка"},
-            },
-        }
-    )
-
-    report = await session._audit_turn(plan, config)
-    assert not has_code(report.issues, AuditCode.FILTER_MISSING, AuditCode.FILTER_MISMATCH)
-    assert report.passed is True
 
 
 # ── Aux LLM budget ─────────────────────────────────────────────────────────────

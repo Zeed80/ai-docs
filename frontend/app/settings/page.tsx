@@ -138,7 +138,6 @@ interface AgentConfig {
   backend_timeout_seconds: number;
   approval_timeout_seconds: number;
   max_worker_steps: number;
-  max_audit_retries: number;
   memory_enabled: boolean;
   audit_enabled: boolean;
   allow_capability_builder: boolean;

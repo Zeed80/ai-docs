@@ -1,10 +1,4 @@
-"""Phase 1 — intent-match correctness gate + adaptive-by-risk behaviour.
-
-Hard scenarios for "агент публикует не то": an empty/mismatched desktop table
-must be caught (AuditCode.INTENT_MISMATCH), retried, and — if still empty on a
-cheap action — answered honestly instead of shipping a blank board. Gated
-(expensive/external) actions are classified separately.
-"""
+"""The semantic critic sees a compact brief of the published table."""
 
 from __future__ import annotations
 
@@ -12,7 +6,6 @@ import pytest
 
 from app.ai import orchestrator as orchestrator_module
 from app.ai.agent_config import BuiltinAgentConfig
-from app.ai.audit import RETRYABLE, AuditCode, retryable
 from app.ai.orchestrator import (
     AgentOrchestrator,
     OrchestratorPlan,
@@ -101,13 +94,6 @@ def _publish_event(
 
 
 # ── Risk classification ────────────────────────────────────────────────────────
-
-
-def test_intent_mismatch_is_retryable():
-    from app.ai.audit import AuditIssue
-
-    assert AuditCode.INTENT_MISMATCH in RETRYABLE
-    assert retryable([AuditIssue(code=AuditCode.INTENT_MISMATCH, message="x")]) is True
 
 
 # ── Critic snapshot + adaptive honest message ──────────────────────────────────

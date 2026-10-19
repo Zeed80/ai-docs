@@ -3637,18 +3637,11 @@ class AgentSession:
         self._granted_approvals.clear()
         message = {"role": "user", "content": content}
         self.messages.append(message)
-        if not getattr(self, "_next_is_continuation", False):
-            self._turn_user_message = message
+        self._turn_user_message = message
         self._completion_checked = False
         self._completion_draft = None
-        self._next_is_continuation = False
         self._trim_history()
         await self._run()
-
-    def begin_continuation(self) -> None:
-        """The next message is the orchestrator's correction within the same
-        human turn, not a new turn: earlier creations of the turn still count."""
-        self._next_is_continuation = True
 
     def _turn_start(self) -> int:
         """Index of the human message that started this turn (by identity)."""

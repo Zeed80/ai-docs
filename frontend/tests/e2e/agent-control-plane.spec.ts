@@ -51,7 +51,6 @@ const agentConfig = {
   backend_timeout_seconds: 30,
   approval_timeout_seconds: 120,
   max_worker_steps: 12,
-  max_audit_retries: 1,
   memory_enabled: true,
   audit_enabled: true,
   allow_capability_builder: true,

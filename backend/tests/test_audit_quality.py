@@ -79,7 +79,7 @@ async def test_a_sql_table_published_in_a_v1_envelope_counts_as_published(monkey
     plan = _employee_plan("счета по поставщикам")
     orc._trace.text_chunks = ["Опубликовал таблицу «Счета по поставщикам»: 33 строк."]
     audit = await orc._audit_turn(plan, get_builtin_agent_config())
-    assert AuditCode.WORKSPACE_NOT_PUBLISHED.value not in audit.issue_codes
+    assert audit.passed is True
     assert audit.workspace_verified is True
     # The client still receives the event as the tool sent it.
     assert send.await_args_list[-1].args[0]["result"]["version"] == 1

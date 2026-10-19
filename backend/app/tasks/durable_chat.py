@@ -525,7 +525,7 @@ async def _run_durable_chat(
                 raise ChatRunStopped("Authorized checkpoint changed")
             if continuation_payload["pending_calls"][0]["id"] != decision["call_id"]:
                 raise ChatRunStopped("Authorized call changed")
-    chunks, errors, superseded = [], [], []
+    chunks, errors = [], []
     tool_evidence: list[dict[str, Any]] = []
 
     async def collect(event):
@@ -553,12 +553,6 @@ async def _run_durable_chat(
             await db.commit()
         if kind == "text":
             chunks.append(str(event.get("content") or ""))
-        if kind == "audit.retry_started":
-            # The retry answers the turn again: the first attempt's "could not
-            # finish" was glued in front of the real answer (live 2026-10-12).
-            # It stays only as a fallback for a retry that says nothing.
-            superseded[:] = chunks or superseded
-            chunks.clear()
         if kind in _VERIFIER_EVIDENCE_EVENTS:
             tool_evidence.append(_verifier_evidence_entry(kind, event))
             del tool_evidence[:-_VERIFIER_EVIDENCE_MAX_ITEMS]
@@ -712,7 +706,7 @@ async def _run_durable_chat(
     if checkpointed:
         await agent._executor.save_checkpoint("turn_finished")
     # Text frames are whole messages, not tokens: keep them apart.
-    result = "\n\n".join(c.strip() for c in (chunks or superseded) if c.strip())
+    result = "\n\n".join(c.strip() for c in chunks if c.strip())
     if not result:
         raise RuntimeError("Agent did not produce a final response")
     # Persist the response once; semantic verification remains a separate step.
