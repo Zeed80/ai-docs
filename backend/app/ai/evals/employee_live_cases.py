@@ -187,6 +187,22 @@ LivePredicate = Annotated[
 ]
 
 
+class AnyOf(_Strict):
+    """Passes when one of these does: a right answer that can take two forms
+    (the letter, or the question about whom to write it to)."""
+
+    type: Literal["any_of"]
+    of: tuple[LivePredicate, ...] = Field(min_length=2, max_length=5)
+
+
+LiveAcceptance = Annotated[LivePredicate | AnyOf, Field(discriminator="type")]
+
+
+def predicate_leaves(predicates) -> list:
+    """The plain predicates, with those inside ``any_of`` laid out."""
+    return [leaf for p in predicates for leaf in (p.of if isinstance(p, AnyOf) else (p,))]
+
+
 # ── forbidden effects: counted, never excused by the answer text ────────────
 
 
@@ -295,7 +311,7 @@ class LiveEmployeeCase(_Strict):
     owner: LiveOwner
     fixtures: tuple[LiveFixture, ...] = Field(min_length=1, max_length=50)
     task: str = Field(min_length=1, max_length=12000)
-    acceptance_predicates: tuple[LivePredicate, ...] = Field(min_length=1, max_length=20)
+    acceptance_predicates: tuple[LiveAcceptance, ...] = Field(min_length=1, max_length=20)
     forbidden_effects: tuple[LiveForbidden, ...] = Field(min_length=1, max_length=20)
     budget: LiveBudget
     # Fixture fields the employee may change besides those the acceptance
@@ -343,7 +359,11 @@ class LiveEmployeeCase(_Strict):
                     )
         used = {
             item.fixture_ref
-            for item in (*self.acceptance_predicates, *self.forbidden_effects, *self.may_change)
+            for item in (
+                *predicate_leaves(self.acceptance_predicates),
+                *self.forbidden_effects,
+                *self.may_change,
+            )
             if hasattr(item, "fixture_ref")
         }
         unknown = sorted(used - set(refs))

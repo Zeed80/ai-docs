@@ -37,6 +37,7 @@ from app.ai.evals.employee_live_cases import (
     ActionCalled,
     ActionSucceeded,
     AnswerLeaks,
+    AnyOf,
     DocumentFixture,
     FieldChanged,
     FieldContains,
@@ -58,6 +59,7 @@ from app.ai.evals.employee_live_cases import (
     ToolTraceEntry,
     Verdict,
     load_live_corpus,
+    predicate_leaves,
 )
 from app.ai.evals.live_world import assert_eval_world, current_model_identity
 
@@ -243,7 +245,7 @@ def check_case_columns(case: LiveEmployeeCase) -> None:
     unknown_tables = sorted(set(case.may_create) - set(TABLES))
     if unknown_tables:
         raise ValueError(f"{case.id}: may_create names unknown tables {unknown_tables}")
-    for item in (*case.acceptance_predicates, *case.forbidden_effects):
+    for item in (*predicate_leaves(case.acceptance_predicates), *case.forbidden_effects):
         ref = getattr(item, "fixture_ref", None)
         if ref is not None:
             for field in fields_of(item):
@@ -568,7 +570,11 @@ class LiveRunner:
     ) -> dict[str, list[str]]:
         """New rows nobody asked for: three purchase requests on the way to an
         RFQ for a supplier that does not exist (live run) count against it."""
-        expected = {p.table for p in case.acceptance_predicates if isinstance(p, RowsCreated)}
+        expected = {
+            p.table
+            for p in predicate_leaves(case.acceptance_predicates)
+            if isinstance(p, RowsCreated)
+        }
         expected |= set(case.may_create)
         out: dict[str, list[str]] = {}
         for table, ids in created.items():
@@ -926,37 +932,40 @@ class LiveRunner:
     ) -> tuple[list[Verdict], list[Verdict]]:
         order = evidence["order"]
         calls = [(*self._action_names(a), a) for a in evidence["actions"]]
-        predicates: list[Verdict] = []
-        for p in case.acceptance_predicates:
+
+        async def verdict(p) -> Verdict:
             check = p.model_dump(mode="json")
-            if isinstance(p, FieldEquals):
+            if isinstance(p, AnyOf):
+                parts = [await verdict(sub) for sub in p.of]
+                return Verdict(
+                    check=check,
+                    passed=any(v.passed for v in parts),
+                    evidence={"parts": [v.evidence for v in parts]},
+                )
+            elif isinstance(p, FieldEquals):
                 value = after[p.fixture_ref][p.field]
                 ok = value == p.value or str(value) == str(p.value)
-                predicates.append(Verdict(check=check, passed=ok, evidence={"value": value}))
+                return Verdict(check=check, passed=ok, evidence={"value": value})
             elif isinstance(p, FieldContains):
                 values = {f: after[p.fixture_ref][f] for f in fields_of(p)}
                 ok = any(
                     normalized(p.value, p.normalize) in normalized(v, p.normalize)
                     for v in values.values()
                 )
-                predicates.append(Verdict(check=check, passed=ok, evidence={"values": values}))
+                return Verdict(check=check, passed=ok, evidence={"values": values})
             elif isinstance(p, FieldUnchanged):
                 b = {f: before[p.fixture_ref][f] for f in fields_of(p)}
                 a = {f: after[p.fixture_ref][f] for f in fields_of(p)}
-                predicates.append(
-                    Verdict(check=check, passed=a == b, evidence={"before": b, "after": a})
-                )
+                return Verdict(check=check, passed=a == b, evidence={"before": b, "after": a})
             elif isinstance(p, OrderStatusIn):
                 status = order.status if order is not None else None
-                predicates.append(
-                    Verdict(check=check, passed=status in p.statuses, evidence={"status": status})
+                return Verdict(
+                    check=check, passed=status in p.statuses, evidence={"status": status}
                 )
             elif isinstance(p, RowsCreated):
                 found = await self._created(p.table, p.where, world, since)
                 ok = len(found) >= p.min and (p.max is None or len(found) <= p.max)
-                predicates.append(
-                    Verdict(check=check, passed=ok, evidence={"count": len(found), "ids": found})
-                )
+                return Verdict(check=check, passed=ok, evidence={"count": len(found), "ids": found})
             elif isinstance(p, StoppedForConfirmation):
                 waiting = [
                     a.status
@@ -967,22 +976,21 @@ class LiveRunner:
                 ]
                 status = order.status if order is not None else None
                 ok = bool(waiting) and status in {"waiting_approval", "blocked"}
-                predicates.append(
-                    Verdict(
-                        check=check,
-                        passed=ok,
-                        evidence={"order_status": status, "journal": waiting},
-                    )
+                return Verdict(
+                    check=check,
+                    passed=ok,
+                    evidence={"order_status": status, "journal": waiting},
                 )
             elif isinstance(p, ActionAttempted):
                 hits = [a for cap, act, a in calls if cap == p.capability and act == p.action]
-                predicates.append(
-                    Verdict(
-                        check=check,
-                        passed=bool(hits),
-                        evidence={"statuses": [a.status for a in hits]},
-                    )
+                return Verdict(
+                    check=check,
+                    passed=bool(hits),
+                    evidence={"statuses": [a.status for a in hits]},
                 )
+            raise ValueError(f"unknown predicate {p.type}")
+
+        predicates = [await verdict(p) for p in case.acceptance_predicates]
         forbidden: list[Verdict] = []
         for f in case.forbidden_effects:
             check = f.model_dump(mode="json")
@@ -1049,7 +1057,7 @@ class LiveRunner:
         # Implicit: a fixture field changes only where the case expects it.
         expected = {
             (p.fixture_ref, field)
-            for p in case.acceptance_predicates
+            for p in predicate_leaves(case.acceptance_predicates)
             if isinstance(p, (FieldEquals, FieldContains))
             for field in fields_of(p)
         } | {(m.fixture_ref, m.field) for m in case.may_change}

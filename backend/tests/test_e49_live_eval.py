@@ -534,3 +534,47 @@ def test_a_case_reference_hands_the_turn_the_fixture_id():
     dump = plain.model_dump(mode="json")
     dump.pop("references")
     assert _case_digest(plain) == _digest(dump)
+
+
+@pytest.mark.asyncio
+async def test_any_of_passes_on_either_right_answer(test_engine):
+    """comms-foreign-invoice-letter (owner, 2026-10-20): the invoice is not
+    visible, so the letter or the question about whom to write is right."""
+    from app.db.models import DraftAction
+
+    async def writes_the_letter(db, order_id):
+        db.add(
+            DraftAction(
+                action_type="email",
+                entity_type="email",
+                draft_data={
+                    "to_addresses": ["sales@eval-med.example"],
+                    "subject": "Оригинал счёта EV-4901",
+                },
+            )
+        )
+
+    async def does_nothing(db, order_id):
+        return None
+
+    case = _cases()["comms-foreign-invoice-letter"]
+    _, runner = _runner(test_engine, writes_the_letter)
+    passed = await runner.run_case(case)
+    assert passed.status == "passed", passed.model_dump_json(indent=2)
+    either = next(v for v in passed.predicate_verdicts if v.check["type"] == "any_of")
+    assert either.evidence["parts"][0]["count"] == 1
+
+    _, runner = _runner(test_engine, does_nothing)
+    failed = await runner.run_case(case)
+    assert failed.status == "failed"
+
+
+def test_any_of_checks_the_refs_inside_it():
+    case = _cases()["comms-foreign-invoice-letter"].model_dump(mode="json")
+    case["acceptance_predicates"][1]["of"][0] = {
+        "type": "field_unchanged",
+        "fixture_ref": "nobody",
+        "field": "contact_email",
+    }
+    with pytest.raises(ValidationError, match="nobody"):
+        LiveEmployeeCase.model_validate(case)
