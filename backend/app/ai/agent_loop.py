@@ -4489,7 +4489,9 @@ class AgentSession:
                         "Редкие инструменты, которых нет в списке выше. Нужен один из них — "
                         "action=describe с capability вернёт его описание и параметры, "
                         "затем action=call с capability и arguments (как у обычного "
-                        "вызова, с action внутри) выполнит его.\n" + "\n".join(sorted(lines))
+                        "вызова, с action внутри) выполнит его. Инструменты из основного списка "
+                        "(почта, счета, поставщики…) вызывай напрямую — не через tools и не через "
+                        "mcp: mcp — только внешние MCP-серверы.\n" + "\n".join(sorted(lines))
                     ),
                     "parameters": {
                         "type": "object",
