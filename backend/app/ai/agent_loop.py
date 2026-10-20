@@ -3167,7 +3167,7 @@ def fruitless_reads(calls: list[tuple[str, Any, Any]], seen: set[str]) -> bool |
         is_read = definition is not None and definition.effect == "read"
         if not (is_read and _job_running(result)):
             waiting = False
-        if refused_missing:
+        if refused_missing or (isinstance(result, dict) and result.get("status") == "already_read"):
             continue
         if not is_read or not (repeated or _found_nothing(result)):
             fruitless = False
@@ -3638,6 +3638,8 @@ class AgentSession:
         message = {"role": "user", "content": content}
         self.messages.append(message)
         self._turn_user_message = message
+        self._turn_reads = {}
+        self._turn_writes = 0
         self._completion_checked = False
         self._completion_draft = None
         self._trim_history()
@@ -4372,7 +4374,11 @@ class AgentSession:
         tc_id = tc.get("id") or ""
         raw_args = fn.get("arguments", {})
         if isinstance(raw_args, dict):
-            args = raw_args
+            # A copy: the call is already journaled with these exact arguments;
+            # stripping target_match out of its body in place changed its
+            # digest, and the checkpoint before the owner's confirmation
+            # failed as "binding changed" (E52, once a run since 2026-10-11).
+            args = json.loads(json.dumps(raw_args, default=str))
         else:
             try:
                 args = json.loads(raw_args or "{}")
@@ -4692,6 +4698,28 @@ class AgentSession:
             }
             await self._send({"type": "tool_result", "tool": fn_name, "result": result})
             return fn_name, result, tc_id
+        # The same read with the same arguments, nothing written since: its
+        # answer is already above. E52 2026-10-19: procurement.list_requests
+        # four times in a row instead of the drafts the task asked for.
+        definition = _tool_definition(fn_name, args) if skill else None
+        read_key = (
+            f"{fn_name}\n{json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)}"
+            if definition is not None and definition.effect == "read"
+            else None
+        )
+        turn_reads = getattr(self, "_turn_reads", {})
+        turn_writes = getattr(self, "_turn_writes", 0)
+        if read_key is not None and turn_reads.get(read_key) == turn_writes:
+            result = {
+                "status": "already_read",
+                "message": (
+                    "Этот запрос с теми же параметрами уже выполнен в этом ходе, и с тех "
+                    "пор ничего не менялось — его ответ выше. Повтор ничего нового не "
+                    "даст: действуй по полученному или ответь пользователю."
+                ),
+            }
+            await self._send({"type": "tool_result", "tool": fn_name, "result": result})
+            return fn_name, result, tc_id
         if skill:
             receipt_options = {}
             action_id = getattr(self, "_checkpoint_action_ids", {}).get(tc_id)
@@ -4727,6 +4755,13 @@ class AgentSession:
                 "available_skills": available,
                 "hint": "Проверь имя скилла — используй двойное подчёркивание вместо точки (например invoice__list).",
             }
+        if read_key is not None:
+            if not _failed(result) and not _job_running(result):
+                turn_reads[read_key] = turn_writes
+                self._turn_reads = turn_reads
+        elif skill and not _failed(result):
+            # Any other call may have changed what a read would return.
+            self._turn_writes = turn_writes + 1
 
         asyncio.create_task(
             self._log_action(

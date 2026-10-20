@@ -151,6 +151,21 @@ async def test_search_finds_a_name_spelled_with_other_quotes_or_form(
     assert [r["name"] for r in resp.json()["results"]] == ['ООО "ИНАТЕК-М"']
 
 
+@pytest.mark.asyncio
+async def test_search_finds_a_name_in_another_case(client: AsyncClient, db_session):
+    """E52 2026-10-19: «Напиши письмо Эвал-Меди» — every spelling of the name
+    found nothing, and the employee guessed which of two namesakes was meant."""
+    db_session.add(Party(name="ООО «Эвал-Медь»", inn="7702000051", role=PartyRole.supplier))
+    db_session.add(Party(name="АО «Эвал-Медь»", inn="7702000052", role=PartyRole.supplier))
+    db_session.add(Party(name="ООО «Эвал-Сталь»", inn="7701000049", role=PartyRole.supplier))
+    await db_session.commit()
+    resp = await client.post("/api/suppliers/search", json={"query": "Эвал-Меди"})
+    assert sorted(r["name"] for r in resp.json()["results"]) == [
+        "АО «Эвал-Медь»",
+        "ООО «Эвал-Медь»",
+    ]
+
+
 def test_company_core_name_strips_the_longest_legal_form():
     from app.domain.party_names import company_core_name
 

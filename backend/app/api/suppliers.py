@@ -388,6 +388,14 @@ async def search_suppliers(
         conditions.append(
             func.regexp_replace(Party.name, "[\"'«»“”„()]", "", "g").ilike(f"%{core}%")
         )
+    # The name in another case: «письмо Эвал-Меди» is «Эвал-Медь» (E52
+    # 2026-10-19: every spelling found nothing, and the employee guessed
+    # which of the two namesakes was meant).
+    from app.domain.table_spec import _word_form_pattern
+
+    form = _word_form_pattern(core or q)
+    if form:
+        conditions.append(func.regexp_replace(Party.name, "[\"'«»“”„()]", "", "g").op("~*")(form))
     query = select(Party).where(or_(*conditions))
 
     count_q = select(func.count()).select_from(query.subquery())

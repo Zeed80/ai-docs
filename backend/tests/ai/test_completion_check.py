@@ -189,3 +189,86 @@ async def test_a_desktop_table_alone_does_not_count_as_done(harness):
     assert ("email", "draft") in executed
     assert sum(_has_check(seen) for seen in state["seen"]) == 1
     assert _texts(events)[-1] == "Черновики готовы."
+
+
+def _call_args(name: str, args: dict) -> dict:
+    return {
+        "tool_calls": [
+            {
+                "id": f"call_{name}_{len(str(args))}_{id(args)}",
+                "type": "function",
+                "function": {"name": name, "arguments": args},
+            }
+        ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_the_same_read_is_not_repeated_in_a_turn(harness):
+    # E52 2026-10-19: procurement.list_requests four times in a row.
+    session, state, events, executed = harness
+    read = {"action": "list_requests", "filters": {"limit": 50}}
+    state["replies"] = [
+        _call_args("procurement", dict(read)),
+        _call_args("procurement", dict(read)),
+        "Заявок нет.",
+        "ГОТОВО",
+    ]
+
+    await session.on_user_message("Есть ли заявки?")
+
+    assert executed == [("procurement", "list_requests")]
+    repeated = [
+        e
+        for e in events
+        if e.get("type") == "tool_result" and e["result"].get("status") == "already_read"
+    ]
+    assert len(repeated) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_read_after_a_write_runs_again(harness):
+    session, state, events, executed = harness
+    read = {"action": "calendar_upcoming"}
+    state["replies"] = [
+        _call_args("analytics", dict(read)),
+        _call("analytics", "calendar_create_reminder"),
+        _call_args("analytics", dict(read)),
+        "Напоминание создано.",
+    ]
+
+    await session.on_user_message("Напомни завтра в 10 позвонить поставщику")
+
+    assert [a for _, a in executed] == [
+        "calendar_upcoming",
+        "calendar_create_reminder",
+        "calendar_upcoming",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_guess_mark_in_the_body_leaves_the_journaled_call_intact(harness, monkeypatch):
+    # The checkpoint journal holds the call by digest; stripping the mark in
+    # place changed it and the confirmation checkpoint failed.
+    session, state, events, executed = harness
+    asked = []
+
+    async def _decline(name, args):
+        asked.append(args)
+        return False
+
+    monkeypatch.setattr(session, "_request_approval", _decline)
+    update = {
+        "action": "update",
+        "supplier_id": "3ee9d1bd-af5d-4c82-868a-283c1d100d23",
+        "body": {"contact_email": "new@eval-med.example", "target_match": "guess"},
+    }
+    reply = _call_args("suppliers", update)
+    state["replies"] = [reply, "Изменение ждёт вашего подтверждения.", "ГОТОВО"]
+
+    await session.on_user_message("Обнови e-mail Эвал-Стали")
+
+    assert asked and "target_match" not in asked[0]["body"]
+    sent = reply["tool_calls"][0]["function"]["arguments"]
+    assert sent["body"]["target_match"] == "guess"
+    assert executed == []
