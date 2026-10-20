@@ -403,3 +403,76 @@ def test_qwen36_sessions_must_fit_the_card(data):
     # The setting that would break the loaded model is refused before it is saved.
     with pytest.raises(strata_manager.StrataError):
         strata_manager.write_desired(model=vid, context=262144, vision=True, reinstall=False)
+
+
+# ── Build: the commit reaches package_terminal.py ───────────────────────────
+
+_TERMINAL_STAGE = """FROM ${RUNTIME_BASE} AS terminal
+COPY . /src/
+RUN python3 /src/packaging/package_terminal.py --out /out --cache /cache \\
+ && /opt/strata/terminal/bin/strata --version
+"""
+
+
+def test_dockerfile_patch_passes_the_commit_and_a_git_shim():
+    """v0.2.1 asks `git rev-parse HEAD` in a stage with no git; later sources
+    read STRATA_BUILD_COMMIT. The patch serves both, only for that RUN."""
+    out = strata_lifecycle.patch_dockerfile(_TERMINAL_STAGE)
+    assert out is not None
+    assert "ARG STRATA_COMMIT=\nENV STRATA_BUILD_COMMIT=${STRATA_COMMIT}\n" in out
+    assert "RUN PATH=/opt/aiw-git:$PATH python3 /src/packaging/package_terminal.py" in out
+    assert out.index("ENV STRATA_BUILD_COMMIT") < out.index("package_terminal.py")
+    assert strata_lifecycle.patch_dockerfile("FROM ubuntu\nRUN true\n") is None
+
+
+def _build_harness(monkeypatch, dockerfile):
+    created: list[dict] = []
+
+    async def none(*_a, **_k):
+        return None
+
+    async def post(path, /, *, json_body=None, **_params):
+        if path == "/containers/create":
+            created.append(json_body)
+            return SimpleNamespace(status_code=201, json=lambda: {"Id": "b1"}, text="")
+        return SimpleNamespace(status_code=204, json=lambda: {}, text="")
+
+    async def fetch(_commit):
+        return dockerfile
+
+    async def me():
+        return {}
+
+    monkeypatch.setattr(strata_lifecycle, "_by_role", none)
+    monkeypatch.setattr(strata_lifecycle, "_image", none)
+    monkeypatch.setattr(strata_lifecycle, "_ensure_builder_image", none)
+    monkeypatch.setattr(strata_lifecycle, "_clear_job_error", lambda: None)
+    monkeypatch.setattr(strata_lifecycle, "_self", me)
+    monkeypatch.setattr(strata_lifecycle, "_post", post)
+    monkeypatch.setattr(strata_lifecycle, "_fetch_dockerfile", fetch)
+    return created
+
+
+def test_build_feeds_the_patched_dockerfile_through_stdin(monkeypatch):
+    created = _build_harness(monkeypatch, _TERMINAL_STAGE)
+    commit = "a" * 40
+    asyncio.run(strata_lifecycle.start_build(version="0.2.1", commit=commit, then="prepare"))
+    body = created[0]
+    sh, flag, script, context = body["Cmd"]
+    assert (sh, flag) == ("sh", "-c")
+    assert script.startswith('printf "%s" "$STRATA_DOCKERFILE" | docker build ')
+    assert script.endswith(' -f - "$0"')
+    assert f"STRATA_COMMIT={commit}" in script
+    assert context == f"{strata_lifecycle.GIT_URL}#{commit}"
+    env = dict(e.split("=", 1) for e in body["Env"])
+    assert "PATH=/opt/aiw-git:$PATH" in env["STRATA_DOCKERFILE"]
+
+
+def test_build_without_the_step_uses_the_repo_dockerfile(monkeypatch):
+    created = _build_harness(monkeypatch, None)
+    commit = "b" * 40
+    asyncio.run(strata_lifecycle.start_build(version="0.2.2", commit=commit, then="prepare"))
+    cmd = created[0]["Cmd"]
+    assert cmd[:2] == ["docker", "build"]
+    assert cmd[-1] == f"{strata_lifecycle.GIT_URL}#{commit}"
+    assert created[0]["Env"] == []

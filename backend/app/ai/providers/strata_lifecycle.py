@@ -56,6 +56,41 @@ IMAGE_REPO = "ai-workspace/strata"
 CURRENT_TAG = "current"
 BUILDER_IMAGE = "docker:29-cli"
 
+# The Terminal stage of Strata's root Dockerfile runs packaging/package_terminal.py,
+# which asks `git rev-parse HEAD` for the archive's COMMIT file. A build from the
+# git URL has neither .git nor git in that stage: v0.2.1 crashes on the missing
+# binary, later sources read STRATA_BUILD_COMMIT first. The build therefore gets
+# the Dockerfile patched to pass the commit both ways (env + a one-command git shim
+# on PATH for that RUN only); a Dockerfile without the step is built unchanged.
+PACKAGE_TERMINAL_RUN = "RUN python3 /src/packaging/package_terminal.py"
+_GIT_SHIM = (
+    "RUN mkdir -p /opt/aiw-git"
+    " && printf '#!/bin/sh\\necho \"$STRATA_BUILD_COMMIT\"\\n' > /opt/aiw-git/git"
+    " && chmod +x /opt/aiw-git/git\n"
+)
+
+
+def patch_dockerfile(text: str) -> str | None:
+    """Strata's Dockerfile with the commit passed into package_terminal.py; None if the step is gone."""
+    if text.count(PACKAGE_TERMINAL_RUN) != 1:
+        return None
+    head = "ARG STRATA_COMMIT=\nENV STRATA_BUILD_COMMIT=${STRATA_COMMIT}\n" + _GIT_SHIM
+    run = "RUN PATH=/opt/aiw-git:$PATH python3 /src/packaging/package_terminal.py"
+    return text.replace(PACKAGE_TERMINAL_RUN, head + run)
+
+
+async def _fetch_dockerfile(commit: str) -> str | None:
+    url = f"https://raw.githubusercontent.com/{REPO}/{commit}/Dockerfile"
+    try:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+            r = await client.get(url, headers={"User-Agent": "ai-workspace-strata"})
+            r.raise_for_status()
+            return r.text
+    except httpx.HTTPError as exc:
+        logger.warning("strata_dockerfile_fetch_failed", commit=commit, error=str(exc))
+        return None
+
+
 LABEL_ROLE = "aiw.strata.role"  # server | builder | installer
 LABEL_VERSION = "aiw.strata.version"
 LABEL_COMMIT = "aiw.strata.commit"
@@ -416,13 +451,24 @@ async def start_build(*, version: str, commit: str, then: str) -> dict:
         "-t", image,
         "--build-arg", f"CUDA_ARCHITECTURES={settings.strata_cuda_architectures}",
         "--build-arg", "BUILD_VISION=1",
+        "--build-arg", f"STRATA_COMMIT={commit}",
         "--label", f"{LABEL_VERSION}={version}",
         "--label", f"{LABEL_COMMIT}={commit}",
-        f"{GIT_URL}#{commit}",
     ]  # fmt: skip
+    env: list[str] = []
+    original = await _fetch_dockerfile(commit)
+    dockerfile = patch_dockerfile(original) if original else None
+    if dockerfile:
+        # Dockerfile from stdin, sources still from the git URL at that commit.
+        env.append(f"STRATA_DOCKERFILE={dockerfile}")
+        script = 'printf "%s" "$STRATA_DOCKERFILE" | ' + " ".join(cmd) + ' -f - "$0"'
+        cmd = ["sh", "-c", script, f"{GIT_URL}#{commit}"]
+    else:
+        cmd.append(f"{GIT_URL}#{commit}")
     body = {
         "Image": BUILDER_IMAGE,
         "Cmd": cmd,
+        "Env": env,
         "Labels": {
             LABEL_ROLE: "builder",
             LABEL_VERSION: version,
