@@ -109,6 +109,22 @@ class BuiltinAgentConfig(BaseModel):
     # After a completed multi-step order a background model call may propose a
     # procedure for the owner to approve (hermes-agent's self-written skills).
     procedure_autopropose_enabled: bool = False
+    # Capabilities not sent with every request: the model finds them through
+    # the `tools` meta-tool (list / describe / call). None of these was called
+    # in 30 days of chat or in E52 (2026-10-20); they were a quarter of the
+    # tool descriptions. hermes-agent's deferred tools; empty list = all sent.
+    deferred_capabilities: list[str] = Field(
+        default_factory=lambda: [
+            "image_studio",
+            "sheets",
+            "tech",
+            "engineering",
+            "normalization",
+            "cad_review",
+            "mcp",
+            "vault",
+        ]
+    )
     memory_enabled: bool = True
     audit_enabled: bool = True
     # Learned recipes replay their recorded calls without the model. Off: the
@@ -192,6 +208,7 @@ class BuiltinAgentConfigUpdate(BaseModel):
     orchestrator_plan_timeout_seconds: float | None = Field(default=None, ge=2.0, le=180.0)
     max_worker_steps: int | None = Field(default=None, ge=1, le=60)
     procedure_autopropose_enabled: bool | None = None
+    deferred_capabilities: list[str] | None = None
     memory_enabled: bool | None = None
     audit_enabled: bool | None = None
     recipe_replay_enabled: bool | None = None

@@ -3574,7 +3574,7 @@ class AgentSession:
         """
         scope = self._capability_scope
         if scope is None or gateway_config.skills_mode != "capabilities":
-            return self._tools
+            return self._with_deferred_tools(self._tools)
 
         def _tool_name(tool: dict) -> str:
             fn = tool.get("function") if isinstance(tool.get("function"), dict) else tool
@@ -4456,6 +4456,74 @@ class AgentSession:
                 content += "Уточните запрос или разбейте его на части."
             await self._send({"type": "text", "content": content})
 
+    def _deferred_names(self) -> set[str]:
+        config = getattr(self, "_config", None)
+        deferred = set(getattr(config, "deferred_capabilities", None) or [])
+        return {name for name in deferred if name in getattr(self, "_skill_map", {})}
+
+    def _with_deferred_tools(self, tools: list[dict]) -> list[dict]:
+        """Rarely used capabilities stay out of every request; one `tools`
+        entry names them, so the list (and the cached head of the request)
+        does not change when one of them is needed."""
+        deferred = self._deferred_names()
+        if not deferred:
+            return tools
+
+        def _name(tool: dict) -> str:
+            fn = tool.get("function") if isinstance(tool.get("function"), dict) else tool
+            return str(fn.get("name") or "")
+
+        kept = [tool for tool in tools if _name(tool) not in deferred]
+        lines = []
+        for tool in tools:
+            if _name(tool) in deferred:
+                description = str((tool.get("function") or {}).get("description") or "")
+                first = description.split(". ")[0].split("\n")[0].strip()
+                lines.append(f"{_name(tool)} — {first[:160]}")
+        return kept + [
+            {
+                "type": "function",
+                "function": {
+                    "name": "tools",
+                    "description": (
+                        "Редкие инструменты, которых нет в списке выше. Нужен один из них — "
+                        "action=describe с capability вернёт его описание и параметры, "
+                        "затем action=call с capability и arguments (как у обычного "
+                        "вызова, с action внутри) выполнит его.\n" + "\n".join(sorted(lines))
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "action": {"type": "string", "description": "describe | call"},
+                            "capability": {"type": "string"},
+                            "arguments": {
+                                "type": "object",
+                                "description": "call: аргументы инструмента",
+                            },
+                        },
+                        "required": ["action", "capability"],
+                    },
+                },
+            }
+        ]
+
+    def _describe_deferred(self, capability: str) -> dict:
+        for tool in self._tools:
+            fn = tool.get("function") or {}
+            if fn.get("name") == capability:
+                return {
+                    "status": "ok",
+                    "capability": capability,
+                    "description": fn.get("description"),
+                    "parameters": fn.get("parameters"),
+                }
+        return {
+            "status": "error",
+            "error_code": "unknown_capability",
+            "message": f"Нет такого инструмента: {capability}",
+            "available": sorted(self._deferred_names()),
+        }
+
     async def _execute_single_tool(self, tc: dict, iteration: int) -> tuple[str, dict, str]:
         """Execute one tool call and return (fn_name, result, tool_call_id).
 
@@ -4488,6 +4556,27 @@ class AgentSession:
                     "error": "Аргументы инструмента не являются валидным JSON.",
                     "hint": "Повтори вызов с корректным JSON-объектом аргументов.",
                 }
+                await self._send({"type": "tool_result", "tool": fn_name, "result": result})
+                return fn_name, result, tc_id
+
+        # A deferred capability: describe answers here; call becomes the real
+        # call, so every check below (gates, guesses, journal) applies to it.
+        if fn_name == "tools":
+            capability = str(args.get("capability") or "")
+            if args.get("action") == "call" and capability in self._deferred_names():
+                inner = args.get("arguments")
+                fn_name, args = capability, dict(inner) if isinstance(inner, dict) else {}
+            else:
+                result = (
+                    self._describe_deferred(capability)
+                    if args.get("action") == "describe"
+                    else {
+                        "status": "error",
+                        "error_code": "bad_arguments",
+                        "message": "action: describe или call; capability — из списка tools",
+                        "available": sorted(self._deferred_names()),
+                    }
+                )
                 await self._send({"type": "tool_result", "tool": fn_name, "result": result})
                 return fn_name, result, tc_id
 
