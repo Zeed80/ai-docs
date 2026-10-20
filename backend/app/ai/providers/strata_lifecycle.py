@@ -6,19 +6,19 @@ editing the pinned commit in compose and rebuilding on the host. Now the
 panel does it over the Docker socket:
 
 * **Update check** — the newest GitHub release (cached for hours) against the
-  version of the image the server runs (its ``aiw.strata.version`` label, or
-  the engine's own BUILD.json for an image built before the labels).
-* **Build** — a one-shot ``docker:cli`` container runs ``docker build`` of the
-  release's commit (Strata's Dockerfile needs BuildKit, which the Engine
-  API's /build does not give). It is a container of its own, so a backend
-  restart does not cut the half-hour CUDA compile; its labels say what it
-  builds and what to do with the result, so the job survives a restart too.
+  version of the image the server runs (its OCI version label).
+* **Download** — from 0.2.1 Strata publishes ready images
+  (ghcr.io/niko1221/strata:<version>-<flavor>). A one-shot ``docker:cli``
+  container pulls the release's image and tags it ``ai-workspace/strata:<version>``.
+  It is a container of its own, so a backend restart does not cut the pull;
+  its labels say what it fetches and what to do with the result, so the job
+  survives a restart too.
 * **Apply** — the server container is recreated on the new image with its
   own settings (env, ports, volume, network aliases, GPU), keeping whether it
   was running. Model files live on the volume and are not touched.
 * **Install / uninstall** — the same spec from scratch (the backend's own
   compose project, network and the strata_data volume), and the reverse.
-* **Side download** — another one-shot container runs Strata's setup for a
+* **Side download** — another one-shot container runs ``strata install`` for a
   variant from its own env file while the server keeps serving; switching to
   it afterwards is a restart, not an hour of download.
 * **Memory limit** — the RAM reserve (strata_manager.ram_plan) is the server
@@ -51,59 +51,40 @@ from app.config import settings
 logger = structlog.get_logger()
 
 REPO = "Niko1221/Strata"
-GIT_URL = f"https://github.com/{REPO}.git"
 IMAGE_REPO = "ai-workspace/strata"
 CURRENT_TAG = "current"
 BUILDER_IMAGE = "docker:29-cli"
 
-# The Terminal stage of Strata's root Dockerfile runs packaging/package_terminal.py,
-# which asks `git rev-parse HEAD` for the archive's COMMIT file. A build from the
-# git URL has neither .git nor git in that stage: v0.2.1 crashes on the missing
-# binary, later sources read STRATA_BUILD_COMMIT first. The build therefore gets
-# the Dockerfile patched to pass the commit both ways (env + a one-command git shim
-# on PATH for that RUN only); a Dockerfile without the step is built unchanged.
-PACKAGE_TERMINAL_RUN = "RUN python3 /src/packaging/package_terminal.py"
-_GIT_SHIM = (
-    "RUN mkdir -p /opt/aiw-git"
-    " && printf '#!/bin/sh\\necho \"$STRATA_BUILD_COMMIT\"\\n' > /opt/aiw-git/git"
-    " && chmod +x /opt/aiw-git/git\n"
-)
+# Ready-made images, from 0.2.1 on: <version>-cuda13 needs NVIDIA driver 580+,
+# <version>-cuda12 575+ (docs/DOCKER.md, "Which image for which card").
+IMAGE_SOURCE = "ghcr.io/niko1221/strata"
+MIN_VERSION = "0.2.1"
 
-
-# ENTRYPOINT_SCRIPT drives the 0.1.x image: ./docker-entrypoint.sh and setup.py
-# in /opt/strata. From 0.2 Strata starts through `strata launch` with another
-# volume layout (/data/install, MODEL_PATH, no LOW_RAM); such a release is
-# neither built nor applied until the integration follows it.
-SUPPORTED_ENTRYPOINT = ["./docker-entrypoint.sh"]
+# The 0.2 image starts through tini + /opt/strata/entrypoint.sh (`strata launch`).
+# ENTRYPOINT_SCRIPT drives that layout; an image started otherwise (0.1.x:
+# ./docker-entrypoint.sh + setup.py, or whatever a later release changes to) is
+# neither fetched nor applied — the server it was put on would exit at once.
+SUPPORTED_ENTRYPOINT = ["/usr/bin/tini", "--", "/opt/strata/entrypoint.sh"]
+SERVER_ENTRYPOINT = ["/usr/bin/tini", "--", "/bin/sh", "-c"]
+# docs/DOCKER.md: --shm-size 2g --stop-timeout 120 (the engine drains, then
+# releases tens of GB of pinned RAM).
+SHM_BYTES = 2 * 1024**3
+STOP_TIMEOUT_S = 120
+OCI_VERSION_LABEL = "org.opencontainers.image.version"
 UNSUPPORTED_LAYOUT = (
-    "Strata {version} запускается по-новому (strata launch, другая раскладка тома); "
-    "панель её пока не поддерживает — установленная версия остаётся"
+    "Strata {version} запускается иначе, чем ожидает панель; установленная версия остаётся"
 )
+TOO_OLD = "Готовые образы Strata выходят с {min}; {version} панель не ставит"
+# Settings of the 0.1.x image the 0.2 entrypoint warns about and ignores.
+LEGACY_ENV = ("HOST", "LOW_RAM", "RESIDENT_BUDGET_GIB", "REINSTALL", "KV_STREAMING", "CONFIG")
 
 
-def dockerfile_supported(text: str) -> bool:
-    return 'ENTRYPOINT ["./docker-entrypoint.sh"]' in text
+def release_image(version: str) -> str:
+    return f"{IMAGE_SOURCE}:{version}-{settings.strata_image_flavor}"
 
 
-def patch_dockerfile(text: str) -> str | None:
-    """Strata's Dockerfile with the commit passed into package_terminal.py; None if the step is gone."""
-    if text.count(PACKAGE_TERMINAL_RUN) != 1:
-        return None
-    head = "ARG STRATA_COMMIT=\nENV STRATA_BUILD_COMMIT=${STRATA_COMMIT}\n" + _GIT_SHIM
-    run = "RUN PATH=/opt/aiw-git:$PATH python3 /src/packaging/package_terminal.py"
-    return text.replace(PACKAGE_TERMINAL_RUN, head + run)
-
-
-async def _fetch_dockerfile(commit: str) -> str | None:
-    url = f"https://raw.githubusercontent.com/{REPO}/{commit}/Dockerfile"
-    try:
-        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-            r = await client.get(url, headers={"User-Agent": "ai-workspace-strata"})
-            r.raise_for_status()
-            return r.text
-    except httpx.HTTPError as exc:
-        logger.warning("strata_dockerfile_fetch_failed", commit=commit, error=str(exc))
-        return None
+def release_supported(version: str | None) -> bool:
+    return bool(version) and version_tuple(version) >= version_tuple(MIN_VERSION)
 
 
 LABEL_ROLE = "aiw.strata.role"  # server | builder | installer
@@ -124,12 +105,23 @@ _UNSET = object()
 
 ENTRYPOINT_SCRIPT = r"""# The backend (uid/gid 10001, appuser) writes aiw.env, aiw-runtime.json
 # and the run configs and deletes quants on this volume, while
-# everything here is created as root: give the volume to its group
+# everything here is created as root: give what it touches to its group
 # (setgid dirs + umask 002 keep new files writable for it too).
 # Without it, saving Strata settings in the panel failed with a 500.
-chgrp -R "${STRATA_SHARED_GID:-10001}" /data 2>/dev/null
-chmod -R g+rwX /data 2>/dev/null
-find /data -type d -exec chmod g+s {} + 2>/dev/null
+# Only that: Strata keeps its runtime directory, connections and API key
+# owner-only and refuses to start otherwise ("runtime directory must be
+# owner-only (mode 0700)" - live, on the first restart after 0.2.1).
+gid="${STRATA_SHARED_GID:-10001}"
+mkdir -p /data/Strata-data /data/install
+chgrp "$gid" /data /data/aiw*.env /data/aiw-runtime.json /data/config /data/config/strata-*.json 2>/dev/null
+chmod g+rw /data/aiw*.env /data/aiw-runtime.json /data/config/strata-*.json 2>/dev/null
+chmod g+rwxs /data /data/config 2>/dev/null
+for d in /data/install /data/Strata-data; do
+  chgrp -R "$gid" "$d" 2>/dev/null
+  chmod -R g+rwX "$d" 2>/dev/null
+  find "$d" -type d -exec chmod g+s {} + 2>/dev/null
+done
+chmod -R go-rwx /data/state /data/home /data/config/strata 2>/dev/null
 umask 002
 # The server reads /data/aiw.env; a side download (strata_lifecycle's
 # installer container) names its own file, so it never changes what the
@@ -140,47 +132,56 @@ set -a
 set +a
 # REINSTALL is one-shot: drop it so the next restart just serves.
 [ -f "$envfile" ] && sed -i '/^REINSTALL=/d' "$envfile"
-case "${FAMILY:-qwen}" in qwen) prefix="" ;; *) prefix="${FAMILY}-" ;; esac
-tag="${prefix}$(printf '%s' "${MODEL:-IQ2_XS}" | tr 'A-Z' 'a-z')"
-# Setup only: Strata's entrypoint minus its final "start the server" line.
-sed 's|^exec .venv/bin/python setup.py "\$@"$|exit 0|' docker-entrypoint.sh > /tmp/install-only.sh
-grep -q '^exit 0$' /tmp/install-only.sh || { echo "install-only: entrypoint changed"; exit 1; }
+# The 0.1.x image kept models, MTP and packs in /data; 0.2 keeps them in
+# /data/Strata-data (`strata launch --data-dir`). Same disk: a rename, and a
+# link back so the older image still finds them.
+for d in models mtp packs; do
+  if [ -d "/data/$d" ] && [ ! -L "/data/$d" ] && [ ! -e "/data/Strata-data/$d" ]; then
+    mv "/data/$d" "/data/Strata-data/$d" && ln -s "Strata-data/$d" "/data/$d"
+  fi
+done
+PY=/opt/strata/terminal/python/bin/python3
+FAMILY="${FAMILY:-qwen}"
+MODEL="${MODEL:-IQ2_XS}"
+case "$FAMILY" in qwen) prefix="" ;; *) prefix="${FAMILY}-" ;; esac
+tag="${prefix}$(printf '%s' "$MODEL" | tr 'A-Z' 'a-z')"
+cfg="/data/install/strata-$tag.json"
+case "$(printf '%s' "${VISION:-yes}" | tr 'A-Z' 'a-z')" in no|off|false|0) vis=no ;; *) vis=yes ;; esac
+# setup.py the way `strata launch` runs it (strata_cli/launch/runner.py:
+# ensure_model, setup_args), so the launch after it finds the model
+# "already installed with these choices" and serves it as it is.
+set -- --yes --no-start --family "$FAMILY" --model "$MODEL"
+[ -n "${CONTEXT:-}" ] && set -- "$@" --context "$CONTEXT"
+set -- "$@" --vision "$vis" --kv "${KV:-int8}"
+case "$FAMILY" in qwen|coder) set -- "$@" --experimental-speed-projection off ;; esac
+set -- "$@" --data-dir /data/Strata-data
+[ -n "${LOW_RAM:-}" ] && [ "$LOW_RAM" != auto ] && set -- "$@" --low-ram "$LOW_RAM"
+[ -n "${RESIDENT_BUDGET_GIB:-}" ] && set -- "$@" --resident-budget-gib "$RESIDENT_BUDGET_GIB"
+setup_pass() {
+  ( cd /opt/strata/terminal && env -u PYTHONHOME -u VIRTUAL_ENV STRATA_CONTROL_INSTALL=1 \
+      STRATA_INSTALL_DIR=/data/install STRATA_NEED_ENGINE=1 PYTHONNOUSERSITE=1 \
+      PYTHONPATH=/opt/strata/terminal "$PY" setup.py "$@" )
+}
 if [ "${INSTALL_ONLY:-0}" = "1" ]; then
   # Download/setup only, then exit. The GPU stays with Ollama meanwhile.
-  exec sh /tmp/install-only.sh
+  setup_pass "$@"
+  exit $?
 fi
-# A setup pass (new quant, or REINSTALL after a context/images change)
-# rewrites the run config, so it runs first and on its own: the
-# residency keys below must land in the config it writes, or Strata
-# stops unloading when idle after a context change.
-if [ "${REINSTALL:-0}" = "1" ] || [ ! -f "/data/config/strata-$tag.json" ]; then
-  sh /tmp/install-only.sh || exit 1
-fi
-export REINSTALL=0
-# Several quants installed: setup.py starts "the newest strata-*.json"
-# and, with more than one in /opt/strata, ASKS which — no TTY, so the
-# start failed (live, after IQ2_XS joined IQ3_S). Keep only the chosen
-# quant's link; the canonical copies live in /data/config.
-for f in /opt/strata/strata-*.json; do
-  [ -e "$f" ] || [ -L "$f" ] || continue
-  [ "$(basename "$f")" = "strata-$tag.json" ] && continue
-  rm -f "$f"
-done
-# A setup pass leaves the chosen quant's config as a regular FILE in
-# /opt/strata (copied to /data/config at its end), and Strata starts
-# from that file: later edits to /data/config (idle unload, parallel)
-# never reached it. Make it a link to the canonical copy.
-cur="/opt/strata/strata-$tag.json"
-if [ -f "/data/config/strata-$tag.json" ] && [ ! -L "$cur" ]; then
-  rm -f "$cur" && ln -s "/data/config/strata-$tag.json" "$cur"
+# A setup pass first when the variant has no run config yet (or REINSTALL,
+# or a RAM mode `strata launch` cannot ask for): the residency keys below
+# must be in the config before the first serve, not after a restart.
+[ "${REINSTALL:-0}" = "1" ] && rm -f "$cfg"
+if [ ! -f "$cfg" ] || { [ -n "${LOW_RAM:-}" ] && [ "$LOW_RAM" != auto ]; } || [ -n "${RESIDENT_BUDGET_GIB:-}" ]; then
+  setup_pass "$@" || exit 1
 fi
 # Runtime settings from the backend's /data/aiw-runtime.json (same rules
 # as strata_manager.merge_run_config): "config_keys" are run-config keys
 # (idle unload, ComfyUI hand-off, parallel), "config_args" engine flags
-# (conversation cache); null removes.
-.venv/bin/python - "$tag" <<'PY'
+# (conversation cache); null removes. Setup keeps both on later passes
+# (keys it does not own; hand-added args as "user_args").
+"$PY" - "$cfg" <<'PY'
 import json, pathlib, sys
-cfg = pathlib.Path(f"/data/config/strata-{sys.argv[1]}.json")
+cfg = pathlib.Path(sys.argv[1])
 rt = pathlib.Path("/data/aiw-runtime.json")
 if cfg.exists() and rt.exists():
     body = json.loads(rt.read_text())
@@ -204,7 +205,8 @@ if cfg.exists() and rt.exists():
     cfg.write_text(json.dumps(c, indent=1))
     print(f"[aiw] runtime settings applied to {cfg.name}: {sorted(keys) + sorted(flags)}")
 PY
-exec ./docker-entrypoint.sh
+unset LOW_RAM RESIDENT_BUDGET_GIB REINSTALL HOST INSTALL_ONLY AIW_ENV_FILE
+exec /opt/strata/entrypoint.sh run
 """
 
 
@@ -339,8 +341,7 @@ async def latest_release(*, force: bool = False) -> dict:
                 "url": rel.get("html_url"),
                 "checked_at": int(time.time()),
             }
-        dockerfile = await _fetch_dockerfile(out["commit"])
-        out["supported"] = dockerfile_supported(dockerfile) if dockerfile else None
+        out["supported"] = release_supported(out["version"])
         ttl = _RELEASE_TTL_S
     except Exception as exc:  # noqa: BLE001
         out = {"error": f"GitHub недоступен: {str(exc)[:200]}", "checked_at": int(time.time())}
@@ -374,7 +375,7 @@ async def server_version(container: dict | None = None) -> dict | None:
     image_id = container.get("ImageID") or ""
     info = await _image(image_id) if image_id else None
     labels = (info or {}).get("Config", {}).get("Labels") or {}
-    version = labels.get(LABEL_VERSION)
+    version = labels.get(LABEL_VERSION) or labels.get(OCI_VERSION_LABEL)
     commit = labels.get(LABEL_COMMIT)
     if not version:
         cache_key = f"strata:image_version:{image_id}"
@@ -391,7 +392,8 @@ async def server_version(container: dict | None = None) -> dict | None:
                     pass
     image = container.get("Image") or ""
     if not commit and ":" in image:
-        commit = image.rsplit(":", 1)[1]  # ai-workspace/strata:a0116b2
+        tag = image.rsplit(":", 1)[1]  # ai-workspace/strata:a0116b2 (built), :0.2.1 (pulled)
+        commit = tag if tag != version else None
     return {"version": version, "commit": commit, "image": image, "image_id": image_id}
 
 
@@ -412,7 +414,7 @@ async def update_info() -> dict:
     blocked = None
     if available and latest.get("supported") is False:
         available = False
-        blocked = UNSUPPORTED_LAYOUT.format(version=latest["version"])
+        blocked = TOO_OLD.format(min=MIN_VERSION, version=latest["version"])
     return {
         "current": current,
         "latest": latest,
@@ -444,22 +446,24 @@ async def _ensure_builder_image() -> None:
         )
 
 
-def target_image(commit: str) -> str:
-    return f"{IMAGE_REPO}:{commit[:7]}"
+def target_image(version: str) -> str:
+    return f"{IMAGE_REPO}:{version}"
 
 
 async def start_build(*, version: str, commit: str, then: str) -> dict:
-    """Start building Strata ``version`` (``commit``); ``then``: apply | create."""
+    """Fetch Strata ``version``'s ready image in the background; ``then``: apply | create | prepare."""
+    if not release_supported(version):
+        raise StrataError(TOO_OLD.format(min=MIN_VERSION, version=version))
     current = await _by_role("builder")
     if current and current.get("State") == "running":
-        raise StrataError("Сборка Strata уже идёт")
+        raise StrataError("Образ Strata уже скачивается")
     if current:
         await _remove(current["Id"])
     _clear_job_error()
-    image = target_image(commit)
+    image = target_image(version)
     if await _image(image):
-        # Built before (prepared ahead, or an earlier attempt whose apply
-        # failed): nothing to compile, go straight to the next step.
+        # Fetched before (prepared ahead, or an earlier attempt whose apply
+        # failed): go straight to the next step.
         if then != "prepare":
             await _finish(image, then)
         return {"image": image, "built": True}
@@ -468,31 +472,13 @@ async def start_build(*, version: str, commit: str, then: str) -> dict:
         project = _project_name(await _self())
     except StrataError:
         project = "infra"
-    cmd = [
-        "docker", "build", "--progress=plain",
-        "-t", image,
-        "--build-arg", f"CUDA_ARCHITECTURES={settings.strata_cuda_architectures}",
-        "--build-arg", "BUILD_VISION=1",
-        "--build-arg", f"STRATA_COMMIT={commit}",
-        "--label", f"{LABEL_VERSION}={version}",
-        "--label", f"{LABEL_COMMIT}={commit}",
-    ]  # fmt: skip
-    env: list[str] = []
-    original = await _fetch_dockerfile(commit)
-    if original and not dockerfile_supported(original):
-        raise StrataError(UNSUPPORTED_LAYOUT.format(version=version))
-    dockerfile = patch_dockerfile(original) if original else None
-    if dockerfile:
-        # Dockerfile from stdin, sources still from the git URL at that commit.
-        env.append(f"STRATA_DOCKERFILE={dockerfile}")
-        script = 'printf "%s" "$STRATA_DOCKERFILE" | ' + " ".join(cmd) + ' -f - "$0"'
-        cmd = ["sh", "-c", script, f"{GIT_URL}#{commit}"]
-    else:
-        cmd.append(f"{GIT_URL}#{commit}")
+    source = release_image(version)
+    # Pull, keep it under our own name (uninstall and :current work on
+    # IMAGE_REPO), drop the registry tag (the image itself stays).
+    script = 'docker pull "$0" && docker tag "$0" "$1" && docker rmi "$0" >/dev/null'
     body = {
         "Image": BUILDER_IMAGE,
-        "Cmd": cmd,
-        "Env": env,
+        "Cmd": ["sh", "-c", script, source, image],
         "Labels": {
             LABEL_ROLE: "builder",
             LABEL_VERSION: version,
@@ -507,7 +493,7 @@ async def start_build(*, version: str, commit: str, then: str) -> dict:
         "create builder",
     ).json()
     _ok(await _post(f"/containers/{created['Id']}/start"), "start builder", 204, 304)
-    logger.info("strata_build_started", version=version, commit=commit, then=then)
+    logger.info("strata_pull_started", version=version, image=source, then=then)
     watch()
     return {"image": image, "built": False}
 
@@ -616,7 +602,8 @@ async def _finish(image: str, then: str) -> None:
     built = await _image(image)
     entrypoint = ((built or {}).get("Config") or {}).get("Entrypoint")
     if built is not None and entrypoint != SUPPORTED_ENTRYPOINT:
-        version = ((built.get("Config") or {}).get("Labels") or {}).get(LABEL_VERSION) or image
+        labels = (built.get("Config") or {}).get("Labels") or {}
+        version = labels.get(OCI_VERSION_LABEL) or labels.get(LABEL_VERSION) or image
         raise StrataError(UNSUPPORTED_LAYOUT.format(version=version))
     _ok(
         await _post(f"/images/{image}/tag", repo=IMAGE_REPO, tag=CURRENT_TAG),
@@ -728,15 +715,18 @@ async def _spec_from(info: dict, *, image: str, memory: int) -> dict:
         name: {"Aliases": [a for a in (ep.get("Aliases") or []) if a != short]}
         for name, ep in ((info.get("NetworkSettings") or {}).get("Networks") or {}).items()
     }
+    env = _user_env(cfg.get("Env") or [], (old_image.get("Config") or {}).get("Env") or [])
+    host = _memory(info.get("HostConfig") or {}, memory)
+    host["ShmSize"] = max(int(host.get("ShmSize") or 0), SHM_BYTES)
     return {
         "Image": image,
-        "Env": _user_env(cfg.get("Env") or [], (old_image.get("Config") or {}).get("Env") or []),
+        "Env": [e for e in env if e.split("=", 1)[0] not in LEGACY_ENV],
         "Labels": labels,
         "ExposedPorts": cfg.get("ExposedPorts") or {"8080/tcp": {}},
-        "Entrypoint": ["/bin/sh", "-c"],
+        "Entrypoint": SERVER_ENTRYPOINT,
         "Cmd": [ENTRYPOINT_SCRIPT],
-        "StopTimeout": cfg.get("StopTimeout") or 60,
-        "HostConfig": _memory(info.get("HostConfig") or {}, memory),
+        "StopTimeout": max(int(cfg.get("StopTimeout") or 0), STOP_TIMEOUT_S),
+        "HostConfig": host,
         "NetworkingConfig": {"EndpointsConfig": networks},
     }
 
@@ -827,15 +817,14 @@ async def create_server(image: str) -> None:
         f"MODEL={strata_manager.DEFAULT_QUANT}",
         f"CONTEXT={strata_manager.DEFAULT_CONTEXT}",
         "VISION=yes",
-        "HOST=0.0.0.0",
         "PORT=8080",
         f"API_KEY={key}",
-        "LOW_RAM=auto",
     ]
     host = {
         "Binds": [f"{volume}:/data"],
         "Runtime": "nvidia",
         "Ulimits": [{"Name": "memlock", "Soft": -1, "Hard": -1}],
+        "ShmSize": SHM_BYTES,
         "PortBindings": {
             "8080/tcp": [{"HostIp": bind, "HostPort": str(settings.strata_host_port)}]
         },
@@ -847,9 +836,9 @@ async def create_server(image: str) -> None:
         "Env": env,
         "Labels": labels,
         "ExposedPorts": {"8080/tcp": {}},
-        "Entrypoint": ["/bin/sh", "-c"],
+        "Entrypoint": SERVER_ENTRYPOINT,
         "Cmd": [ENTRYPOINT_SCRIPT],
-        "StopTimeout": 60,
+        "StopTimeout": STOP_TIMEOUT_S,
         "HostConfig": _memory(host, wanted_memory_bytes()),
         "NetworkingConfig": {
             "EndpointsConfig": {network: {"Aliases": [settings.strata_service_name, name]}}
@@ -927,7 +916,7 @@ async def run_installer(vid: str, env_file: str) -> None:
             f"AIW_ENV_FILE={env_file}",
         ],
         "Labels": {LABEL_ROLE: "installer", LABEL_VARIANT: vid},
-        "Entrypoint": ["/bin/sh", "-c"],
+        "Entrypoint": SERVER_ENTRYPOINT,
         "Cmd": [ENTRYPOINT_SCRIPT],
         "HostConfig": {
             "Binds": hc.get("Binds"),
@@ -1001,7 +990,7 @@ async def stop_installer() -> None:
 
 # ── Uninstall ───────────────────────────────────────────────────────────────
 
-_DATA_ITEMS = ("models", "packs", "mtp", "config")
+_DATA_ITEMS = ("Strata-data", "install", "state", "home", "models", "packs", "mtp", "config")
 _DATA_FILES = (
     strata_manager.ENV_FILE_NAME,
     strata_manager.INSTALL_ENV_FILE_NAME,
@@ -1038,6 +1027,9 @@ async def uninstall(*, wipe_models: bool) -> dict:
         root = strata_manager.data_dir()
         for item in _DATA_ITEMS:
             path = root / item
+            if path.is_symlink():  # /data/models -> Strata-data/models after the 0.2 move
+                path.unlink()
+                continue
             size = strata_manager._dir_size_gb(path) or 0.0
             try:
                 shutil.rmtree(path)

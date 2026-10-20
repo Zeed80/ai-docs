@@ -405,27 +405,10 @@ def test_qwen36_sessions_must_fit_the_card(data):
         strata_manager.write_desired(model=vid, context=262144, vision=True, reinstall=False)
 
 
-# ── Build: the commit reaches package_terminal.py ───────────────────────────
-
-_TERMINAL_STAGE = """FROM ${RUNTIME_BASE} AS terminal
-COPY . /src/
-RUN python3 /src/packaging/package_terminal.py --out /out --cache /cache \\
- && /opt/strata/terminal/bin/strata --version
-"""
+# ── Update: the release's ready image is pulled, not built ────────────────
 
 
-def test_dockerfile_patch_passes_the_commit_and_a_git_shim():
-    """v0.2.1 asks `git rev-parse HEAD` in a stage with no git; later sources
-    read STRATA_BUILD_COMMIT. The patch serves both, only for that RUN."""
-    out = strata_lifecycle.patch_dockerfile(_TERMINAL_STAGE)
-    assert out is not None
-    assert "ARG STRATA_COMMIT=\nENV STRATA_BUILD_COMMIT=${STRATA_COMMIT}\n" in out
-    assert "RUN PATH=/opt/aiw-git:$PATH python3 /src/packaging/package_terminal.py" in out
-    assert out.index("ENV STRATA_BUILD_COMMIT") < out.index("package_terminal.py")
-    assert strata_lifecycle.patch_dockerfile("FROM ubuntu\nRUN true\n") is None
-
-
-def _build_harness(monkeypatch, dockerfile):
+def _build_harness(monkeypatch):
     created: list[dict] = []
 
     async def none(*_a, **_k):
@@ -437,9 +420,6 @@ def _build_harness(monkeypatch, dockerfile):
             return SimpleNamespace(status_code=201, json=lambda: {"Id": "b1"}, text="")
         return SimpleNamespace(status_code=204, json=lambda: {}, text="")
 
-    async def fetch(_commit):
-        return dockerfile
-
     async def me():
         return {}
 
@@ -449,69 +429,43 @@ def _build_harness(monkeypatch, dockerfile):
     monkeypatch.setattr(strata_lifecycle, "_clear_job_error", lambda: None)
     monkeypatch.setattr(strata_lifecycle, "_self", me)
     monkeypatch.setattr(strata_lifecycle, "_post", post)
-    monkeypatch.setattr(strata_lifecycle, "_fetch_dockerfile", fetch)
+    monkeypatch.setattr(strata_lifecycle, "watch", lambda: None)
     return created
 
 
-def test_build_feeds_the_patched_dockerfile_through_stdin(monkeypatch):
-    created = _build_harness(monkeypatch, _OLD_LAYOUT)
-    commit = "a" * 40
-    asyncio.run(strata_lifecycle.start_build(version="0.2.1", commit=commit, then="prepare"))
+def test_update_pulls_the_ready_image_and_keeps_our_name(monkeypatch):
+    """0.2.1 publishes images to ghcr: the update is a pull (minutes), not an
+    hour of CUDA compile; uninstall and :current work on ai-workspace/strata."""
+    monkeypatch.setattr(strata_lifecycle.settings, "strata_image_flavor", "cuda13")
+    created = _build_harness(monkeypatch)
+    out = asyncio.run(strata_lifecycle.start_build(version="0.2.1", commit="a" * 40, then="apply"))
+    assert out == {"image": "ai-workspace/strata:0.2.1", "built": False}
     body = created[0]
-    sh, flag, script, context = body["Cmd"]
+    sh, flag, script, source, target = body["Cmd"]
     assert (sh, flag) == ("sh", "-c")
-    assert script.startswith('printf "%s" "$STRATA_DOCKERFILE" | docker build ')
-    assert script.endswith(' -f - "$0"')
-    assert f"STRATA_COMMIT={commit}" in script
-    assert context == f"{strata_lifecycle.GIT_URL}#{commit}"
-    env = dict(e.split("=", 1) for e in body["Env"])
-    assert "PATH=/opt/aiw-git:$PATH" in env["STRATA_DOCKERFILE"]
+    assert script.startswith('docker pull "$0" && docker tag "$0" "$1"')
+    assert source == "ghcr.io/niko1221/strata:0.2.1-cuda13"
+    assert target == "ai-workspace/strata:0.2.1"
+    assert body["Labels"][strata_lifecycle.LABEL_TARGET_IMAGE] == target
 
 
-def test_build_without_the_step_uses_the_repo_dockerfile(monkeypatch):
-    created = _build_harness(monkeypatch, None)
-    commit = "b" * 40
-    asyncio.run(strata_lifecycle.start_build(version="0.2.2", commit=commit, then="prepare"))
-    cmd = created[0]["Cmd"]
-    assert cmd[:2] == ["docker", "build"]
-    assert cmd[-1] == f"{strata_lifecycle.GIT_URL}#{commit}"
-    assert created[0]["Env"] == []
-
-
-# ── A release the integration cannot run is neither built nor applied ──────
-
-_NEW_LAYOUT = """FROM ubuntu:24.04 AS terminal
-RUN python3 /src/packaging/package_terminal.py --out /out
-FROM ubuntu:24.04
-ENTRYPOINT ["/usr/bin/tini", "--", "/opt/strata/entrypoint.sh"]
-CMD ["run"]
-"""
-_OLD_LAYOUT = _TERMINAL_STAGE + 'WORKDIR /opt/strata\nENTRYPOINT ["./docker-entrypoint.sh"]\n'
-
-
-def test_new_layout_release_is_not_built(monkeypatch):
-    """0.2 starts through `strata launch`: building it took an hour and the
-    server it was applied to exited at once (docker-entrypoint.sh is gone)."""
-    created = _build_harness(monkeypatch, _NEW_LAYOUT)
-    with pytest.raises(strata_manager.StrataError, match="по-новому"):
-        asyncio.run(strata_lifecycle.start_build(version="0.2.1", commit="c" * 40, then="apply"))
+def test_a_release_without_a_ready_image_is_not_fetched(monkeypatch):
+    created = _build_harness(monkeypatch)
+    with pytest.raises(strata_manager.StrataError, match="0.2.1"):
+        asyncio.run(strata_lifecycle.start_build(version="0.1.45", commit="b" * 40, then="apply"))
     assert created == []
 
 
-def test_old_layout_release_is_built(monkeypatch):
-    created = _build_harness(monkeypatch, _OLD_LAYOUT)
-    asyncio.run(strata_lifecycle.start_build(version="0.1.46", commit="d" * 40, then="prepare"))
-    assert len(created) == 1
-
-
 def test_an_image_with_another_entrypoint_is_not_applied(monkeypatch):
+    """0.1.x started through ./docker-entrypoint.sh: the 0.2 launch script on it
+    (or on a later layout) would exit at once — the server is left as it is."""
     calls: list[str] = []
 
     async def image(_ref):
         return {
             "Config": {
-                "Entrypoint": ["/usr/bin/tini", "--", "/opt/strata/entrypoint.sh"],
-                "Labels": {strata_lifecycle.LABEL_VERSION: "0.2.1"},
+                "Entrypoint": ["./docker-entrypoint.sh"],
+                "Labels": {strata_lifecycle.OCI_VERSION_LABEL: "0.1.45"},
             }
         }
 
@@ -520,20 +474,20 @@ def test_an_image_with_another_entrypoint_is_not_applied(monkeypatch):
 
     monkeypatch.setattr(strata_lifecycle, "_image", image)
     monkeypatch.setattr(strata_lifecycle, "_post", post)
-    with pytest.raises(strata_manager.StrataError, match="0.2.1"):
-        asyncio.run(strata_lifecycle._finish("ai-workspace/strata:9076725", "apply"))
+    with pytest.raises(strata_manager.StrataError, match="0.1.45"):
+        asyncio.run(strata_lifecycle._finish("ai-workspace/strata:477ac13", "apply"))
     assert calls == []  # :current is not moved, the server is not touched
 
 
-def test_update_info_blocks_an_unsupported_release(monkeypatch):
+def test_update_info_does_not_offer_a_release_without_a_ready_image(monkeypatch):
     async def container():
         return {"Id": "s1"}
 
     async def current(_c=None):
-        return {"version": "0.1.45"}
+        return {"version": "0.1.44"}
 
     async def latest(**_kw):
-        return {"version": "0.2.1", "commit": "e" * 40, "supported": False}
+        return {"version": "0.1.45", "commit": "e" * 40, "supported": False}
 
     async def no_job():
         return None
@@ -544,4 +498,63 @@ def test_update_info_blocks_an_unsupported_release(monkeypatch):
     monkeypatch.setattr(strata_lifecycle, "job_status", no_job)
     info = asyncio.run(strata_lifecycle.update_info())
     assert info["update_available"] is False
-    assert "0.2.1" in info["update_blocked"]
+    assert "0.1.45" in info["update_blocked"]
+
+
+def test_the_version_of_a_published_image_comes_from_its_oci_label(monkeypatch):
+    async def image(_ref):
+        return {"Config": {"Labels": {strata_lifecycle.OCI_VERSION_LABEL: "0.2.1"}}}
+
+    monkeypatch.setattr(strata_lifecycle, "_image", image)
+    out = asyncio.run(
+        strata_lifecycle.server_version(
+            {"Id": "c1", "ImageID": "sha256:x", "Image": "ai-workspace/strata:0.2.1"}
+        )
+    )
+    assert out["version"] == "0.2.1"
+
+
+# ── The launch script (Strata 0.2) ──────────────────────────────────────────
+
+
+def test_launch_script_moves_the_old_layout_and_ends_in_strata_launch():
+    script = strata_lifecycle.ENTRYPOINT_SCRIPT
+    # 0.1.x files move under Strata-data once, a link stays for the old image.
+    assert 'mv "/data/$d" "/data/Strata-data/$d" && ln -s "Strata-data/$d" "/data/$d"' in script
+    # A variant without a run config is set up first, so the residency keys
+    # are in the config before the first serve.
+    assert 'setup_pass "$@" || exit 1' in script
+    assert "STRATA_CONTROL_INSTALL=1" in script and 'setup.py "$@"' in script
+    assert 'if [ "${INSTALL_ONLY:-0}" = "1" ]; then' in script  # side download
+    assert "--data-dir /data/Strata-data" in script
+    assert script.rstrip().endswith("exec /opt/strata/entrypoint.sh run")
+    # Strata's own private parts stay owner-only; no recursive grant over /data.
+    assert "chmod -R go-rwx /data/state /data/home /data/config/strata" in script
+    assert "chmod -R g+rwX /data " not in script and 'chgrp -R "${STRATA_SHARED_GID' not in script
+    # Settings the 0.2 entrypoint would warn about are not passed on.
+    assert "unset LOW_RAM RESIDENT_BUDGET_GIB REINSTALL HOST" in script
+
+
+def test_server_spec_runs_the_script_under_tini_without_legacy_env(monkeypatch):
+    async def image(ref):
+        return {"Id": "sha256:new", "Config": {"Env": ["PATH=/usr/bin"]}}
+
+    monkeypatch.setattr(strata_lifecycle, "_image", image)
+    info = {
+        "Id": "abc",
+        "Image": "old",
+        "Config": {
+            "Env": ["MODEL=IQ2_XS", "HOST=0.0.0.0", "LOW_RAM=auto", "API_KEY=k", "PATH=/usr/bin"],
+            "Labels": {},
+        },
+        "HostConfig": {"ShmSize": 67108864},
+        "NetworkSettings": {"Networks": {}},
+    }
+    spec = asyncio.run(
+        strata_lifecycle._spec_from(info, image="ai-workspace/strata:0.2.1", memory=0)
+    )
+    assert spec["Entrypoint"] == ["/usr/bin/tini", "--", "/bin/sh", "-c"]
+    assert "HOST=0.0.0.0" not in spec["Env"] and "LOW_RAM=auto" not in spec["Env"]
+    assert "MODEL=IQ2_XS" in spec["Env"] and "API_KEY=k" in spec["Env"]
+    assert spec["HostConfig"]["ShmSize"] == 2 * 1024**3
+    assert spec["StopTimeout"] == 120

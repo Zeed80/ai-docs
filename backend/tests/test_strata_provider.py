@@ -257,8 +257,8 @@ def test_ocr_large_assignment_is_persisted(monkeypatch):
 
 def test_idle_unload_keys_land_in_every_installed_config(tmp_path, monkeypatch):
     monkeypatch.setenv("STRATA_DATA_DIR", str(tmp_path))
-    (tmp_path / "config").mkdir()
-    cfg_path = tmp_path / "config" / "strata-iq3_s.json"
+    (tmp_path / "install").mkdir()
+    cfg_path = tmp_path / "install" / "strata-iq3_s.json"
     cfg_path.write_text(json.dumps({"args": ["--pack", "/data/packs/iq3_s"], "port": 8080}))
 
     # Default: unload after 5 min, ask ComfyUI to free VRAM before a reload.
@@ -582,14 +582,15 @@ def test_container_merge_matches_the_backend(tmp_path, monkeypatch):
     snippet = textwrap.dedent(snippet).replace("/data/", f"{tmp_path}/")
 
     monkeypatch.setenv("STRATA_DATA_DIR", str(tmp_path))
-    (tmp_path / "config").mkdir()
+    (tmp_path / "install").mkdir()
+    cfg_path = tmp_path / "install" / "strata-iq2_xs.json"
     cfg = {"args": ["--pack", "/p", "--conversation-cache-mib", "2048"], "idle_unload_s": 60}
-    (tmp_path / "config" / "strata-iq2_xs.json").write_text(json.dumps(cfg))
+    cfg_path.write_text(json.dumps(cfg))
     strata_manager._save_runtime(strata_manager.read_runtime())
     runtime = json.loads((tmp_path / "aiw-runtime.json").read_text())
 
-    subprocess.run([sys.executable, "-c", snippet, "iq2_xs"], check=True, capture_output=True)
-    container = json.loads((tmp_path / "config" / "strata-iq2_xs.json").read_text())
+    subprocess.run([sys.executable, "-c", snippet, str(cfg_path)], check=True, capture_output=True)
+    container = json.loads(cfg_path.read_text())
     backend = strata_manager.merge_run_config(cfg, runtime["config_keys"], runtime["config_args"])
     assert container == backend
 
@@ -679,3 +680,42 @@ async def test_chat_turn_waits_only_for_an_unloaded_strata(monkeypatch, owner, h
 
     assert bool(ensured) is waits
     assert [m["type"] for m in sent] == (["status"] if waits else [])
+
+
+def test_a_01_config_counts_as_installed_but_keys_go_to_the_02_one(tmp_path, monkeypatch):
+    """Strata 0.1.x left run configs in config/; until 0.2's setup writes its own
+    in install/, the model still shows as downloaded and nothing edits the old file."""
+    monkeypatch.setenv("STRATA_DATA_DIR", str(tmp_path))
+    (tmp_path / "config").mkdir()
+    legacy = tmp_path / "config" / "strata-iq3_s.json"
+    legacy.write_text(json.dumps({"args": ["--pack", "/data/packs/iq3_s"]}))
+    assert strata_manager.installed_quants() == ["IQ3_S"]
+    assert strata_manager.apply_runtime_keys() == []
+    assert "idle_unload_s" not in json.loads(legacy.read_text())
+
+    (tmp_path / "install").mkdir()
+    new = tmp_path / "install" / "strata-iq3_s.json"
+    new.write_text(json.dumps({"args": []}))
+    assert strata_manager.apply_runtime_keys() == ["IQ3_S"]
+    assert json.loads(new.read_text())["idle_unload_s"] == 300
+
+
+def test_model_files_are_found_in_either_layout(tmp_path, monkeypatch):
+    monkeypatch.setenv("STRATA_DATA_DIR", str(tmp_path))
+    old = tmp_path / "models" / "IQ3_S"
+    old.mkdir(parents=True)
+    (old / "a.gguf").write_bytes(b"x" * 1000)
+    assert strata_manager._model_dir("IQ3_S") == old
+    new = tmp_path / "Strata-data" / "models" / "IQ3_S"
+    new.mkdir(parents=True)
+    assert strata_manager._model_dir("IQ3_S") == new
+
+
+def test_parallel_change_reaches_the_launch_env(tmp_path, monkeypatch):
+    """`strata launch` takes PARALLEL from aiw.env at start."""
+    monkeypatch.setenv("STRATA_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(strata_manager, "check_vram_fit", lambda *a, **k: None)
+    (tmp_path / "aiw.env").write_text("MODEL=IQ3_S\nPARALLEL=2\n")
+    strata_manager.write_runtime(parallel=1)
+    text = (tmp_path / "aiw.env").read_text()
+    assert "PARALLEL=1" in text and "PARALLEL=2" not in text and "MODEL=IQ3_S" in text

@@ -9,8 +9,8 @@
  * Переключение — явное решение, и оно может переназначить слоты; что именно
  * переедет, показывается до нажатия.
  *
- * Здесь же: установка, обновление и удаление самой Strata (сборка образа
- * нового выпуска, пересоздание контейнера), скачивание моделей рядом с
+ * Здесь же: установка, обновление и удаление самой Strata (скачивание
+ * готового образа выпуска, пересоздание контейнера), скачивание моделей рядом с
  * работающей Strata и быстрая смена загруженной модели, запас ОЗУ системе.
  */
 
@@ -119,7 +119,7 @@ export function StrataPanel() {
     setParams({ context: serverContext, vision: serverVision });
   }, [serverModel, serverContext, serverVision]);
 
-  // Пока идёт установка/загрузка/сборка — опрашиваем часто, иначе редко.
+  // Пока идёт установка/загрузка/скачивание образа — опрашиваем часто, иначе редко.
   const active =
     st?.phase === "installing" ||
     st?.phase === "loading" ||
@@ -636,10 +636,10 @@ function StrataServerBlock({
         <div className="space-y-2 text-xs text-amber-200 bg-amber-950/40 border border-amber-900 rounded p-3">
           <div className="text-sm text-slate-100">Strata не установлена</div>
           <div>
-            Установка соберёт образ последнего выпуска
-            {latest.version ? ` (${latest.version})` : ""} под эту видеокарту —
-            20–40 минут, работа не прерывается — и создаст контейнер. Затем
-            скачайте модель в списке ниже и отдайте Strata видеокарту.
+            Установка скачает готовый образ последнего выпуска
+            {latest.version ? ` (${latest.version})` : ""} — около 1,5 ГБ,
+            работа не прерывается — и создаст контейнер. Затем скачайте модель в
+            списке ниже и отдайте Strata видеокарту.
           </div>
           <button
             className={btnPrimary}
@@ -647,7 +647,7 @@ function StrataServerBlock({
             onClick={() =>
               void run(
                 strataInstallServer,
-                ["Установка Strata началась", "Сборка образа идёт в фоне"],
+                ["Установка Strata началась", "Образ скачивается в фоне"],
                 "Установка не запущена",
               )
             }
@@ -673,14 +673,14 @@ function StrataServerBlock({
               <button
                 className={btnPrimary}
                 disabled={busy}
-                title="Соберёт образ нового выпуска (20–40 мин, в фоне) и перезапустит Strata на нём; скачанные модели остаются"
+                title="Скачает готовый образ нового выпуска (около 1,5 ГБ, в фоне) и перезапустит Strata на нём; скачанные модели остаются"
                 aria-label={`Обновить Strata до ${latest.version}`}
                 onClick={() =>
                   void run(
                     strataUpdate,
                     [
                       `Обновление до ${latest.version} началось`,
-                      "Образ собирается в фоне; Strata перезапустится, когда он будет готов",
+                      "Образ скачивается в фоне; Strata перезапустится, когда он будет готов",
                     ],
                     "Обновление не запущено",
                   )
@@ -745,7 +745,7 @@ function StrataServerBlock({
         <div className="space-y-2 rounded border border-slate-700 p-3 text-xs">
           <div className="text-slate-200">
             {job.stage === "building" &&
-              `Собирается образ Strata ${job.version ?? ""} — ${
+              `Скачивается образ Strata ${job.version ?? ""} — ${
                 job.then === "create" ? "установка" : "обновление"
               }. Работа не прерывается; по готовности Strata ${
                 job.then === "create"
@@ -753,11 +753,11 @@ function StrataServerBlock({
                   : "перезапустится на новой версии"
               }.`}
             {job.stage === "built" &&
-              "Образ собран, Strata переводится на него…"}
+              "Образ скачан, Strata переводится на него…"}
             {job.stage === "failed" &&
-              `Сборка ${job.version ?? ""} не удалась (код ${job.exit_code}). Strata работает на прежней версии.`}
+              `Скачивание ${job.version ?? ""} не удалось (код ${job.exit_code}). Strata работает на прежней версии.`}
             {job.stage === "apply_failed" &&
-              `Образ ${job.version ?? ""} собран, но перевести Strata на него не удалось: ${job.error}`}
+              `Образ ${job.version ?? ""} скачан, но перевести Strata на него не удалось: ${job.error}`}
           </div>
           {job.log_tail.length > 0 && (
             <pre className="text-[11px] leading-snug font-mono bg-slate-950 border border-slate-800 rounded p-2 max-h-40 overflow-auto whitespace-pre-wrap break-all text-slate-400">
@@ -783,7 +783,7 @@ function StrataServerBlock({
                 onClick={() =>
                   void run(
                     notCreated ? strataInstallServer : strataUpdate,
-                    ["Сборка запущена заново"],
+                    ["Скачивание запущено заново"],
                     "Не удалось запустить",
                   )
                 }
@@ -797,12 +797,16 @@ function StrataServerBlock({
               onClick={() =>
                 void run(
                   strataDismissJob,
-                  [job.stage === "building" ? "Сборка остановлена" : "Скрыто"],
+                  [
+                    job.stage === "building"
+                      ? "Скачивание остановлено"
+                      : "Скрыто",
+                  ],
                   "Не удалось",
                 )
               }
             >
-              {job.stage === "building" ? "Остановить сборку" : "Скрыть"}
+              {job.stage === "building" ? "Остановить скачивание" : "Скрыть"}
             </button>
           </div>
         </div>

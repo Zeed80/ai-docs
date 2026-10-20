@@ -226,6 +226,38 @@ def data_dir() -> Path:
     return Path(os.environ.get("STRATA_DATA_DIR", settings.strata_data_dir))
 
 
+# Strata 0.2 on the volume: models, packs and MTP under Strata-data
+# (`strata launch --data-dir`), run configs in install/ (STRATA_INSTALL_DIR).
+# The 0.1.x image kept models/packs/mtp in the volume root and run configs in
+# config/; the container moves the files on its first 0.2 start (links stay
+# behind), and a 0.1 run config counts until 0.2's setup writes its own.
+STRATA_DATA = "Strata-data"
+INSTALL_DIR = "install"
+LEGACY_CONFIG_DIR = "config"
+
+
+def models_dir() -> Path:
+    return data_dir() / STRATA_DATA / "models"
+
+
+def _model_dir(model: str) -> Path:
+    new = models_dir() / model
+    return new if new.exists() else data_dir() / "models" / model
+
+
+def _pack_dir(model: str) -> Path:
+    new = data_dir() / STRATA_DATA / "packs" / _tag(model)
+    return new if new.exists() else data_dir() / "packs" / _tag(model)
+
+
+def _config_path(model: str) -> Path:
+    return data_dir() / INSTALL_DIR / f"strata-{_tag(model)}.json"
+
+
+def _legacy_config_path(model: str) -> Path:
+    return data_dir() / LEGACY_CONFIG_DIR / f"strata-{_tag(model)}.json"
+
+
 def _env_path() -> Path:
     return data_dir() / ENV_FILE_NAME
 
@@ -278,13 +310,15 @@ def _env_lines(vid: str, context: int, vision: bool, ram: dict | None) -> list[s
     ram = ram or ram_plan(vid, context)
     lines = [
         "# Written by the AI workspace backend (strata_manager). Sourced by the",
-        "# strata container before Strata's docker-entrypoint.sh.",
+        "# strata container before `strata launch` (Strata's entrypoint.sh).",
         f"FAMILY={q['family']}",
         f"MODEL={q['model']}",
         f"CONTEXT={context}",
         f"VISION={'yes' if vision else 'no'}",
-        # setup.py reads the host's RAM, not the container's limit: with a
-        # reserve the mode it must pick is spelled out (see ram_plan).
+        f"PARALLEL={read_runtime()['parallel']}",
+        # setup reads the host's RAM, not the container's limit: with a
+        # reserve the mode it must pick is spelled out (see ram_plan); the
+        # container passes it to a `strata install` pass before the launch.
         f"LOW_RAM={ram['low_ram']}",
     ]
     if ram.get("resident_budget_gib"):
@@ -575,7 +609,21 @@ def write_runtime(
             )
         runtime["ram_reserve_gb"] = ram_reserve_gb
     _save_runtime(runtime)
+    if parallel is not None:
+        _set_env_value("PARALLEL", str(parallel))
     return runtime
+
+
+def _set_env_value(key: str, value: str) -> None:
+    """Change one line of aiw.env (`strata launch` reads PARALLEL from it at start)."""
+    path = _env_path()
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return  # nothing chosen yet: write_desired writes the whole file
+    out = [line for line in lines if not line.startswith(f"{key}=")]
+    out.append(f"{key}={value}")
+    _atomic_write(path, "\n".join(out) + "\n")
 
 
 def _save_runtime(runtime: dict) -> None:
@@ -638,14 +686,18 @@ def merge_run_config(cfg: dict, keys: dict, args: dict) -> dict:
     return new
 
 
+# The 0.2 image has no curl: the hook runs the Terminal's own Python.
+STRATA_PYTHON = "/opt/strata/terminal/python/bin/python3"
+_COMFYUI_FREE = (
+    "import sys, urllib.request; urllib.request.urlopen(urllib.request.Request("
+    'sys.argv[1], data=b\'{"unload_models": true, "free_memory": true}\', '
+    "headers={'Content-Type': 'application/json'}, method='POST'), timeout=20)"
+)
+
+
 def _comfyui_free_command() -> list[str]:
     url = settings.comfyui_url.rstrip("/") + "/free"
-    return [
-        "curl", "-s", "-m", "20", "-X", "POST",
-        "-H", "Content-Type: application/json",
-        "-d", '{"unload_models": true, "free_memory": true}',
-        url,
-    ]  # fmt: skip
+    return [STRATA_PYTHON, "-c", _COMFYUI_FREE, url]
 
 
 def apply_runtime_keys() -> list[str]:
@@ -663,7 +715,9 @@ def apply_runtime_keys() -> list[str]:
         logger.warning("strata_runtime_file_unwritable", error=str(exc)[:200])
     changed: list[str] = []
     for model in installed_quants():
-        path = data_dir() / "config" / f"strata-{_tag(model)}.json"
+        path = _config_path(model)
+        if not path.is_file():
+            continue  # a 0.1 config: the container's setup pass writes the 0.2 one, keys included
         try:
             cfg = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
@@ -706,21 +760,20 @@ def _tag(model: str) -> str:
 
 def installed_quants() -> list[str]:
     """Quantizations whose setup finished on the volume (their run config exists)."""
-    cfg_dir = data_dir() / "config"
-    found = []
-    for model in QUANTS:
-        if (cfg_dir / f"strata-{_tag(model)}.json").is_file():
-            found.append(model)
-    return found
+    return [
+        model
+        for model in QUANTS
+        if _config_path(model).is_file() or _legacy_config_path(model).is_file()
+    ]
 
 
 def _installed_config(model: str) -> dict:
-    try:
-        return json.loads(
-            (data_dir() / "config" / f"strata-{_tag(model)}.json").read_text(encoding="utf-8")
-        )
-    except (OSError, ValueError):
-        return {}
+    for path in (_config_path(model), _legacy_config_path(model)):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+    return {}
 
 
 def _dir_size_gb(path: Path) -> float | None:
@@ -737,10 +790,7 @@ def _dir_size_gb(path: Path) -> float | None:
 
 
 def _size_on_disk_gb(model: str) -> float | None:
-    parts = [
-        _dir_size_gb(data_dir() / "models" / model),
-        _dir_size_gb(data_dir() / "packs" / _tag(model)),
-    ]
+    parts = [_dir_size_gb(_model_dir(model)), _dir_size_gb(_pack_dir(model))]
     found = [p for p in parts if p is not None]
     return round(sum(found), 1) if found else None
 
@@ -954,7 +1004,7 @@ def _phase(
     if h is not None:
         return "ready" if h.get("loaded", True) else "unloaded"
     tail = "\n".join(logs[-15:]).lower()
-    if "download" in tail or "setting up" in tail or "%|" in tail:
+    if "download" in tail or "setting up" in tail or "setup step" in tail or "%|" in tail:
         return "installing"
     return "loading"
 
@@ -1204,9 +1254,11 @@ async def delete_quant(model: str) -> float:
     if await strata_lifecycle.installer_variant() == model:
         raise StrataError(f"{model} сейчас скачивается. Остановите скачивание, затем удаляйте.")
     targets = [
-        data_dir() / "models" / model,
-        data_dir() / "packs" / _tag(model),
-        data_dir() / "config" / f"strata-{_tag(model)}.json",
+        _model_dir(model),
+        _pack_dir(model),
+        _config_path(model),
+        _legacy_config_path(model),
+        data_dir() / INSTALL_DIR / f"run-{_tag(model)}.sh",
     ]
     if not any(t.exists() for t in targets):
         raise StrataError(f"{model} не скачана — удалять нечего")

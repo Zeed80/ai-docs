@@ -182,10 +182,11 @@ class Settings(BaseSettings):
     # the UI next to the API key. Empty: not published.
     strata_public_url: str = ""
     # A container the backend creates (install/update from the panel): the
-    # published LAN port, and the GPU architectures the image is built for.
+    # published LAN port.
     strata_bind: str = "0.0.0.0"
     strata_host_port: int = 8090
-    strata_cuda_architectures: str = "86"
+    # The ready-made image flavor: cuda13 needs NVIDIA driver 580+, cuda12 575+.
+    strata_image_flavor: str = "cuda13"
 
     # ComfyUI (image generation / editing — drawings studio). On-prem only.
     # Default targets the optional compose service; override: COMFYUI_URL=http://host:8188

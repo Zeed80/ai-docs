@@ -125,10 +125,11 @@ x-backend-env: &backend-env
   STRATA_SERVICE_NAME: strata
   STRATA_PUBLIC_URL: ${STRATA_PUBLIC_URL:-}
   # For a Strata container the backend creates itself (install/update from
-  # /settings/models): the published port and the image's GPU architectures.
+  # /settings/models): the published port and the ready image's flavor
+  # (cuda13: NVIDIA driver 580+, cuda12: 575+).
   STRATA_BIND: ${STRATA_BIND:-0.0.0.0}
   STRATA_HOST_PORT: ${STRATA_HOST_PORT:-8090}
-  STRATA_CUDA_ARCHITECTURES: ${STRATA_CUDA_ARCHITECTURES:-86}
+  STRATA_IMAGE_FLAVOR: ${STRATA_IMAGE_FLAVOR:-cuda13}
 
 x-authentik-env: &authentik-env
   AUTHENTIK_REDIS__HOST: redis
@@ -744,37 +745,27 @@ services:
     networks:
       - app
 
-  # === Backend API ===
-  # Strata — local MoE models split across the GPU and RAM
-  # (https://github.com/Niko1221/Strata: Qwen3.8-Flash-Next 125B, Qwen3.6-35B,
-  # ...), OpenAI-compatible on :8080, one model at a time. It takes the whole
+  # Strata (https://github.com/Niko1221/Strata): a 125B MoE LLM server on GPU
+  # + RAM, OpenAI-compatible on :8080, one model at a time. It takes the whole
   # GPU and 20-50 GB of RAM, so it is never run beside GPU-Ollama: the backend
   # starts/stops this container from the GPU switch on /settings/models.
-  # Installed, updated (new release → image build → container recreated) and
-  # removed from the same screen (strata_lifecycle); this service is the same
-  # container for `docker compose --profile strata ...`. The model/context/
-  # images come from /data/aiw.env, written by the backend (strata_manager).
-  # The image: the release the panel last installed is tagged :current; the
-  # build below (v0.1.45, RTX 3090 = sm_86, other cards:
-  # STRATA_CUDA_ARCHITECTURES) is only for a compose-first install.
+  # Installed, updated (new release → ready image pulled → container
+  # recreated) and removed from the same screen (strata_lifecycle); this
+  # service is the same container for `docker compose --profile strata ...`.
+  # The model/context/images come from /data/aiw.env, written by the backend
+  # (strata_manager). The image: the release the panel last installed is
+  # tagged :current; the published one below is for a compose-first install
+  # (NVIDIA driver 580+; older drivers: STRATA_IMAGE=...:0.2.1-cuda12).
   strata:
-    image: ${STRATA_IMAGE:-ai-workspace/strata:current}
-    build:
-      context: https://github.com/Niko1221/Strata.git#477ac13cbe8e582c20484871ce459d20d82df09d
-      args:
-        CUDA_ARCHITECTURES: ${STRATA_CUDA_ARCHITECTURES:-86}
-        BUILD_VISION: "1"
-      labels:
-        aiw.strata.version: "0.1.45"
-        aiw.strata.commit: "477ac13cbe8e582c20484871ce459d20d82df09d"
+    image: ${STRATA_IMAGE:-ghcr.io/niko1221/strata:0.2.1-cuda13}
     runtime: nvidia
     profiles:
       - strata
-    # No automatic restart: the backend starts/stops it from the GPU switch,
-    # and after a host reboot the GPU goes back to Ollama (startup reconcile).
     restart: "no"
     ulimits:
       memlock: -1
+    shm_size: 2gb
+    stop_grace_period: 120s
     environment:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
@@ -782,23 +773,19 @@ services:
       MODEL: IQ2_XS
       CONTEXT: "65536"
       VISION: "yes"
-      HOST: 0.0.0.0
       PORT: "8080"
       API_KEY: ${STRATA_API_KEY:-}
-      # setup.py reads the host's RAM; below a quant's need it picks the
-      # low-RAM mode itself (the GPU holds the hot experts, the rest in RAM).
-      LOW_RAM: auto
     volumes:
       - strata_data:/data
-    # LAN access for other machines (OpenAI API at http://<server>:8090/v1).
-    # API_KEY is required: without it Strata would answer anyone who reaches
-    # the port. Narrow with STRATA_BIND=192.168.x.y, close with STRATA_BIND=127.0.0.1.
+    # Reachable from the LAN (http://<server>:8090/v1). API_KEY is required:
+    # without it Strata would answer anyone who reaches the port. Narrow with
+    # STRATA_BIND=192.168.x.y, close with STRATA_BIND=127.0.0.1.
     ports:
       - "${STRATA_BIND:-0.0.0.0}:${STRATA_HOST_PORT:-8090}:8080"
     # before_load asks ComfyUI on the host to free its VRAM (POST /free).
     extra_hosts:
       - "host-gateway:host-gateway"
-    entrypoint: ["/bin/sh", "-c"]
+    entrypoint: ["/usr/bin/tini", "--", "/bin/sh", "-c"]
     # The same script as strata_lifecycle.ENTRYPOINT_SCRIPT (the backend
     # creates the container from that copy on install/update; a test keeps
     # the two equal).
@@ -806,12 +793,23 @@ services:
       - |
         # The backend (uid/gid 10001, appuser) writes aiw.env, aiw-runtime.json
         # and the run configs and deletes quants on this volume, while
-        # everything here is created as root: give the volume to its group
+        # everything here is created as root: give what it touches to its group
         # (setgid dirs + umask 002 keep new files writable for it too).
         # Without it, saving Strata settings in the panel failed with a 500.
-        chgrp -R "$${STRATA_SHARED_GID:-10001}" /data 2>/dev/null
-        chmod -R g+rwX /data 2>/dev/null
-        find /data -type d -exec chmod g+s {} + 2>/dev/null
+        # Only that: Strata keeps its runtime directory, connections and API key
+        # owner-only and refuses to start otherwise ("runtime directory must be
+        # owner-only (mode 0700)" - live, on the first restart after 0.2.1).
+        gid="$${STRATA_SHARED_GID:-10001}"
+        mkdir -p /data/Strata-data /data/install
+        chgrp "$$gid" /data /data/aiw*.env /data/aiw-runtime.json /data/config /data/config/strata-*.json 2>/dev/null
+        chmod g+rw /data/aiw*.env /data/aiw-runtime.json /data/config/strata-*.json 2>/dev/null
+        chmod g+rwxs /data /data/config 2>/dev/null
+        for d in /data/install /data/Strata-data; do
+          chgrp -R "$$gid" "$$d" 2>/dev/null
+          chmod -R g+rwX "$$d" 2>/dev/null
+          find "$$d" -type d -exec chmod g+s {} + 2>/dev/null
+        done
+        chmod -R go-rwx /data/state /data/home /data/config/strata 2>/dev/null
         umask 002
         # The server reads /data/aiw.env; a side download (strata_lifecycle's
         # installer container) names its own file, so it never changes what the
@@ -822,47 +820,56 @@ services:
         set +a
         # REINSTALL is one-shot: drop it so the next restart just serves.
         [ -f "$$envfile" ] && sed -i '/^REINSTALL=/d' "$$envfile"
-        case "$${FAMILY:-qwen}" in qwen) prefix="" ;; *) prefix="$${FAMILY}-" ;; esac
-        tag="$${prefix}$$(printf '%s' "$${MODEL:-IQ2_XS}" | tr 'A-Z' 'a-z')"
-        # Setup only: Strata's entrypoint minus its final "start the server" line.
-        sed 's|^exec .venv/bin/python setup.py "\$$@"$$|exit 0|' docker-entrypoint.sh > /tmp/install-only.sh
-        grep -q '^exit 0$$' /tmp/install-only.sh || { echo "install-only: entrypoint changed"; exit 1; }
+        # The 0.1.x image kept models, MTP and packs in /data; 0.2 keeps them in
+        # /data/Strata-data (`strata launch --data-dir`). Same disk: a rename, and a
+        # link back so the older image still finds them.
+        for d in models mtp packs; do
+          if [ -d "/data/$$d" ] && [ ! -L "/data/$$d" ] && [ ! -e "/data/Strata-data/$$d" ]; then
+            mv "/data/$$d" "/data/Strata-data/$$d" && ln -s "Strata-data/$$d" "/data/$$d"
+          fi
+        done
+        PY=/opt/strata/terminal/python/bin/python3
+        FAMILY="$${FAMILY:-qwen}"
+        MODEL="$${MODEL:-IQ2_XS}"
+        case "$$FAMILY" in qwen) prefix="" ;; *) prefix="$${FAMILY}-" ;; esac
+        tag="$${prefix}$$(printf '%s' "$$MODEL" | tr 'A-Z' 'a-z')"
+        cfg="/data/install/strata-$$tag.json"
+        case "$$(printf '%s' "$${VISION:-yes}" | tr 'A-Z' 'a-z')" in no|off|false|0) vis=no ;; *) vis=yes ;; esac
+        # setup.py the way `strata launch` runs it (strata_cli/launch/runner.py:
+        # ensure_model, setup_args), so the launch after it finds the model
+        # "already installed with these choices" and serves it as it is.
+        set -- --yes --no-start --family "$$FAMILY" --model "$$MODEL"
+        [ -n "$${CONTEXT:-}" ] && set -- "$$@" --context "$$CONTEXT"
+        set -- "$$@" --vision "$$vis" --kv "$${KV:-int8}"
+        case "$$FAMILY" in qwen|coder) set -- "$$@" --experimental-speed-projection off ;; esac
+        set -- "$$@" --data-dir /data/Strata-data
+        [ -n "$${LOW_RAM:-}" ] && [ "$$LOW_RAM" != auto ] && set -- "$$@" --low-ram "$$LOW_RAM"
+        [ -n "$${RESIDENT_BUDGET_GIB:-}" ] && set -- "$$@" --resident-budget-gib "$$RESIDENT_BUDGET_GIB"
+        setup_pass() {
+          ( cd /opt/strata/terminal && env -u PYTHONHOME -u VIRTUAL_ENV STRATA_CONTROL_INSTALL=1 \
+              STRATA_INSTALL_DIR=/data/install STRATA_NEED_ENGINE=1 PYTHONNOUSERSITE=1 \
+              PYTHONPATH=/opt/strata/terminal "$$PY" setup.py "$$@" )
+        }
         if [ "$${INSTALL_ONLY:-0}" = "1" ]; then
           # Download/setup only, then exit. The GPU stays with Ollama meanwhile.
-          exec sh /tmp/install-only.sh
+          setup_pass "$$@"
+          exit $$?
         fi
-        # A setup pass (new quant, or REINSTALL after a context/images change)
-        # rewrites the run config, so it runs first and on its own: the
-        # residency keys below must land in the config it writes, or Strata
-        # stops unloading when idle after a context change.
-        if [ "$${REINSTALL:-0}" = "1" ] || [ ! -f "/data/config/strata-$$tag.json" ]; then
-          sh /tmp/install-only.sh || exit 1
-        fi
-        export REINSTALL=0
-        # Several quants installed: setup.py starts "the newest strata-*.json"
-        # and, with more than one in /opt/strata, ASKS which — no TTY, so the
-        # start failed (live, after IQ2_XS joined IQ3_S). Keep only the chosen
-        # quant's link; the canonical copies live in /data/config.
-        for f in /opt/strata/strata-*.json; do
-          [ -e "$$f" ] || [ -L "$$f" ] || continue
-          [ "$$(basename "$$f")" = "strata-$$tag.json" ] && continue
-          rm -f "$$f"
-        done
-        # A setup pass leaves the chosen quant's config as a regular FILE in
-        # /opt/strata (copied to /data/config at its end), and Strata starts
-        # from that file: later edits to /data/config (idle unload, parallel)
-        # never reached it. Make it a link to the canonical copy.
-        cur="/opt/strata/strata-$$tag.json"
-        if [ -f "/data/config/strata-$$tag.json" ] && [ ! -L "$$cur" ]; then
-          rm -f "$$cur" && ln -s "/data/config/strata-$$tag.json" "$$cur"
+        # A setup pass first when the variant has no run config yet (or REINSTALL,
+        # or a RAM mode `strata launch` cannot ask for): the residency keys below
+        # must be in the config before the first serve, not after a restart.
+        [ "$${REINSTALL:-0}" = "1" ] && rm -f "$$cfg"
+        if [ ! -f "$$cfg" ] || { [ -n "$${LOW_RAM:-}" ] && [ "$$LOW_RAM" != auto ]; } || [ -n "$${RESIDENT_BUDGET_GIB:-}" ]; then
+          setup_pass "$$@" || exit 1
         fi
         # Runtime settings from the backend's /data/aiw-runtime.json (same rules
         # as strata_manager.merge_run_config): "config_keys" are run-config keys
         # (idle unload, ComfyUI hand-off, parallel), "config_args" engine flags
-        # (conversation cache); null removes.
-        .venv/bin/python - "$$tag" <<'PY'
+        # (conversation cache); null removes. Setup keeps both on later passes
+        # (keys it does not own; hand-added args as "user_args").
+        "$$PY" - "$$cfg" <<'PY'
         import json, pathlib, sys
-        cfg = pathlib.Path(f"/data/config/strata-{sys.argv[1]}.json")
+        cfg = pathlib.Path(sys.argv[1])
         rt = pathlib.Path("/data/aiw-runtime.json")
         if cfg.exists() and rt.exists():
             body = json.loads(rt.read_text())
@@ -886,7 +893,8 @@ services:
             cfg.write_text(json.dumps(c, indent=1))
             print(f"[aiw] runtime settings applied to {cfg.name}: {sorted(keys) + sorted(flags)}")
         PY
-        exec ./docker-entrypoint.sh
+        unset LOW_RAM RESIDENT_BUDGET_GIB REINSTALL HOST INSTALL_ONLY AIW_ENV_FILE
+        exec /opt/strata/entrypoint.sh run
     networks:
       - app
 
