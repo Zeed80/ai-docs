@@ -906,9 +906,12 @@ async def _wait_for_strata_load() -> None:
     (86 s live) instead of spending the call's own timeout on it. Outside any
     transaction; the authority snapshot is re-checked before the plan lands."""
     from app.ai import gpu_runtime
+    from app.ai.model_resolver import get_reasoning_model
 
     if gpu_runtime.current_owner() != gpu_runtime.STRATA:
         return
+    if get_reasoning_model().provider != "strata":
+        return  # the planner runs elsewhere: loading Strata only costs RAM and time
     from app.ai.providers import strata_manager
 
     if not await strata_manager.ensure_loaded():

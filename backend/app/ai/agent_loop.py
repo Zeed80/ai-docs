@@ -2319,12 +2319,18 @@ async def _call_provider_streaming(
                         raise
                     last_exc = exc
                     if isinstance(exc, transient_errors):
+                        # httpx often has no message here ("ConnectError: ''"):
+                        # without the URL and the cause the log did not say
+                        # which host failed (live: a MiniMax turn, 2026-10-20).
+                        request = getattr(exc, "_request", None)
                         logger.warning(
                             "provider_transient_error",
                             provider=p,
                             attempt=attempt,
                             attempts=attempts,
-                            error=str(exc),
+                            error=str(exc) or repr(exc.__cause__ or exc.__context__ or exc),
+                            url=str(request.url) if request is not None else None,
+                            exc_info=True,
                         )
                         if attempt < attempts:
                             await asyncio.sleep(0.75 * attempt)
@@ -4048,8 +4054,15 @@ class AgentSession:
                 resp = await client.get(
                     f"{self._config.backend_url.rstrip('/')}/api/technology/learning-rules",
                     params={"status": "active", "limit": 50},
+                    # Without the service headers every turn got 401 and ran
+                    # without its learned rules, silently (live, 2026-10-20).
+                    headers=internal_headers(),
                 )
                 if resp.status_code != 200:
+                    log_degraded(
+                        "agent_loop.learning_rules",
+                        RuntimeError(f"HTTP {resp.status_code}"),
+                    )
                     return
                 rules: list[dict] = (resp.json() or {}).get("items") or []
             if not rules:

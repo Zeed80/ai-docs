@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import struct
+from types import SimpleNamespace
 
 import pytest
 
@@ -676,10 +677,58 @@ async def test_chat_turn_waits_only_for_an_unloaded_strata(monkeypatch, owner, h
     orchestrator = AgentOrchestrator.__new__(AgentOrchestrator)
     orchestrator._outer_send = outer_send
 
-    await orchestrator._wait_for_strata_load()
+    await orchestrator._wait_for_strata_load(
+        SimpleNamespace(worker_provider=None, provider="strata")
+    )
 
     assert bool(ensured) is waits
     assert [m["type"] for m in sent] == (["status"] if waits else [])
+
+
+@pytest.mark.asyncio
+async def test_chat_turn_on_another_provider_does_not_load_strata(monkeypatch):
+    """The GPU being Strata's said nothing about a MiniMax turn: it waited ~25 s
+    and loaded 40 GB into RAM for nothing (live, 2026-10-20)."""
+    from app.ai.orchestrator import AgentOrchestrator
+
+    called: list[str] = []
+
+    async def fake_health():
+        called.append("health")
+        return {"loaded": False}
+
+    monkeypatch.setattr(gpu_runtime, "current_owner", lambda: gpu_runtime.STRATA)
+    monkeypatch.setattr(strata_manager, "health", fake_health)
+    orchestrator = AgentOrchestrator.__new__(AgentOrchestrator)
+    await orchestrator._wait_for_strata_load(
+        SimpleNamespace(worker_provider="minimax", provider="minimax")
+    )
+    assert called == []
+
+
+@pytest.mark.asyncio
+async def test_planner_waits_for_strata_only_when_it_plans_on_strata(monkeypatch):
+    from app.ai import model_resolver
+    from app.domain import work_planning
+
+    ensured: list[bool] = []
+
+    async def fake_ensure(**_kwargs):
+        ensured.append(True)
+        return True
+
+    monkeypatch.setattr(gpu_runtime, "current_owner", lambda: gpu_runtime.STRATA)
+    monkeypatch.setattr(strata_manager, "ensure_loaded", fake_ensure)
+    monkeypatch.setattr(
+        model_resolver, "get_reasoning_model", lambda: SimpleNamespace(provider="minimax")
+    )
+    await work_planning._wait_for_strata_load()
+    assert ensured == []
+    monkeypatch.setattr(
+        model_resolver, "get_reasoning_model", lambda: SimpleNamespace(provider="strata")
+    )
+    await work_planning._wait_for_strata_load()
+    assert ensured == [True]
 
 
 def test_a_01_config_counts_as_installed_but_keys_go_to_the_02_one(tmp_path, monkeypatch):

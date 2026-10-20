@@ -301,7 +301,7 @@ class AgentOrchestrator:
         if await self._try_spec_table_patch_directly(content, config, turn_started_at):
             return
 
-        await self._wait_for_strata_load()
+        await self._wait_for_strata_load(config)
         # One employee: the executor reads the request itself, with one
         # constant prompt and every tool — no routing call, no role.
         self._plan_source = "employee"
@@ -451,16 +451,22 @@ class AgentOrchestrator:
             )
         return ""
 
-    async def _wait_for_strata_load(self) -> None:
-        """With the GPU on Strata, wait out a reload after its idle unload.
+    async def _wait_for_strata_load(self, config: BuiltinAgentConfig) -> None:
+        """With the agent on Strata, wait out a reload after its idle unload.
 
         The reload took 86 s live and the 45 s turn router gave up first, so
         the turn ended as "model unavailable" (2026-10-07). Only an unloaded
-        model is waited for; a loaded one costs one /health request.
+        model is waited for; a loaded one costs one /health request. An agent
+        on another provider does not wait: the GPU being Strata's said nothing
+        about the turn, which loaded 40 GB into RAM for nothing and kept a
+        MiniMax turn waiting ~25 s (live, 2026-10-20).
         """
         from app.ai import gpu_runtime
+        from app.ai.agent_loop import _get_agent_provider
         from app.ai.providers import strata_manager
 
+        if _get_agent_provider(config) != "strata":
+            return
         if gpu_runtime.current_owner() != gpu_runtime.STRATA:
             return
         h = await strata_manager.health()
