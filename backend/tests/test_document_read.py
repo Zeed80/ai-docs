@@ -144,3 +144,50 @@ async def test_the_agent_does_not_reprocess_a_processed_document(
     resp = await client.post(f"/api/documents/{doc.id}/extract")
     assert resp.status_code == 409
     assert "documents.read" in resp.json()["detail"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_read_names_the_scanned_pages_it_could_not_read(
+    client: AsyncClient, db_session, as_user
+):
+    """A text PDF with a scanned page: the scan's content is not in the text,
+    and the reader is told so instead of taking the text for the whole."""
+    import fitz
+
+    from app.storage import upload_file
+
+    as_user(_user("alice"))
+    pdf = fitz.open()
+    pdf.new_page().insert_text((72, 72), "Page one text", fontsize=12)
+    scan = pdf.new_page()
+    scan.draw_rect(fitz.Rect(72, 72, 300, 300), color=(0, 0, 0), fill=(0.5, 0.5, 0.5))
+    content = pdf.tobytes()
+    path = f"tests/read/{uuid.uuid4()}.pdf"
+    upload_file(content, path, "application/pdf")
+    doc = Document(
+        owner_sub="alice",
+        file_name="mixed.pdf",
+        file_hash=uuid.uuid4().hex,
+        file_size=len(content),
+        mime_type="application/pdf",
+        storage_path=path,
+        doc_type=DocumentType.contract,
+        status=DocumentStatus.approved,
+    )
+    db_session.add(doc)
+    await db_session.commit()
+
+    body = (await client.get(f"/api/documents/{doc.id}/text")).json()
+
+    assert "Page one text" in body["text"]
+    assert body["pages_total"] == 2
+    assert body["pages_without_text"] == [2]
+    assert "Страницы 2 из 2" in body["warning"]
+
+
+@pytest.mark.asyncio
+async def test_a_fully_text_pdf_has_no_warning(client: AsyncClient, db_session, as_user):
+    as_user(_user("alice"))
+    doc = await _pdf_document(db_session, "alice")
+    body = (await client.get(f"/api/documents/{doc.id}/text")).json()
+    assert body["pages_without_text"] == [] and body["warning"] is None

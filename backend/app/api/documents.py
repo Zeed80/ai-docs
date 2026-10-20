@@ -1405,6 +1405,10 @@ class DocumentTextOut(BaseModel):
     offset: int
     text: str
     next_offset: int | None
+    pages_total: int | None = None
+    # Pages with no text layer (scans): their content is not in ``text``.
+    pages_without_text: list[int] = []
+    warning: str | None = None
 
 
 @router.get("/{document_id}/text", response_model=DocumentTextOut)
@@ -1425,13 +1429,18 @@ async def read_document_text(
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
     text, source = "", "none"
+    pages_total: int | None = None
+    blank_pages: list[int] = []
     if doc.mime_type == "application/pdf":
         try:
             from app.ai.pdf_processor import extract_pdf
             from app.storage import download_file
 
-            text = extract_pdf(download_file(doc.storage_path), render_pages=False).full_text or ""
+            pdf = extract_pdf(download_file(doc.storage_path), render_pages=False)
+            text = pdf.full_text or ""
             source = "pdf_text_layer" if text.strip() else source
+            pages_total = pdf.page_count
+            blank_pages = [p.page_number + 1 for p in pdf.pages if not p.text.strip()]
         except Exception:  # noqa: BLE001 — fall through to stored text
             text = ""
     if not text.strip():
@@ -1461,6 +1470,15 @@ async def read_document_text(
         raise HTTPException(status_code=422, detail="No text available for this document")
     page = text[offset : offset + limit]
     end = offset + len(page)
+    # A scan inside a text PDF was read as if the document ended before it
+    # (hermes-agent warns the same way); the reader must know what it missed.
+    warning = None
+    if source == "pdf_text_layer" and blank_pages:
+        warning = (
+            f"Страницы {', '.join(map(str, blank_pages))} из {pages_total} — сканы без "
+            "текстового слоя: их содержимого в этом тексте нет. Если ответ может быть "
+            "там, скажи об этом пользователю, а не делай вывод, что в документе этого нет."
+        )
     return DocumentTextOut(
         document_id=doc.id,
         file_name=doc.file_name,
@@ -1469,6 +1487,9 @@ async def read_document_text(
         offset=offset,
         text=page,
         next_offset=end if end < len(text) else None,
+        pages_total=pages_total,
+        pages_without_text=blank_pages if source == "pdf_text_layer" else [],
+        warning=warning,
     )
 
 
