@@ -149,3 +149,35 @@ async def test_a_clarify_call_ends_the_turn_with_the_question(harness):
     assert text.startswith("Какой «Эвал-Медь» имеется в виду?")
     assert "1. ООО «Эвал-Медь», ИНН 7702000051 (рекомендую)" in text
     assert session.messages[-1] == {"role": "assistant", "content": text}
+
+
+@pytest.mark.asyncio
+async def test_an_at_reference_is_read_before_the_first_model_call(harness, monkeypatch):
+    session, seen, events = harness
+    executed = []
+
+    async def fake_execute_skill(skill, args, config, **kwargs):
+        executed.append(dict(args))
+        if args.get("action") == "ask":
+            return {"version": 1, "status": "succeeded", "data": dict(args)}
+        return {
+            "version": 1,
+            "status": "succeeded",
+            "data": {"id": args["invoice_id"], "invoice_number": "EV-4901"},
+        }
+
+    monkeypatch.setattr(agent_loop, "execute_skill", fake_execute_skill)
+    invoice_id = "3b759084-86f5-4182-be2f-9613a2adac78"
+    session.set_turn_references(
+        [
+            {"type": "invoice", "id": invoice_id},
+            {"type": "invoice", "id": invoice_id},
+            {"type": "x", "id": "1"},
+        ]
+    )
+    await session.on_user_message("Что со счётом @счёт:EV-4901?")
+
+    assert executed[0] == {"action": "get", "invoice_id": invoice_id}
+    assert [a.get("action") for a in executed] == ["get", "ask"]
+    first_call = seen[0]
+    assert any(m.get("role") == "tool" and "EV-4901" in str(m.get("content")) for m in first_call)

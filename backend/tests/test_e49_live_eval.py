@@ -511,3 +511,26 @@ def test_the_world_takes_the_model_strata_serves(monkeypatch):
     monkeypatch.setattr(agent_config, "save_builtin_agent_config", lambda config: None)
     live_world.import_model_setup(setup)
     assert served["model"] == "swift-1.5"
+
+
+def test_a_case_reference_hands_the_turn_the_fixture_id():
+    import uuid as _uuid
+
+    from app.ai.evals.employee_live_cases import load_live_corpus
+    from app.ai.evals.live_runner import LiveRunner, _case_digest
+
+    corpus = load_live_corpus("app/ai/evals/data/employee_live_v1.yaml")
+    case = next(c for c in corpus.cases if c.id == "reference-invoice-mark")
+    invoice_id = _uuid.uuid4()
+    world = {"rows": {"b": ("invoices", invoice_id, "owner")}}
+    assert LiveRunner._references(case, world) == {
+        "references": [{"type": "invoice", "id": str(invoice_id), "label": "b"}]
+    }
+    plain = next(c for c in corpus.cases if not c.references)
+    assert LiveRunner._references(plain, {"rows": {}}) == {}
+    # An empty field added later leaves earlier digests as they were.
+    from app.ai.evals.live_runner import _digest
+
+    dump = plain.model_dump(mode="json")
+    dump.pop("references")
+    assert _case_digest(plain) == _digest(dump)

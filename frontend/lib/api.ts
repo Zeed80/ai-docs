@@ -117,3 +117,15 @@ export async function importArchivedConversation(
     },
   );
 }
+
+/** Запись для ссылки @ в чате: агент получит её точный id. */
+export type Mention = {
+  type: "invoice" | "document" | "supplier";
+  id: string;
+  label: string;
+  hint?: string | null;
+};
+
+export async function searchMentions(q: string): Promise<Mention[]> {
+  return apiFetch<Mention[]>(`/api/agent/mentions?q=${encodeURIComponent(q)}&limit=6`);
+}

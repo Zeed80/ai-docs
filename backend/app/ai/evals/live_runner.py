@@ -172,6 +172,15 @@ def fixture_table(fixture: Any) -> str:
 _TERMINAL = {"completed", "failed", "canceled", "waiting_approval", "blocked", "paused"}
 
 
+def _case_digest(case: LiveEmployeeCase) -> str:
+    """A case's digest; a field added later is left out while empty, so the
+    digests of earlier cases (and their results) stay comparable."""
+    dump = case.model_dump(mode="json")
+    if not dump.get("references"):
+        dump.pop("references", None)
+    return _digest(dump)
+
+
 def _digest(value: Any) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, ensure_ascii=False, default=str).encode()
@@ -681,6 +690,7 @@ class LiveRunner:
             external_message_id=f"live:{case.id}:{ns}",
             request_id=uuid.uuid4(),
             content=case.task,
+            workspace_context=self._references(case, world),
         )
         async with self._factory()() as db:
             intake = await submit_agent_intake(db, identity=identity, request=request)
@@ -710,6 +720,15 @@ class LiveRunner:
             except TimeoutError:
                 break
         return order_id
+
+    @staticmethod
+    def _references(case: LiveEmployeeCase, world: dict[str, Any]) -> dict:
+        kinds = {"parties": "supplier", "invoices": "invoice", "documents": "document"}
+        refs = []
+        for ref in case.references:
+            table, row_id, _owner = world["rows"][ref]
+            refs.append({"type": kinds[table], "id": str(row_id), "label": ref})
+        return {"references": refs} if refs else {}
 
     async def _grant_browser(
         self, case: LiveEmployeeCase, world: dict[str, Any], order_id: uuid.UUID
@@ -1133,7 +1152,7 @@ class LiveRunner:
             status = "passed" if passed else "failed"
         return LiveEmployeeResult(
             case_id=case.id,
-            case_digest=_digest(case.model_dump(mode="json")),
+            case_digest=_case_digest(case),
             group=case.group,
             complexity=case.complexity,
             control=case.control,

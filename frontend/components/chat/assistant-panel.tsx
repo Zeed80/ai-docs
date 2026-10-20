@@ -18,6 +18,7 @@ import {
   speechAvailable,
 } from "@/lib/native-bridge";
 import { GpuStatusBar } from "@/components/gpu-status-bar";
+import { useMentions } from "@/components/chat/use-mentions";
 import {
   createChatSession,
   deleteChatSession,
@@ -382,6 +383,7 @@ export function AssistantPanel() {
   const streamingIdRef = useRef<string | null>(null);
   const tgStreamingIdRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const mentions = useMentions(input, setInput, inputRef);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [native, setNative] = useState(false);
   const [voiceOk, setVoiceOk] = useState(false);
@@ -1093,6 +1095,7 @@ export function AssistantPanel() {
             size_bytes: item.sizeBytes,
           })),
           reasoningMode,
+          mentions.takeReferences(content),
         ),
       ),
     );
@@ -2079,12 +2082,15 @@ export function AssistantPanel() {
             {reasoningMode === "strict" ? "🧠" : "💬"}
           </button>
 
+          <div className="relative flex min-w-0 flex-1">
+          {mentions.popup}
           <input
             ref={inputRef}
             type="text"
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => mentions.onInputChange(e.target.value, e.target.selectionStart)}
             onKeyDown={(e) => {
+              if (mentions.onKeyDown(e)) return;
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 sendMessage();
@@ -2101,8 +2107,9 @@ export function AssistantPanel() {
             }
             aria-label={`Сообщение ${agentName}`}
             disabled={effectivelyOffline || isStreaming}
-            className="flex-1 px-3 py-2 text-sm bg-slate-700 border border-slate-600 rounded-lg text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 disabled:opacity-50"
+            className="min-w-0 flex-1 px-3 py-2 text-sm bg-slate-700 border border-slate-600 rounded-lg text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 disabled:opacity-50"
           />
+          </div>
           {isStreaming && (
             <button
               type="button"

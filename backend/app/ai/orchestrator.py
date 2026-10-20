@@ -340,6 +340,9 @@ class AgentOrchestrator:
             config.fast_model if (config.fast_model and tier < Tier.MEDIUM) else None
         )
         self._llm_calls += 1
+        set_references = getattr(self._executor, "set_turn_references", None)
+        if callable(set_references):
+            set_references(self._workspace_context.get("references"))
         await self._executor.on_user_message(content)
         # Deterministically enforce grouping/sort/aggregates the request asked for
         # but the worker may have dropped (e.g. «сгруппируй по поставщику»). Fires

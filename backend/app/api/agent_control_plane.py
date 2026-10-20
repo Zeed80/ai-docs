@@ -16,9 +16,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 import structlog
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import AliasChoices, BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai import model_runtime_store
@@ -30,7 +30,7 @@ from app.ai.agent_config import (
 )
 from app.ai.gateway_config import gateway_config
 from app.ai.policy_engine import classify_skill_risk, is_protected_setting
-from app.auth.jwt import require_human_role, require_role
+from app.auth.jwt import get_current_user, require_human_role, require_role
 from app.auth.models import UserInfo, UserRole
 from app.db.models import (
     AgentAction,
@@ -1591,6 +1591,70 @@ async def clarify_question(payload: ClarifyRequest) -> ClarifyOut:
         options=options,
         recommended=payload.recommended,
     )
+
+
+class MentionOut(BaseModel):
+    type: Literal["invoice", "document", "supplier"]
+    id: uuid.UUID
+    label: str
+    hint: str | None = None
+
+
+@router.get("/mentions", response_model=list[MentionOut])
+async def search_mentions(
+    q: str = Query("", max_length=100),
+    limit: int = Query(8, ge=1, le=20),
+    db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
+) -> list[MentionOut]:
+    """Records for an @ reference in the chat: invoices, documents, suppliers.
+
+    The person picks the exact record, so the agent is handed its id instead
+    of searching by a number and taking a look-alike (hermes-agent's context
+    references). Only rows this user may see are offered.
+    """
+    from app.db.models import Document, Invoice, Party
+    from app.domain.access import document_visibility_filter, invoice_visibility_clause
+
+    term = q.strip()
+    like = f"%{term}%"
+    found: list[MentionOut] = []
+
+    invoices = select(Invoice, Party.name).outerjoin(Party, Party.id == Invoice.supplier_id)
+    if term:
+        invoices = invoices.where(or_(Invoice.invoice_number.ilike(like), Party.name.ilike(like)))
+    clause = await invoice_visibility_clause(db, current_user)
+    if clause is not None:
+        invoices = invoices.where(clause)
+    for invoice, supplier in (
+        await db.execute(invoices.order_by(Invoice.created_at.desc()).limit(limit))
+    ).all():
+        found.append(
+            MentionOut(
+                type="invoice",
+                id=invoice.id,
+                label=invoice.invoice_number or "без номера",
+                hint=supplier,
+            )
+        )
+
+    suppliers = select(Party)
+    if term:
+        suppliers = suppliers.where(or_(Party.name.ilike(like), Party.inn.ilike(like)))
+    for party in (await db.scalars(suppliers.order_by(Party.name).limit(limit))).all():
+        found.append(MentionOut(type="supplier", id=party.id, label=party.name, hint=party.inn))
+
+    documents = select(Document)
+    if term:
+        documents = documents.where(Document.file_name.ilike(like))
+    clause = await document_visibility_filter(db, current_user)
+    if clause is not None:
+        documents = documents.where(clause)
+    for doc in (
+        await db.scalars(documents.order_by(Document.created_at.desc()).limit(limit))
+    ).all():
+        found.append(MentionOut(type="document", id=doc.id, label=doc.file_name))
+    return found
 
 
 @router.get("/recipes", response_model=list[RecipeSkillOut])

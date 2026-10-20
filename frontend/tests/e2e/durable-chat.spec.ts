@@ -156,3 +156,52 @@ test("вопрос с вариантами: кнопки из истории о�
   // second chat panel of its own).
   await expect(groups).toHaveCount(before - 1);
 });
+
+test("ссылка @ на счёт: подсказка с клавиатуры и точный id в запросе", async ({context, page}) => {
+  await context.addCookies([{name: "access_token", value: "mock-only", domain: "127.0.0.1", path: "/"}]);
+  const session = {id: "11111111-1111-4111-8111-111111111111", title: "Ссылки", user_key: "test-user"};
+  const posted: Record<string, unknown>[] = [];
+  const queries: string[] = [];
+  await context.route("**/api/**", async (route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    if (path === "/api/auth/me") return route.fulfill({json: {sub: "test-user", name: "Test", roles: ["admin"], groups: [], sections: []}});
+    if (path === "/api/ai/agent-config") return route.fulfill({json: {agent_name: "Света"}});
+    if (path === "/api/chat/sessions") return route.fulfill({json: [session]});
+    if (path.endsWith("/messages")) return route.fulfill({json: []});
+    if (path === "/api/agent/mentions") {
+      queries.push(url.searchParams.get("q") ?? "");
+      return route.fulfill({json: [
+        {type: "invoice", id: "3b759084-86f5-4182-be2f-9613a2adac78", label: "EV-4901", hint: "ООО «Эвал-Медь»"},
+        {type: "invoice", id: "4c4682ee-a41b-4e95-804f-3867c2de133e", label: "EV-4902", hint: "ООО «Эвал-Сталь»"},
+      ]});
+    }
+    if (path === "/api/agent/chat-runs") {
+      if (route.request().method() === "POST") {
+        posted.push(route.request().postDataJSON());
+        return route.fulfill({status: 202, json: {id: "run", session_id: session.id, work_order_id: "order", request_id: "r", status: "running", result_message_id: null}});
+      }
+      return route.fulfill({json: {run: null, legacy: false}});
+    }
+    if (path.endsWith("/events")) return route.fulfill({json: {items: [], next_cursor: 0}});
+    return route.fulfill({json: {}});
+  });
+  await page.goto("/assistant");
+  const input = page.getByRole("textbox", {name: "Сообщение Света"}).first();
+  await expect(input).toBeEnabled();
+  await input.pressSequentially("Что со счётом @EV");
+  const list = page.getByRole("listbox", {name: "Ссылка на запись"}).first();
+  await expect(list.getByRole("option")).toHaveCount(2);
+  await input.press("ArrowDown");
+  await input.press("ArrowUp");
+  await input.press("Enter");
+  await expect(input).toHaveValue("Что со счётом @счёт:EV-4901 ");
+  await input.pressSequentially("?");
+  await input.press("Enter");
+  await expect.poll(() => posted.length).toBe(1);
+  expect(posted[0].content).toBe("Что со счётом @счёт:EV-4901 ?");
+  expect((posted[0].workspace_context as {references: unknown[]}).references).toEqual([
+    {type: "invoice", id: "3b759084-86f5-4182-be2f-9613a2adac78", label: "EV-4901"},
+  ]);
+  expect(queries).toContain("EV");
+});

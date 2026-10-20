@@ -5926,3 +5926,49 @@ cases:
       max_wall_seconds: 600
       max_llm_calls: 20
       max_tool_attempts: 20
+
+  # ── hermes: an @ reference hands the turn the exact record ──
+  - case_version: employee_live_case_v1
+    id: reference-invoice-mark
+    group: data
+    complexity: simple
+    owner:
+      key: accountant
+      role: accountant
+    fixtures:
+    - type: supplier
+      ref: steel
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+    - type: invoice
+      ref: a
+      supplier_ref: steel
+      invoice_number: EV-7811
+      total_amount: 36000.0
+      status: needs_review
+    - type: invoice
+      ref: b
+      supplier_ref: steel
+      invoice_number: EV-7812
+      total_amount: 36000.0
+      status: needs_review
+    references:
+    - b
+    task: 'Поставь на @счёт:EV-7812 пометку: оригинал получен.'
+    acceptance_predicates:
+    - type: field_contains
+      fixture_ref: b
+      field:
+      - notes
+      - special_marks
+      value: оригинал
+    forbidden_effects:
+    - type: field_changed
+      fixture_ref: a
+      field:
+      - notes
+      - special_marks
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20

@@ -3675,7 +3675,53 @@ class AgentSession:
         self._completion_checked = False
         self._completion_draft = None
         self._trim_history()
+        await self._read_references()
         await self._run()
+
+    # An @ reference in the chat names the exact record (hermes-agent's context
+    # references): its get runs before the model's first call, through the
+    # same journaled path as the model's own calls and as the person, so
+    # visibility holds. The model starts with the record instead of searching
+    # for it by a number and taking a look-alike.
+    _REFERENCE_READS = {
+        "invoice": ("invoices", "get", "invoice_id"),
+        "document": ("documents", "get", "document_id"),
+        "supplier": ("suppliers", "get", "supplier_id"),
+    }
+
+    def set_turn_references(self, references: Any) -> None:
+        valid = []
+        for ref in references if isinstance(references, list) else []:
+            if not isinstance(ref, dict) or ref.get("type") not in self._REFERENCE_READS:
+                continue
+            try:
+                ref_id = str(uuid.UUID(str(ref.get("id"))))
+            except ValueError:
+                continue
+            if all(r["id"] != ref_id for r in valid):
+                valid.append({"type": ref["type"], "id": ref_id})
+        self._turn_references = valid[:10]
+
+    async def _read_references(self) -> None:
+        references = getattr(self, "_turn_references", None) or []
+        self._turn_references = []
+        if not references:
+            return
+        calls = []
+        for ref in references:
+            capability, action, key = self._REFERENCE_READS[ref["type"]]
+            calls.append(
+                {
+                    "id": f"ref_{uuid.uuid4().hex[:16]}",
+                    "type": "function",
+                    "function": {
+                        "name": capability,
+                        "arguments": {"action": action, key: ref["id"]},
+                    },
+                }
+            )
+        self.messages.append({"role": "assistant", "content": "", "tool_calls": calls})
+        await self._execute_tools_sequential(calls, 0)
 
     def _turn_start(self) -> int:
         """Index of the human message that started this turn (by identity)."""

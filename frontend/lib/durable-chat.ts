@@ -89,12 +89,15 @@ export function buildDurableUserCommand(
     size_bytes?: number;
   }>,
   reasoningMode?: "normal" | "strict",
+  references?: Array<{ type: string; id: string; label: string }>,
 ): Record<string, unknown> {
+  const context = getActiveWorkspaceContext();
   return {
     type: "message",
     content,
     session_id: sessionId ?? undefined,
-    workspace_context: getActiveWorkspaceContext(),
+    workspace_context:
+      references && references.length > 0 ? { ...(context ?? {}), references } : context,
     attachments:
       attachments && attachments.length > 0 ? attachments : undefined,
     reasoning_mode: reasoningMode ?? "normal",

@@ -308,12 +308,23 @@ class LiveEmployeeCase(_Strict):
     # the agent is asked to show.
     may_create: tuple[str, ...] = ()
     browser_grant: BrowserGrant | None = None
+    # Fixtures the person names with an @ reference in the chat: the turn is
+    # handed their exact ids (supplier, invoice or document fixtures only).
+    references: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def _references(self) -> LiveEmployeeCase:
         refs = [f.ref for f in self.fixtures]
         if len(refs) != len(set(refs)):
             raise ValueError("fixture refs must be unique")
+        referable = {
+            f.ref
+            for f in self.fixtures
+            if isinstance(f, SupplierFixture | InvoiceFixture | DocumentFixture)
+        }
+        unknown = sorted(set(self.references) - referable)
+        if unknown:
+            raise ValueError(f"references must name a supplier, invoice or document: {unknown}")
         suppliers = {f.ref for f in self.fixtures if isinstance(f, SupplierFixture)}
         for fixture in self.fixtures:
             if isinstance(fixture, InvoiceFixture) and fixture.supplier_ref not in suppliers:

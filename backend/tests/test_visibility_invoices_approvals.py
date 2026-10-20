@@ -260,3 +260,20 @@ async def test_table_export_and_edits_skip_hidden_invoices(
         "/api/tables/batch", json={"entity_ids": [str(hidden)], "action": "approve"}
     )
     assert r.json()["succeeded"] == 0
+
+
+# An @ reference offers only records the person may see: the agent then reads
+# the picked one by id, and a hidden one must not be pickable at all.
+
+
+async def test_mentions_offer_only_visible_records(client: AsyncClient, invoices_setup):
+    _as_user(_info("u:alice", UserRole.buyer))
+    r = await client.get("/api/agent/mentions", params={"limit": 20})
+    assert r.status_code == 200, r.text
+    labels = {(m["type"], m["label"]) for m in r.json()}
+    assert ("invoice", "A1") in labels and ("invoice", "LEG") in labels
+    assert ("invoice", "B1") not in labels
+    assert ("document", "ownA") in labels and ("document", "ownB") not in labels
+
+    r = await client.get("/api/agent/mentions", params={"q": "B1"})
+    assert all(m["label"] != "B1" for m in r.json())
