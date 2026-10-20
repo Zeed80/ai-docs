@@ -543,7 +543,13 @@ async def _generate_json_openai_compatible(
     timeout_seconds: float,
 ) -> dict:
     """Generate structured JSON via any OpenAI-compatible endpoint (openrouter, deepseek, vllm…)."""
-    from app.ai.model_resolver import _provider_api_key, _provider_base_url
+    from app.ai.model_resolver import (
+        _provider_api_key,
+        _provider_base_url,
+        require_chat_completions,
+    )
+
+    require_chat_completions(provider)
 
     base_url = _provider_base_url(provider)
     api_key = _provider_api_key(provider)
@@ -1106,7 +1112,13 @@ async def reasoning_generate(
         )
 
     if cloud_compat and not confidential:
-        from app.ai.model_resolver import _provider_api_key, _provider_base_url
+        from app.ai.model_resolver import (
+            _provider_api_key,
+            _provider_base_url,
+            require_chat_completions,
+        )
+
+        require_chat_completions(provider)
 
         base_url = _provider_base_url(provider)
         if not base_url.endswith("/v1"):

@@ -25,11 +25,12 @@ from typing import Any, Literal
 import httpx
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai import model_runtime_store, provider_registry
+from app.ai import model_runtime_store, provider_oauth, provider_registry
 from app.ai.model_registry import ModelRegistry
 from app.ai.schemas import AITask, ModelCapability, ModelStatus, ProviderKind
 from app.ai.secret_box import decrypt, encrypt, key_state, mask
@@ -76,6 +77,17 @@ class ProviderInstanceOut(BaseModel):
     last_check_at: datetime | None
     last_check_ok: bool | None
     last_error: str | None
+    # "api_key" or "oauth" (signed in through the provider's site).
+    auth_mode: str = "api_key"
+    # Signed-in account info (account, expires_at, region) — never the tokens.
+    oauth: dict = {}
+
+
+class OAuthKindOut(BaseModel):
+    label: str
+    note: str
+    flow: str  # "redirect" (OpenRouter) | "device"
+    regions: list[str] = []
 
 
 class KnownKind(BaseModel):
@@ -83,6 +95,8 @@ class KnownKind(BaseModel):
     is_local: bool
     default_base_url: str
     requires_api_key: bool
+    # Present when the provider also offers sign-in through its site.
+    oauth: OAuthKindOut | None = None
 
 
 class ProvidersListOut(BaseModel):
@@ -161,6 +175,24 @@ def _to_out(inst: ProviderInstance) -> ProviderInstanceOut:
         last_check_at=inst.last_check_at,
         last_check_ok=inst.last_check_ok,
         last_error=inst.last_error,
+        auth_mode=inst.auth_mode or "api_key",
+        oauth=provider_oauth.public_info(
+            inst.kind, provider_oauth.decode_state(inst.oauth_encrypted)
+        )
+        if inst.auth_mode == "oauth"
+        else {},
+    )
+
+
+def _oauth_kind_out(kind: str) -> OAuthKindOut | None:
+    spec = provider_oauth.spec_for(kind)
+    if spec is None:
+        return None
+    return OAuthKindOut(
+        label=spec.label,
+        note=spec.note,
+        flow="redirect" if spec.flow == "pkce_key" else "device",
+        regions=list(spec.regions),
     )
 
 
@@ -188,9 +220,114 @@ async def list_providers(db: AsyncSession = Depends(get_db)) -> ProvidersListOut
                 is_local=cfg.is_local,
                 default_base_url=str(cfg.base_url),
                 requires_api_key=bool(cfg.api_key_env) or not cfg.is_local,
+                oauth=_oauth_kind_out(kind.value),
             )
         )
     return ProvidersListOut(instances=instances, known_kinds=known)
+
+
+# ── Sign-in through the provider's site (OAuth) ─────────────────────────────
+
+
+class OAuthStartIn(BaseModel):
+    # window.location.origin of the page: OpenRouter returns the browser here.
+    origin: str
+    region: str | None = None
+
+
+@router.post("/{instance_id}/oauth/start", dependencies=_admin)
+async def oauth_start(
+    instance_id: str, payload: OAuthStartIn, db: AsyncSession = Depends(get_db)
+) -> dict:
+    inst = await _get_or_404(db, instance_id)
+    try:
+        return await provider_oauth.start(
+            inst.kind, str(inst.id), origin=payload.origin, region=payload.region
+        )
+    except provider_oauth.OAuthError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"Провайдер недоступен: {_http_error_text(exc)}") from exc
+
+
+@router.post("/oauth/flows/{flow_id}/poll", dependencies=_admin)
+async def oauth_poll(
+    flow_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> dict:
+    flow = provider_oauth.load_flow(flow_id)
+    try:
+        status, state, message = await provider_oauth.poll(flow_id)
+    except httpx.HTTPError as exc:
+        # A network blip is not the end of the sign-in: the page polls again.
+        return {"status": "pending", "message": f"сеть: {_http_error_text(exc)}"}
+    if status != "success" or state is None or flow is None:
+        if status == "error":
+            provider_oauth.drop_flow(flow_id)
+        return {"status": status, "message": message}
+    inst = await _get_or_404(db, flow["instance_id"])
+    inst.auth_mode = "oauth"
+    inst.oauth_encrypted = provider_oauth.encode_state(state)
+    inst.is_local = False
+    inst.last_check_at = datetime.now(UTC)
+    inst.last_check_ok = True
+    inst.last_error = None
+    await db.commit()
+    provider_oauth.remember_state(str(inst.id), state)
+    provider_oauth.drop_flow(flow_id)
+    await _sync_cache(db)
+    logger.info("provider_oauth_signed_in", kind=inst.kind, instance=str(inst.id), by=user.sub)
+    return {"status": "success", "message": message, "instance": _to_out(inst).model_dump()}
+
+
+@router.get("/oauth/openrouter/callback", dependencies=_admin)
+async def oauth_openrouter_callback(
+    state: str, code: str = "", db: AsyncSession = Depends(get_db)
+) -> RedirectResponse:
+    """OpenRouter sends the browser back here; the code becomes the node's API key."""
+    flow = provider_oauth.load_flow(state)
+    if flow is None:
+        raise HTTPException(400, "Вход в OpenRouter устарел — начните заново")
+    origin = flow.get("origin", "").rstrip("/")
+    target = f"{origin}/settings/models?tab=overview"
+    if not code:
+        provider_oauth.drop_flow(state)
+        return RedirectResponse(f"{target}&oauth=openrouter&oauth_error=cancelled", status_code=302)
+    try:
+        key = await provider_oauth.exchange_openrouter_code(flow, code)
+    except (provider_oauth.OAuthError, httpx.HTTPError) as exc:
+        provider_oauth.drop_flow(state)
+        logger.warning("provider_oauth_openrouter_failed", error=str(exc)[:200])
+        return RedirectResponse(f"{target}&oauth=openrouter&oauth_error=exchange", status_code=302)
+    inst = await _get_or_404(db, flow["instance_id"])
+    inst.api_key_encrypted = encrypt(key)
+    inst.auth_mode = "api_key"
+    inst.oauth_encrypted = None
+    inst.extra = {**(inst.extra or {}), "key_source": "openrouter_oauth"}
+    await db.commit()
+    provider_oauth.drop_flow(state)
+    await _sync_cache(db)
+    logger.info("provider_oauth_openrouter_key_saved", instance=str(inst.id))
+    return RedirectResponse(f"{target}&oauth=openrouter&oauth_ok=1", status_code=302)
+
+
+@router.post("/{instance_id}/oauth/logout", response_model=ProviderInstanceOut, dependencies=_admin)
+async def oauth_logout(instance_id: str, db: AsyncSession = Depends(get_db)) -> ProviderInstanceOut:
+    inst = await _get_or_404(db, instance_id)
+    inst.auth_mode = "api_key"
+    inst.oauth_encrypted = None
+    await db.commit()
+    provider_oauth.remember_state(str(inst.id), None)
+    await _sync_cache(db)
+    return _to_out(inst)
+
+
+def _oauth_runtime(inst: ProviderInstance) -> provider_oauth.Runtime:
+    try:
+        return provider_oauth.runtime_credentials(str(inst.id), inst.kind, inst.oauth_encrypted)
+    except provider_oauth.OAuthError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 # ── Create ──────────────────────────────────────────────────────────────────
@@ -314,6 +451,19 @@ async def delete_provider(instance_id: str, db: AsyncSession = Depends(get_db)) 
 async def test_provider(instance_id: str, db: AsyncSession = Depends(get_db)) -> dict:
     inst = await _get_or_404(db, instance_id)
     kind = ProviderKind(inst.kind)
+    if inst.auth_mode == "oauth":
+        ok, error, model_count = False, None, 0
+        try:
+            model_count = len(await provider_oauth.list_models(inst.kind, _oauth_runtime(inst)))
+            ok = True
+        except (provider_oauth.OAuthError, HTTPException, httpx.HTTPError) as exc:
+            error = str(getattr(exc, "detail", None) or exc)
+        inst.last_check_at = datetime.now(UTC)
+        inst.last_check_ok = ok
+        inst.last_error = error
+        await db.commit()
+        await _sync_cache(db)
+        return {"ok": ok, "error": error, "model_count": model_count}
     resolved = provider_registry.select_instance(kind)
     # Force the URL/key of THIS row (select_instance picks first enabled node).
     base = (inst.base_url or resolved.base_url or "").rstrip("/")
@@ -442,6 +592,9 @@ async def refresh_models(instance_id: str, db: AsyncSession = Depends(get_db)) -
         # Local availability is discovered live by the router; nothing to persist.
         return {"ok": True, "added": [], "note": "local models are discovered live"}
 
+    if inst.auth_mode == "oauth":
+        return await _refresh_oauth_models(inst, kind, db)
+
     resolved = provider_registry.select_instance(kind)
     base = (inst.base_url or resolved.base_url or "").rstrip("/")
     api_key = decrypt(inst.api_key_encrypted) or resolved.api_key
@@ -494,6 +647,39 @@ async def refresh_models(instance_id: str, db: AsyncSession = Depends(get_db)) -
         )
         added.append(key)
 
+    await db.commit()
+    await model_runtime_store.hydrate_runtime_cache(db)
+    return {"ok": True, "added": added, "count": len(added)}
+
+
+async def _refresh_oauth_models(
+    inst: ProviderInstance, kind: ProviderKind, db: AsyncSession
+) -> dict:
+    """Catalog entries for the models a signed-in account can use."""
+    from app.ai.provider_catalog_probes import capability_from_listing
+
+    try:
+        ids = await provider_oauth.list_models(inst.kind, _oauth_runtime(inst))
+    except provider_oauth.OAuthError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"Failed to fetch models: {_http_error_text(exc)}") from exc
+    registry = _registry()
+    added: list[str] = []
+    for provider_model in ids:
+        key = f"{kind.value}_{provider_model}".replace("/", "_").replace(":", "_").replace(".", "_")
+        cap = capability_from_listing(key, kind, {"id": provider_model})
+        registry.add_model(key, cap, persist=True)
+        await model_runtime_store.persist_catalog_entry(
+            db,
+            model_key=key,
+            provider=kind.value,
+            provider_model=provider_model,
+            capability=cap.model_dump(mode="json", exclude={"name"}),
+            source="cloud_oauth_refresh",
+            verification_status="discovered",
+        )
+        added.append(key)
     await db.commit()
     await model_runtime_store.hydrate_runtime_cache(db)
     return {"ok": True, "added": added, "count": len(added)}

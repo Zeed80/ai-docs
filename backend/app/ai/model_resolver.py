@@ -188,6 +188,23 @@ def _provider_base_url(provider: str) -> str:
     return str(node.base_url).rstrip("/").removesuffix("/v1")
 
 
+def require_chat_completions(provider: str) -> None:
+    """Refuse a direct Chat Completions call to a node that speaks another API.
+
+    A node signed in through the provider's site (MiniMax → Anthropic API,
+    ChatGPT/xAI → Responses API) is served by the router and the agent loop;
+    the direct helpers only speak Chat Completions and would hit a wrong URL.
+    """
+    node = _resolved_node(provider)
+    api = (node.extra or {}).get("api") if node is not None else None
+    if api and api != "openai":
+        raise RuntimeError(
+            f"{provider} подключён через вход на сайте ({api} API): этот вызов идёт только "
+            "через основной маршрутизатор. Назначьте задаче модель другого провайдера или "
+            "подключите провайдера по ключу API."
+        )
+
+
 def _provider_api_key(provider: str) -> str:
     """Ключ провайдера; пустая строка для локальных и для незаданного ключа."""
     node = _resolved_node(provider)

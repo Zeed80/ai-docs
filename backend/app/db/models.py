@@ -4572,6 +4572,13 @@ class ProviderInstance(UUIDPrimaryKey, TimestampMixin, Base):
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     is_local: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     api_key_encrypted: Mapped[str | None] = mapped_column(Text)
+    # "api_key" or "oauth" (signed in through the provider's site, see
+    # app/ai/provider_oauth.py); oauth_encrypted holds the Fernet-encrypted
+    # token state.
+    auth_mode: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="api_key", server_default="api_key"
+    )
+    oauth_encrypted: Mapped[str | None] = mapped_column(Text)
     extra: Mapped[dict | None] = mapped_column(JSON)
     last_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_check_ok: Mapped[bool | None] = mapped_column(Boolean)

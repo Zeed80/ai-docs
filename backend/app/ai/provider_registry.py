@@ -207,6 +207,8 @@ def _row_to_resolved(row: dict) -> ResolvedProvider | None:
         base = _default_instance(kind).base_url
     else:
         base = _env_override_url(kind, base)
+    if row.get("auth_mode") == "oauth":
+        return _oauth_row_to_resolved(row, kind)
     api_key = decrypt(row.get("api_key_encrypted")) or _env_key_for(kind)
     return ResolvedProvider(
         kind=kind,
@@ -216,6 +218,39 @@ def _row_to_resolved(row: dict) -> ResolvedProvider | None:
         instance_id=row.get("id"),
         name=row.get("name") or f"{kind.value}",
         extra=row.get("extra") or {},
+    )
+
+
+def _oauth_row_to_resolved(row: dict, kind: ProviderKind) -> ResolvedProvider | None:
+    """A node signed in through the provider's site: a fresh token, its own API.
+
+    ``extra["api"]`` tells the router which protocol the token speaks
+    ("openai" / "anthropic" / "responses") and ``extra["headers"]`` carries the
+    provider's identity headers. A node whose sign-in can no longer be
+    refreshed is dropped from routing (logged with the reason) instead of
+    sending requests with a dead token.
+    """
+    from app.ai import provider_oauth
+
+    try:
+        rt = provider_oauth.runtime_credentials(
+            str(row.get("id")), kind.value, row.get("oauth_encrypted")
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("provider_oauth_unusable", kind=kind.value, error=str(exc)[:200])
+        return None
+    extra = dict(row.get("extra") or {})
+    extra["headers"] = {**(extra.get("headers") or {}), **rt.headers}
+    extra["api"] = rt.api
+    extra["oauth"] = True
+    return ResolvedProvider(
+        kind=kind,
+        base_url=rt.base_url,
+        is_local=False,
+        api_key=rt.token,
+        instance_id=row.get("id"),
+        name=row.get("name") or f"{kind.value}",
+        extra=extra,
     )
 
 
@@ -399,6 +434,8 @@ async def refresh_cache_from_db(session) -> list[dict]:
                 "enabled": inst.enabled,
                 "is_local": inst.is_local,
                 "api_key_encrypted": inst.api_key_encrypted,
+                "auth_mode": inst.auth_mode or "api_key",
+                "oauth_encrypted": inst.oauth_encrypted,
                 "extra": inst.extra or {},
             }
         )

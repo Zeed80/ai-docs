@@ -274,6 +274,15 @@ class AIRouter:
             is_local=resolved.is_local,
             extra_headers=(extra.get("headers") or {}) if isinstance(extra, dict) else {},
         )
+        # A node signed in through the provider's site speaks the protocol its
+        # token belongs to (app/ai/provider_oauth.py), whatever its kind.
+        api = extra.get("api") if isinstance(extra, dict) else None
+        if api == "responses":
+            from app.ai.providers.openai_responses import OpenAIResponsesProvider
+
+            return OpenAIResponsesProvider(config)
+        if api == "anthropic":
+            return AnthropicProvider(config, bearer_auth=True)
         if kind == ProviderKind.OLLAMA:
             return OllamaProvider(config)
         if kind == ProviderKind.VLLM:

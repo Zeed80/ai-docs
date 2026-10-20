@@ -17,6 +17,7 @@ import type {
   ProviderInstance,
   RoutingChain,
   ModelCandidate,
+  OAuthStart,
   Slot,
   SlotSmokeResult,
   StrataAccess,
@@ -397,3 +398,26 @@ export const strataDeleteQuant = (model: string) =>
     `/api/local-models/strata/quants/${encodeURIComponent(model)}`,
     { method: "DELETE" },
   );
+
+// ── Вход через сайт провайдера (OAuth) ──────────────────────────────────────
+
+export const oauthStart = (
+  instanceId: string,
+  body: { origin: string; region?: string },
+) =>
+  request<OAuthStart>(`/api/providers/${instanceId}/oauth/start`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const oauthPoll = (flowId: string) =>
+  request<{
+    status: "pending" | "success" | "error";
+    message?: string | null;
+    instance?: ProviderInstance;
+  }>(`/api/providers/oauth/flows/${flowId}/poll`, { method: "POST" });
+
+export const oauthLogout = (instanceId: string) =>
+  request<ProviderInstance>(`/api/providers/${instanceId}/oauth/logout`, {
+    method: "POST",
+  });

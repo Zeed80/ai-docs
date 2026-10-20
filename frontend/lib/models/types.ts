@@ -34,6 +34,27 @@ export interface ProviderInstance {
   last_check_at: string | null;
   last_check_ok: boolean | null;
   last_error: string | null;
+  /** "oauth" — узел вошёл через сайт провайдера вместо ключа. */
+  auth_mode?: "api_key" | "oauth";
+  /** Что можно показать о входе (никогда не токены). */
+  oauth?: ProviderOAuthInfo;
+}
+
+export interface ProviderOAuthInfo {
+  account?: string | null;
+  /** Unix-время окончания токена (секунды); обновляется сервером сам. */
+  expires_at?: number | null;
+  region?: string | null;
+  refreshable?: boolean;
+}
+
+/** Провайдер умеет вход через свой сайт. */
+export interface ProviderOAuthKind {
+  label: string;
+  note: string;
+  /** "redirect" — уход на сайт и возврат (OpenRouter); "device" — код на сайте. */
+  flow: "redirect" | "device";
+  regions: string[];
 }
 
 export interface KnownKind {
@@ -41,6 +62,17 @@ export interface KnownKind {
   is_local: boolean;
   default_base_url: string;
   requires_api_key: boolean;
+  oauth?: ProviderOAuthKind | null;
+}
+
+export interface OAuthStart {
+  flow_id: string;
+  type: "redirect" | "device";
+  authorize_url?: string;
+  verification_uri?: string;
+  user_code?: string;
+  expires_at?: number;
+  interval?: number;
 }
 
 export interface CatalogModel {

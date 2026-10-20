@@ -169,9 +169,13 @@ class AnthropicProvider(AIProvider):
         instance._prompt_cache = prompt_cache
         return instance
 
-    def __init__(self, config: ProviderConfig) -> None:
+    def __init__(self, config: ProviderConfig, *, bearer_auth: bool = False) -> None:
         super().__init__(config)
         self._prompt_cache: bool = False
+        # Anthropic-compatible endpoints signed in through the provider's site
+        # (MiniMax OAuth) take the token as "Authorization: Bearer", not x-api-key.
+        self._bearer_auth = bearer_auth
+        self.kind = config.kind
 
     def _api_key(self) -> str:
         # Prefer the runtime-resolved key (from the provider_instances DB row),
@@ -188,10 +192,14 @@ class AnthropicProvider(AIProvider):
 
     def _headers(self, stream: bool = False) -> dict[str, str]:
         h = {
-            "x-api-key": self._api_key(),
             "anthropic-version": _ANTHROPIC_VERSION,
             "content-type": "application/json",
+            **(self.config.extra_headers or {}),
         }
+        if self._bearer_auth:
+            h["Authorization"] = f"Bearer {self._api_key()}"
+        else:
+            h["x-api-key"] = self._api_key()
         if stream:
             h["accept"] = "text/event-stream"
         if self._prompt_cache:

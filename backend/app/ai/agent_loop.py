@@ -1523,6 +1523,9 @@ def _openai_compatible_provider_config(
             {},
         ),
     }
+    node = _oauth_node(provider)
+    if node is not None and (node.extra or {}).get("api") == "openai":
+        return node.base_url, node.api_key, dict((node.extra or {}).get("headers") or {})
     local_mapping: dict[str, tuple[str, str, dict[str, str]]] = {
         # llamacpp: llama-server speaks OpenAI-compatible API at /v1/*
         # settings.llamacpp_url = http://llama-server:8080 (Docker) — must append /v1
@@ -1772,6 +1775,105 @@ async def _call_openai_streaming(
     }
 
 
+def _oauth_node(provider: str):
+    """The node for ``provider`` if it is signed in through the provider's site."""
+    try:
+        from app.ai.provider_registry import select_instance
+        from app.ai.schemas import ProviderKind
+
+        node = select_instance(ProviderKind(provider))
+    except Exception:  # noqa: BLE001 — unknown alias or no node: not an OAuth node
+        return None
+    return node if (node.extra or {}).get("oauth") else None
+
+
+async def _call_responses_streaming(
+    messages: list[dict],
+    tools: list[dict],
+    system_prompt: str,
+    config: BuiltinAgentConfig,
+    on_token: Callable[[str], Awaitable[None]],
+    *,
+    node: Any,
+    model_override: str | None = None,
+    disable_thinking: bool | None = None,
+    thinking_level: str | None = None,
+    on_thinking: Callable[[str], Awaitable[None]] | None = None,
+) -> dict:
+    """Stream a Responses-API node (ChatGPT/Codex or xAI sign-in).
+
+    Same normalised result as the other streaming calls.
+    """
+    from app.ai.providers.openai_responses import (
+        ResponsesStream,
+        build_body,
+        chat_to_responses,
+        chat_tools_to_responses,
+        is_codex,
+        iter_sse,
+        responses_url,
+    )
+
+    model = _get_agent_model(config, model_override=model_override)
+    instructions, items = chat_to_responses(_merge_system_messages(system_prompt, messages))
+    disabled = _thinking_disabled(config, disable_thinking, model_name=model)
+    effort = None
+    if not disabled:
+        effort = _thinking_level(
+            config, disabled=False, level_override=thinking_level, model_name=model
+        )
+    body = build_body(
+        model=model,
+        instructions=instructions,
+        items=items,
+        tools=chat_tools_to_responses(tools),
+        reasoning_effort=effort,
+        codex=is_codex(node.base_url),
+    )
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+        "Authorization": f"Bearer {node.api_key}",
+        **((node.extra or {}).get("headers") or {}),
+    }
+    stream = ResponsesStream()
+    scrubber = StreamingContextScrubber()
+    full_content = ""
+    async with httpx.AsyncClient(timeout=float(config.llm_timeout_seconds)) as client:
+        async with client.stream(
+            "POST", responses_url(node.base_url), headers=headers, json=body
+        ) as resp:
+            if resp.status_code >= 400:
+                text = (await resp.aread()).decode("utf-8", "replace")[:400]
+                raise RuntimeError(f"Responses API HTTP {resp.status_code}: {text}")
+            async for event in iter_sse(resp):
+                delta, reasoning = stream.feed(event)
+                if delta:
+                    clean = scrubber.feed(delta)
+                    if clean:
+                        full_content += clean
+                        await on_token(clean)
+                if reasoning and on_thinking:
+                    await on_thinking(reasoning)
+    if stream.error:
+        raise RuntimeError(f"Responses API: {stream.error}")
+    trailing = scrubber.flush()
+    if trailing:
+        full_content += trailing
+        await on_token(trailing)
+    tool_calls = []
+    for call in stream.tool_calls():
+        try:
+            args: Any = json.loads(call["function"]["arguments"] or "{}")
+        except json.JSONDecodeError:
+            args = {}
+        tool_calls.append(
+            {"type": "function", "id": call["id"],
+             "function": {"name": call["function"]["name"], "arguments": args}}
+        )  # fmt: skip
+    return {"role": "assistant", "content": full_content, "tool_calls": tool_calls or None}
+
+
 # ── Anthropic streaming ───────────────────────────────────────────────────────
 
 
@@ -1879,12 +1981,23 @@ async def _call_anthropic_streaming(
     config: BuiltinAgentConfig,
     on_token: Callable[[str], Awaitable[None]],
     max_tokens: int | None = None,
+    node: Any = None,
+    model_override: str | None = None,
 ) -> dict:
-    """Stream Anthropic Messages API response; normalises output to Ollama format."""
+    """Stream Anthropic Messages API response; normalises output to Ollama format.
+
+    ``node``: an Anthropic-compatible node signed in through the provider's site
+    (MiniMax OAuth) — its URL, Bearer token and headers replace Anthropic's.
+    """
     from app.config import settings
 
     api_key = os.environ.get("ANTHROPIC_API_KEY") or settings.anthropic_api_key
-    model = _get_agent_model(config)
+    model = _get_agent_model(config, model_override=model_override)
+    messages_url = "https://api.anthropic.com/v1/messages"
+    if node is not None:
+        api_key = node.api_key
+        base = node.base_url.rstrip("/")
+        messages_url = f"{base if base.endswith('/v1') else base + '/v1'}/messages"
 
     system_text, anthropic_msgs = _convert_messages_to_anthropic(messages, system_prompt)
     anthropic_tools = _convert_tools_to_anthropic(tools) if tools else []
@@ -1911,11 +2024,15 @@ async def _call_anthropic_streaming(
         payload["tools"] = anthropic_tools
 
     headers: dict[str, str] = {
-        "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
         "accept": "text/event-stream",
     }
+    if node is not None:
+        headers.update((node.extra or {}).get("headers") or {})
+        headers["Authorization"] = f"Bearer {api_key}"
+    else:
+        headers["x-api-key"] = api_key
     if config.prompt_cache_enabled:
         headers["anthropic-beta"] = "prompt-caching-2024-07-31"
 
@@ -1926,9 +2043,7 @@ async def _call_anthropic_streaming(
     current_idx: int = 0
 
     async with httpx.AsyncClient(timeout=float(config.llm_timeout_seconds)) as client:
-        async with client.stream(
-            "POST", "https://api.anthropic.com/v1/messages", headers=headers, json=payload
-        ) as resp:
+        async with client.stream("POST", messages_url, headers=headers, json=payload) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
                 if not line or not line.startswith("data: "):
@@ -2108,7 +2223,33 @@ async def _call_provider_streaming(
                                 "max_output_tokens": max_tokens,
                             },
                         )
-                    if p == "ollama":
+                    oauth_node = _oauth_node(p)
+                    oauth_api = (oauth_node.extra or {}).get("api") if oauth_node else None
+                    if oauth_api == "responses":
+                        result = await _call_responses_streaming(
+                            messages,
+                            tools,
+                            system_prompt,
+                            config,
+                            on_token,
+                            node=oauth_node,
+                            model_override=model_override,
+                            disable_thinking=disable_thinking_override,
+                            thinking_level=thinking_level_override,
+                            on_thinking=on_thinking,
+                        )
+                    elif oauth_api == "anthropic":
+                        result = await _call_anthropic_streaming(
+                            messages,
+                            tools,
+                            system_prompt,
+                            config,
+                            on_token,
+                            max_tokens=max_tokens,
+                            node=oauth_node,
+                            model_override=model_override,
+                        )
+                    elif p == "ollama":
                         result = await _call_ollama_streaming(
                             messages,
                             tools,

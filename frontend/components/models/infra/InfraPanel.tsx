@@ -14,6 +14,7 @@ import { getApiBaseUrl } from "@/lib/api-base";
 import { csrfHeaders } from "@/lib/auth";
 import { useToast } from "@/components/ui/primitives/Toast";
 import { CloudConnectSheet } from "@/components/models/infra/CloudConnectSheet";
+import { ProviderSignIn } from "@/components/models/infra/ProviderSignIn";
 import { StrataPanel } from "@/components/models/infra/StrataPanel";
 import {
   btn,
@@ -33,6 +34,7 @@ import type {
   LocalProviderKind as Provider,
   ModelsTab as Tab,
   ProviderInstance as ProviderInstanceT,
+  ProviderOAuthKind,
   ProviderStatus,
 } from "@/lib/models/types";
 import { httpDetail, notifyError } from "@/components/ui/primitives/Toast";
@@ -47,6 +49,7 @@ interface KnownKindT {
   is_local: boolean;
   default_base_url: string;
   requires_api_key: boolean;
+  oauth?: ProviderOAuthKind | null;
 }
 
 function VRAMBar({
@@ -83,11 +86,8 @@ function VRAMBar({
       <div className="flex gap-3 flex-wrap text-xs text-slate-400">
         {Object.entries(allocations).map(([p, a]) => (
           <span key={p} className="flex items-center gap-1">
-            <span
-              className={`w-2 h-2 rounded-full ${providerBarColor(p)}`}
-            />
-            {providerLabel(p)}: {a.vram_used_gb.toFixed(1)}{" "}
-            GB
+            <span className={`w-2 h-2 rounded-full ${providerBarColor(p)}`} />
+            {providerLabel(p)}: {a.vram_used_gb.toFixed(1)} GB
           </span>
         ))}
         <span className="flex items-center gap-1">
@@ -744,6 +744,7 @@ interface KnownKindT {
   is_local: boolean;
   default_base_url: string;
   requires_api_key: boolean;
+  oauth?: ProviderOAuthKind | null;
 }
 
 async function provFetch(path: string, init?: RequestInit) {
@@ -787,6 +788,32 @@ function ProvidersConfigPanel() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Возврат с сайта OpenRouter после входа: сообщить и убрать метку из адреса.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("oauth") !== "openrouter") return;
+    if (params.get("oauth_ok")) {
+      toast.ok(
+        "OpenRouter подключён",
+        "Ключ аккаунта сохранён; подтяните модели",
+      );
+    } else {
+      toast.error(
+        "Вход в OpenRouter не завершён",
+        params.get("oauth_error") === "cancelled"
+          ? "отменён на сайте"
+          : "обмен кода не удался",
+      );
+    }
+    ["oauth", "oauth_ok", "oauth_error"].forEach((k) => params.delete(k));
+    const qs = params.toString();
+    window.history.replaceState(
+      null,
+      "",
+      `${window.location.pathname}${qs ? `?${qs}` : ""}`,
+    );
+  }, [toast]);
 
   const localKinds = kinds.filter((k) => k.is_local).map((k) => k.kind);
   const cloud = instances
@@ -848,18 +875,22 @@ function ProvidersConfigPanel() {
                   </span>
                   <span
                     className={`text-[10px] ${
-                      c.api_key_state === "corrupt"
-                        ? "text-amber-400"
-                        : c.api_key_set
-                          ? "text-emerald-400"
-                          : "text-slate-400"
+                      c.auth_mode === "oauth"
+                        ? "text-emerald-400"
+                        : c.api_key_state === "corrupt"
+                          ? "text-amber-400"
+                          : c.api_key_set
+                            ? "text-emerald-400"
+                            : "text-slate-400"
                     }`}
                   >
-                    {c.api_key_state === "corrupt"
-                      ? "ключ повреждён"
-                      : c.api_key_set
-                        ? "ключ ✓"
-                        : "нет"}
+                    {c.auth_mode === "oauth"
+                      ? "вход ✓"
+                      : c.api_key_state === "corrupt"
+                        ? "ключ повреждён"
+                        : c.api_key_set
+                          ? "ключ ✓"
+                          : "нет"}
                   </span>
                 </button>
               ))}
@@ -869,6 +900,10 @@ function ProvidersConfigPanel() {
               {selectedCloud ? (
                 <CloudProviderDetail
                   inst={selectedCloud}
+                  oauth={
+                    kinds.find((k) => k.kind === selectedCloud.kind)?.oauth ??
+                    null
+                  }
                   busy={busy === selectedCloud.id}
                   onTest={() => test(selectedCloud.id)}
                   onChanged={load}
@@ -920,6 +955,7 @@ function StatusDotT({ ok }: { ok: boolean | null }) {
 
 function CloudProviderDetail({
   inst,
+  oauth,
   busy,
   onTest,
   onChanged,
@@ -927,6 +963,7 @@ function CloudProviderDetail({
   setBusy,
 }: {
   inst: ProviderInstanceT;
+  oauth: ProviderOAuthKind | null;
   busy: boolean;
   onTest: () => void;
   onChanged: () => void;
@@ -1010,8 +1047,12 @@ function CloudProviderDetail({
         </span>
       </div>
 
+      {oauth && (
+        <ProviderSignIn inst={inst} oauth={oauth} onChanged={onChanged} />
+      )}
+
       <label className="block text-xs text-slate-400">
-        API-ключ
+        {oauth ? "Или API-ключ" : "API-ключ"}
         <input
           className={`${input} mt-1`}
           type="password"
@@ -1087,7 +1128,7 @@ function CloudProviderDetail({
         </button>
         <button
           className={btnSecondary}
-          disabled={busy || !inst.api_key_set}
+          disabled={busy || (!inst.api_key_set && inst.auth_mode !== "oauth")}
           onClick={fetchModels}
         >
           Подтянуть модели
