@@ -17,7 +17,7 @@ from typing import Any, Literal
 
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -30,7 +30,8 @@ from app.ai.agent_config import (
 )
 from app.ai.gateway_config import gateway_config
 from app.ai.policy_engine import classify_skill_risk, is_protected_setting
-from app.auth.jwt import get_current_user, require_human_role, require_role
+from app.audit.service import log_action
+from app.auth.jwt import get_current_user, is_service_account, require_human_role, require_role
 from app.auth.models import UserInfo, UserRole
 from app.db.models import (
     AgentAction,
@@ -1540,13 +1541,232 @@ async def list_agent_procedures() -> list[ProcedureSummaryOut]:
 
 
 @router.get("/procedures/{name}", response_model=ProcedureOut)
-async def get_agent_procedure(name: str) -> ProcedureOut:
-    from app.ai.procedures import read_procedure
+async def get_agent_procedure(name: str, db: AsyncSession = Depends(get_db)) -> ProcedureOut:
+    from app.ai.procedures import read_procedure, record_use, refresh_learned
 
+    await refresh_learned(db)
     proc = read_procedure(name)
     if proc is None:
         raise HTTPException(status_code=404, detail=f"Procedure '{name}' not found")
+    if proc.learned:
+        await record_use(db, proc.name)
+        await db.commit()
     return ProcedureOut(name=proc.name, description=proc.description, text=proc.text)
+
+
+class ProcedureProposalIn(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    description: str = Field(min_length=1, max_length=300)
+    text: str = Field(min_length=1, max_length=20000)
+    reason: str | None = Field(default=None, max_length=2000)
+
+
+class AgentProcedureOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    description: str
+    text: str
+    status: str
+    origin: str
+    reason: str | None
+    source_work_order_id: uuid.UUID | None
+    proposed_by: str
+    decided_by: str | None
+    decided_at: datetime | None
+    pinned: bool
+    uses: int
+    last_used_at: datetime | None
+    created_at: datetime
+    # The live text of the same name, for the owner to compare a new version.
+    current_text: str | None = None
+
+
+@router.post("/procedures-proposals", response_model=AgentProcedureOut, status_code=201)
+async def propose_agent_procedure(
+    payload: ProcedureProposalIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserInfo = Depends(get_current_user),
+) -> AgentProcedureOut:
+    """The agent (or a person) proposes a procedure; nothing changes until the
+    owner approves it on «Настройки → Процедуры»."""
+    from app.ai.procedures import ProcedureError, propose, read_procedure, refresh_learned
+
+    await refresh_learned(db)
+    try:
+        row = await propose(
+            db,
+            name=payload.name,
+            description=payload.description,
+            text=payload.text,
+            reason=payload.reason,
+            actor=current_user.sub,
+            origin="owner" if not is_service_account(current_user) else "agent",
+        )
+    except ProcedureError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    await log_action(
+        db,
+        action="procedure.proposed",
+        entity_type="agent_procedure",
+        entity_id=row.id,
+        user_id=current_user.sub,
+        details={"name": row.name},
+    )
+    await db.commit()
+    current = read_procedure(row.name)
+    out = AgentProcedureOut.model_validate(row)
+    out.current_text = current.text if current else None
+    return out
+
+
+@router.get("/procedures-registry", response_model=list[AgentProcedureOut])
+async def list_procedure_registry(
+    status: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    _user: UserInfo = Depends(require_human_role(UserRole.admin)),
+) -> list[AgentProcedureOut]:
+    """Learned procedures and proposals, newest first, with the live text of each name."""
+    from app.ai.procedures import builtin_procedures, read_procedure, refresh_learned
+    from app.db.models import AgentProcedure
+
+    await refresh_learned(db)
+    stmt = select(AgentProcedure).order_by(AgentProcedure.created_at.desc()).limit(300)
+    if status:
+        stmt = stmt.where(AgentProcedure.status == status)
+    builtins = {p.name: p.text for p in builtin_procedures()}
+    out = []
+    for row in (await db.scalars(stmt)).all():
+        item = AgentProcedureOut.model_validate(row)
+        if row.status == "proposed":
+            live = read_procedure(row.name)
+            item.current_text = live.text if live else builtins.get(row.name)
+        out.append(item)
+    return out
+
+
+class ProcedureDecisionIn(BaseModel):
+    approve: bool
+    description: str | None = Field(default=None, max_length=300)
+    text: str | None = Field(default=None, max_length=20000)
+
+
+async def _registry_row(db: AsyncSession, procedure_id: uuid.UUID):
+    from app.db.models import AgentProcedure
+
+    row = await db.get(AgentProcedure, procedure_id, with_for_update=True)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Procedure not found")
+    return row
+
+
+@router.post("/procedures-registry/{procedure_id}/decide", response_model=AgentProcedureOut)
+async def decide_agent_procedure(
+    procedure_id: uuid.UUID,
+    payload: ProcedureDecisionIn,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(require_human_role(UserRole.admin)),
+) -> AgentProcedureOut:
+    """Approve (optionally edited) or reject a proposal. A procedure is a rule
+    for the model like the prompt: only a person decides, and it is audited."""
+    from app.ai.procedures import ProcedureError, decide
+
+    row = await _registry_row(db, procedure_id)
+    try:
+        await decide(
+            db,
+            row,
+            approve=payload.approve,
+            actor=user.sub,
+            text=payload.text,
+            description=payload.description,
+        )
+    except ProcedureError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    await log_action(
+        db,
+        action="procedure.approved" if payload.approve else "procedure.rejected",
+        entity_type="agent_procedure",
+        entity_id=row.id,
+        user_id=user.sub,
+        details={"name": row.name, "edited": payload.text is not None},
+    )
+    await db.commit()
+    return AgentProcedureOut.model_validate(row)
+
+
+class ProcedurePinIn(BaseModel):
+    pinned: bool
+
+
+@router.post("/procedures-registry/{procedure_id}/pin", response_model=AgentProcedureOut)
+async def pin_agent_procedure(
+    procedure_id: uuid.UUID,
+    payload: ProcedurePinIn,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(require_human_role(UserRole.admin)),
+) -> AgentProcedureOut:
+    """A pinned procedure is never moved to stale or the archive."""
+    row = await _registry_row(db, procedure_id)
+    row.pinned = payload.pinned
+    await log_action(
+        db,
+        action="procedure.pinned" if payload.pinned else "procedure.unpinned",
+        entity_type="agent_procedure",
+        entity_id=row.id,
+        user_id=user.sub,
+        details={"name": row.name},
+    )
+    await db.commit()
+    return AgentProcedureOut.model_validate(row)
+
+
+@router.post("/procedures-registry/{procedure_id}/archive", response_model=AgentProcedureOut)
+async def archive_agent_procedure(
+    procedure_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(require_human_role(UserRole.admin)),
+) -> AgentProcedureOut:
+    row = await _registry_row(db, procedure_id)
+    if row.status not in {"active", "stale"}:
+        raise HTTPException(status_code=409, detail="В архив уходит только действующая процедура")
+    row.status = "archived"
+    await log_action(
+        db,
+        action="procedure.archived",
+        entity_type="agent_procedure",
+        entity_id=row.id,
+        user_id=user.sub,
+        details={"name": row.name},
+    )
+    await db.commit()
+    return AgentProcedureOut.model_validate(row)
+
+
+@router.post("/procedures-registry/{procedure_id}/restore", response_model=AgentProcedureOut)
+async def restore_agent_procedure(
+    procedure_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(require_human_role(UserRole.admin)),
+) -> AgentProcedureOut:
+    from app.ai.procedures import ProcedureError, restore
+
+    row = await _registry_row(db, procedure_id)
+    try:
+        await restore(db, row, actor=user.sub)
+    except ProcedureError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    await log_action(
+        db,
+        action="procedure.restored",
+        entity_type="agent_procedure",
+        entity_id=row.id,
+        user_id=user.sub,
+        details={"name": row.name},
+    )
+    await db.commit()
+    return AgentProcedureOut.model_validate(row)
 
 
 class ClarifyOption(BaseModel):

@@ -139,6 +139,7 @@ interface AgentConfig {
   approval_timeout_seconds: number;
   max_worker_steps: number;
   memory_enabled: boolean;
+  procedure_autopropose_enabled?: boolean;
   audit_enabled: boolean;
   allow_capability_builder: boolean;
   capability_builder_requires_approval: boolean;
@@ -2508,6 +2509,27 @@ export default function SettingsPage() {
                       }
                     />
                     Подключать память к каждому запросу
+                  </label>
+                  <label className="flex items-start gap-2 text-sm text-slate-200">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={Boolean(agentConfig.procedure_autopropose_enabled)}
+                      onChange={(e) =>
+                        setAgentConfig({
+                          ...agentConfig,
+                          procedure_autopropose_enabled: e.target.checked,
+                        })
+                      }
+                    />
+                    <span>
+                      Предлагать процедуры после многошаговой работы
+                      <span className="block text-xs text-slate-400">
+                        После выполненного поручения агент в фоне решает, стоит ли записать
+                        порядок работы. Предложение ждёт вашего решения в «Процедурах»;
+                        вызов модели идёт, когда видеокарта свободна.
+                      </span>
+                    </span>
                   </label>
                   <div className="rounded-md border border-slate-800 bg-slate-900/40 p-3">
                     <p className="text-sm font-medium text-slate-100">

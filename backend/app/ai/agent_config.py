@@ -106,6 +106,9 @@ class BuiltinAgentConfig(BaseModel):
     # planning model need to raise this.
     orchestrator_plan_timeout_seconds: float = Field(8.0, ge=2.0, le=180.0)
     max_worker_steps: int = Field(12, ge=1, le=60)
+    # After a completed multi-step order a background model call may propose a
+    # procedure for the owner to approve (hermes-agent's self-written skills).
+    procedure_autopropose_enabled: bool = False
     memory_enabled: bool = True
     audit_enabled: bool = True
     # Learned recipes replay their recorded calls without the model. Off: the
@@ -188,6 +191,7 @@ class BuiltinAgentConfigUpdate(BaseModel):
     approval_timeout_seconds: int | None = Field(default=None, ge=10, le=1800)
     orchestrator_plan_timeout_seconds: float | None = Field(default=None, ge=2.0, le=180.0)
     max_worker_steps: int | None = Field(default=None, ge=1, le=60)
+    procedure_autopropose_enabled: bool | None = None
     memory_enabled: bool | None = None
     audit_enabled: bool | None = None
     recipe_replay_enabled: bool | None = None

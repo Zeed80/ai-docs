@@ -13,6 +13,7 @@ const TABS = [
   { href: "/settings/notifications", label: "Уведомления" },
   { href: "/settings/auto-approval", label: "Авто-утверждение" },
   { href: "/settings/recipes", label: "Рецепты" },
+  { href: "/settings/procedures", label: "Процедуры" },
   { href: "/settings/models", label: "Модели" },
   { href: "/settings/web-search", label: "Веб-поиск" },
   { href: "/settings/browser", label: "Браузер" },

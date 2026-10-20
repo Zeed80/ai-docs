@@ -211,6 +211,11 @@ celery_app.conf.beat_schedule = {
         "task": "work.expire_memory",
         "schedule": 3_600.0,
     },
+    # Learned procedures unused for 14 days go stale, 30 days to the archive.
+    "agent-procedure-curator": {
+        "task": "agent.curate_procedures",
+        "schedule": 86_400.0,
+    },
     # Б12: repeated same-shape WorkStepAttempt failures -> a draft
     # CapabilityProposal for a human to review. Batched hourly, never per
     # failed attempt.

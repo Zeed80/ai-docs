@@ -1218,6 +1218,7 @@ _OPERATIONS = {
     "agent_control.ai_config_get": ("GET", "/api/ai/config", [], "read", False),
     "agent_control.ai_config_set": ("PATCH", "/api/ai/config", [], "write", True),
     "procedures.read": ("GET", "/api/agent/procedures/{name}", ["name"], "read", False),
+    "procedures.propose": ("POST", "/api/agent/procedures-proposals", [], "write", False),
     "clarify.ask": ("POST", "/api/agent/clarify", [], "read", False),
     "image_studio.generate": ("POST", "/api/image-gen/generate", [], "write", False),
     "image_studio.list": ("GET", "/api/image-gen", [], "read", False),

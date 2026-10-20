@@ -2543,9 +2543,50 @@ def verify_order_semantics(work_order_id: str, deferrals: int) -> None:
     time_limit=150,
 )
 def learn_work_order(work_order_id: str) -> None:
+    from app.ai.agent_config import get_builtin_agent_config
     from app.domain.work_learning import process_work_learning
 
     run_async(process_work_learning(uuid.UUID(work_order_id)))
+    if get_builtin_agent_config().procedure_autopropose_enabled:
+        propose_procedure.apply_async(args=[work_order_id, 0], queue="scheduler")
+
+
+async def propose_procedure_later(work_order_id: uuid.UUID, deferrals: int) -> str | None:
+    """Like the verdict, the reflection waits for a quiet Strata."""
+    if deferrals < _VERIFY_MAX_DEFERRALS and await _verifier_should_wait():
+        propose_procedure.apply_async(
+            args=[str(work_order_id), deferrals + 1],
+            countdown=_VERIFY_DEFER_SECONDS,
+            queue="scheduler",
+        )
+        return None
+    from app.domain.procedure_learning import suggest_procedure
+
+    return await suggest_procedure(work_order_id)
+
+
+@celery_app.task(
+    name="work.propose_procedure",
+    queue="scheduler",
+    max_retries=0,
+    ignore_result=True,
+    soft_time_limit=150,
+    time_limit=180,
+)
+def propose_procedure(work_order_id: str, deferrals: int) -> None:
+    run_async(propose_procedure_later(uuid.UUID(work_order_id), deferrals))
+
+
+@celery_app.task(
+    name="agent.curate_procedures",
+    queue="scheduler",
+    max_retries=0,
+    ignore_result=True,
+)
+def curate_agent_procedures() -> None:
+    from app.domain.procedure_learning import curate_procedures
+
+    run_async(curate_procedures())
 
 
 @celery_app.task(

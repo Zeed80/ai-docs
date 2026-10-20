@@ -3663,6 +3663,12 @@ class AgentSession:
     async def on_user_message(self, content: str) -> None:
         self._restored_system = None
         self._refresh_runtime_config()
+        # Procedures the owner approved since the prompt was built join its
+        # index; an unchanged set leaves the prompt (and its cache) as it was.
+        from app.ai.procedures import refresh_learned
+
+        if await refresh_learned():
+            self._system = _load_system_prompt(self._config)
         await self._init_mcp()
         # Одобрение действует на ход, а не навсегда: новое сообщение человека
         # начинает новый ход, и прошлое «да» его не покрывает.

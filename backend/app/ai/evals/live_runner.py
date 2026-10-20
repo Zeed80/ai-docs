@@ -151,6 +151,12 @@ TABLES: dict[str, tuple[str, tuple[str, ...]]] = {
         "MemoryFact",
         ("scope", "kind", "source", "title", "summary", "confidence", "status", "pinned"),
     ),
+    # Learned procedures: a case may seed one (active or only proposed) and
+    # checks that the employee proposes, never activates, what it was taught.
+    "agent_procedures": (
+        "AgentProcedure",
+        ("name", "description", "text", "status", "origin", "proposed_by", "pinned"),
+    ),
 }
 AUDIT_TABLES = frozenset({"computer_use_actions", "memory_facts"})
 _FIXTURE_TABLE = {"supplier": "parties", "invoice": "invoices", "document": "documents"}

@@ -2413,6 +2413,42 @@ class RecipeSkill(UUIDPrimaryKey, TimestampMixin, Base):
     created_by: Mapped[str] = mapped_column(String(100), default="sveta", nullable=False)
 
 
+class AgentProcedure(UUIDPrimaryKey, TimestampMixin, Base):
+    """A procedure the agent proposed or the owner edited (hermes-agent's skills).
+
+    Built-in procedures are files in aiagent/procedures; these rows are the
+    learned ones and owner edits of either kind. A row is one version of a
+    named procedure: proposed → active (owner approved) → stale (unused 14
+    days) → archived (30 days), or rejected; approving a new version of a name
+    supersedes the active one. Only active and stale rows reach the prompt
+    index — the agent never sees its own proposal before the owner decides.
+    """
+
+    __tablename__ = "agent_procedures"
+    __table_args__ = (
+        Index(
+            "uq_agent_procedures_live_name",
+            "name",
+            unique=True,
+            postgresql_where=text("status IN ('active', 'stale')"),
+        ),
+    )
+
+    name: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    description: Mapped[str] = mapped_column(String(300), nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    origin: Mapped[str] = mapped_column(String(20), nullable=False)  # agent | owner
+    reason: Mapped[str | None] = mapped_column(Text)
+    source_work_order_id: Mapped[uuid.UUID | None] = mapped_column(GUID())
+    proposed_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    decided_by: Mapped[str | None] = mapped_column(String(255))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    uses: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class SourceConnector(UUIDPrimaryKey, TimestampMixin, Base):
     """Ф5 (AGENT_AUTONOMY_ROADMAP.md): a confirmed-working discovery/extraction
     strategy for a web domain or source pattern, learned from real exploratory

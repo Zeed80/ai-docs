@@ -1277,6 +1277,10 @@ capabilities:
       склад, почта, поиск по базе знаний, сводка для руководителя. Список с
       описаниями — в разделе «Процедуры» системного промпта. action=read с
       name возвращает текст процедуры; читай её до работы по этой теме.
+      action=propose предлагает новую процедуру или новую версию существующей
+      (тот же name): name, description — одна строка, text — порядок работы
+      по шагам, reason — откуда это известно. В силу она вступит только после
+      решения владельца; до того её нет в списке.
     path: /api/agent/cap/procedures
     method: POST
     gate_actions: []
@@ -1285,10 +1289,19 @@ capabilities:
       properties:
         action:
           type: string
-          description: "read"
+          description: "read | propose"
         name:
           type: string
-          description: "Имя процедуры из раздела «Процедуры»"
+          description: "Имя процедуры: латиница, цифры, дефис (например overdue-letter)"
+        description:
+          type: string
+          description: "propose: одна строка до 150 знаков — о чём процедура"
+        text:
+          type: string
+          description: "propose: порядок работы по шагам, markdown"
+        reason:
+          type: string
+          description: "propose: кто научил или из какой работы это выяснилось"
       required: [action, name]
 
   - name: clarify
