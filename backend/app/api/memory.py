@@ -364,7 +364,7 @@ async def search_memory(
     hits = _rrf_fuse(hits)
 
     if hits:
-        if _reranker_model_key():
+        if payload.rerank and _reranker_model_key():
             hits = _sort_memory_hits(payload.query, hits)
             reranked = await _try_rerank_hits(payload.query, hits[:_RERANK_CANDIDATE_LIMIT])
             hits = reranked + hits[_RERANK_CANDIDATE_LIMIT:]
@@ -1597,6 +1597,7 @@ async def explain_memory(
             limit=payload.limit,
             retrieval_mode=payload.retrieval_mode,
             include_explain=payload.include_explain,
+            rerank=payload.rerank,
         ),
         db,
         user,
@@ -1672,6 +1673,7 @@ async def query_memory(
             limit=payload.limit,
             neighborhood_depth=payload.neighborhood_depth,
             include_explain=True,
+            rerank=payload.rerank,
         ),
         db,
         user,

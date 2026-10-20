@@ -266,6 +266,7 @@ class MemorySearchRequest(BaseModel):
         "hybrid",
     ] = "auto_hybrid"
     include_explain: bool = True
+    rerank: bool = True
 
 
 class MemorySearchHit(BaseModel):
@@ -311,6 +312,7 @@ class MemoryExplainRequest(BaseModel):
         "hybrid",
     ] = "auto_hybrid"
     include_explain: bool = True
+    rerank: bool = True
 
 
 class MemoryExplainResponse(BaseModel):
@@ -331,6 +333,10 @@ class MemoryQueryRequest(BaseModel):
     limit: int = Field(12, ge=1, le=100)
     neighborhood_depth: int = Field(1, ge=0, le=2)
     include_graph: bool = True
+    # Cross-encoder reranking of the candidates: ~0.45 s a pair on the CPU
+    # Ollama node (30 pairs ≈ 14 s). The agent's per-turn prefetch turns it off:
+    # its 12 s wait always ran out, so turns waited and got no memory at all.
+    rerank: bool = True
 
 
 class MemoryEvidenceItem(BaseModel):

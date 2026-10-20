@@ -4201,13 +4201,27 @@ class AgentSession:
                 return
 
             # Deterministic fast-path: skip the LLM for high-confidence count questions.
+            prep: dict[str, float] = {}
+            mark = time.perf_counter()
             if not restored and await self._try_fast_intent():
                 return
+            prep["fast_intent"] = time.perf_counter() - mark
 
             if not restored:
-                await self._append_memory_context()
-                await self._inject_rating_hint()
-                await self._inject_learning_rules()
+                # One line per turn with what the setup before the first model
+                # call cost: the first turn of a fresh worker spent ~11 s here.
+                for name, step in (
+                    ("memory", self._append_memory_context),
+                    ("rating_hint", self._inject_rating_hint),
+                    ("learning_rules", self._inject_learning_rules),
+                ):
+                    mark = time.perf_counter()
+                    await step()
+                    prep[name] = time.perf_counter() - mark
+                logger.info(
+                    "agent_turn_prep",
+                    **{f"{k}_ms": int(v * 1000) for k, v in prep.items()},
+                )
 
             consecutive_empty_responses = 0
             seen_reads: set[str] = set()

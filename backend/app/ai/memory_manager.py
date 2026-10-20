@@ -113,6 +113,10 @@ class MemoryManager:
             "query": query[:500],
             "limit": _MEMORY_PAGE_SIZE,
             "include_graph": True,
+            # Reranking 30 candidates on the CPU node took ~14 s, past the
+            # turn's 12 s wait: every turn waited and got no memory (live,
+            # 2026-10-20). The fused hybrid order is what the turn gets.
+            "rerank": False,
         }
         if session_id:
             body["session_id"] = session_id
