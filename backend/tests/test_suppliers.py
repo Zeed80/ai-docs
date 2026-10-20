@@ -166,6 +166,21 @@ async def test_search_finds_a_name_in_another_case(client: AsyncClient, db_sessi
     ]
 
 
+@pytest.mark.parametrize(
+    ("query", "pattern"),
+    [
+        ("миру станочника", "мир.*станочник"),
+        ("мира станочника", "мир.*станочник"),
+        ("эвал-меди", "эвал\\-мед"),
+        ("7702000051", None),
+    ],
+)
+def test_name_form_pattern(query, pattern):
+    from app.api.suppliers import _name_form_pattern
+
+    assert _name_form_pattern(query) == pattern
+
+
 def test_company_core_name_strips_the_longest_legal_form():
     from app.domain.party_names import company_core_name
 

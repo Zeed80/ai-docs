@@ -366,6 +366,31 @@ async def list_suppliers_endpoint(
 # ── supplier.search ────────────────────────────────────────────────────────
 
 
+def _name_form_pattern(name: str) -> str | None:
+    """Regex for a company name in any case: «Миру Станочника» → «мир.*станочник».
+
+    Looser than the table filter's stems: a short word loses its last vowel too
+    («миру», «меди»), since a search offers candidates and an extra one is
+    harmless while a missed name made the employee guess.
+    """
+    import re
+
+    from app.domain.table_spec import _form_stem
+
+    parts = []
+    for word in name.lower().split():
+        if not re.search(r"[а-яё]", word):
+            parts.append(re.escape(word))
+            continue
+        stem = _form_stem(word)
+        if stem == word and len(word) >= 4 and word[-1] in "аяоеёиыуюь":
+            stem = word[:-1]
+        parts.append(re.escape(stem))
+    if not parts or not any(re.search(r"[а-яё]", p) for p in parts):
+        return None
+    return ".*".join(parts)
+
+
 @router.post("/search", response_model=SupplierSearchResponse)
 async def search_suppliers(
     payload: SupplierSearchRequest,
@@ -391,9 +416,7 @@ async def search_suppliers(
     # The name in another case: «письмо Эвал-Меди» is «Эвал-Медь» (E52
     # 2026-10-19: every spelling found nothing, and the employee guessed
     # which of the two namesakes was meant).
-    from app.domain.table_spec import _word_form_pattern
-
-    form = _word_form_pattern(core or q)
+    form = _name_form_pattern(core or q)
     if form:
         conditions.append(func.regexp_replace(Party.name, "[\"'«»“”„()]", "", "g").op("~*")(form))
     query = select(Party).where(or_(*conditions))
