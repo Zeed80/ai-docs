@@ -338,6 +338,7 @@ export interface StrataRelease {
   url?: string | null;
   error?: string;
   checked_at?: number;
+  supported?: boolean | null;
 }
 
 export interface StrataBuildJob {
@@ -361,6 +362,8 @@ export interface StrataServerInfo {
   } | null;
   latest: StrataRelease;
   update_available: boolean;
+  /** A newer release the panel cannot run yet (why), instead of offering it. */
+  update_blocked?: string | null;
   job: StrataBuildJob | null;
   error?: string;
 }

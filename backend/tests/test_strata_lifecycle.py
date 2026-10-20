@@ -454,7 +454,7 @@ def _build_harness(monkeypatch, dockerfile):
 
 
 def test_build_feeds_the_patched_dockerfile_through_stdin(monkeypatch):
-    created = _build_harness(monkeypatch, _TERMINAL_STAGE)
+    created = _build_harness(monkeypatch, _OLD_LAYOUT)
     commit = "a" * 40
     asyncio.run(strata_lifecycle.start_build(version="0.2.1", commit=commit, then="prepare"))
     body = created[0]
@@ -476,3 +476,72 @@ def test_build_without_the_step_uses_the_repo_dockerfile(monkeypatch):
     assert cmd[:2] == ["docker", "build"]
     assert cmd[-1] == f"{strata_lifecycle.GIT_URL}#{commit}"
     assert created[0]["Env"] == []
+
+
+# ── A release the integration cannot run is neither built nor applied ──────
+
+_NEW_LAYOUT = """FROM ubuntu:24.04 AS terminal
+RUN python3 /src/packaging/package_terminal.py --out /out
+FROM ubuntu:24.04
+ENTRYPOINT ["/usr/bin/tini", "--", "/opt/strata/entrypoint.sh"]
+CMD ["run"]
+"""
+_OLD_LAYOUT = _TERMINAL_STAGE + 'WORKDIR /opt/strata\nENTRYPOINT ["./docker-entrypoint.sh"]\n'
+
+
+def test_new_layout_release_is_not_built(monkeypatch):
+    """0.2 starts through `strata launch`: building it took an hour and the
+    server it was applied to exited at once (docker-entrypoint.sh is gone)."""
+    created = _build_harness(monkeypatch, _NEW_LAYOUT)
+    with pytest.raises(strata_manager.StrataError, match="по-новому"):
+        asyncio.run(strata_lifecycle.start_build(version="0.2.1", commit="c" * 40, then="apply"))
+    assert created == []
+
+
+def test_old_layout_release_is_built(monkeypatch):
+    created = _build_harness(monkeypatch, _OLD_LAYOUT)
+    asyncio.run(strata_lifecycle.start_build(version="0.1.46", commit="d" * 40, then="prepare"))
+    assert len(created) == 1
+
+
+def test_an_image_with_another_entrypoint_is_not_applied(monkeypatch):
+    calls: list[str] = []
+
+    async def image(_ref):
+        return {
+            "Config": {
+                "Entrypoint": ["/usr/bin/tini", "--", "/opt/strata/entrypoint.sh"],
+                "Labels": {strata_lifecycle.LABEL_VERSION: "0.2.1"},
+            }
+        }
+
+    async def post(path, /, **_kw):
+        calls.append(path)
+
+    monkeypatch.setattr(strata_lifecycle, "_image", image)
+    monkeypatch.setattr(strata_lifecycle, "_post", post)
+    with pytest.raises(strata_manager.StrataError, match="0.2.1"):
+        asyncio.run(strata_lifecycle._finish("ai-workspace/strata:9076725", "apply"))
+    assert calls == []  # :current is not moved, the server is not touched
+
+
+def test_update_info_blocks_an_unsupported_release(monkeypatch):
+    async def container():
+        return {"Id": "s1"}
+
+    async def current(_c=None):
+        return {"version": "0.1.45"}
+
+    async def latest(**_kw):
+        return {"version": "0.2.1", "commit": "e" * 40, "supported": False}
+
+    async def no_job():
+        return None
+
+    monkeypatch.setattr(strata_manager, "_find_container", container)
+    monkeypatch.setattr(strata_lifecycle, "server_version", current)
+    monkeypatch.setattr(strata_lifecycle, "latest_release", latest)
+    monkeypatch.setattr(strata_lifecycle, "job_status", no_job)
+    info = asyncio.run(strata_lifecycle.update_info())
+    assert info["update_available"] is False
+    assert "0.2.1" in info["update_blocked"]

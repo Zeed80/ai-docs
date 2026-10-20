@@ -618,7 +618,10 @@ function StrataServerBlock({
         toast.ok(
           info.update_available
             ? `Доступна Strata ${info.latest.version}`
-            : "Установлена последняя версия",
+            : info.update_blocked
+              ? `Вышла Strata ${info.latest.version}`
+              : "Установлена последняя версия",
+          info.update_blocked ?? undefined,
         );
     } catch (e) {
       toast.error("Проверка не удалась", errText(e));
@@ -699,12 +702,18 @@ function StrataServerBlock({
           ) : (
             !job && (
               <>
-                <span className="text-slate-500">
+                <span
+                  className={
+                    server.update_blocked ? "text-amber-300" : "text-slate-500"
+                  }
+                >
                   {latest.error
                     ? "не удалось проверить обновления"
-                    : latest.version
-                      ? "последняя версия"
-                      : ""}
+                    : server.update_blocked
+                      ? server.update_blocked
+                      : latest.version
+                        ? "последняя версия"
+                        : ""}
                 </span>
                 <button
                   type="button"

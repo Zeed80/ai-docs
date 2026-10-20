@@ -70,6 +70,21 @@ _GIT_SHIM = (
 )
 
 
+# ENTRYPOINT_SCRIPT drives the 0.1.x image: ./docker-entrypoint.sh and setup.py
+# in /opt/strata. From 0.2 Strata starts through `strata launch` with another
+# volume layout (/data/install, MODEL_PATH, no LOW_RAM); such a release is
+# neither built nor applied until the integration follows it.
+SUPPORTED_ENTRYPOINT = ["./docker-entrypoint.sh"]
+UNSUPPORTED_LAYOUT = (
+    "Strata {version} запускается по-новому (strata launch, другая раскладка тома); "
+    "панель её пока не поддерживает — установленная версия остаётся"
+)
+
+
+def dockerfile_supported(text: str) -> bool:
+    return 'ENTRYPOINT ["./docker-entrypoint.sh"]' in text
+
+
 def patch_dockerfile(text: str) -> str | None:
     """Strata's Dockerfile with the commit passed into package_terminal.py; None if the step is gone."""
     if text.count(PACKAGE_TERMINAL_RUN) != 1:
@@ -324,6 +339,8 @@ async def latest_release(*, force: bool = False) -> dict:
                 "url": rel.get("html_url"),
                 "checked_at": int(time.time()),
             }
+        dockerfile = await _fetch_dockerfile(out["commit"])
+        out["supported"] = dockerfile_supported(dockerfile) if dockerfile else None
         ttl = _RELEASE_TTL_S
     except Exception as exc:  # noqa: BLE001
         out = {"error": f"GitHub недоступен: {str(exc)[:200]}", "checked_at": int(time.time())}
@@ -392,10 +409,15 @@ async def update_info() -> dict:
         and latest.get("version")
         and version_tuple(latest["version"]) > version_tuple(current["version"])
     )
+    blocked = None
+    if available and latest.get("supported") is False:
+        available = False
+        blocked = UNSUPPORTED_LAYOUT.format(version=latest["version"])
     return {
         "current": current,
         "latest": latest,
         "update_available": available,
+        "update_blocked": blocked,
         "job": job,
     }
 
@@ -457,6 +479,8 @@ async def start_build(*, version: str, commit: str, then: str) -> dict:
     ]  # fmt: skip
     env: list[str] = []
     original = await _fetch_dockerfile(commit)
+    if original and not dockerfile_supported(original):
+        raise StrataError(UNSUPPORTED_LAYOUT.format(version=version))
     dockerfile = patch_dockerfile(original) if original else None
     if dockerfile:
         # Dockerfile from stdin, sources still from the git URL at that commit.
@@ -589,6 +613,11 @@ async def dismiss_job() -> None:
 
 async def _finish(image: str, then: str) -> None:
     """Point :current at ``image`` and put the server on it (create it for an install)."""
+    built = await _image(image)
+    entrypoint = ((built or {}).get("Config") or {}).get("Entrypoint")
+    if built is not None and entrypoint != SUPPORTED_ENTRYPOINT:
+        version = ((built.get("Config") or {}).get("Labels") or {}).get(LABEL_VERSION) or image
+        raise StrataError(UNSUPPORTED_LAYOUT.format(version=version))
     _ok(
         await _post(f"/images/{image}/tag", repo=IMAGE_REPO, tag=CURRENT_TAG),
         "tag",
