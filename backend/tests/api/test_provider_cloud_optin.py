@@ -40,7 +40,7 @@ def test_every_content_bearing_slot_is_local_until_opened(monkeypatch):
     подтверждения и без следа. Теперь письма, как и остальные слоты, через
     которые проходит содержимое документов, локальны до явного разрешения."""
     monkeypatch.setattr(p, "_cloud_allowed_slots", lambda: set())
-    for slot in ("agent_email", "agent_orchestrator", "agent_fast", "agent_large"):
+    for slot in ("agent_email", "agent_orchestrator", "agent_compression", "agent_auditor"):
         assert p._slot_base_local_only(slot) is True, slot
         assert p._slot_effective_local_only(slot) is True, slot
 

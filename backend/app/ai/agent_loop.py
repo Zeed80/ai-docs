@@ -291,45 +291,12 @@ def _get_agent_provider(
     return config.provider or "ollama"
 
 
-def _is_builder_turn(messages: list[dict]) -> bool:
-    latest_user = next(
-        (str(m.get("content") or "") for m in reversed(messages) if m.get("role") == "user"),
-        "",
-    ).lower()
-    if not latest_user:
-        return False
-    builder_markers = (
-        "skill",
-        "скилл",
-        "tool",
-        "инструмент",
-        "capability",
-        "возможност",
-        "plugin",
-        "плагин",
-        "script",
-        "скрипт",
-        "api",
-        "endpoint",
-        "код",
-        "реализуй",
-        "доработай",
-        "создай",
-    )
-    return any(marker in latest_user for marker in builder_markers)
-
-
 def _turn_model_overrides(
     config: BuiltinAgentConfig,
-    messages: list[dict],
 ) -> tuple[str | None, str | None, bool | None, str | None]:
-    if _is_builder_turn(messages):
-        return (
-            config.builder_model or config.worker_model,
-            config.builder_provider or config.worker_provider,
-            config.builder_disable_thinking,
-            config.builder_thinking_level,
-        )
+    # One employee: every turn runs on the same model and reasoning settings.
+    # A keyword-picked "builder turn" («создай», «код», «инструмент») used to
+    # switch them, a leftover of the skill generator retired by E48.
     return (
         config.worker_model,
         config.worker_provider,
@@ -3703,11 +3670,7 @@ class AgentSession:
         self._response_budget = max(256, min(int(max_tokens), 16384))
 
     def set_model_override(self, model: str | None) -> None:
-        """Set a per-turn worker model (tier-based fast/strong routing).
-
-        Replaced each turn. None → fall back to the configured worker/model.
-        Does not affect builder turns (capability generation keeps builder_model).
-        """
+        """Set a per-turn worker model. None → the configured worker/model."""
         self._turn_model_override = (model or "").strip() or None
 
     # Capabilities a scoped session can always use.
@@ -4277,14 +4240,10 @@ class AgentSession:
                             pass
 
                 model_override, provider_override, disable_thinking, thinking_level = (
-                    _turn_model_overrides(
-                        self._config,
-                        self.messages,
-                    )
+                    _turn_model_overrides(self._config)
                 )
-                # Tier-based override from the orchestrator (e.g. fast small model
-                # for simple turns) — applies to worker turns, not builder turns.
-                if self._turn_model_override and not _is_builder_turn(self.messages):
+                # A headless turn (an e-mail draft) may name its own model.
+                if self._turn_model_override:
                     model_override = self._turn_model_override
                 message = await _call_provider_streaming(
                     self._messages_for_call(),

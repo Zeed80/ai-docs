@@ -145,7 +145,7 @@ const PLAN = [
   },
   {
     slot: "agent_orchestrator",
-    label: "Оркестратор",
+    label: "Сотрудник",
     current_model: "ollama_thinkingcap_qwen3_8_27b_65536",
     move: true,
     reason: "GPU-Ollama → Strata",

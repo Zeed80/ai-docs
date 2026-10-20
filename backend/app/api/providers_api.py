@@ -1757,6 +1757,10 @@ class SlotOut(BaseModel):
 # «не задано → та же модель, что у оркестратора».
 _OPTIONAL_SLOTS = frozenset({"cad_text_ocr"})
 
+# Slots of the turn router and builder turns, gone with one employee
+# (2026-10-20). Older revisions still name them; a rollback skips them.
+_RETIRED_SLOTS = frozenset({"agent_fast", "agent_large"})
+
 
 # local_only=True → слот видит содержимое документов и потому локален по
 # умолчанию. Это не запрет: облако включается отдельным защищённым действием
@@ -1790,28 +1794,16 @@ _SLOTS = [
     # счетов и чертежей. Флаг делает их cloud-opt-in: облако остаётся
     # доступным, но включается осознанно (PATCH /slots/{slot}/allow-cloud с
     # подтверждением), а не побочным эффектом выбора модели из списка.
+    # One employee since 2026-10-18: no router, roles or builder turns. The
+    # key stays agent_orchestrator so saved revisions keep pointing at it.
     (
         "agent_orchestrator",
         "Агент",
-        "Оркестратор",
-        "Планирование, вызов инструментов, диалог",
-        True,
-    ),
-    (
-        "agent_fast",
-        "Агент",
-        "Быстрая (роутер/простые ходы)",
-        "Классификация хода и быстрые ответы — лёгкая модель, structured output",
+        "Сотрудник",
+        "Ведёт диалог, вызывает инструменты и отвечает — весь ход агента",
         True,
     ),
     ("agent_email", "Агент", "Письма", "Генерация деловых писем и черновиков", True),
-    (
-        "agent_large",
-        "Агент",
-        "Большая (скиллы/скрипты/ТП)",
-        "Генерация кода, навыков, техпроцессов",
-        True,
-    ),
     # Обе настройки существовали и раньше, но задавались мимо каталога:
     # «модель для сжатия» — свободным текстом в настройках агента (опечатка
     # или имя несуществующей модели молча ломали сжатие), аудитор — вовсе не
@@ -1871,9 +1863,7 @@ _SLOT_MODALITY = {
     "structured_extraction": "text",
     "ocr_large": "vision",
     "agent_orchestrator": "tool_calling",
-    "agent_fast": "text",
     "agent_email": "text",
-    "agent_large": "text",
     "agent_compression": "text",
     "agent_auditor": "text",
     "embedding": "embedding",
@@ -1891,22 +1881,17 @@ _SLOT_THINKING_TASKS: dict[str, list[str]] = {
     "ocr_fast": ["invoice_ocr", "classification", "drawing_analysis", "drawing_analysis_vlm"],
     "structured_extraction": ["structured_extraction", "long_context_summarization"],
     "agent_email": ["email_drafting"],
-    "agent_large": ["code_generation"],
     "cad_spec_read": ["cad_spec_read"],
     "cad_text_ocr": ["cad_text_ocr"],
     "cad_spec_draft": ["cad_spec_draft"],
 }
 _SLOT_THINKING_AGENT_FIELDS: dict[str, list[str]] = {
     "agent_orchestrator": ["orchestrator_disable_thinking", "worker_disable_thinking"],
-    "agent_fast": ["fast_disable_thinking"],
-    "agent_large": ["builder_disable_thinking"],
     "agent_auditor": ["auditor_disable_thinking"],
 }
 # Same slot→field(s) shape as above, for the reasoning-effort level tri-state.
 _SLOT_THINKING_LEVEL_AGENT_FIELDS: dict[str, list[str]] = {
     "agent_orchestrator": ["orchestrator_thinking_level", "worker_thinking_level"],
-    "agent_fast": ["fast_thinking_level"],
-    "agent_large": ["builder_thinking_level"],
     "agent_auditor": ["auditor_thinking_level"],
 }
 
@@ -1965,10 +1950,6 @@ def _slot_current_model(slot: str, registry) -> str | None:
     cfg = get_builtin_agent_config()
     if slot == "agent_orchestrator":
         return _key_for_raw(registry, cfg.orchestrator_model or cfg.model)
-    if slot == "agent_fast":
-        return _key_for_raw(registry, cfg.fast_model)
-    if slot == "agent_large":
-        return _key_for_raw(registry, cfg.builder_model)
     if slot == "agent_compression":
         return _key_for_raw(registry, cfg.compression_model)
     if slot == "agent_auditor":
@@ -2487,10 +2468,6 @@ def _slot_affected(slot: str) -> list[str]:
             AITask.ORCHESTRATOR_PLANNING.value,
             AITask.TOOL_CALLING.value,
         ]
-    if slot == "agent_fast":
-        return ["agent_config.fast_model"]
-    if slot == "agent_large":
-        return ["agent_config.builder_model", AITask.CODE_GENERATION.value]
     if slot == "agent_compression":
         return ["agent_config.compression_model"]
     if slot == "agent_auditor":
@@ -2827,8 +2804,7 @@ def _apply_slot_assignment(slot: str, model_key: str, registry) -> None:
         elif slot == "cad_spec_draft":
             _set_primary(AITask.CAD_SPEC_DRAFT, key)
         elif slot == "agent_orchestrator":
-            # Orchestrator + worker + base model. fast_model is a SEPARATE slot
-            # (agent_fast) so a heavy orchestrator no longer forces a heavy router.
+            # The employee's model: base, orchestrator and worker fields alike.
             update_builtin_agent_config(
                 BuiltinAgentConfigUpdate(
                     provider=cap.provider.value,
@@ -2841,21 +2817,6 @@ def _apply_slot_assignment(slot: str, model_key: str, registry) -> None:
             )
             for t in (AITask.ORCHESTRATOR_PLANNING, AITask.TOOL_CALLING):
                 _assign_task(t, key)
-        elif slot == "agent_fast":
-            update_builtin_agent_config(
-                BuiltinAgentConfigUpdate(
-                    fast_provider=cap.provider.value,
-                    fast_model=cap.provider_model,
-                )
-            )
-        elif slot == "agent_large":
-            update_builtin_agent_config(
-                BuiltinAgentConfigUpdate(
-                    builder_provider=cap.provider.value,
-                    builder_model=cap.provider_model,
-                )
-            )
-            _assign_task(AITask.CODE_GENERATION, key)
         elif slot == "agent_compression":
             # Провайдер обязателен: раньше сжатие всегда уходило провайдеру
             # worker'а, каким бы ни было имя модели — назвать облачную модель
@@ -2898,11 +2859,6 @@ def _unset_slot(slot: str, registry) -> None:
         )
         for t in (AITask.ORCHESTRATOR_PLANNING, AITask.TOOL_CALLING):
             reset_task_routing(t)
-    elif slot == "agent_fast":
-        update_builtin_agent_config(BuiltinAgentConfigUpdate(fast_model=defaults.fast_model))
-    elif slot == "agent_large":
-        update_builtin_agent_config(BuiltinAgentConfigUpdate(builder_model=defaults.builder_model))
-        reset_task_routing(AITask.CODE_GENERATION)
     elif slot == "agent_compression":
         update_builtin_agent_config(
             BuiltinAgentConfigUpdate(
@@ -3820,7 +3776,7 @@ async def rollback_assignment_revision(
     target = {
         item.get("slot"): item.get("old_model")
         for item in (revision.diff or [])
-        if item.get("slot")
+        if item.get("slot") and item.get("slot") not in _RETIRED_SLOTS
     }
     diff, warnings, errors = await _validate_assignment_draft(registry, target, loaded)
     if errors:
@@ -4055,8 +4011,6 @@ async def set_slot_thinking(
 
 
 def _slot_smoke_task(slot: str) -> AITask:
-    if slot == "agent_fast":
-        return AITask.ORCHESTRATOR_PLANNING
     affected = [item for item in _slot_affected(slot) if "." not in item]
     for item in affected:
         try:

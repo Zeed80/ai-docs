@@ -81,10 +81,10 @@ def test_apply_slot_thinking_agent_field_tristate(monkeypatch):
     # apply imports update_builtin_agent_config locally — patch at source too.
     monkeypatch.setattr(ac, "update_builtin_agent_config", _update)
 
-    _apply_slot_thinking("agent_fast", True)
-    assert captured["fast_disable_thinking"] is False  # reasoning ON → disable=False
-    _apply_slot_thinking("agent_fast", None)
-    assert captured["fast_disable_thinking"] is None  # default
+    _apply_slot_thinking("agent_auditor", True)
+    assert captured["auditor_disable_thinking"] is False  # reasoning ON → disable=False
+    _apply_slot_thinking("agent_auditor", None)
+    assert captured["auditor_disable_thinking"] is None  # default
 
 
 def test_slot_thinking_state_reports_effective_source(routing_mem_store):
@@ -118,7 +118,7 @@ def test_slot_thinking_state_flags_unknown_disable_knob(routing_mem_store):
         local_only=True,
     )
 
-    state = _slot_thinking_state("agent_fast", registry, "lmstudio_thinker_test")
+    state = _slot_thinking_state("agent_auditor", registry, "lmstudio_thinker_test")
     assert state["thinking_effective"] is False
     assert state["thinking_disable_supported"] is False
     assert state["thinking_warning"]

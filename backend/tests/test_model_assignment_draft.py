@@ -29,7 +29,7 @@ def test_production_manual_capability_is_not_reported_as_failed_verification():
         capability_source="manual",
     )
 
-    assert _verification_warning("agent_fast", "prod_manual", cap) is None
+    assert _verification_warning("agent_auditor", "prod_manual", cap) is None
 
 
 def test_discovered_capability_gets_precise_unverified_profile_warning():
@@ -42,7 +42,7 @@ def test_discovered_capability_gets_precise_unverified_profile_warning():
         capability_source="discovered",
     )
 
-    issue = _verification_warning("agent_fast", "live_discovered", cap)
+    issue = _verification_warning("agent_auditor", "live_discovered", cap)
 
     assert issue is not None
     assert issue.code == "not_production"
@@ -165,7 +165,7 @@ async def test_assignment_draft_apply_and_rollback(
     assert apply_resp.status_code == 200
     applied = apply_resp.json()
     assert applied["revision_id"]
-    assert tr.get_routing_for(AITask.STRUCTURED_EXTRACTION).primary == "qwen3_5_9b_ollama"
+    assert tr.get_routing_for(AITask.STRUCTURED_EXTRACTION).primary == before
 
     # Rollback now gates warnings symmetrically with apply (Fix 8): the target
     # model may carry a non-blocking warning, so confirm_warnings is required.
@@ -174,4 +174,55 @@ async def test_assignment_draft_apply_and_rollback(
         params={"confirm_warnings": "true"},
     )
     assert rollback_resp.status_code == 200
+    assert tr.get_routing_for(AITask.STRUCTURED_EXTRACTION).primary == before
+
+
+@pytest.mark.asyncio
+async def test_agent_slots_are_the_one_employee(client: AsyncClient):
+    """No router or builder slots since 2026-10-20: one employee model."""
+    resp = await client.get("/api/providers/slots")
+    agent = [s["slot"] for s in resp.json() if s["group"] == "Агент"]
+    assert agent == ["agent_orchestrator", "agent_email", "agent_compression", "agent_auditor"]
+
+
+@pytest.mark.asyncio
+async def test_rollback_skips_slots_that_are_gone(
+    client: AsyncClient, db_session, monkeypatch, routing_mem_store
+):
+    """39 of 91 live revisions name agent_fast/agent_large (a Strata switch
+    moves every slot); rolling one back must not fail on them."""
+    from app.ai import model_runtime_store
+
+    async def _loaded_index():
+        return {("ollama", "qwen3.5:9b"): "test-node", ("ollama", "qwen3.5"): "test-node"}
+
+    monkeypatch.setattr("app.api.providers_api._loaded_index", _loaded_index)
+    before = tr.get_routing_for(AITask.STRUCTURED_EXTRACTION).primary
+    applied = await client.post(
+        "/api/providers/assignment-draft/apply",
+        json={"slots": {"structured_extraction": "qwen3_5_9b_ollama"}, "confirm_warnings": True},
+    )
+    assert applied.status_code == 200
+    revision = await model_runtime_store.create_assignment_revision(
+        db_session,
+        created_by="test",
+        before_snapshot={},
+        after_snapshot={},
+        diff=[
+            {"slot": "agent_fast", "old_model": "gemma4_e2b_ollama", "new_model": "x"},
+            {
+                "slot": "structured_extraction",
+                "old_model": before,
+                "new_model": "qwen3_5_9b_ollama",
+            },
+        ],
+        warnings=[],
+    )
+    await db_session.commit()
+
+    resp = await client.post(
+        f"/api/providers/assignments/{revision.id}/rollback",
+        params={"confirm_warnings": "true"},
+    )
+    assert resp.status_code == 200, resp.text
     assert tr.get_routing_for(AITask.STRUCTURED_EXTRACTION).primary == before

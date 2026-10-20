@@ -41,10 +41,10 @@ async def test_agent_config_roundtrip_survives_flush(db_session, monkeypatch):
         "app.ai.agent_config._redis_set_agent_config",
         lambda data: written.update({"cfg": data}),
     )
-    await store.persist_agent_config(db_session, config={"fast_model": "gemma4:e2b"})
+    await store.persist_agent_config(db_session, config={"compression_model": "gemma4:e2b"})
     await db_session.commit()
     await store.hydrate_runtime_cache(db_session)
-    assert written["cfg"]["fast_model"] == "gemma4:e2b"
+    assert written["cfg"]["compression_model"] == "gemma4:e2b"
 
 
 @pytest.mark.asyncio

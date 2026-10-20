@@ -87,25 +87,17 @@ def test_agent_approval_map_covers_high_risk_tools():
         assert agent_loop._APPROVAL_ACTION_TYPE_MAP[skill_name] == action_type
 
 
-def test_turn_model_overrides_route_builder_tasks_to_large_model():
+def test_every_turn_runs_on_the_employee_model():
+    """A «создай…» or «код» turn used to switch to the builder model and its
+    reasoning by keywords; one employee has one setting."""
     config = BuiltinAgentConfig(
         model="qwen3.5:9b",
         worker_model="qwen3.5:9b",
         worker_provider="ollama",
         worker_disable_thinking=True,
-        builder_model="qwen3.6:35b",
-        builder_provider="ollama",
-        builder_disable_thinking=False,
     )
 
-    assert agent_loop._turn_model_overrides(
-        config,
-        [{"role": "user", "content": "Создай новый skill для таблицы"}],
-    ) == ("qwen3.6:35b", "ollama", False, None)
-    assert agent_loop._turn_model_overrides(
-        config,
-        [{"role": "user", "content": "Покажи товары по счетам"}],
-    ) == ("qwen3.5:9b", "ollama", True, None)
+    assert agent_loop._turn_model_overrides(config) == ("qwen3.5:9b", "ollama", True, None)
 
 
 @pytest.mark.asyncio

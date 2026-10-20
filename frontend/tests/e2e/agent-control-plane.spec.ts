@@ -30,12 +30,6 @@ const agentConfig = {
   auditor_model: null,
   auditor_provider: null,
   auditor_disable_thinking: false,
-  builder_model: null,
-  builder_provider: null,
-  builder_disable_thinking: false,
-  fast_model: null,
-  fast_provider: null,
-  fast_disable_thinking: false,
   provider: "ollama",
   fallback_providers: [],
   prompt_cache_enabled: false,
@@ -269,7 +263,6 @@ async function mockSettingsApi(page: Page, calls: string[]) {
           models: {
             orchestrator_model: null,
             worker_model: null,
-            builder_model: null,
             fallback_providers: [],
           },
           memory: {

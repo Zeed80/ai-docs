@@ -85,8 +85,6 @@ class AgentGroup(BaseModel):
 
     agent_model: str | None = None
     agent_provider: str | None = None
-    large_model: str | None = None
-    large_provider: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -119,8 +117,6 @@ def get_agent_group() -> AgentGroup:
     return AgentGroup(
         agent_model=cfg.worker_model or cfg.model,
         agent_provider=cfg.worker_provider or cfg.provider,
-        large_model=cfg.builder_model,
-        large_provider=cfg.builder_provider or cfg.provider,
     )
 
 
@@ -386,13 +382,6 @@ def set_agent_group(group: AgentGroup) -> AgentGroup:
             worker_model=group.agent_model,
             auditor_provider=provider,
             auditor_model=group.agent_model,
-            fast_provider=provider,
-            fast_model=group.agent_model,
-        )
-    if group.large_model:
-        patch.update(
-            builder_provider=group.large_provider or group.agent_provider or "ollama",
-            builder_model=group.large_model,
         )
     if patch:
         update_builtin_agent_config(BuiltinAgentConfigUpdate(**patch))
@@ -402,6 +391,5 @@ def set_agent_group(group: AgentGroup) -> AgentGroup:
     logger.info(
         "agent_group_set",
         agent_model=group.agent_model,
-        large_model=group.large_model,
     )
     return get_agent_group()

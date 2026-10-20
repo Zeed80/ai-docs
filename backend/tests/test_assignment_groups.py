@@ -91,15 +91,12 @@ def test_set_agent_group_updates_roles_and_syncs_orchestrator(stores):
         ag.AgentGroup(
             agent_model="gemma4:e4b",
             agent_provider="ollama",
-            large_model="qwen3.6:35b",
-            large_provider="ollama",
         )
     )
     cfg = ac.get_builtin_agent_config()
     assert cfg.worker_model == "gemma4:e4b"
     assert cfg.orchestrator_model == "gemma4:e4b"
     assert cfg.auditor_model == "gemma4:e4b"
-    assert cfg.builder_model == "qwen3.6:35b"
 
     # Critical: orchestrator routing must follow so the pinned model is correct.
     orch = tr.get_routing_for(AITask.ORCHESTRATOR_PLANNING)

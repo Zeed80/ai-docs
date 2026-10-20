@@ -113,8 +113,6 @@ class AgentRuntimeModels(BaseModel):
     orchestrator_model: str | None = None
     worker_model: str | None = None
     auditor_model: str | None = None
-    builder_model: str | None = None
-    fast_model: str | None = None
     compression_model: str | None = None
     fallback_providers: list[str]
 
@@ -831,8 +829,6 @@ async def runtime_status(db: AsyncSession = Depends(get_db)) -> AgentRuntimeStat
             orchestrator_model=config.orchestrator_model,
             worker_model=config.worker_model or config.model,
             auditor_model=config.auditor_model or config.worker_model or config.model,
-            builder_model=config.builder_model,
-            fast_model=config.fast_model,
             compression_model=config.compression_model,
             fallback_providers=list(config.fallback_providers or []),
         ),

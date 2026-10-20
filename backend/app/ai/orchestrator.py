@@ -334,11 +334,6 @@ class AgentOrchestrator:
         # Size the response budget to the task: cheap/fast for short answers,
         # roomy for reports/tables. Avoids the old hardcoded 4096 on every turn.
         self._executor.set_response_budget(_response_budget_for(tier, plan))
-        # Tier-based model routing: simple turns → fast small model (if configured),
-        # complex turns → the configured worker/model. No fast_model → no change.
-        self._executor.set_model_override(
-            config.fast_model if (config.fast_model and tier < Tier.MEDIUM) else None
-        )
         self._llm_calls += 1
         set_references = getattr(self._executor, "set_turn_references", None)
         if callable(set_references):

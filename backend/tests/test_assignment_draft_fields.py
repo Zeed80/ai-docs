@@ -81,7 +81,7 @@ def test_only_explicit_cloud_decisions_are_collected():
         slots={
             "agent_email": {"allow_cloud": True},
             "ocr_fast": {"allow_cloud": False},
-            "agent_large": {"model": "x"},
+            "agent_compression": {"model": "x"},
         }
     )
     assert _cloud_overrides(payload) == {"agent_email": True, "ocr_fast": False}

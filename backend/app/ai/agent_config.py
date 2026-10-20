@@ -67,14 +67,6 @@ class BuiltinAgentConfig(BaseModel):
     # opt-in). Lived only in the Redis set providers:slot_allow_cloud, while
     # its mirror auditor_allow_cloud was reset from Postgres on every start.
     cloud_allowed_slots: list[str] = Field(default_factory=list)
-    builder_model: str | None = None
-    builder_provider: str | None = None
-    builder_disable_thinking: bool = False
-    builder_thinking_level: Literal["low", "medium", "high"] | None = None
-    fast_model: str | None = None
-    fast_provider: str | None = None
-    fast_disable_thinking: bool | None = None
-    fast_thinking_level: Literal["low", "medium", "high"] | None = None
     # LLM provider: ollama, vllm, lmstudio, openai-compatible or supported cloud provider.
     provider: str = "ollama"
     # Ordered fallback chain tried when primary provider fails
@@ -181,14 +173,6 @@ class BuiltinAgentConfigUpdate(BaseModel):
     auditor_allow_cloud: bool | None = None
     sql_full_access: bool | None = None
     cloud_allowed_slots: list[str] | None = None
-    builder_model: str | None = None
-    builder_provider: str | None = None
-    builder_disable_thinking: bool | None = None
-    builder_thinking_level: Literal["low", "medium", "high"] | None = None
-    fast_model: str | None = None
-    fast_provider: str | None = None
-    fast_disable_thinking: bool | None = None
-    fast_thinking_level: Literal["low", "medium", "high"] | None = None
     provider: str | None = None
     fallback_providers: list[str] | None = None
     prompt_cache_enabled: bool | None = None
@@ -423,16 +407,12 @@ ROLE_THINKING_FIELDS: dict[str, str] = {
     "orchestrator": "orchestrator_disable_thinking",
     "worker": "worker_disable_thinking",
     "auditor": "auditor_disable_thinking",
-    "builder": "builder_disable_thinking",
-    "fast": "fast_disable_thinking",
 }
 
 ROLE_THINKING_LEVEL_FIELDS: dict[str, str] = {
     "orchestrator": "orchestrator_thinking_level",
     "worker": "worker_thinking_level",
     "auditor": "auditor_thinking_level",
-    "builder": "builder_thinking_level",
-    "fast": "fast_thinking_level",
 }
 
 

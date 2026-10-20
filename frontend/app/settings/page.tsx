@@ -117,12 +117,6 @@ interface AgentConfig {
   auditor_model: string | null;
   auditor_provider: string | null;
   auditor_disable_thinking: boolean;
-  builder_model: string | null;
-  builder_provider: string | null;
-  builder_disable_thinking: boolean;
-  fast_model: string | null;
-  fast_provider: string | null;
-  fast_disable_thinking: boolean;
   provider: string;
   fallback_providers: string[];
   prompt_cache_enabled: boolean;
@@ -201,8 +195,6 @@ interface AgentRuntimeStatus {
     orchestrator_model: string | null;
     worker_model: string | null;
     auditor_model: string | null;
-    builder_model: string | null;
-    fast_model: string | null;
     compression_model: string | null;
     fallback_providers: string[];
   };
@@ -1645,8 +1637,8 @@ export default function SettingsPage() {
               </SectionCard>
 
               <SectionCard
-                title="Отдел ИИ"
-                subtitle="Оркестратор управляет задачей: назначает исполнителя, контролирует инструменты, Рабочий стол и аудит результата."
+                title="Сотрудник ИИ"
+                subtitle="Один сотрудник ведёт задачу целиком: вызывает инструменты, публикует на Рабочий стол, проверяет результат."
               >
                 <div className="space-y-4">
                   <div className="grid grid-cols-1 gap-3 lg:grid-cols-4">
@@ -1804,18 +1796,19 @@ export default function SettingsPage() {
                       </div>
                       <div className="rounded-md border border-slate-700 bg-slate-900/50 p-3 text-xs">
                         <div className="font-medium text-slate-100">
-                          Model routing
+                          Модели
                         </div>
                         <div className="mt-2 space-y-1 text-slate-400">
                           <div>
-                            Orchestrator:{" "}
-                            {agentRuntime.models.orchestrator_model ?? "—"}
+                            Сотрудник: {agentRuntime.models.worker_model ?? "—"}
                           </div>
                           <div>
-                            Workers: {agentRuntime.models.worker_model ?? "—"}
+                            Проверка ответа:{" "}
+                            {agentRuntime.models.auditor_model ?? "—"}
                           </div>
                           <div>
-                            Builder: {agentRuntime.models.builder_model ?? "—"}
+                            Сжатие:{" "}
+                            {agentRuntime.models.compression_model ?? "как у сотрудника"}
                           </div>
                           <div>
                             Fallbacks:{" "}

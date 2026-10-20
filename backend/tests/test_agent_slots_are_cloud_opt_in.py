@@ -19,9 +19,7 @@ from app.api.providers_api import (
 # Слоты, через которые проходит пользовательский контент.
 CONTENT_BEARING_SLOTS = [
     "agent_orchestrator",
-    "agent_fast",
     "agent_email",
-    "agent_large",
     "agent_compression",
     "agent_auditor",
     "ocr_fast",

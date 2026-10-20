@@ -906,8 +906,6 @@ class DocumentGroupUpdate(BaseModel):
 class AgentGroupUpdate(BaseModel):
     agent_model: str | None = None
     agent_provider: str | None = None
-    large_model: str | None = None
-    large_provider: str | None = None
 
 
 @router.get("/assignment")

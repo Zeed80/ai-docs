@@ -235,7 +235,7 @@ models:
     vram_gb_estimate: 3.5
     quality_score: 0.65
     speed_score: 0.95
-    notes: "Compact 2B multimodal model (7.2 GB). Fast vision OCR and a cheap, JSON-reliable turn router (fast_model). Honors Ollama structured output."
+    notes: "Compact 2B multimodal model (7.2 GB). Fast vision OCR, JSON-reliable. Honors Ollama structured output."
   gemma4_e4b_ollama:
     provider: "ollama"
     provider_model: "gemma4:e4b"
