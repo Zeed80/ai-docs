@@ -526,6 +526,7 @@ async def _run_durable_chat(
             if continuation_payload["pending_calls"][0]["id"] != decision["call_id"]:
                 raise ChatRunStopped("Authorized call changed")
     chunks, errors = [], []
+    clarify: list[dict] = []
     tool_evidence: list[dict[str, Any]] = []
 
     async def collect(event):
@@ -558,6 +559,8 @@ async def _run_durable_chat(
             del tool_evidence[:-_VERIFIER_EVIDENCE_MAX_ITEMS]
         if kind == "error":
             errors.append(str(event.get("error_code") or "agent_error"))
+        if kind == "clarify":
+            clarify.append({k: event.get(k) for k in ("question", "options", "recommended")})
 
     budget_context = WorkBudgetContext(
         work_order_id=uuid.UUID(str(work_order_id)),
@@ -721,7 +724,12 @@ async def _run_durable_chat(
                 session_id=session_id,
                 role="assistant",
                 content=result,
-                metadata={"work_order_id": str(work_order_id), "verified": False},
+                metadata={
+                    "work_order_id": str(work_order_id),
+                    "verified": False,
+                    # The answer buttons, so a reloaded chat still shows them.
+                    **({"clarify": clarify[-1]} if clarify else {}),
+                },
             )
             run.result_message_id = message.id
             await append_event(

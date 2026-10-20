@@ -3176,6 +3176,38 @@ def fruitless_reads(calls: list[tuple[str, Any, Any]], seen: set[str]) -> bool |
     return fruitless
 
 
+def clarify_question(tool_calls: list[dict], results: list) -> dict | None:
+    """The question of a successful ``clarify`` call of this step, if any."""
+    for call, (name, result) in zip(tool_calls, results, strict=False):
+        fn = (call.get("function") or {}).get("name") or name
+        if str(fn).replace("__", ".").split(".")[0] != "clarify" or _failed(result):
+            continue
+        answer = _answer(result)
+        if not isinstance(answer, dict):
+            continue
+        options = [
+            {"label": str(o.get("label")), "value": str(o.get("value") or o.get("label"))}
+            for o in answer.get("options") or []
+            if isinstance(o, dict) and o.get("label")
+        ]
+        if answer.get("question") and len(options) >= 2:
+            return {
+                "question": str(answer["question"]),
+                "options": options,
+                "recommended": bool(answer.get("recommended")),
+            }
+    return None
+
+
+def clarify_text(question: dict) -> str:
+    """The question as plain text, for history and channels without buttons."""
+    lines = [question["question"], ""]
+    for number, option in enumerate(question["options"], 1):
+        mark = " (рекомендую)" if number == 1 and question.get("recommended") else ""
+        lines.append(f"{number}. {option['label']}{mark}")
+    return "\n".join(lines)
+
+
 def _failed(result: Any) -> bool:
     if not isinstance(result, dict):
         return True
@@ -4135,6 +4167,19 @@ class AgentSession:
                 # conversational context for another model/tool turn.  The
                 # executor has already retained the exact recipient envelope.
                 if self._contains_nonterminal_v1_result(results):
+                    break
+
+                # A question with answer buttons ends the turn: the person's
+                # choice is the next message (hermes-agent's clarify).
+                question = clarify_question(tool_calls, results)
+                if question is not None:
+                    text = clarify_text(question)
+                    await self._send({"type": "text", "content": text})
+                    # After the text: the buttons attach to that message.
+                    await self._send({"type": "clarify", **question})
+                    delivered_text = text
+                    self._record_assistant_reply(delivered_text)
+                    self._remember_latest_turn(delivered_text)
                     break
 
                 # A desktop publish ends the tool phase: one tool-less call

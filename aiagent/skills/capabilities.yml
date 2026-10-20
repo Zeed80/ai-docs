@@ -1291,6 +1291,44 @@ capabilities:
           description: "Имя процедуры из раздела «Процедуры»"
       required: [action, name]
 
+  - name: clarify
+    description: >
+      Вопрос человеку с вариантами ответа кнопками. Вызывай, когда задачу нельзя
+      сделать без его выбора: несколько подходящих записей (два поставщика с
+      похожим названием, несколько счетов), запись не нашлась, но есть похожая,
+      адрес с ошибкой. Варианты — конкретные (название, ИНН, номер, дата), от
+      двух до пяти; тот, что считаешь верным, — первым. Вызов заканчивает ход:
+      человек ответит выбором, и ты продолжишь. Не вызывай, если выбор не нужен.
+    path: /api/agent/cap/clarify
+    method: POST
+    gate_actions: []
+    parameters:
+      type: object
+      properties:
+        action:
+          type: string
+          description: "ask"
+        question:
+          type: string
+          description: "Один короткий вопрос"
+        options:
+          type: array
+          description: "От 2 до 5 вариантов; рекомендуемый — первым"
+          items:
+            type: object
+            properties:
+              label:
+                type: string
+                description: "Что видит человек на кнопке"
+              value:
+                type: string
+                description: "Что придёт тебе в ответ (по умолчанию label)"
+            required: [label]
+        recommended:
+          type: boolean
+          description: "true — первый вариант рекомендуешь ты"
+      required: [action, question, options]
+
   - name: vault
     description: >
       Получить данные из временного хранилища по vault_ref из предыдущего ответа.

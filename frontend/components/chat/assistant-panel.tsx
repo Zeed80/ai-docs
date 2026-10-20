@@ -63,6 +63,29 @@ interface ApprovalCard {
   raw_args: Record<string, unknown>;
 }
 
+/** Вопрос агента с вариантами ответа (clarify): выбор уходит следующим
+ *  сообщением, точным значением варианта. */
+interface ClarifyQuestion {
+  question: string;
+  options: { label: string; value: string }[];
+  recommended?: boolean;
+}
+
+function asClarify(raw: unknown): ClarifyQuestion | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const data = raw as Record<string, unknown>;
+  const options = Array.isArray(data.options)
+    ? (data.options as Record<string, unknown>[])
+        .filter((o) => o && typeof o.label === "string" && o.label)
+        .map((o) => ({
+          label: String(o.label),
+          value: typeof o.value === "string" && o.value ? o.value : String(o.label),
+        }))
+    : [];
+  if (typeof data.question !== "string" || options.length < 2) return undefined;
+  return { question: data.question, options, recommended: Boolean(data.recommended) };
+}
+
 interface ChatMessage {
   id: string;
   role: MessageRole;
@@ -75,6 +98,7 @@ interface ChatMessage {
   card?: ApprovalCard;
   irreversible?: boolean;
   planSteps?: { text: string; irreversible: boolean }[];
+  clarify?: ClarifyQuestion;
   approvalId?: string;
   dbId?: string;
   toolsUsedInTurn?: string[];
@@ -415,6 +439,7 @@ export function AssistantPanel() {
             id: msg.id,
             role,
             content: msg.content ?? undefined,
+            clarify: asClarify(msg.metadata?.clarify),
             attachments:
               msg.attachments
                 ?.filter((item) => item.document_id)
@@ -812,6 +837,19 @@ export function AssistantPanel() {
         return prev.map((m, i) =>
           i === realIdx ? { ...m, status: "done", result: data.result } : m,
         );
+      });
+      return;
+    }
+
+    // Варианты ответа на вопрос агента — к его последнему сообщению.
+    if (type === "clarify") {
+      const clarify = asClarify(data);
+      if (!clarify || isTelegram) return;
+      setMessages((prev) => {
+        const idx = [...prev].reverse().findIndex((m) => m.role === "assistant");
+        if (idx === -1) return prev;
+        const realIdx = prev.length - 1 - idx;
+        return prev.map((m, i) => (i === realIdx ? { ...m, clarify } : m));
       });
       return;
     }
@@ -1634,6 +1672,31 @@ export function AssistantPanel() {
                   )}
                   <div className="px-3 py-2">{msg.content}</div>
                 </div>
+                {msg.clarify && isLastAssistant && messages[messages.length - 1]?.id === msg.id && (
+                  <div
+                    className="flex flex-wrap gap-1.5 pl-1 pt-1"
+                    role="group"
+                    aria-label="Варианты ответа"
+                  >
+                    {msg.clarify.options.map((option, oi) => (
+                      <button
+                        key={oi}
+                        type="button"
+                        disabled={isStreaming || isLegacyChat}
+                        onClick={() => sendAgentText(option.value)}
+                        className={`min-w-0 max-w-full truncate rounded-full border px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
+                          oi === 0 && msg.clarify?.recommended
+                            ? "border-blue-500 bg-blue-600/20 text-blue-200 hover:bg-blue-600/30"
+                            : "border-slate-600 bg-slate-700 text-slate-200 hover:border-blue-500 hover:text-blue-300"
+                        }`}
+                        title={option.label}
+                      >
+                        {option.label}
+                        {oi === 0 && msg.clarify?.recommended ? " · рекомендую" : ""}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 {msg.actionChips && msg.actionChips.length > 0 && (
                   <div className="flex flex-wrap gap-1.5 pl-1 pt-1">
                     {msg.actionChips.map((chip, ci) => (

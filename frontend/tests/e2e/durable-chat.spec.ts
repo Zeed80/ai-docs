@@ -113,3 +113,46 @@ test("HTTP-чат восстанавливает работу после reload 
   expect(posts).toBe(1);
   expect(sockets.some((url) => url.includes("/ws/chat"))).toBe(false);
 });
+
+test("вопрос с вариантами: кнопки из истории отправляют точное значение", async ({context, page}) => {
+  await context.addCookies([{name: "access_token", value: "mock-only", domain: "127.0.0.1", path: "/"}]);
+  const session = {id: "11111111-1111-4111-8111-111111111111", title: "Тёзки", user_key: "test-user"};
+  const posted: string[] = [];
+  await context.route("**/api/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/auth/me") return route.fulfill({json: {sub: "test-user", name: "Test", roles: ["admin"], groups: [], sections: []}});
+    if (path === "/api/ai/agent-config") return route.fulfill({json: {agent_name: "Света"}});
+    if (path === "/api/chat/sessions") return route.fulfill({json: [session]});
+    if (path.endsWith("/messages")) return route.fulfill({json: [
+      {id: "user", role: "user", content: "Напиши письмо Эвал-Меди", attachments: []},
+      {id: "answer", role: "assistant", content: "Какой «Эвал-Медь»?\n\n1. ООО (рекомендую)\n2. АО", attachments: [],
+        metadata: {clarify: {question: "Какой «Эвал-Медь»?", recommended: true, options: [
+          {label: "ООО «Эвал-Медь», ИНН 7702000051", value: "ООО «Эвал-Медь» (7702000051)"},
+          {label: "АО «Эвал-Медь», ИНН 7702000052", value: "АО «Эвал-Медь» (7702000052)"},
+        ]}}},
+      ...posted.map((_, i) => ({id: `reply-${i}`, role: "user", content: "АО «Эвал-Медь» (7702000052)", attachments: []})),
+    ]});
+    if (path === "/api/agent/chat-runs") {
+      if (route.request().method() === "POST") {
+        posted.push(JSON.stringify(route.request().postDataJSON()));
+        return route.fulfill({status: 202, json: {id: "run", session_id: session.id, work_order_id: "order", request_id: "r", status: "running", result_message_id: null}});
+      }
+      return route.fulfill({json: {run: null, legacy: false}});
+    }
+    if (path.endsWith("/events")) return route.fulfill({json: {items: [], next_cursor: 0}});
+    return route.fulfill({json: {}});
+  });
+  await page.goto("/assistant");
+  const groups = page.getByRole("group", {name: "Варианты ответа"});
+  await expect(groups.first()).toBeVisible();
+  const before = await groups.count();
+  const group = groups.first();
+  await expect(group.getByRole("button")).toHaveCount(2);
+  await expect(group.getByRole("button").first()).toContainText("рекомендую");
+  await group.getByRole("button", {name: /АО «Эвал-Медь»/}).click();
+  await expect.poll(() => posted.length).toBe(1);
+  expect(posted[0]).toContain("АО «Эвал-Медь» (7702000052)");
+  // The answered question shows no buttons any more (the page may hold a
+  // second chat panel of its own).
+  await expect(groups).toHaveCount(before - 1);
+});

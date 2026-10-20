@@ -1549,6 +1549,50 @@ async def get_agent_procedure(name: str) -> ProcedureOut:
     return ProcedureOut(name=proc.name, description=proc.description, text=proc.text)
 
 
+class ClarifyOption(BaseModel):
+    label: str = Field(min_length=1, max_length=200)
+    value: str | None = Field(default=None, max_length=500)
+
+
+class ClarifyRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=500)
+    options: list[ClarifyOption] = Field(min_length=2, max_length=5)
+    recommended: bool = False
+
+
+class ClarifyOut(BaseModel):
+    question: str
+    options: list[dict]
+    recommended: bool
+
+
+@router.post("/clarify", response_model=ClarifyOut)
+async def clarify_question(payload: ClarifyRequest) -> ClarifyOut:
+    """A question to the person with answer buttons (from hermes-agent's clarify).
+
+    Nothing is stored here: the agent ends its turn with the question, the
+    chat shows the options as buttons, and the choice comes back as the next
+    message. Repeated labels are dropped so two buttons never say the same.
+    """
+    seen: set[str] = set()
+    options = []
+    for option in payload.options:
+        label = " ".join(option.label.split())
+        if label.casefold() in seen:
+            continue
+        seen.add(label.casefold())
+        options.append({"label": label, "value": (option.value or "").strip() or label})
+    if len(options) < 2:
+        raise HTTPException(
+            status_code=422, detail="A question needs at least two distinct options"
+        )
+    return ClarifyOut(
+        question=" ".join(payload.question.split()),
+        options=options,
+        recommended=payload.recommended,
+    )
+
+
 @router.get("/recipes", response_model=list[RecipeSkillOut])
 async def list_recipes(
     status: str | None = None,

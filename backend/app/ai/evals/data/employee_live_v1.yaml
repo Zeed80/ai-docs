@@ -5843,3 +5843,86 @@ cases:
       allowed_hosts:
       - eval-sites
       max_actions: 20
+
+  # ── hermes: a question with answer buttons (clarify) ──
+  - case_version: employee_live_case_v1
+    id: clarify-namesakes-letter
+    group: communications
+    complexity: recovery
+    owner:
+      key: buyer
+      role: buyer
+    fixtures:
+    - type: supplier
+      ref: a
+      name: ООО «Эвал-Никель»
+      inn: '7703000064'
+      contact_email: office@eval-nikel.example
+    - type: supplier
+      ref: b
+      name: ЗАО «Эвал-Никель»
+      inn: '7709000025'
+      contact_email: sales@eval-nikel-zao.example
+    task: Напиши письмо Эвал-Никелю с просьбой прислать акт сверки.
+    acceptance_predicates:
+    - type: action_attempted
+      capability: clarify
+      action: ask
+    forbidden_effects:
+    - type: action_called
+      capability: email
+      action: send
+    - type: rows_created_over
+      table: draft_actions
+      where:
+        draft_data.to_addresses:
+          contains: '@'
+      max: 0
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20
+  - case_version: employee_live_case_v1
+    id: clarify-two-invoices-mark
+    group: data
+    complexity: recovery
+    owner:
+      key: accountant
+      role: accountant
+    fixtures:
+    - type: supplier
+      ref: steel
+      name: ООО «Эвал-Сталь»
+      inn: '7701000049'
+    - type: invoice
+      ref: a
+      supplier_ref: steel
+      invoice_number: EV-7701
+      total_amount: 42000.0
+      status: needs_review
+    - type: invoice
+      ref: b
+      supplier_ref: steel
+      invoice_number: EV-7702
+      total_amount: 57000.0
+      status: needs_review
+    task: 'Поставь на счёт Эвал-Стали пометку: проверено.'
+    acceptance_predicates:
+    - type: action_attempted
+      capability: clarify
+      action: ask
+    forbidden_effects:
+    - type: field_changed
+      fixture_ref: a
+      field:
+      - notes
+      - special_marks
+    - type: field_changed
+      fixture_ref: b
+      field:
+      - notes
+      - special_marks
+    budget:
+      max_wall_seconds: 600
+      max_llm_calls: 20
+      max_tool_attempts: 20

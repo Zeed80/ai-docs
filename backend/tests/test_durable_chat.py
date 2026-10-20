@@ -427,6 +427,37 @@ async def test_worker_persists_result_without_http_connection(test_engine):
         )
 
 
+class ClarifyAgent(FakeAgent):
+    async def on_user_message(self, prompt, **kwargs):
+        await self.send({"type": "text", "content": "Какой?\n\n1. A\n2. B"})
+        await self.send(
+            {
+                "type": "clarify",
+                "question": "Какой?",
+                "options": [{"label": "A", "value": "A"}, {"label": "B", "value": "B"}],
+                "recommended": False,
+            }
+        )
+        await self.send({"type": "done"})
+
+
+@pytest.mark.asyncio
+async def test_the_answer_buttons_are_saved_with_the_reply(test_engine):
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    run, step, attempt = await claimed_run(factory)
+    await run_durable_chat(
+        run["work_order_id"], step, attempt, session_factory=factory, agent_factory=ClarifyAgent
+    )
+    async with factory() as db:
+        saved = await db.get(DurableChatRun, run["id"])
+        message = await db.get(ChatMessage, saved.result_message_id)
+        assert message.metadata_["clarify"] == {
+            "question": "Какой?",
+            "options": [{"label": "A", "value": "A"}, {"label": "B", "value": "B"}],
+            "recommended": False,
+        }
+
+
 @pytest.mark.asyncio
 async def test_telegram_worker_persists_terminal_reply_outbox(test_engine):
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
