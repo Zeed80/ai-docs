@@ -144,7 +144,8 @@ test("вопрос с вариантами: кнопки из истории о�
   });
   await page.goto("/assistant");
   const groups = page.getByRole("group", {name: "Варианты ответа"});
-  await expect(groups.first()).toBeVisible();
+  // The first visit compiles the page on a cold dev server.
+  await expect(groups.first()).toBeVisible({ timeout: 30_000 });
   const before = await groups.count();
   const group = groups.first();
   await expect(group.getByRole("button")).toHaveCount(2);
