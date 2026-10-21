@@ -628,10 +628,17 @@ capabilities:
           сущности — обязателен), source_title, edge_type, target_title,
           target_type, confidence, reason. Пример: source=graph_query,
           filters=[{field: start_node, op: contains, value: "ООО Ромашка"}].
-        Фильтр op: eq|ne|contains|gte|lte|between|in|smart|empty|not_empty
+        Фильтр op: eq|ne|contains|not_contains|gte|lte|between|in|smart|empty|not_empty
         (empty — поле не заполнено: «у кого не указан телефон» =
         {field: contact_phone, op: empty})
-        (smart — умный поиск по содержимому: «фрезы диаметра 5»).
+        (smart — умный поиск по содержимому: «фрезы диаметра 5»; ищет слово
+        в любом месте названия, поэтому «фрезы» находят и «патрон для фрез»).
+        Ответ: matched — названия, которые нашёл поиск по тексту; если среди
+        них есть не то, что просили (оснастка, патрон, державка к искомому),
+        добавь {field: description, op: not_contains, value: "патрон"} и
+        опубликуй заново. source_rows — сколько позиций за строками
+        сгруппированной таблицы: в ответе называй его («8 поставщиков,
+        59 фрез»), а не число строк.
         Полный справочник: action=spec_table_catalog.
       - spec_table_patch — править существующую spec-таблицу: canvas_id +
         ops:[{op: add_column|remove_column|move_column|set_sort|add_filter|

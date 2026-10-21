@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 
 from app.db.models import (
     CanonicalItem,
@@ -1575,3 +1576,39 @@ async def test_sum_and_average_of_one_field_side_by_side(db_session, seeded):
     by_supplier = {r["supplier_name"]: (r["amount"], r["amount_avg"]) for r in result.rows}
     assert by_supplier == {"ООО Ромашка": (8000.0, 8000.0), "АО Лютик": (5000.0, 5000.0)}
     assert [r["supplier_name"] for r in result.rows] == ["ООО Ромашка", "АО Лютик"]
+
+
+@pytest.mark.asyncio
+async def test_a_word_search_shows_what_it_matched_and_can_exclude(db_session, seeded):
+    """Live 2026-10-21: «фрезы» brought «патрон для дисковых фрез» into a table
+    grouped by supplier, and the agent saw only «8 строк» for 59 items."""
+    inv = (
+        await db_session.execute(select(Invoice).where(Invoice.invoice_number == "INV-001"))
+    ).scalar_one()
+    db_session.add(
+        InvoiceLine(
+            invoice_id=inv.id,
+            line_number=9,
+            description="C12-SCA13 патрон для дисковых фрез",
+            quantity=1,
+            unit="шт",
+            unit_price=900.0,
+            amount=900.0,
+        )
+    )
+    await db_session.flush()
+    spec = ts.TableSpec(
+        source="invoice_items",
+        columns=[ts.ColumnSpec(field="supplier_name"), ts.ColumnSpec(field="item_with_qty")],
+        filters=[ts.FilterSpec(field="description", op="smart", value="фрезы")],
+        group_by=["supplier_name"],
+    )
+    result = await ts.execute_spec(db_session, spec)
+    assert result.source_rows == 3
+    assert "C12-SCA13 патрон для дисковых фрез" in result.matched
+    assert result.total == 2  # two suppliers
+
+    spec.filters.append(ts.FilterSpec(field="description", op="not_contains", value="патрон"))
+    narrowed = await ts.execute_spec(db_session, spec)
+    assert narrowed.source_rows == 2
+    assert narrowed.matched == ["Фреза дисковая 50 мм", "Фреза концевая ⌀5 мм Z4"]

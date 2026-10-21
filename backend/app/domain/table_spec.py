@@ -109,7 +109,17 @@ class ColumnSpec(BaseModel):
 class FilterSpec(BaseModel):
     field: str
     op: Literal[
-        "eq", "ne", "contains", "gte", "lte", "between", "in", "smart", "empty", "not_empty"
+        "eq",
+        "ne",
+        "contains",
+        "not_contains",
+        "gte",
+        "lte",
+        "between",
+        "in",
+        "smart",
+        "empty",
+        "not_empty",
     ] = "contains"
     value: Any = None
     value2: Any | None = None  # upper bound for "between"
@@ -1247,6 +1257,16 @@ class TableResult(BaseModel):
     # confusing empty table and answer with a plain "not found" instead.
     # See AGENT_LIVE_TEST_FINDINGS.md #5.
     unresolved_entity: str | None = None
+    # What a text search let in, for the reader who asked for it: «фрезы»
+    # also matches «патрон для дисковых фрез», and a table grouped by supplier
+    # shows 8 rows for 59 items. Neither was visible to the agent (live
+    # 2026-10-21), so it reported «8 строк» and could not drop the chuck.
+    matched: list[str] = []
+    matched_more: bool = False
+    source_rows: int | None = None
+
+
+_MATCHED_LIMIT = 60
 
 
 def _format_value(value: Any, ftype: str) -> Any:
@@ -1928,12 +1948,14 @@ async def execute_spec(
             cond = expr == flt.value
         elif flt.op == "ne":
             cond = expr != flt.value
-        elif flt.op == "contains":
+        elif flt.op in ("contains", "not_contains"):
             pattern = _word_form_pattern(str(flt.value or ""))
             if pattern and source.fields[flt.field].type == "text":
                 cond = cast(expr, Text).op("~*")(pattern)
             else:
                 cond = expr.ilike(f"%{flt.value}%")
+            if flt.op == "not_contains":
+                cond = or_(expr.is_(None), ~cond)
         elif flt.op == "gte":
             cond = expr >= flt.value
         elif flt.op == "lte":
@@ -1964,13 +1986,19 @@ async def execute_spec(
         if scope is not None:
             where_conds.append(scope)
     where_conds.extend(await _row_scope(db, spec.source, viewer))
+    matched, matched_more, source_rows = await _search_report(
+        db, spec, source, exprs, where_conds, primary_text
+    )
 
     # Aggregating group_by: collapse to ONE row per group — the group key plus,
     # for each other column, a string_agg of distinct text values (e.g. all of a
     # supplier's milling items in one cell) or a SUM for numbers. "Выведи фрезы и
     # сгруппируй по поставщику" → two columns: поставщик | его фрезы.
     if spec.group_by and _can_aggregate(spec.source, keys):
-        return await _execute_grouped(db, spec, source, columns, keys, exprs, where_conds)
+        grouped = await _execute_grouped(db, spec, source, columns, keys, exprs, where_conds)
+        return grouped.model_copy(
+            update={"matched": matched, "matched_more": matched_more, "source_rows": source_rows}
+        )
 
     for cond in where_conds:
         stmt = stmt.where(cond)
@@ -2050,7 +2078,42 @@ async def execute_spec(
         total=int(total),
         truncated=int(total) > len(rows),
         unresolved_entity=unresolved_entity,
+        matched=matched,
+        matched_more=matched_more,
     )
+
+
+async def _search_report(
+    db: AsyncSession,
+    spec: TableSpec,
+    source: SourceDef,
+    exprs: dict[str, Any],
+    where_conds: list[Any],
+    primary_text: str,
+) -> tuple[list[str], bool, int | None]:
+    """The distinct texts a word search matched, and the rows under a grouping."""
+    searched = any(
+        f.op == "smart" or (f.op == "contains" and f.field == primary_text) for f in spec.filters
+    )
+    matched: list[str] = []
+    more = False
+    if searched and primary_text in exprs:
+        text = exprs[primary_text]
+        stmt = _base_stmt(spec.source, exprs, [], select_cols=[text.label("t")]).distinct()
+        for cond in where_conds:
+            stmt = stmt.where(cond)
+        values = [
+            str(v)[:80] for v in (await db.execute(stmt.limit(_MATCHED_LIMIT + 1))).scalars() if v
+        ]
+        more = len(values) > _MATCHED_LIMIT
+        matched = sorted(values[:_MATCHED_LIMIT])
+    source_rows = None
+    if spec.group_by:
+        stmt = _base_stmt(spec.source, exprs, [], select_cols=[func.count()])
+        for cond in where_conds:
+            stmt = stmt.where(cond)
+        source_rows = int((await db.execute(stmt)).scalar() or 0)
+    return matched, more, source_rows
 
 
 # ── Patch operations ───────────────────────────────────────────────────────────

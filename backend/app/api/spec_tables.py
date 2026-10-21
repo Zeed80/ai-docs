@@ -151,6 +151,11 @@ class SpecTableResponse(BaseModel):
     truncated: bool = False
     spec: dict[str, Any] | None = None
     filters: dict[str, Any] = {}
+    # Rows behind a grouped table (8 suppliers = 59 items) and what a word
+    # search let in, so the agent can count items and drop a wrong match.
+    source_rows: int | None = None
+    matched: list[str] = []
+    matched_more: bool = False
 
 
 async def _render_and_publish(
@@ -206,6 +211,13 @@ async def _render_and_publish(
         }
     )
     suffix = f" (показаны первые {len(result.rows)})" if result.truncated else ""
+    if result.source_rows is not None:
+        suffix += f"; за ними {result.source_rows} позиций — называй их число, а не строк"
+    if result.matched:
+        suffix += (
+            "; поиск по тексту нашёл названия из поля matched — если среди них есть "
+            "не то, что просили, исключи его фильтром not_contains и опубликуй заново"
+        )
     note_part = f"{note}. " if note else ""
     return SpecTableResponse(
         status="published",
@@ -217,6 +229,9 @@ async def _render_and_publish(
         ),
         truncated=result.truncated,
         spec=spec.model_dump(mode="json"),
+        source_rows=result.source_rows,
+        matched=result.matched,
+        matched_more=result.matched_more,
     )
 
 
