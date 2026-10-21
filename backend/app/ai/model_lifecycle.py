@@ -81,7 +81,11 @@ def keep_alive_for(model: str) -> str | int:
         return -1
     # Embedding/reranker models are cheap and called in bursts → keep a bit longer.
     model_lower = model.lower()
-    if any(x in model_lower for x in ("embed", "rerank", "nomic", "bge")):
+    if "rerank" in model_lower:
+        # Every agent turn reranks its memory within a 12 s wait; a cold load
+        # on the CPU node took 11.8 s of it (0.6B, 1.2 GB), a warm call 3.8 s.
+        return "60m"
+    if any(x in model_lower for x in ("embed", "nomic", "bge")):
         return "5m"
     return ephemeral_keep_alive()
 

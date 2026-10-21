@@ -38,6 +38,8 @@ def test_keep_alive_pinned_vs_ephemeral(monkeypatch):
     assert ml.keep_alive_for("qwen3.5:9b") == -1  # orchestrator pinned forever
     assert ml.keep_alive_for("gemma4:e4b") == ml.ephemeral_keep_alive()
     assert ml.keep_alive_for("nomic-embed-text") == "5m"  # embeddings kept a bit longer
+    # Every turn reranks its memory: a cold load ate 11.8 s of the 12 s wait.
+    assert ml.keep_alive_for("dengcao/Qwen3-Reranker-0.6B:F16") == "60m"
 
 
 def test_global_env_override(monkeypatch):
