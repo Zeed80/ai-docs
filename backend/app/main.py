@@ -127,6 +127,19 @@ configure_logging(debug=settings.app_debug, level=settings.app_log_level)
 logger = structlog.get_logger()
 
 
+def _should_warm_pinned(gpu_owner: str | None) -> bool:
+    """Warm pinned Ollama models at startup unless the GPU is not Ollama's.
+
+    The eval world learns who holds the GPU only after startup, from the stack
+    it measures; warming before that loaded a 17 GB model into the shared GPU
+    Ollama for good, and an idle-unloaded Strata could not come back (E52
+    2026-10-21: every case HTTP 503 after 318 s).
+    """
+    if os.environ.get("EMPLOYEE_EVAL_WORLD") == "isolated":
+        return False
+    return gpu_owner != "strata"
+
+
 def _reject_silent_production_schema_create() -> None:
     app_env = os.getenv("APP_ENV", settings.app_env).lower()
     auto_create_schema = os.getenv("AUTO_CREATE_SCHEMA", "false").lower()
@@ -307,7 +320,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         from app.ai.model_lifecycle import warm_pinned
 
-        warmed = [] if gpu_owner == "strata" else await warm_pinned()
+        warmed = await warm_pinned() if _should_warm_pinned(gpu_owner) else []
         if warmed:
             logger.info("pinned_models_warmed", models=warmed)
     except Exception as exc:

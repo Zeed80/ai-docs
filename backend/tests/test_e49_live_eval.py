@@ -578,3 +578,13 @@ def test_any_of_checks_the_refs_inside_it():
     }
     with pytest.raises(ValidationError, match="nobody"):
         LiveEmployeeCase.model_validate(case)
+
+
+def test_the_eval_world_never_warms_models_on_the_shared_gpu(monkeypatch):
+    from app.main import _should_warm_pinned
+
+    monkeypatch.delenv("EMPLOYEE_EVAL_WORLD", raising=False)
+    assert _should_warm_pinned("ollama") is True
+    assert _should_warm_pinned("strata") is False
+    monkeypatch.setenv("EMPLOYEE_EVAL_WORLD", "isolated")
+    assert _should_warm_pinned("ollama") is False
