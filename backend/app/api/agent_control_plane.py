@@ -1772,7 +1772,9 @@ class ClarifyOption(BaseModel):
 
 class ClarifyRequest(BaseModel):
     question: str = Field(min_length=1, max_length=500)
-    options: list[ClarifyOption] = Field(min_length=2, max_length=5)
+    # No options = an open question («какому поставщику?»): the person answers
+    # in words. With options there are at least two to choose from.
+    options: list[ClarifyOption] = Field(default_factory=list, max_length=5)
     recommended: bool = False
 
 
@@ -1798,9 +1800,10 @@ async def clarify_question(payload: ClarifyRequest) -> ClarifyOut:
             continue
         seen.add(label.casefold())
         options.append({"label": label, "value": (option.value or "").strip() or label})
-    if len(options) < 2:
+    if len(options) == 1:
         raise HTTPException(
-            status_code=422, detail="A question needs at least two distinct options"
+            status_code=422,
+            detail="A choice needs at least two distinct options; ask without options instead",
         )
     return ClarifyOut(
         question=" ".join(payload.question.split()),

@@ -20,6 +20,46 @@ body {
   outline-offset: 2px;
 }
 
+/* Clickable things look clickable. Tailwind 4 gives buttons the arrow cursor,
+   and over a button's text the browser showed the text cursor instead — one
+   control, two cursors. Disabled ones say so. */
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  [role="option"]:not([aria-disabled="true"]),
+  [role="tab"],
+  [role="radio"]:not(:disabled),
+  [role="menuitem"],
+  a[href],
+  summary,
+  select:not(:disabled),
+  input[type="checkbox"]:not(:disabled),
+  input[type="radio"]:not(:disabled),
+  input[type="file"]:not(:disabled),
+  label:has(> input[type="checkbox"]:not(:disabled)),
+  label:has(> input[type="radio"]:not(:disabled)) {
+    cursor: pointer;
+  }
+  button:disabled,
+  [aria-disabled="true"],
+  select:disabled,
+  input:disabled {
+    cursor: not-allowed;
+  }
+  button,
+  [role="button"] {
+    user-select: none;
+  }
+}
+
+/* A press is felt: the control sinks a pixel and darkens while held, so it is
+   clear the click landed (before, nothing moved until the result came). */
+button:not(:disabled):active,
+[role="button"]:not([aria-disabled="true"]):active {
+  transform: translateY(1px);
+  filter: brightness(0.88);
+}
+
 /* ── Responsive shell (mobile / tablet, browser + native) ────────────────── */
 /* The mobile layout (ResizableLayout) owns bottom-nav clearance via main padding,
    so no body-level padding is needed. These rules keep wide tables scrollable and

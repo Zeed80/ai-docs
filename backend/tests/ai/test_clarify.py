@@ -41,12 +41,22 @@ async def test_the_endpoint_normalises_options(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_one_distinct_option_is_not_a_question(client: AsyncClient):
+async def test_one_distinct_option_is_not_a_choice(client: AsyncClient):
     resp = await client.post(
         "/api/agent/clarify",
         json={"question": "Какой?", "options": [{"label": "A"}, {"label": "a"}]},
     )
     assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_an_open_question_has_no_options(client: AsyncClient):
+    """E52 №8: «какому поставщику писать?» had nothing to choose from, so the
+    agent asked in plain text — a question the case could not see."""
+    resp = await client.post("/api/agent/clarify", json={"question": "Какому поставщику написать?"})
+    assert resp.status_code == 200
+    assert resp.json()["options"] == []
+    assert agent_loop.clarify_text(resp.json()) == "Какому поставщику написать?"
 
 
 def test_the_text_numbers_the_options_and_marks_the_recommended():

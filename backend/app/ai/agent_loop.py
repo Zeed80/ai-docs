@@ -3304,7 +3304,8 @@ def clarify_question(tool_calls: list[dict], results: list) -> dict | None:
             for o in answer.get("options") or []
             if isinstance(o, dict) and o.get("label")
         ]
-        if answer.get("question") and len(options) >= 2:
+        # No options: an open question, answered in words.
+        if answer.get("question") and len(options) != 1:
             return {
                 "question": str(answer["question"]),
                 "options": options,
@@ -3315,6 +3316,8 @@ def clarify_question(tool_calls: list[dict], results: list) -> dict | None:
 
 def clarify_text(question: dict) -> str:
     """The question as plain text, for history and channels without buttons."""
+    if not question["options"]:
+        return question["question"]
     lines = [question["question"], ""]
     for number, option in enumerate(question["options"], 1):
         mark = " (рекомендую)" if number == 1 and question.get("recommended") else ""
