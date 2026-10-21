@@ -78,9 +78,10 @@ export function DataAccessCard() {
   }
 
   if (!state) return null;
+  // A partial answer must not take the whole Assignment tab down with it.
   const hidden = [
-    ...state.secret_tables,
-    ...Object.entries(state.secret_columns).flatMap(([t, cols]) =>
+    ...(state.secret_tables ?? []),
+    ...Object.entries(state.secret_columns ?? {}).flatMap(([t, cols]) =>
       cols.map((c) => `${t}.${c}`),
     ),
   ];
