@@ -1743,6 +1743,10 @@ class SlotOut(BaseModel):
     optional: bool = False
     # Оператор выключил слот — стадия не выполняется, модель не выбирается.
     disabled: bool = False
+    # «Использовать основную модель»: слот берёт модель из общей настройки
+    # вверху экрана. Эмбеддинг и реранк — другие по природе модели.
+    can_follow_main: bool = False
+    follows_main: bool = False
 
 
 # Слоты, которые можно выключить целиком. Список короткий намеренно: выключать
@@ -1984,6 +1988,7 @@ class SlotDraft(BaseModel):
     # «Не использовать» — отдельное решение, а не сброс модели. Сброс вернул бы
     # цепочку из model_registry.yaml, то есть снова включил бы стадию.
     disabled: bool | None = None
+    follows_main: bool | None = None
 
 
 def _as_slot_draft(value: SlotDraft | str | None) -> SlotDraft:
@@ -1996,8 +2001,10 @@ def _as_slot_draft(value: SlotDraft | str | None) -> SlotDraft:
 class AssignmentDraftIn(BaseModel):
     # str | None принимается ради совместимости: так черновик выглядел раньше,
     # и на этой форме держатся существующие тесты и внешние вызовы.
-    slots: dict[str, SlotDraft | str | None]
+    slots: dict[str, SlotDraft | str | None] = {}
     confirm_warnings: bool = False
+    # A new main model (catalog key); every following slot takes it.
+    main_model: str | None = None
 
     @property
     def model_slots(self) -> dict[str, str | None]:
@@ -2035,6 +2042,7 @@ class AssignmentDiffItem(BaseModel):
 
 class AssignmentDraftOut(BaseModel):
     slots: list[SlotOut]
+    main_model: str | None = None
     diff: list[AssignmentDiffItem] = []
     warnings: list[AssignmentIssue] = []
     errors: list[AssignmentIssue] = []
@@ -2044,6 +2052,93 @@ class AssignmentDraftOut(BaseModel):
 
 def _slot_meta(slot: str):
     return next((s for s in _SLOTS if s[0] == slot), None)
+
+
+# Embeddings and reranking are a different kind of model: they never follow.
+_NOT_FOLLOWING_MAIN = frozenset({"embedding", "rerank"})
+
+
+def _can_follow_main(slot: str) -> bool:
+    return slot not in _NOT_FOLLOWING_MAIN and _slot_meta(slot) is not None
+
+
+def _main_model_state(registry) -> tuple[str | None, set[str]]:
+    """The main model and the slots following it.
+
+    Never chosen: the agent's model, followed by the slots already on it —
+    with one model for everything that is the state the screen should show.
+    """
+    from app.ai.agent_config import get_builtin_agent_config
+
+    cfg = get_builtin_agent_config()
+    main = cfg.main_model or _slot_current_model("agent_orchestrator", registry)
+    if cfg.main_model_slots is not None:
+        followers = {s for s in cfg.main_model_slots if _can_follow_main(s)}
+    else:
+        followers = {
+            slot
+            for slot, *_ in _SLOTS
+            if _can_follow_main(slot) and main and _slot_current_model(slot, registry) == main
+        }
+    return main, followers
+
+
+def _resolve_main_model(
+    payload: AssignmentDraftIn, registry
+) -> tuple[dict[str, str | None], str | None, set[str]]:
+    """The draft's models with the main model laid over its followers."""
+    main, followers = _main_model_state(registry)
+    if payload.main_model:
+        main = payload.main_model
+    for slot, draft in payload.drafts.items():
+        if draft.follows_main is None or not _can_follow_main(slot):
+            continue
+        if draft.follows_main:
+            followers.add(slot)
+        else:
+            followers.discard(slot)
+    models = dict(payload.model_slots)
+    for slot in followers:
+        # A model chosen by hand for a following slot would be overridden
+        # silently; following is the decision on this screen, not a default.
+        if main:
+            models[slot] = main
+    return models, main, followers
+
+
+def _save_main_model(main: str | None, followers: set[str]) -> None:
+    from app.ai.agent_config import BuiltinAgentConfigUpdate, update_builtin_agent_config
+
+    update_builtin_agent_config(
+        BuiltinAgentConfigUpdate(main_model=main, main_model_slots=sorted(followers))
+    )
+
+
+def _follow_moved_main(diff: list[AssignmentDiffItem]) -> bool:
+    """A Strata switch or rollback moved the followers: the main model moves too.
+
+    Followers left on another model stop following, so the screen never shows
+    a slot «on the main model» that runs something else.
+    """
+    from app.ai.agent_config import get_builtin_agent_config
+
+    cfg = get_builtin_agent_config()
+    if not cfg.main_model or cfg.main_model_slots is None:
+        return False
+    followers = set(cfg.main_model_slots)
+    moved = {
+        d.slot: d.new_model
+        for d in diff
+        if d.slot in followers and d.old_model == cfg.main_model and d.new_model
+    }
+    if not moved:
+        return False
+    counts: dict[str, int] = {}
+    for key in moved.values():
+        counts[key] = counts.get(key, 0) + 1
+    new_main = max(counts, key=lambda k: counts[k])
+    _save_main_model(new_main, {s for s in followers if moved.get(s) == new_main})
+    return True
 
 
 # ── Per-slot cloud opt-in ────────────────────────────────────────────────────
@@ -2383,10 +2478,12 @@ def _build_slot_out(
     )
 
 
-def _all_slots_out(model_of, registry) -> list[SlotOut]:
+def _all_slots_out(model_of, registry, followers: set[str] | None = None) -> list[SlotOut]:
     """Build every SlotOut; `model_of(slot)` returns the assigned model key."""
     cloud_slots = _cloud_allowed_slots()
-    return [
+    if followers is None:
+        followers = _main_model_state(registry)[1]
+    out = [
         _build_slot_out(
             slot,
             group,
@@ -2400,6 +2497,10 @@ def _all_slots_out(model_of, registry) -> list[SlotOut]:
         )
         for slot, group, label, hint, local_only in _SLOTS
     ]
+    for item in out:
+        item.can_follow_main = _can_follow_main(item.slot)
+        item.follows_main = item.slot in followers
+    return out
 
 
 @router.get("/slots", response_model=list[SlotOut], dependencies=_admin)
@@ -2936,6 +3037,8 @@ async def _apply_draft_atomic(
                 _unset_slot(item.slot, registry)
             applied.append(item.slot)
             await _persist_slot_durable(db, item.slot)
+        if _follow_moved_main(diff):
+            await _persist_agent_config(db)
     except Exception:
         for slot in applied:
             old = before["slots"].get(slot)
@@ -3055,7 +3158,8 @@ def _schedule_provider_autostart(model_keys, registry) -> None:
 async def get_assignment_draft(db: AsyncSession = Depends(get_db)) -> AssignmentDraftOut:
     registry = _registry()
     return AssignmentDraftOut(
-        slots=_all_slots_out(lambda s: _slot_current_model(s, registry), registry)
+        slots=_all_slots_out(lambda s: _slot_current_model(s, registry), registry),
+        main_model=_main_model_state(registry)[0],
     )
 
 
@@ -3065,19 +3169,22 @@ async def validate_assignment_draft(
     db: AsyncSession = Depends(get_db),
 ) -> AssignmentDraftOut:
     registry = _registry()
+    models, main, followers = _resolve_main_model(payload, registry)
     # allow_cloud из черновика расширяет множество допустимых моделей, поэтому
     # учитывается ДО проверки — иначе выбор облачной модели вместе с галочкой
     # «разрешить облако» отвергался бы как ошибка.
     diff, warnings, errors = await _validate_assignment_draft(
-        registry, payload.model_slots, cloud_overrides=_cloud_overrides(payload)
+        registry, models, cloud_overrides=_cloud_overrides(payload)
     )
     return AssignmentDraftOut(
         # model_slots, а не slots: в черновике теперь лежит объект, и его
         # нельзя подставить туда, где ждут ключ модели.
         slots=_all_slots_out(
-            lambda s: payload.model_slots.get(s, _slot_current_model(s, registry)),
+            lambda s: models.get(s, _slot_current_model(s, registry)),
             registry,
+            followers,
         ),
+        main_model=main,
         diff=diff,
         warnings=warnings,
         errors=errors,
@@ -3093,8 +3200,9 @@ async def apply_assignment_draft(
 ) -> AssignmentDraftOut:
     registry = _registry()
     loaded = await _loaded_index()
+    models, main, followers = _resolve_main_model(payload, registry)
     diff, warnings, errors = await _validate_assignment_draft(
-        registry, payload.model_slots, loaded, cloud_overrides=_cloud_overrides(payload)
+        registry, models, loaded, cloud_overrides=_cloud_overrides(payload)
     )
     if errors:
         raise HTTPException(400, {"errors": [e.model_dump() for e in errors]})
@@ -3114,6 +3222,9 @@ async def apply_assignment_draft(
         await _persist_agent_config(db)
 
     await _apply_draft_atomic(db, diff, before, registry)  # rolls back Redis on error
+    # The operator's choice on this screen, after the move-along of the hook.
+    _save_main_model(main, followers)
+    await _persist_agent_config(db)
 
     for slot, d in payload.drafts.items():
         if d.disabled is not None:
@@ -3151,6 +3262,7 @@ async def apply_assignment_draft(
     _schedule_provider_autostart([d.new_model for d in diff], after_registry)
     return AssignmentDraftOut(
         slots=_all_slots_out(lambda s: _slot_current_model(s, after_registry), after_registry),
+        main_model=main,
         diff=diff,
         warnings=warnings,
         ok_to_apply=True,

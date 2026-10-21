@@ -35,6 +35,17 @@ describe("черновик назначения моделей", () => {
     });
   });
 
+  it("«использовать основную модель» едет флагом, только если его трогали", () => {
+    const payload = buildDraftPayload(
+      { ocr_fast: "m_b", agent_email: "m_b" },
+      {},
+      {},
+      { ocr_fast: true },
+    );
+    expect(payload.ocr_fast).toEqual({ model: "m_b", follows_main: true });
+    expect(payload.agent_email).toEqual({ model: "m_b" });
+  });
+
   it("нетронутые решения не попадают в запрос", () => {
     // Разница между «выключил» и «не трогал» существенна: отправив
     // disabled:false там, где решения не принимали, черновик молча включил бы

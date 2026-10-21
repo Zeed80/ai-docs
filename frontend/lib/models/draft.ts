@@ -15,6 +15,8 @@ export interface SlotDraftPayload {
   allow_cloud?: boolean;
   /** «Не использовать»: стадия не выполняется вовсе. */
   disabled?: boolean;
+  /** «Использовать основную модель»: слот берёт модель из общей настройки. */
+  follows_main?: boolean;
 }
 
 /**
@@ -29,6 +31,7 @@ export function buildDraftPayload(
   models: Record<string, string | null>,
   cloud: Record<string, boolean> = {},
   disabled: Record<string, boolean> = {},
+  follows: Record<string, boolean> = {},
 ): Record<string, SlotDraftPayload> {
   return Object.fromEntries(
     Object.entries(models).map(([slot, model]) => [
@@ -37,6 +40,7 @@ export function buildDraftPayload(
         model,
         ...(cloud[slot] === undefined ? {} : { allow_cloud: cloud[slot] }),
         ...(disabled[slot] === undefined ? {} : { disabled: disabled[slot] }),
+        ...(follows[slot] === undefined ? {} : { follows_main: follows[slot] }),
       },
     ]),
   );

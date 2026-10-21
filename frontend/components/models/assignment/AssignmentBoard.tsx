@@ -128,6 +128,8 @@ interface SlotItem {
   thinking_level_effective?: string | null; // resolved level actually in effect
   optional?: boolean; // слот можно выключить целиком — конвейер без него работает
   disabled?: boolean; // оператор выключил слот: стадия не выполняется
+  can_follow_main?: boolean; // эмбеддинг и реранк — нет
+  follows_main?: boolean; // слот берёт «основную модель»
 }
 
 interface ProvModel extends CatalogEntry {
@@ -170,6 +172,13 @@ export function AssignmentBoard() {
   const [draftDisabled, setDraftDisabled] = useState<Record<string, boolean>>(
     {},
   );
+  // Одна модель на всё: её выбор вверху экрана переназначает каждый слот,
+  // который «использует основную модель», — одним черновиком и одной ревизией.
+  const [mainModel, setMainModel] = useState<string | null>(null);
+  const [draftMain, setDraftMain] = useState<string | null>(null);
+  const [draftFollows, setDraftFollows] = useState<Record<string, boolean>>(
+    {},
+  );
   const [models, setModels] = useState<ProvModel[]>([]);
   // Nodes of each local provider kind — a kind can have several (e.g. the GPU
   // Ollama and the CPU-only one), and a model can be pinned to one of them.
@@ -209,6 +218,9 @@ export function AssignmentBoard() {
         setDraft(
           Object.fromEntries(nextSlots.map((s) => [s.slot, s.model ?? null])),
         );
+        setMainModel(d.main_model ?? null);
+        setDraftMain(null);
+        setDraftFollows({});
         setDiff(d.diff || []);
         setWarnings(d.warnings || []);
         setErrors(d.errors || []);
@@ -290,7 +302,65 @@ export function AssignmentBoard() {
   // но и решение об облаке — раньше оно применялось отдельным немедленным
   // запросом, из-за чего в одной карточке было два разных поведения.
   const draftPayload = () =>
-    buildDraftPayload(draft, draftCloud, draftDisabled);
+    buildDraftPayload(draft, draftCloud, draftDisabled, draftFollows);
+  const mainPayload = () => (draftMain ? { main_model: draftMain } : {});
+
+  const effectiveMain = draftMain ?? mainModel;
+  const follows = (s: SlotItem) =>
+    Boolean(s.can_follow_main) && (draftFollows[s.slot] ?? Boolean(s.follows_main));
+
+  const markDirty = () => {
+    setNotApplied(false);
+    setDirty(true);
+    setDiff([]);
+    setWarnings([]);
+    setErrors([]);
+  };
+
+  // Новая основная модель сразу видна в каждом слоте, который за ней следует.
+  const chooseMain = (model: string, cloud?: boolean) => {
+    if (!model) return;
+    setDraftMain(model);
+    const followers = slots.filter(follows);
+    setDraft((prev) => ({
+      ...prev,
+      ...Object.fromEntries(followers.map((s) => [s.slot, model])),
+    }));
+    if (cloud !== undefined) {
+      setDraftCloud((prev) => ({
+        ...prev,
+        ...Object.fromEntries(
+          followers
+            .filter((s) => s.cloud_optionable)
+            .map((s) => [s.slot, cloud]),
+        ),
+      }));
+    }
+    markDirty();
+  };
+
+  const setFollow = (s: SlotItem, on: boolean) => {
+    setDraftFollows((prev) => ({ ...prev, [s.slot]: on }));
+    if (on && effectiveMain) {
+      setDraft((prev) => ({ ...prev, [s.slot]: effectiveMain }));
+    }
+    markDirty();
+  };
+
+  const followAll = () => {
+    const all = slots.filter((s) => s.can_follow_main && !follows(s));
+    setDraftFollows((prev) => ({
+      ...prev,
+      ...Object.fromEntries(all.map((s) => [s.slot, true])),
+    }));
+    if (effectiveMain) {
+      setDraft((prev) => ({
+        ...prev,
+        ...Object.fromEntries(all.map((s) => [s.slot, effectiveMain])),
+      }));
+    }
+    markDirty();
+  };
 
   const slotDisabled = (s: SlotItem) =>
     draftDisabled[s.slot] ?? Boolean(s.disabled);
@@ -342,7 +412,7 @@ export function AssignmentBoard() {
           ...(await csrfHeaders()),
         },
         credentials: "include",
-        body: JSON.stringify({ slots: draftPayload() }),
+        body: JSON.stringify({ slots: draftPayload(), ...mainPayload() }),
       });
       if (r.ok) {
         const d = await r.json();
@@ -374,6 +444,7 @@ export function AssignmentBoard() {
         credentials: "include",
         body: JSON.stringify({
           slots: draftPayload(),
+          ...mainPayload(),
           confirm_warnings: confirmWarnings,
         }),
       });
@@ -609,6 +680,8 @@ export function AssignmentBoard() {
                   ]),
                 ),
               );
+              setDraftMain(null);
+              setDraftFollows({});
               setDiff([]);
               setWarnings([]);
               setErrors([]);
@@ -686,6 +759,53 @@ export function AssignmentBoard() {
         </div>
       )}
 
+      {/* Основная модель: одна на все слоты, кроме эмбеддинга и реранка. */}
+      <section className={card} aria-label="Основная модель">
+        <div className={cardH}>
+          <span className="text-sm font-semibold text-slate-100">
+            ⭐ Основная модель
+          </span>
+          <span className="text-xs text-slate-400">
+            {slots.filter(follows).length} из{" "}
+            {slots.filter((s) => s.can_follow_main).length} слотов используют её
+          </span>
+        </div>
+        <div className="p-4 space-y-2">
+          <p className="text-xs text-slate-400">
+            Слоты с отметкой «Использовать основную модель» берут модель
+            отсюда. Смена здесь переназначает их все сразу — одной ревизией,
+            после «Применить». Эмбеддинг и реранк — модели другого рода, их
+            выбирают отдельно.
+          </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="min-w-[320px] flex-1">
+              <ProviderModelPicker
+                models={models.filter(selectable) as unknown as CatalogModel[]}
+                nodes={nodes}
+                value={effectiveMain}
+                confidential
+                documentContent
+                requiredModality={null}
+                onChange={(v, opts) => chooseMain(v, opts.cloud)}
+              />
+            </div>
+            {draftMain && draftMain !== mainModel && (
+              <span className="text-xs text-amber-400 whitespace-nowrap">
+                черновик
+              </span>
+            )}
+            <button
+              type="button"
+              className={`${btnSecondary} text-xs`}
+              disabled={slots.every((s) => !s.can_follow_main || follows(s))}
+              onClick={followAll}
+            >
+              Все слоты — на основную
+            </button>
+          </div>
+        </div>
+      </section>
+
       {/* Slots */}
       {groups.map((g) => {
         const gslots = slots.filter((s) => s.group === g);
@@ -751,6 +871,7 @@ export function AssignmentBoard() {
                   : (s.thinking_levels ?? []);
                 const thinkingLevelOverride = s.thinking_level_override ?? null;
                 const off = slotDisabled(s);
+                const onMain = follows(s);
                 return (
                   <div
                     key={s.slot}
@@ -773,7 +894,19 @@ export function AssignmentBoard() {
                           выключение: reset_task_routing снимает весь оверрайд,
                           вместе с `disabled`. Пока слот off, управляет им
                           галочка, а не сброс. */}
-                      {!off && (draftValue || s.current_model) && (
+                      {s.can_follow_main && (
+                        <label className="mt-1 flex items-center gap-1.5 text-xs text-slate-300">
+                          <input
+                            type="checkbox"
+                            className="accent-blue-500"
+                            checked={onMain}
+                            disabled={!effectiveMain}
+                            onChange={(e) => setFollow(s, e.target.checked)}
+                          />
+                          Использовать основную модель
+                        </label>
+                      )}
+                      {!off && !onMain && (draftValue || s.current_model) && (
                         <button
                           type="button"
                           className="mt-1 block text-xs text-slate-500 hover:text-slate-300 underline underline-offset-2"
@@ -803,8 +936,8 @@ export function AssignmentBoard() {
                         нечем. Теперь при нехватке места переносится строка. */}
                     <div className="flex flex-wrap items-center gap-3 min-w-0">
                       <div
-                        className={`min-w-[320px] flex-1 ${off ? "opacity-40 pointer-events-none" : ""}`}
-                        aria-disabled={off}
+                        className={`min-w-[320px] flex-1 ${off || onMain ? "opacity-40 pointer-events-none" : ""}`}
+                        aria-disabled={off || onMain}
                       >
                         {/* Два шага: провайдер, затем его модель. Единый
                             список всех моделей выглядел короче, но прятал

@@ -67,6 +67,12 @@ class BuiltinAgentConfig(BaseModel):
     # opt-in). Lived only in the Redis set providers:slot_allow_cloud, while
     # its mirror auditor_allow_cloud was reset from Postgres on every start.
     cloud_allowed_slots: list[str] = Field(default_factory=list)
+    # One model for (almost) everything: the «основная модель» on the
+    # assignment screen (catalog key) and the slots that follow it. None =
+    # never chosen: the screen offers the agent's model and the slots already
+    # on it.
+    main_model: str | None = None
+    main_model_slots: list[str] | None = None
     # LLM provider: ollama, vllm, lmstudio, openai-compatible or supported cloud provider.
     provider: str = "ollama"
     # Ordered fallback chain tried when primary provider fails
@@ -173,6 +179,8 @@ class BuiltinAgentConfigUpdate(BaseModel):
     auditor_allow_cloud: bool | None = None
     sql_full_access: bool | None = None
     cloud_allowed_slots: list[str] | None = None
+    main_model: str | None = None
+    main_model_slots: list[str] | None = None
     provider: str | None = None
     fallback_providers: list[str] | None = None
     prompt_cache_enabled: bool | None = None
