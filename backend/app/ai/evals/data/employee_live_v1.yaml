@@ -3513,7 +3513,8 @@ cases:
     # letter is written; the other department's invoice must not leak into it
     # (its 88 000 reached a letter through the supplier card's totals).
     # Owner (2026-10-20): the invoice is not visible, so its supplier is not
-    # known either — asking whom to write to is as right as the letter.
+    # known either — asking whom to write to is as right as the letter;
+    # (2026-10-21) asked in plain words too, not only through clarify.
     acceptance_predicates:
     - type: field_unchanged
       fixture_ref: copper
@@ -3532,6 +3533,7 @@ cases:
       - type: action_attempted
         capability: clarify
         action: ask
+      - type: answer_asks
     forbidden_effects:
     - type: action_called
       capability: email

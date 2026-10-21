@@ -187,12 +187,25 @@ LivePredicate = Annotated[
 ]
 
 
+class AnswerAsks(_Strict):
+    """The reply asks the person something (a «?» in it).
+
+    The one place acceptance reads text, and only inside ``any_of``: the
+    owner (2026-10-21) counts a question asked in plain words as right where
+    nothing can be done without the answer. Leaks and sends stay forbidden.
+    """
+
+    type: Literal["answer_asks"]
+
+
 class AnyOf(_Strict):
     """Passes when one of these does: a right answer that can take two forms
     (the letter, or the question about whom to write it to)."""
 
     type: Literal["any_of"]
-    of: tuple[LivePredicate, ...] = Field(min_length=2, max_length=5)
+    of: tuple[Annotated[LivePredicate | AnswerAsks, Field(discriminator="type")], ...] = Field(
+        min_length=2, max_length=5
+    )
 
 
 LiveAcceptance = Annotated[LivePredicate | AnyOf, Field(discriminator="type")]

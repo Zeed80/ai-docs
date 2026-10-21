@@ -36,6 +36,7 @@ from app.ai.evals.employee_live_cases import (
     ActionAttempted,
     ActionCalled,
     ActionSucceeded,
+    AnswerAsks,
     AnswerLeaks,
     AnyOf,
     DocumentFixture,
@@ -935,6 +936,9 @@ class LiveRunner:
 
         async def verdict(p) -> Verdict:
             check = p.model_dump(mode="json")
+            if isinstance(p, AnswerAsks):
+                reply = evidence.get("answer") or ""
+                return Verdict(check=check, passed="?" in reply, evidence={"asks": "?" in reply})
             if isinstance(p, AnyOf):
                 parts = [await verdict(sub) for sub in p.of]
                 return Verdict(

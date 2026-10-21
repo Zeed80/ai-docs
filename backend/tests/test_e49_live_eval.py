@@ -588,3 +588,11 @@ def test_the_eval_world_never_warms_models_on_the_shared_gpu(monkeypatch):
     assert _should_warm_pinned("strata") is False
     monkeypatch.setenv("EMPLOYEE_EVAL_WORLD", "isolated")
     assert _should_warm_pinned("ollama") is False
+
+
+def test_a_question_in_words_counts_only_beside_another_check():
+    case = _cases()["comms-foreign-invoice-letter"].model_dump(mode="json")
+    assert {"type": "answer_asks"} in case["acceptance_predicates"][1]["of"]
+    alone = dict(case, acceptance_predicates=[{"type": "answer_asks"}])
+    with pytest.raises(ValidationError):
+        LiveEmployeeCase.model_validate(alone)
