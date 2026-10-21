@@ -189,11 +189,6 @@ TOOL_MAP: dict[tuple[str, str], dict[str, Any]] = {
         "approval_required": False,
         "description": "Read capability proposal lifecycle state.",
     },
-    ("POST", "/api/agent/capabilities/{proposal_id}/sandbox-apply"): {
-        "name": "capability.sandbox_apply",
-        "approval_required": False,
-        "description": "Prepare sandbox validation for a draft capability.",
-    },
     ("POST", "/api/agent/tasks/create"): {
         "name": "task.create",
         "approval_required": False,
