@@ -17,7 +17,7 @@ from app.api import memory as memory_api
 from app.domain.graph import MemoryQueryRequest, MemorySearchRequest
 
 
-def test_agent_prefetch_asks_for_memory_without_reranking(monkeypatch):
+def test_agent_prefetch_asks_for_reranked_memory(monkeypatch):
     bodies: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -31,7 +31,7 @@ def test_agent_prefetch_asks_for_memory_without_reranking(monkeypatch):
         lambda **kw: real(transport=httpx.MockTransport(handler), **kw),
     )
     asyncio.run(MemoryManager(base_url="http://backend:8000").prefetch("счета Ромашки"))
-    assert bodies and bodies[0]["rerank"] is False
+    assert bodies and bodies[0]["rerank"] is True
 
 
 def test_rerank_is_on_by_default_for_other_callers():

@@ -481,6 +481,25 @@ models:
     quality_score: 0.86
     speed_score: 0.60
     notes: "Qwen3-Reranker 4B Q8_0, paired with qwen3_embedding_4b_ollama. Runs on the CPU node."
+  qwen3_reranker_0_6b_ollama:
+    provider: "ollama"
+    provider_model: "dengcao/Qwen3-Reranker-0.6B:F16"
+    status: "production"
+    modalities: ["rerank"]
+    max_context_tokens: 32768
+    max_input_tokens: 32768
+    batch_size: 8
+    supports_batching: true
+    rerank_score_range: "0..1"
+    model_family: "qwen3-reranker"
+    capability_source: "manual"
+    supports_structured_output: false
+    supports_tool_calling: false
+    local_only: true
+    vram_gb_estimate: 1.2
+    quality_score: 0.86
+    speed_score: 0.90
+    notes: "Qwen3-Reranker 0.6B F16 on the CPU node. Measured 2026-10-21 on 24 memory questions: MRR 0.82 vs 0.72 for 4B, 4.2 s vs 25.6 s. The Q8_0 build of this model is broken (uniform log-probabilities)."
   local_reranker_openai_compatible:
     provider: "openai_compatible"
     provider_model: "BAAI/bge-reranker-v2-m3"

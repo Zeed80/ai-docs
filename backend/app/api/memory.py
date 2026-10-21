@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import Text, and_, cast, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.web_search import WebSearchRequest, execute_web_search
@@ -367,7 +367,10 @@ async def search_memory(
         if payload.rerank and _reranker_model_key():
             hits = _sort_memory_hits(payload.query, hits)
             reranked = await _try_rerank_hits(payload.query, hits[:_RERANK_CANDIDATE_LIMIT])
-            hits = reranked + hits[_RERANK_CANDIDATE_LIMIT:]
+            tail = hits[_RERANK_CANDIDATE_LIMIT:]
+            if any(hit.rerank_score is not None for hit in reranked):
+                tail = [hit.model_copy(update={"score": 0.5 * (hit.score or 0.0)}) for hit in tail]
+            hits = reranked + tail
 
     hits = _sort_memory_hits(payload.query, hits)
     total_available = len(hits)
@@ -1128,6 +1131,13 @@ def _resolve_visible_scopes(
     return MemoryFact.scope.in_(scopes)
 
 
+def _fts_any_query(query: str):
+    """Any word of the question, not all of them (plainto_tsquery ANDs them)."""
+    return func.to_tsquery(
+        "simple", func.replace(cast(func.plainto_tsquery("russian", query), Text), "&", "|")
+    )
+
+
 async def _search_memory_facts(
     db: AsyncSession,
     payload: MemorySearchRequest,
@@ -1135,11 +1145,24 @@ async def _search_memory_facts(
     *,
     department_id: str | None = None,
 ) -> list[MemorySearchHit]:
+    """Facts by the words of the question, ranked by how much of it they cover.
+
+    They were matched only by the whole question as a substring, and facts are
+    not in the vector index: «Где находится наше предприятие?» never reached
+    «Предприятие находится в Подольске» — no pinned or verified fact, web
+    source or lesson came into a turn (measured 2026-10-21: 0 of 12).
+    """
     hits: list[MemorySearchHit] = []
-    query = select(MemoryFact).where(
+    vector = func.to_tsvector(
+        "russian", func.coalesce(MemoryFact.title, "") + " " + func.coalesce(MemoryFact.summary, "")
+    )
+    any_words = _fts_any_query(payload.query)
+    rank = func.ts_rank_cd(vector, any_words)
+    query = select(MemoryFact, rank.label("r")).where(
         MemoryFact.status == "active",
         or_(MemoryFact.expires_at.is_(None), MemoryFact.expires_at > datetime.now(UTC)),
         or_(
+            vector.op("@@")(any_words),
             MemoryFact.title.ilike(pattern),
             MemoryFact.summary.ilike(pattern),
             MemoryFact.kind.ilike(pattern),
@@ -1147,10 +1170,14 @@ async def _search_memory_facts(
         _resolve_visible_scopes(payload, department_id=department_id),
     )
     result = await db.execute(
-        query.order_by(MemoryFact.pinned.desc(), MemoryFact.created_at.desc()).limit(payload.limit)
+        query.order_by(rank.desc(), MemoryFact.pinned.desc(), MemoryFact.created_at.desc()).limit(
+            payload.limit
+        )
     )
-    for fact in result.scalars().all():
-        score = _simple_score(payload.query, f"{fact.title} {fact.summary}")
+    for fact, fts_rank in result.all():
+        score = max(
+            _simple_score(payload.query, f"{fact.title} {fact.summary}"), float(fts_rank or 0.0)
+        )
         if fact.pinned:
             score = min(1.0, score + 0.15)
         hits.append(
@@ -1307,7 +1334,11 @@ async def _try_rerank_hits(query: str, hits: list[MemorySearchHit]) -> list[Memo
                 reranked.append(hit)
                 continue
             rerank_score = float(scores[index])
-            final_score = max(float(hit.score or 0.0), rerank_score)
+            # The fused score is normalised to the top hit, so the first thirty
+            # all sit near 0.9-1.0 and max() kept every one of them: reranking
+            # changed no order at all (measured 2026-10-21, 24 queries). The
+            # reranker's verdict orders its candidates, above the unjudged tail.
+            final_score = 0.5 + 0.5 * rerank_score
             reranked.append(
                 hit.model_copy(
                     update={
