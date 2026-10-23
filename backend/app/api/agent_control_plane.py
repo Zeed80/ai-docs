@@ -17,7 +17,7 @@ from typing import Any, Literal
 
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError, computed_field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -29,7 +29,12 @@ from app.ai.agent_config import (
     update_builtin_agent_config,
 )
 from app.ai.gateway_config import gateway_config
-from app.ai.policy_engine import classify_skill_risk, is_protected_setting
+from app.ai.policy_engine import (
+    classify_skill_risk,
+    is_protected_setting,
+    protected_setting_impact,
+    setting_risk_level,
+)
 from app.audit.service import log_action
 from app.auth.jwt import get_current_user, is_service_account, require_human_role, require_role
 from app.auth.models import UserInfo, UserRole
@@ -190,6 +195,38 @@ class ConfigProposalOut(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def impact(self) -> str | None:
+        """What approving it changes, for the owner's card."""
+        return protected_setting_impact(self.setting_path)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def age_days(self) -> int:
+        return max(0, (datetime.now(UTC) - self.created_at).days)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def stale(self) -> bool:
+        """Pending for weeks: likely left over (a live check, an old idea)."""
+        return self.status == "pending" and self.age_days >= _STALE_PROPOSAL_DAYS
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def current_changed(self) -> bool:
+        """The setting moved since the proposal recorded its current value."""
+        if self.status != "pending":
+            return False
+        try:
+            now = _json_value(_current_setting_value(self.setting_path))
+        except HTTPException:
+            return False
+        return now != self.current_value
+
+
+_STALE_PROPOSAL_DAYS = 14
 
 
 class ProposalDecision(BaseModel):
@@ -383,13 +420,24 @@ def _current_setting_value(setting_path: str) -> Any:
     return value
 
 
-def _apply_setting(setting_path: str, value: Any) -> None:
+def _setting_update(setting_path: str, value: Any) -> BuiltinAgentConfigUpdate:
     if "." in setting_path:
         raise HTTPException(
             status_code=400,
             detail="Nested setting apply is not supported yet; propose a top-level setting",
         )
-    update_builtin_agent_config(BuiltinAgentConfigUpdate(**{setting_path: value}))
+    try:
+        return BuiltinAgentConfigUpdate(**{setting_path: value})
+    except ValidationError as exc:
+        # Was a 500 at approval time; a value that cannot apply is refused
+        # when proposed.
+        raise HTTPException(
+            status_code=422, detail=f"Invalid value for {setting_path}: {exc.errors()[0]['msg']}"
+        ) from exc
+
+
+def _apply_setting(setting_path: str, value: Any) -> None:
+    update_builtin_agent_config(_setting_update(setting_path, value))
 
 
 async def _create_config_proposal(
@@ -397,13 +445,14 @@ async def _create_config_proposal(
     db: AsyncSession,
 ) -> AgentConfigProposal:
     current_value = _current_setting_value(payload.setting_path)
+    _setting_update(payload.setting_path, payload.proposed_value)
     protected = is_protected_setting(payload.setting_path)
     proposal = AgentConfigProposal(
         setting_path=payload.setting_path,
         proposed_value=_json_value(payload.proposed_value),
         current_value=_json_value(current_value),
         reason=payload.reason,
-        risk_level=payload.risk_level,
+        risk_level=setting_risk_level(payload.setting_path, payload.risk_level),
         protected=protected,
         requested_by=payload.requested_by,
         status="pending" if protected else "applied",
@@ -915,6 +964,21 @@ async def decide_config_proposal(
         proposal.applied_at = now
     else:
         proposal.status = "rejected"
+    # Protected settings are never changed silently: the decision is audited.
+    await log_action(
+        db,
+        action=f"agent_config.proposal_{proposal.status}",
+        entity_type="agent_config_proposal",
+        entity_id=proposal.id,
+        user_id=_user.sub,
+        details={
+            "setting_path": proposal.setting_path,
+            "proposed_value": proposal.proposed_value,
+            "previous_value": proposal.current_value,
+            "risk_level": proposal.risk_level,
+            "decided_by": payload.decided_by,
+        },
+    )
     await db.commit()
     await db.refresh(proposal)
     return proposal

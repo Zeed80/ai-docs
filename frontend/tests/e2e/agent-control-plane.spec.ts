@@ -491,6 +491,8 @@ test("settings control plane approves protected config proposal", async ({
     .locator("..");
   await expect(panel.getByText("safe_auto_apply_enabled")).toBeVisible();
   await panel.getByRole("button", { name: "Разрешить" }).click();
+  // High risk: the first press only asks to confirm.
+  await panel.getByRole("button", { name: "Да, применить" }).click();
 
   await expect(panel.getByText("safe_auto_apply_enabled")).toBeHidden();
   expect(calls).toContain(

@@ -1,5 +1,6 @@
 "use client";
 
+import { ConfigProposalCard } from "@/components/settings/ConfigProposalCard";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { getApiBaseUrl } from "@/lib/api-base";
@@ -248,6 +249,10 @@ interface AgentConfigProposal {
   decided_at: string | null;
   decision_comment: string | null;
   created_at: string;
+  impact?: string | null;
+  age_days?: number;
+  stale?: boolean;
+  current_changed?: boolean;
 }
 
 interface CapabilityProposal {
@@ -372,6 +377,13 @@ function fmtBytes(b: number) {
   if (b >= 1e9) return (b / 1e9).toFixed(1) + " GB";
   if (b >= 1e6) return (b / 1e6).toFixed(0) + " MB";
   return b + " B";
+}
+
+// A list from the API, or empty: an error body is an object, and .map/.filter
+// on it took the whole settings page down («agentTasks.filter is not a
+// function»).
+function asList<T>(value: unknown): T[] {
+  return Array.isArray(value) ? (value as T[]) : [];
 }
 
 function unwrapProposalValue(value: unknown): unknown {
@@ -709,7 +721,7 @@ export default function SettingsPage() {
   async function loadGraphInsights() {
     try {
       const r = await fetch(`${API}/api/admin/graph/insights`);
-      setGraphInsights(await r.json());
+      setGraphInsights(asList(await r.json()));
     } catch {
       setGraphInsights([]);
     }
@@ -774,7 +786,9 @@ export default function SettingsPage() {
   async function loadAgentConfig() {
     try {
       const r = await fetch(`${API}/api/ai/agent-config`);
-      const data = await r.json();
+      const raw = await r.json();
+      // Only a real config: an error body rendered as one crashed the page.
+      const data = r.ok && Array.isArray(raw?.approval_gates) ? raw : null;
       setAgentConfig(data);
       setAgentConfigBaseline(data);
     } catch {
@@ -787,7 +801,7 @@ export default function SettingsPage() {
     try {
       const r = await fetch(`${API}/api/ai/agent-skills`);
       const d = await r.json();
-      setAgentSkills(d.skills ?? []);
+      setAgentSkills(asList(d?.skills));
       setAgentSkillsMode(
         d.mode === "capabilities" ? "capabilities" : "registry",
       );
@@ -799,7 +813,7 @@ export default function SettingsPage() {
   async function loadAgentControlPlane() {
     try {
       const r = await fetch(`${API}/api/agent/control-plane/status`);
-      setAgentControlPlane(await r.json());
+      setAgentControlPlane(r.ok ? await r.json() : null);
     } catch {
       setAgentControlPlane(null);
     }
@@ -808,7 +822,12 @@ export default function SettingsPage() {
   async function loadAgentRuntime() {
     try {
       const r = await fetch(`${API}/api/agent/runtime/status`);
-      setAgentRuntime(await r.json());
+      const data = await r.json();
+      // An error body or a partial answer took the whole settings page down
+      // (counters.llm_calls_24h of undefined): the card just stays hidden.
+      setAgentRuntime(
+        r.ok && data?.counters && data?.models && data?.memory ? data : null,
+      );
     } catch {
       setAgentRuntime(null);
     }
@@ -817,7 +836,8 @@ export default function SettingsPage() {
   async function loadAgentConfigProposals() {
     try {
       const r = await fetch(`${API}/api/agent/config/proposals?status=pending`);
-      setAgentConfigProposals(await r.json());
+      const data = await r.json();
+      setAgentConfigProposals(asList(data));
     } catch {
       setAgentConfigProposals([]);
     }
@@ -826,7 +846,9 @@ export default function SettingsPage() {
   async function loadCapabilityProposals() {
     try {
       const r = await fetch(`${API}/api/agent/capabilities`);
-      setCapabilityProposals(await r.json());
+      const data = await r.json();
+      // An error body is an object: .filter on it took the page down.
+      setCapabilityProposals(asList(data));
     } catch {
       setCapabilityProposals([]);
     }
@@ -851,16 +873,16 @@ export default function SettingsPage() {
         fetch(`${API}/api/memory/sources?status=proposed`),
         fetch(`${API}/api/technology/learning-rules?status=proposed`),
       ]);
-      setAgentTasks(tasksR.ok ? await tasksR.json() : []);
-      setAgentTeams(teamsR.ok ? await teamsR.json() : []);
-      setAgentCrons(cronsR.ok ? await cronsR.json() : []);
-      setAgentPlugins(pluginsR.ok ? await pluginsR.json() : []);
-      setMemoryPromotions(promotionsR.ok ? await promotionsR.json() : []);
-      setWebSources(sourcesR.ok ? await sourcesR.json() : []);
+      setAgentTasks(tasksR.ok ? asList(await tasksR.json()) : []);
+      setAgentTeams(teamsR.ok ? asList(await teamsR.json()) : []);
+      setAgentCrons(cronsR.ok ? asList(await cronsR.json()) : []);
+      setAgentPlugins(pluginsR.ok ? asList(await pluginsR.json()) : []);
+      setMemoryPromotions(promotionsR.ok ? asList(await promotionsR.json()) : []);
+      setWebSources(sourcesR.ok ? asList(await sourcesR.json()) : []);
       const learningPayload = learningRulesR.ok
         ? await learningRulesR.json()
         : { items: [] };
-      setLearningRules(learningPayload.items ?? []);
+      setLearningRules(asList(learningPayload?.items));
     } catch {
       // keep previous state on network error
     }
@@ -2277,62 +2299,15 @@ export default function SettingsPage() {
                       </div>
                       <div className="mt-2 space-y-2">
                         {agentConfigProposals.slice(0, 5).map((proposal) => (
-                          <div
+                          <ConfigProposalCard
                             key={proposal.id}
-                            className="rounded border border-amber-900/60 bg-slate-950/40 p-3 text-xs"
-                          >
-                            <div className="flex flex-wrap items-start justify-between gap-3">
-                              <div>
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <span className="font-mono text-amber-100">
-                                    {proposal.setting_path}
-                                  </span>
-                                  <span className="rounded bg-amber-900/50 px-1.5 py-0.5 text-amber-200">
-                                    {proposal.risk_level}
-                                  </span>
-                                  <span className="text-slate-400">
-                                    {proposal.requested_by}
-                                  </span>
-                                </div>
-                                <div className="mt-1 line-clamp-2 text-slate-400">
-                                  {proposal.reason}
-                                </div>
-                              </div>
-                              <div className="flex gap-2">
-                                <button
-                                  type="button"
-                                  disabled={agentSaving}
-                                  onClick={() =>
-                                    decideAgentConfigProposal(proposal.id, true)
-                                  }
-                                  className="rounded bg-emerald-700 px-2 py-1 text-xs text-white hover:bg-emerald-600 disabled:opacity-50"
-                                >
-                                  Разрешить
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={agentSaving}
-                                  onClick={() =>
-                                    decideAgentConfigProposal(
-                                      proposal.id,
-                                      false,
-                                    )
-                                  }
-                                  className="rounded bg-slate-700 px-2 py-1 text-xs text-slate-100 hover:bg-slate-600 disabled:opacity-50"
-                                >
-                                  Отклонить
-                                </button>
-                              </div>
-                            </div>
-                            <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
-                              <pre className="max-h-28 overflow-auto rounded bg-slate-950/70 p-2 text-slate-400">
-                                {formatProposalValue(proposal.current_value)}
-                              </pre>
-                              <pre className="max-h-28 overflow-auto rounded bg-slate-950/70 p-2 text-amber-100">
-                                {formatProposalValue(proposal.proposed_value)}
-                              </pre>
-                            </div>
-                          </div>
+                            proposal={proposal}
+                            busy={agentSaving}
+                            format={formatProposalValue}
+                            onDecide={(approved) =>
+                              decideAgentConfigProposal(proposal.id, approved)
+                            }
+                          />
                         ))}
                       </div>
                     </div>

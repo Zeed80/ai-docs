@@ -907,6 +907,68 @@ async def test_system_prompt_proposal_still_requires_protected_flow(
 
 
 @pytest.mark.asyncio
+async def test_a_prompt_replacement_says_what_it_does(
+    client: AsyncClient, db_session, _isolated_agent_config
+):
+    """2026-10-21: a «medium» live-check proposal for system_prompt, two months
+    old, was approved in a batch and replaced the whole base prompt."""
+    resp = await client.post(
+        "/api/agent/config/proposals",
+        json={
+            "setting_path": "system_prompt",
+            "proposed_value": "ЖИВАЯ ПРОВЕРКА",
+            "reason": "live check",
+            "risk_level": "medium",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["risk_level"] == "critical"
+    assert "ВЕСЬ основной промпт" in data["impact"]
+    assert data["stale"] is False
+    assert data["current_changed"] is False
+
+    from app.db.models import AgentConfigProposal
+
+    row = await db_session.get(AgentConfigProposal, uuid.UUID(data["id"]))
+    row.created_at = datetime.now(UTC) - timedelta(days=60)
+    await db_session.commit()
+    listed = await client.get("/api/agent/config/proposals?status=pending")
+    mine = next(p for p in listed.json() if p["id"] == data["id"])
+    assert mine["stale"] is True
+    assert mine["age_days"] >= 60
+
+    decided = await client.post(
+        f"/api/agent/config/proposals/{data['id']}/decide", json={"approved": False}
+    )
+    assert decided.status_code == 200
+    from app.db.models import AuditLog
+
+    audit = (
+        await db_session.execute(
+            select(AuditLog).where(AuditLog.entity_id == uuid.UUID(data["id"]))
+        )
+    ).scalar_one()
+    assert audit.action == "agent_config.proposal_rejected"
+
+
+@pytest.mark.asyncio
+async def test_a_value_that_cannot_apply_is_refused_when_proposed(
+    client: AsyncClient, _isolated_agent_config
+):
+    """Was accepted, then a 500 at approval (pydantic error in decide)."""
+    resp = await client.post(
+        "/api/agent/config/proposals",
+        json={
+            "setting_path": "system_prompt",
+            "proposed_value": {"value": None},
+            "reason": "double-wrapped value",
+        },
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_a_reworded_open_task_proposal_is_already_exists(client: AsyncClient):
     """T7a (E52): the employee re-proposed an open task, reworded, in 3 of 3 runs."""
     tag = uuid.uuid4().hex[:6]

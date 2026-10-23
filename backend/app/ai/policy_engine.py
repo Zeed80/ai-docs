@@ -117,6 +117,68 @@ def is_protected_setting(setting_path: str) -> bool:
     return root in PROTECTED_SETTINGS
 
 
+_RISK_ORDER = ("low", "medium", "high", "critical")
+
+# What approving a protected setting does, in the owner's words. The card
+# showed only the path, the requester's own risk level and two raw values: on
+# 2026-10-21 a two-month-old live-check proposal for system_prompt was
+# approved in a batch and replaced the whole base prompt for two days.
+PROTECTED_SETTING_IMPACT: dict[str, tuple[str, str]] = {
+    "system_prompt": (
+        "critical",
+        "Заменит ВЕСЬ основной промпт агента (base.md) этим текстом: правила "
+        "работы, писем и подтверждений перестанут действовать. Пустое значение "
+        "возвращает основной промпт.",
+    ),
+    "approval_gates": (
+        "critical",
+        "Меняет список действий, которые агент делает только после вашего подтверждения.",
+    ),
+    "permission_mode": ("critical", "Меняет, что агенту разрешено делать без вас."),
+    "autonomy_mode": ("critical", "Меняет, насколько самостоятельно агент действует."),
+    "safe_auto_apply_enabled": (
+        "critical",
+        "Разрешает агенту применять изменения без вашего подтверждения.",
+    ),
+    "mcp_servers": ("critical", "Запускает внешние программы на сервере от имени агента."),
+    "exposed_skills": ("high", "Меняет набор инструментов, доступных агенту."),
+    "memory_enabled": ("high", "Включает или выключает долговременную память агента."),
+    "audit_enabled": ("critical", "Включает или выключает журнал действий агента."),
+    "agent_name": ("high", "Меняет имя, которым агент представляется."),
+    "provider": ("high", "Переключает агента на другого провайдера моделей."),
+    "sql_full_access": (
+        "critical",
+        "Даёт моделям, включая облачные, чтение всех несекретных таблиц.",
+    ),
+    "auditor_allow_cloud": ("high", "Разрешает отправлять проверку качества в облако."),
+    "cloud_allowed_slots": ("high", "Разрешает слотам отправлять содержимое в облачные модели."),
+}
+
+
+def protected_setting_impact(setting_path: str) -> str | None:
+    """What approving this setting changes, or None for unprotected ones."""
+    root = setting_path.split(".", 1)[0]
+    if root not in PROTECTED_SETTINGS:
+        return None
+    known = PROTECTED_SETTING_IMPACT.get(root)
+    return known[1] if known else "Защищённая настройка: меняет поведение агента."
+
+
+def setting_risk_level(setting_path: str, claimed: str) -> str:
+    """The requester's risk level, never below the setting's own floor.
+
+    The level used to be whatever the proposer said, so the agent (or a test)
+    could file a whole-prompt replacement as «medium».
+    """
+    root = setting_path.split(".", 1)[0]
+    floor = "low"
+    if root in PROTECTED_SETTINGS:
+        floor = PROTECTED_SETTING_IMPACT.get(root, ("high", ""))[0]
+    if claimed not in _RISK_ORDER:
+        return floor
+    return max(claimed, floor, key=_RISK_ORDER.index)
+
+
 def classify_skill_risk(skill_name: str) -> str:
     # Capability-mode tools have no dot — risk is handled via gate_actions in capabilities.yml.
     if "." not in skill_name and not skill_name.startswith(EXTERNAL_SKILL_PREFIXES):
