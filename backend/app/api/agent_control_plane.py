@@ -253,6 +253,9 @@ class AgentTaskPropose(BaseModel):
     # T7a: an open task with the same objective is already_exists; a second
     # one passes only explicitly, and the agent's request is owner-confirmed.
     allow_duplicate: bool = False
+    # Open tasks about the same named thing (supplier, customer) that the
+    # agent read in a similar_exists answer and judged to be other work.
+    not_a_duplicate_of: list[uuid.UUID] = Field(default_factory=list)
 
 
 class AgentTaskDecision(BaseModel):
@@ -532,9 +535,42 @@ async def _propose_agent_task(
                 .limit(500)
             )
         ).scalars()
+        open_tasks = list(open_tasks)
         existing = next(
             (t for t in open_tasks if _same_objective(t.objective, payload.objective)), None
         )
+        if existing is None:
+            # Whether a reworded task is the same work is the model's
+            # judgement, not a word count: E52 run 10 «Ежемесячная сверка
+            # цен ООО «Эвал-Сталь» с актуальным прайсом» passed next to the
+            # open «Сверять цены ООО «Эвал-Сталь» с их прайсом раз в месяц»
+            # (5 words of 9). Open tasks about the same named thing go back
+            # to the model once; it names the ones it read as other work.
+            names = _quoted_names(payload.objective)
+            judged = set(payload.not_a_duplicate_of)
+            similar = [
+                t for t in open_tasks if names & _quoted_names(t.objective) and t.id not in judged
+            ]
+            if similar:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "similar_exists",
+                        "message": (
+                            "Задача НЕ создана: есть открытые задачи о том же. Сравни "
+                            "по смыслу. Если одна из них — та же работа другими словами "
+                            "(то же действие с тем же объектом, иначе названа "
+                            "периодичность или формулировка), вторую не предлагай: "
+                            "сообщи пользователю о существующей. Если твоя — другая "
+                            "работа, повтори task_propose с not_a_duplicate_of: [id "
+                            "этих задач]."
+                        ),
+                        "tasks": [
+                            {"id": str(t.id), "objective": t.objective, "status": t.status}
+                            for t in similar[:5]
+                        ],
+                    },
+                )
         if existing is not None:
             raise HTTPException(
                 status_code=409,

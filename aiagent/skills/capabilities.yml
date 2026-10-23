@@ -1130,6 +1130,9 @@ capabilities:
       за рамки существующих capabilities или нужна фоновая задача. Если агент
       сам инициативно видит полезную работу, используй action=task_propose;
       action=task_create — только при явной команде или после разрешения.
+      Ответ 409 similar_exists на task_propose — открытые задачи о том же:
+      сравни по смыслу; та же работа другими словами — не предлагай вторую,
+      сообщи о существующей; другая работа — повтори с not_a_duplicate_of.
       Утверждение и запуск proposed-задач (decide/run) — за человеком в GUI; у
       агента нет этих действий и он не запускает собственные предложения сам.
       Настройки авто-обработки: action=ai_config_get — прочитать текущий порог
@@ -1149,7 +1152,7 @@ capabilities:
           description: "task_create | task_propose | capability_propose | capability_status | approval_list | approval_status | config_status | ai_config_get | ai_config_set"
         body:
           type: object
-          description: "Данные для task_create/task_propose: objective, description, role, rationale, suggested_trigger; для capability_propose: name, description, gap; для ai_config_set: auto_approve_confidence_threshold (0–1) и/или auto_verify_enabled (bool)"
+          description: "Данные для task_create/task_propose: objective, description, role, rationale, suggested_trigger, not_a_duplicate_of (id задач из ответа similar_exists, которые ты сравнил и признал другой работой); для capability_propose: name, description, gap; для ai_config_set: auto_approve_confidence_threshold (0–1) и/или auto_verify_enabled (bool)"
         proposal_id:
           type: string
           description: "ID предложения новой capability (для capability_status)"

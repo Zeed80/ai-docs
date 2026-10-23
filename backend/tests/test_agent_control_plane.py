@@ -1021,10 +1021,33 @@ async def test_a_task_reworded_in_other_words_is_already_exists(client: AsyncCli
         json={"objective": f"Ежемесячная сверка цен ООО «Эвал-Сталь{tag}» с их прайсом"},
     )
     assert reworded.status_code == 409
+    # E52 run 10: 5 words of 9 in common, so not already_exists — but an open
+    # task about the same supplier goes back to the model to judge.
+    run10 = await client.post(
+        "/api/agent/tasks/propose",
+        json={
+            "objective": (
+                f"Ежемесячная сверка цен ООО «Эвал-Сталь{tag}» с актуальным прайсом поставщика"
+            )
+        },
+    )
+    assert run10.status_code == 409
+    detail = run10.json()["detail"]
+    assert detail["code"] == "similar_exists"
+    assert [t["id"] for t in detail["tasks"]] == [first.json()["id"]]
+
+    objective = f"Найти каталоги ООО «Эвал-Сталь{tag}» и прикрепить их к карточке"
+    unjudged = await client.post("/api/agent/tasks/propose", json={"objective": objective})
+    assert unjudged.json()["detail"]["code"] == "similar_exists"
     other = await client.post(
         "/api/agent/tasks/propose",
-        json={"objective": f"Найти каталоги ООО «Эвал-Сталь{tag}» и прикрепить их к карточке"},
+        json={"objective": objective, "not_a_duplicate_of": [first.json()["id"]]},
     )
     assert other.status_code == 200, other.text
-    for task in (first, other):
+    unrelated = await client.post(
+        "/api/agent/tasks/propose",
+        json={"objective": f"Сверять цены ООО «Эвал-Медь{tag}» с их прайсом раз в месяц"},
+    )
+    assert unrelated.status_code == 200, unrelated.text
+    for task in (first, other, unrelated):
         await client.post(f"/api/agent/tasks/{task.json()['id']}/decide", json={"approved": False})
