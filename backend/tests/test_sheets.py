@@ -74,12 +74,13 @@ async def test_sheet_create_edit_formula_lifecycle(client):
 
 
 @pytest.mark.asyncio
-async def test_sheet_from_spec_is_editable_copy(client):
+async def test_sheet_from_spec_is_editable_copy(client, db_session):
     # Build a (read-only) spec-table block, then materialise it into a sheet.
+    # One supplier: a table with no rows is no longer published at all.
+    from app.db.models import Party, PartyRole
 
-    # Minimal seed: one invoice via the workspace store path isn't needed; we
-    # just need a table block — use the documents source which needs a Document.
-    # Build directly through the spec-table endpoint with empty data is fine.
+    db_session.add(Party(name="ООО Лист", inn="7700000001", role=PartyRole.supplier))
+    await db_session.commit()
     spec_resp = await client.post(
         "/api/workspace/agent/spec-table",
         json={

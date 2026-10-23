@@ -236,14 +236,13 @@ async def test_agent_items_table_nonexistent_supplier_skips_publish(
 
 
 @pytest.mark.asyncio
-async def test_agent_items_table_real_supplier_zero_lines_still_publishes(
+async def test_agent_items_table_real_supplier_zero_lines_is_said_not_published(
     client: AsyncClient,
     invoices,
     db_session,
 ):
-    """A supplier that genuinely exists but has no matching invoice lines
-    is a real, useful empty state — unlike a name that resolves to nobody,
-    it should still publish."""
+    """A supplier that exists but has no invoice lines is answered in words:
+    an empty table on the desktop read as a result (owner, 2026-10-23)."""
     extra_supplier = Party(name='ООО "Пустографт"', inn="7000000000", role=PartyRole.supplier)
     db_session.add(extra_supplier)
     await db_session.commit()
@@ -257,8 +256,8 @@ async def test_agent_items_table_real_supplier_zero_lines_still_publishes(
     )
     assert pub.status_code == 200
     body = pub.json()
-    assert body["status"] == "published"
+    assert body["status"] == "empty"
     assert body["total"] == 0
 
     blocks = (await client.get("/api/workspace/blocks")).json()
-    assert any(b["id"] == "agent:invoice-items" for b in blocks["items"])
+    assert all(b["id"] != "agent:invoice-items" for b in blocks["items"])

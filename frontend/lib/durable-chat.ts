@@ -174,7 +174,8 @@ export class DurableChatTransport {
         this.emit({type: "durable_run", run_id: data.run.id});
         this.busy = !terminal.has(data.run.status);
         this.emit({type: "durable_state", active: this.busy});
-        void this.poll(generation, 0, savedMessageIds);
+        // Events already in the run when the chat is opened are history.
+        void this.poll(generation, 0, savedMessageIds, true);
       }
     } catch (error) {
       if (generation === this.generation && this.stopOnSessionExpired(error)) return;
@@ -307,7 +308,7 @@ export class DurableChatTransport {
     }
   }
 
-  private async poll(generation: number, cursor: number, saved: Set<string>) {
+  private async poll(generation: number, cursor: number, saved: Set<string>, replay = false) {
     if (generation !== this.generation || !this.run || this.readyState !== 1) return;
     try {
       const run = await this.request(`/api/agent/chat-runs/${this.run.id}`) as Run;
@@ -321,6 +322,8 @@ export class DurableChatTransport {
         const event = item.payload.event;
         if (event && event.type !== "done" && !(event.type === "text" && run.result_message_id && saved.has(run.result_message_id))) {
           if (event.type === "confirmation_required") this.emit({type: "status", content: "Действие остановлено до подтверждения владельцем."});
+          // A desktop publish from history must not open the desktop again.
+          else if (replay && (event.type === "workspace.updated" || event.type === "canvas")) this.emit({...event, replayed: true});
           else this.emit(event);
         }
         cursor = item.sequence;

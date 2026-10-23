@@ -57,20 +57,24 @@ async def test_publish_invoice_table_empty(client: AsyncClient):
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert data["status"] == "published"
+    # No invoices: nothing goes to the desktop, the agent hears it in words.
+    assert data["status"] == "empty"
     assert data["canvas_id"] == "test:invoice-list"
-    assert "total" in data
-    assert "shown" in data
-    assert "message" in data
+    assert data["total"] == 0
+    assert "Ничего не найдено" in data["message"]
 
 
 @pytest.mark.asyncio
 async def test_publish_invoice_table_appears_in_blocks(client: AsyncClient):
     await client.delete("/api/workspace/blocks")
     await client.post(
-        "/api/workspace/agent/invoices/table",
+        "/api/workspace/agent/generated/general",
         json={
             "canvas_id": "test:invoice-table-check",
+            "block_type": "table",
+            "title": "Счета",
+            "columns": [{"key": "id", "header": "ID", "type": "text"}],
+            "rows": [{"id": "1"}],
         },
     )
     resp = await client.get("/api/workspace/blocks")
@@ -83,9 +87,13 @@ async def test_publish_invoice_table_appears_in_blocks(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_verify_block_after_publish(client: AsyncClient):
     await client.post(
-        "/api/workspace/agent/invoices/table",
+        "/api/workspace/agent/generated/general",
         json={
             "canvas_id": "test:verify-after-publish",
+            "block_type": "table",
+            "title": "Счета",
+            "columns": [{"key": "id", "header": "ID", "type": "text"}],
+            "rows": [{"id": "1"}],
         },
     )
     resp = await client.post(
@@ -127,7 +135,7 @@ async def test_delete_specific_block(client: AsyncClient):
             "block_type": "table",
             "title": "Удалить меня",
             "columns": [{"key": "id", "header": "ID", "type": "text"}],
-            "rows": [],
+            "rows": [{"id": "1"}],
         },
     )
 
@@ -375,3 +383,26 @@ async def test_items_by_supplier_table_honours_the_filter(client: AsyncClient, d
     block = (await client.get("/api/workspace/blocks/test:by-supplier-filter")).json()
     suppliers = {row.get("supplier") for row in block["rows"]}
     assert suppliers == {"ООО Фильтруемый"}, f"filter ignored: {suppliers}"
+
+
+@pytest.mark.asyncio
+async def test_a_table_with_no_rows_is_not_published(client: AsyncClient):
+    # Live 2026-10-22: «Закупки концевых фрез Ø6 мм HSS — история», 0 rows,
+    # stayed on the desktop as if it were a result.
+    resp = await client.post(
+        "/api/workspace/agent/generated/general",
+        json={
+            "canvas_id": "test:empty-table",
+            "block_type": "table",
+            "title": "Пусто",
+            "columns": [{"key": "id", "header": "ID", "type": "text"}],
+            "rows": [],
+        },
+    )
+    data = resp.json()
+    assert data["status"] == "empty"
+    assert "Ничего не найдено" in data["message"]
+    verify_resp = await client.post(
+        "/api/workspace/agent/verify-block", json={"canvas_id": "test:empty-table"}
+    )
+    assert verify_resp.json()["exists"] is False

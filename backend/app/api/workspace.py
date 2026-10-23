@@ -22,6 +22,7 @@ from app.domain.workspace import (
     delete_workspace_block,
     get_workspace_block,
     list_workspace_blocks,
+    nothing_found_message,
     upsert_workspace_block,
 )
 from app.formatting import format_money, format_number
@@ -256,6 +257,8 @@ async def publish_invoice_table(
         "rows": rows,
         "source": "workspace.invoice_table",
     }
+    if not rows:
+        return _nothing_found(payload.canvas_id, block["title"])
     stored = upsert_workspace_block(payload.canvas_id, block)
     await chat_bus.publish(
         {
@@ -362,6 +365,8 @@ async def publish_invoice_items_table(
         "source": "workspace.invoice_items_table",
         "filters": {"supplier_query": supplier_filter} if supplier_filter else {},
     }
+    if not rows:
+        return _nothing_found(payload.canvas_id, block["title"])
     stored = upsert_workspace_block(payload.canvas_id, block)
     await chat_bus.publish(
         {
@@ -431,6 +436,8 @@ async def publish_invoice_items_grouped_table(
         "source_agent_role": "invoice_specialist",
         "audit_status": "pending",
     }
+    if not rows:
+        return _nothing_found(payload.canvas_id, block["title"])
     stored = upsert_workspace_block(payload.canvas_id, block)
     await chat_bus.publish(
         {
@@ -516,6 +523,8 @@ async def publish_invoice_items_by_supplier_table(
         "source_agent_role": "invoice_specialist",
         "audit_status": "pending",
     }
+    if not rows:
+        return _nothing_found(payload.canvas_id, block["title"])
     stored = upsert_workspace_block(payload.canvas_id, block)
     await chat_bus.publish(
         {
@@ -847,6 +856,8 @@ async def publish_invoice_pivot_table(
         "source_agent_role": "invoice_specialist",
         "audit_status": "pending",
     }
+    if not rows:
+        return _nothing_found(payload.canvas_id, block["title"])
     stored = upsert_workspace_block(payload.canvas_id, block)
     await chat_bus.publish(
         {"type": "workspace.updated", "canvas_id": payload.canvas_id, "block": stored}
@@ -1176,6 +1187,10 @@ async def _publish_sql_table(
     canvas_block = block.get("data", block)
     canvas_id = payload.canvas_id
     canvas_block["id"] = canvas_id
+    if not canvas_block.get("rows"):
+        empty = _nothing_found(canvas_id, str(canvas_block.get("title") or "Таблица"))
+        empty.sql = str(block.get("sql") or "")
+        return empty
     if context is None:
         stored = upsert_workspace_block(canvas_id, canvas_block)
     else:
@@ -1202,6 +1217,21 @@ async def _publish_sql_table(
         filters={},
         preview=_table_preview(canvas_block),
         sql=str(block.get("sql") or ""),
+    )
+
+
+def _nothing_found(canvas_id: str, title: str) -> WorkspaceToolResponse:
+    """A query that found nothing answers in words, not with an empty table.
+
+    An empty block on the desktop looked like a result (live 2026-10-22:
+    «Закупки концевых фрез Ø6 мм HSS — история», 0 rows) and stayed there.
+    """
+    return WorkspaceToolResponse(
+        status="empty",
+        canvas_id=canvas_id,
+        total=0,
+        shown=0,
+        message=nothing_found_message(title),
     )
 
 
@@ -1247,6 +1277,8 @@ async def publish_general_block(
         "rows": payload.rows,
         "source": "workspace.general",
     }
+    if payload.block_type == "table" and not payload.rows:
+        return _nothing_found(payload.canvas_id, payload.title)
     stored = upsert_workspace_block(payload.canvas_id, block)
     await chat_bus.publish(
         {

@@ -135,6 +135,15 @@ describe("долговечный транспорт чата", () => {
     expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
+  it("публикация из истории помечена replayed и не откроет Рабочий стол снова", async () => {
+    fetcher.mockResolvedValueOnce(response({run, legacy: false}))
+      .mockResolvedValueOnce(response(run)).mockResolvedValueOnce(page([event(1, "workspace.updated"), event(2, "text", "Ответ")]));
+    await transport.watchSession("session"); await flush();
+    expect(emit).toHaveBeenCalledWith({type: "workspace.updated", content: undefined, replayed: true});
+    expect(emit).toHaveBeenCalledWith({type: "text", content: "Ответ"});
+    transport.close();
+  });
+
   it("повторяет транспортный запрос с тем же request_id", async () => {
     fetcher.mockRejectedValueOnce(new TypeError("network"))
       .mockResolvedValueOnce(response(run)).mockResolvedValueOnce(response(run)).mockResolvedValueOnce(page());

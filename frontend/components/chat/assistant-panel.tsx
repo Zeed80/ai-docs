@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   buildDurableUserCommand,
   DurableChatTransport,
@@ -19,6 +19,7 @@ import {
 } from "@/lib/native-bridge";
 import { GpuStatusBar } from "@/components/gpu-status-bar";
 import { useMentions } from "@/components/chat/use-mentions";
+import { LinkifiedText } from "@/components/chat/linkified-text";
 import {
   createChatSession,
   deleteChatSession,
@@ -356,6 +357,11 @@ export function AssistantPanel() {
   const { isDegraded } = useDegradedMode();
   const agentName = useAgentName();
   const router = useRouter();
+  const pathname = usePathname();
+  // handleServerMessage is bound once by the transport, so it reads the
+  // current page through a ref.
+  const pathnameRef = useRef(pathname);
+  pathnameRef.current = pathname;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isConnected, setIsConnected] = useState(false);
@@ -909,11 +915,18 @@ export function AssistantPanel() {
     }
 
     // ── Canvas ────────────────────────────────────────────────────────────────
-    // Публикация на рабочий стол больше не выдёргивает человека со страницы:
-    // router.push("/") посреди разговора терял и контекст, и место в диалоге.
-    // Показываем, что появилось, и даём перейти самому.
+    // Публикация открывает Рабочий стол: так просил владелец (2026-10-23).
+    // Чат живёт в общей раскладке, поэтому переход его не сбрасывает; на
+    // мобильном чат — отдельная страница /assistant, там остаётся кнопка.
     if (type === "canvas" || type === "workspace.updated") {
       window.dispatchEvent(new CustomEvent("workspace-blocks-updated"));
+      if (
+        !data.replayed &&
+        pathnameRef.current !== "/" &&
+        pathnameRef.current !== "/assistant"
+      ) {
+        router.push("/");
+      }
       setMessages((prev) => [
         ...prev,
         {
@@ -1673,7 +1686,9 @@ export function AssistantPanel() {
                       </span>
                     </div>
                   )}
-                  <div className="px-3 py-2">{msg.content}</div>
+                  <div className="px-3 py-2">
+                    <LinkifiedText text={msg.content ?? ""} />
+                  </div>
                 </div>
                 {msg.clarify && isLastAssistant && messages[messages.length - 1]?.id === msg.id && (
                   <div

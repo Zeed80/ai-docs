@@ -225,6 +225,27 @@ async def test_api_spec_table_unresolved_supplier_not_published(client, seeded):
 
 
 @pytest.mark.asyncio
+async def test_api_spec_table_with_no_rows_is_not_published(client, seeded):
+    """A real supplier, nothing matches: the agent hears «ничего не найдено»
+    and the desktop gets no empty table (live 2026-10-22)."""
+    spec = _user_spec()
+    spec.filters = [
+        ts.FilterSpec(field="supplier_name", op="contains", value="Ромашка"),
+        ts.FilterSpec(field="invoice_number", op="eq", value="НЕТ-ТАКОГО-СЧЁТА"),
+    ]
+    resp = await client.post(
+        "/api/workspace/agent/spec-table",
+        json={"canvas_id": "agent:spec-table-empty", "spec": spec.model_dump(mode="json")},
+    )
+    data = resp.json()
+    assert data["status"] == "empty"
+    assert data["total"] == 0
+    assert "Ничего не найдено" in data["message"]
+    blocks = (await client.get("/api/workspace/blocks")).json()
+    assert all(b["id"] != "agent:spec-table-empty" for b in blocks["items"])
+
+
+@pytest.mark.asyncio
 async def test_api_build_then_patch_command(client, seeded):
     # 1. Построение по спецификации пользователя.
     resp = await client.post(

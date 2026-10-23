@@ -1196,6 +1196,35 @@ export default function SettingsPage() {
     setConfigSaving(false);
   }
 
+  // The flag applies on click: it sat ~400 lines above «Сохранить настройки
+  // агента», and leaving the page without that button dropped it (owner,
+  // 2026-10-23).
+  const [autoproposeSaving, setAutoproposeSaving] = useState(false);
+  const [autoproposeError, setAutoproposeError] = useState<string | null>(null);
+  async function saveProcedureAutopropose(enabled: boolean) {
+    setAutoproposeSaving(true);
+    setAutoproposeError(null);
+    try {
+      const r = await mutFetch(`${API}/api/ai/agent-config`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ procedure_autopropose_enabled: enabled }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      const saved = (await r.json()) as AgentConfig;
+      const value = Boolean(saved.procedure_autopropose_enabled);
+      setAgentConfig((prev) =>
+        prev ? { ...prev, procedure_autopropose_enabled: value } : prev,
+      );
+      setAgentConfigBaseline((prev) =>
+        prev ? { ...prev, procedure_autopropose_enabled: value } : prev,
+      );
+    } catch (e) {
+      setAutoproposeError(`Не сохранено: ${String(e)}`);
+    }
+    setAutoproposeSaving(false);
+  }
+
   async function handleSaveAgentConfig() {
     if (!agentConfig) return;
     setAgentSaving(true);
@@ -2483,11 +2512,9 @@ export default function SettingsPage() {
                       type="checkbox"
                       className="mt-0.5"
                       checked={Boolean(agentConfig.procedure_autopropose_enabled)}
+                      disabled={autoproposeSaving}
                       onChange={(e) =>
-                        setAgentConfig({
-                          ...agentConfig,
-                          procedure_autopropose_enabled: e.target.checked,
-                        })
+                        void saveProcedureAutopropose(e.target.checked)
                       }
                     />
                     <span>
@@ -2495,8 +2522,13 @@ export default function SettingsPage() {
                       <span className="block text-xs text-slate-400">
                         После выполненного поручения агент в фоне решает, стоит ли записать
                         порядок работы. Предложение ждёт вашего решения в «Процедурах»;
-                        вызов модели идёт, когда видеокарта свободна.
+                        вызов модели идёт, когда видеокарта свободна. Сохраняется сразу.
                       </span>
+                      {autoproposeError && (
+                        <span role="alert" className="block text-xs text-red-300">
+                          {autoproposeError}
+                        </span>
+                      )}
                     </span>
                   </label>
                   <div className="rounded-md border border-slate-800 bg-slate-900/40 p-3">

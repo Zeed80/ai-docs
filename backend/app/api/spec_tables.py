@@ -38,7 +38,11 @@ from app.domain.table_spec import (
     validate_spec,
     writeback_for,
 )
-from app.domain.workspace import get_workspace_block, upsert_workspace_block
+from app.domain.workspace import (
+    get_workspace_block,
+    nothing_found_message,
+    upsert_workspace_block,
+)
 
 logger = structlog.get_logger()
 
@@ -191,6 +195,17 @@ async def _render_and_publish(
         )
 
     title = spec.title or SOURCES[spec.source].title
+    if not result.rows:
+        # An empty table on the desktop looked like a result (live 2026-10-22:
+        # «Закупки концевых фрез Ø6 мм HSS — история», 0 rows).
+        return SpecTableResponse(
+            status="empty",
+            canvas_id=canvas_id,
+            total=0,
+            shown=0,
+            message=nothing_found_message(title),
+            spec=spec.model_dump(mode="json"),
+        )
     block = {
         "id": canvas_id,
         "type": "table",

@@ -71,6 +71,16 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def nothing_found_message(title: str) -> str:
+    """What the agent hears instead of an empty table being published."""
+    return (
+        f"Ничего не найдено: «{title}» — 0 строк. Пустая таблица на Рабочий стол "
+        "не выводится, прежняя остаётся как была. Скажи пользователю словами, что "
+        "по запросу ничего нет; если условие могло быть слишком узким (точное "
+        "название, период, фильтр) — проверь его и попробуй шире."
+    )
+
+
 def upsert_workspace_block(
     block_id: str, block: dict[str, Any], *, expected_revision: int | None = None
 ) -> dict[str, Any]:

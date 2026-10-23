@@ -4,7 +4,7 @@ import { AssistantPanel } from "@/components/chat/assistant-panel";
 import { mutFetch } from "@/lib/auth";
 import { getChatMessages, importArchivedConversation, listChatSessions } from "@/lib/api";
 
-vi.mock("next/navigation", () => ({useRouter: () => ({push: vi.fn()})}));
+vi.mock("next/navigation", () => ({useRouter: () => ({push: vi.fn()}), usePathname: () => "/"}));
 vi.mock("@/lib/degraded-mode", () => ({useDegradedMode: () => ({isDegraded: false})}));
 vi.mock("@/lib/agent-name", () => ({useAgentName: () => "Света"}));
 vi.mock("@/components/gpu-status-bar", () => ({GpuStatusBar: () => null}));
