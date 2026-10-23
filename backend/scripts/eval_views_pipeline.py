@@ -84,6 +84,10 @@ def prepare_like_product(gray):
         )
         if result.applied:
             content, note = result.content, result.reason
+        elif result.factor:
+            # Нужное, но отбракованное увеличение — тоже причина провала листа
+            # (p063_body: «расходится с исходником», в журнале было пусто).
+            note = f"без увеличения: {result.reason}"[:160]
     except Exception as exc:  # noqa: BLE001 — без увеличения, как продукт при сбое
         note = f"увеличение недоступно: {exc}"[:120]
     image = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_GRAYSCALE)

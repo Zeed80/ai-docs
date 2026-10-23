@@ -1311,10 +1311,10 @@ def build_revolve(
     tried: list[str] = []
     candidates = ordered[:6] + sorted(spare, key=lambda r: -area(r))[:2]
     candidates += _figures_in(gray, ordered[:2])
-    if unscaled:
-        # Не в масштабе масштаб не отсекает чужое — изображение берётся
-        # целиком: рамка, обрезавшая деталь, давала её часть.
-        candidates += _grown_pictures(gray, ordered[:6])
+    # Рамка, обрезавшая деталь, даёт её часть (shaft_detail: модель порезала
+    # вал на девять рамок, «главный вид» — полоска у уступа, профиль 20 мм из
+    # 840) — изображение берётся и целиком, до связных основных линий.
+    candidates += _grown_pictures(gray, ordered[:6])
     for region in candidates:
         crop, factor, origin = prepare(gray, region.box)
         line = _line_px(crop)
@@ -2040,16 +2040,30 @@ def choose_body(
     ]
     largest = max(lengths) if lengths else None
 
-    def rank(result: ViewsResult) -> tuple[bool, bool, float]:
-        explained = {
-            lab.value
-            for lab in (parse_label(t) for t in result.coverage.get("explained") or [])
-            if lab.kind == "linear"
-        }
+    diameters = {
+        lab.value
+        for lab in (parse_label(t) for t in merged)
+        if lab.kind in ("diameter", "thread") and lab.value
+    }
+
+    def rank(result: ViewsResult) -> tuple[bool, bool, bool, float]:
+        parsed = [parse_label(t) for t in result.coverage.get("explained") or []]
+        explained = {lab.value for lab in parsed if lab.kind == "linear"}
+        round_ok = len(diameters) < 2 or any(
+            lab.kind in ("diameter", "thread") and lab.value for lab in parsed
+        )
         share = result.coverage.get("share") or 0.0
         # Только среди правдоподобных: габарит вне надписей бывает и у
         # верного тела (793539cc_p012: 0,78 у вала против 0,35 у «призмы»).
-        return (share >= _MIN_COVERAGE, largest is None or largest in explained, share)
+        # Тело, на котором нет ни одного Ø листа с несколькими Ø, габаритом
+        # не выигрывает: «699» — прочитанное «6P9» допуска паза — отдало вал
+        # part_01 (79 % надписей) «призме» 818 мм без единого Ø (48 %).
+        return (
+            share >= _MIN_COVERAGE,
+            round_ok,
+            largest is None or largest in explained,
+            share,
+        )
 
     best = max(built, key=rank)
     names = {
@@ -2077,7 +2091,7 @@ def choose_body(
     )
     # Габарит вне тела — построена часть детали (рамка обрезала вал, масштаб
     # подобран по надписям этой части: шпиндель 22 мм из 127).
-    partial = total >= _COVERAGE_MIN_LABELS and not rank(best)[1]
+    partial = total >= _COVERAGE_MIN_LABELS and not rank(best)[2]
     if weak or partial:
         # Лист не в масштабе — форма с листа, числа надписями; принимается,
         # только если такое тело надписи объясняет (и габарит, если его не
@@ -2087,7 +2101,7 @@ def choose_body(
             sketch.coverage = label_coverage(sketch, merged)
             share = sketch.coverage.get("share") or 0.0
             if share >= _MIN_COVERAGE and (
-                weak or (rank(sketch)[1] and share >= (coverage.get("share") or 0.0))
+                weak or (rank(sketch)[2] and share >= (coverage.get("share") or 0.0))
             ):
                 sketch.notes.append(f"в масштабе листа надписей на теле {coverage['share']:.0%}")
                 return sketch
