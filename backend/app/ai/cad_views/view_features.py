@@ -89,11 +89,10 @@ def _circles(
     for cx, cy, r0 in found[0][:200]:
         low, high = (radius[0], radius[1]) if radius else (max(line, 0.5 * r0), 1.5 * r0 + line)
         radii = np.arange(low, high, 0.5)
-        shares = []
-        for r in radii:
-            xs = np.clip(np.round(cx + r * np.cos(angles)).astype(int), 0, width - 1)
-            ys = np.clip(np.round(cy + r * np.sin(angles)).astype(int), 0, height - 1)
-            shares.append(float(ink[ys, xs].mean()))
+        # All radii at once: a loop per radius was 9 M numpy calls per corpus.
+        xs = np.clip(np.round(cx + radii[:, None] * np.cos(angles)).astype(int), 0, width - 1)
+        ys = np.clip(np.round(cy + radii[:, None] * np.sin(angles)).astype(int), 0, height - 1)
+        shares = ink[ys, xs].mean(axis=1).tolist() if len(radii) else []
         best = (0.0, None)
         if shares:
             top = max(shares)
