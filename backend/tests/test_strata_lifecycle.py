@@ -662,4 +662,76 @@ def test_update_pulls_the_published_version(monkeypatch):
 
     monkeypatch.setattr(strata_lifecycle, "start_build", build)
     asyncio.run(strata_lifecycle.start_update())
-    assert seen == {"version": "0.2.3", "commit": "c" * 40, "then": "apply"}
+    assert seen == {"version": "0.2.3", "commit": "c" * 40, "then": "apply", "method": "pull"}
+
+
+# ── Always the newest release: build it from its engine package ────────────
+
+_ASSETS = [
+    "strata-engine-0.1.50-linux-x86_64-cuda-cuda13.tar.gz",
+    "strata-engine-0.1.50-windows-x86_64-cuda-cuda13.tar.gz",
+    "strata-dsv41-0.1.51-linux-x86_64-cuda-cuda13.tar.gz",
+]
+
+
+def test_engine_package_is_found_for_the_flavor_only():
+    assert strata_lifecycle.has_engine_package(_ASSETS, "cuda13") is True
+    assert strata_lifecycle.has_engine_package(_ASSETS, "cuda12") is False
+    assert strata_lifecycle.has_engine_package(_ASSETS, "rocm-gfx120x") is False
+
+
+def test_install_plan_prefers_the_newest_release():
+    """0.2.6 had an engine package but no image: it is built, not skipped."""
+    plan = strata_lifecycle.install_plan
+    assert plan("0.2.6", ["0.2.3"], buildable=True) == ("0.2.6", "build")
+    assert plan("0.2.6", ["0.2.3", "0.2.6"], buildable=True) == ("0.2.6", "pull")
+    assert plan("0.2.6", ["0.2.3"], buildable=False) == ("0.2.3", "pull")
+    assert plan("0.1.45", [], buildable=True) == (None, "pull")  # before publish.sh
+
+
+def test_build_job_runs_stratas_own_publish_script(monkeypatch):
+    monkeypatch.setattr(strata_lifecycle.settings, "strata_image_flavor", "cuda13")
+    created = _build_harness(monkeypatch)
+    asyncio.run(
+        strata_lifecycle.start_build(version="0.2.6", commit="a" * 40, then="apply", method="build")
+    )
+    body = created[0]
+    sh, flag, script, tag, flavor, image = body["Cmd"]
+    assert (sh, flag, tag, flavor, image) == (
+        "sh",
+        "-c",
+        "v0.2.6",
+        "cuda13",
+        "ai-workspace/strata:0.2.6",
+    )
+    assert 'docker/publish.sh --release-tag "$0" --flavors "$1"' in script
+    assert "--no-latest --keep-images" in script and "--push" not in script
+    # build.sh of 0.2.4+ leaves tools/dsv41/*.py out of the image: glob widened.
+    assert "tools/**/*.py" in script and script.index("sed -i") < script.index("publish.sh")
+    assert body["Labels"][strata_lifecycle.LABEL_METHOD] == "build"
+
+
+def test_update_builds_when_the_release_has_only_a_package(monkeypatch):
+    _update_harness(
+        monkeypatch,
+        current="0.2.3",
+        latest={
+            "version": "0.2.6",
+            "commit": "f" * 40,
+            "image_version": "0.2.6",
+            "image_commit": "f" * 40,
+            "install_method": "build",
+            "supported": True,
+        },
+    )
+    info = asyncio.run(strata_lifecycle.update_info())
+    assert info["update_available"] is True and info["update_blocked"] is None
+    seen: dict = {}
+
+    async def build(**kw):
+        seen.update(kw)
+        return {"image": "x", "built": False}
+
+    monkeypatch.setattr(strata_lifecycle, "start_build", build)
+    asyncio.run(strata_lifecycle.start_update())
+    assert seen["version"] == "0.2.6" and seen["method"] == "build"

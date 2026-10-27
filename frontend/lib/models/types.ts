@@ -341,6 +341,8 @@ export interface StrataRelease {
   supported?: boolean | null;
   /** Newest version with a ready image for this card (may be older than `version`). */
   image_version?: string | null;
+  /** How image_version is obtained: published image, or built from the release's engine package. */
+  install_method?: "pull" | "build";
   flavor?: string;
 }
 
@@ -350,6 +352,8 @@ export interface StrataBuildJob {
   commit: string | null;
   image: string | null;
   then: "apply" | "create" | null;
+  /** pull: the published image; build: made from the release's engine package. */
+  method?: "pull" | "build";
   started_at: string | null;
   exit_code: number | null;
   error: string | null;

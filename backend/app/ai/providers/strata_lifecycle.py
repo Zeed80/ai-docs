@@ -80,6 +80,29 @@ TOO_OLD = "Готовые образы Strata выходят с {min}; {version}
 LEGACY_ENV = ("HOST", "LOW_RAM", "RESIDENT_BUDGET_GIB", "REINSTALL", "KV_STREAMING", "CONFIG")
 
 
+# The image of a release that has no published one yet, built the way Strata
+# publishes its own (docker/publish.sh, since 0.2.1): fetch-engines.py checks
+# the engine package against the signed feed, build.sh puts it with the
+# Terminal into the runtime image, then a start check. Nothing is pushed.
+# $0 release tag, $1 flavor, $2 the image name to keep.
+# build.sh copies only tools/*.py while package_terminal.py also needs
+# tools/<sub>/*.py since 0.2.4 (tools/dsv41/tune.py: "installer tool missing",
+# live 2026-10-27; upstream published no image for 0.2.4-0.2.6). The glob is
+# widened to tools/**/*.py, which still matches tools/*.py; a build.sh that
+# no longer has the line is left as it is.
+_TOOLS_GLOB_FIX = "s#':(glob)tools/[*].py'#':(glob)tools/**/*.py'#"
+BUILD_FROM_RELEASE = (
+    "set -e; apk add --no-cache git python3 tar coreutils >/dev/null; "
+    'git clone -q --depth 1 --branch "$0" https://github.com/' + REPO + " /src; "
+    'sed -i "' + _TOOLS_GLOB_FIX + '" /src/docker/build.sh; '
+    'v="${0#v}"; built="' + IMAGE_REPO + ':$v-$1"; '
+    'sh /src/docker/publish.sh --release-tag "$0" --flavors "$1" --image '
+    + IMAGE_REPO
+    + " --no-latest --keep-images; "
+    'docker tag "$built" "$2"; [ "$built" = "$2" ] || docker rmi "$built" >/dev/null'
+)
+
+
 def release_image(version: str) -> str:
     return f"{IMAGE_SOURCE}:{version}-{settings.strata_image_flavor}"
 
@@ -116,6 +139,28 @@ async def published_versions(client: httpx.AsyncClient, flavor: str) -> list[str
     return sorted(found, key=version_tuple)
 
 
+def has_engine_package(asset_names: list[str], flavor: str) -> bool:
+    """Does the release carry the Linux engine package an image of ``flavor`` is built from?
+
+    Strata's own docker/publish.sh builds the published images from these
+    packages; when a release has the package but no image yet, the same script
+    builds it here (no CUDA compile: minutes, not an hour).
+    """
+    if not flavor.startswith("cuda"):
+        return False  # only the CUDA flavors map onto the setting today
+    pattern = re.compile(rf"^strata-engine-[\d.]+-linux-x86_64-cuda-{re.escape(flavor)}\.tar\.gz$")
+    return any(pattern.match(name) for name in asset_names)
+
+
+def install_plan(release: str, published: list[str], *, buildable: bool) -> tuple[str | None, str]:
+    """(version to install, "pull" | "build"): the release itself when it can be had."""
+    if release in published:
+        return release, "pull"
+    if buildable and release_supported(release):
+        return release, "build"
+    return newest_image_version(published, release), "pull"
+
+
 def newest_image_version(published: list[str], release: str) -> str | None:
     """The newest published version not newer than the release."""
     ok = [v for v in published if version_tuple(v) <= version_tuple(release)]
@@ -134,6 +179,8 @@ LABEL_TARGET_IMAGE = "aiw.strata.target_image"
 # the image waits, and "Обновить" later switches to it without compiling).
 LABEL_THEN = "aiw.strata.then"
 LABEL_VARIANT = "aiw.strata.variant"
+# builder: pull (the release's published image) | build (from its engine package)
+LABEL_METHOD = "aiw.strata.method"
 
 _RELEASE_KEY = "strata:latest_release"
 _RELEASE_TTL_S = 6 * 3600
@@ -381,11 +428,15 @@ async def latest_release(*, force: bool = False) -> dict:
                 "checked_at": int(time.time()),
             }
             flavor = settings.strata_image_flavor
-            image_version = newest_image_version(
-                await published_versions(client, flavor), out["version"]
+            published = await published_versions(client, flavor)
+            assets = [a.get("name") or "" for a in rel.get("assets") or []]
+            image_version, method = install_plan(
+                out["version"], published, buildable=has_engine_package(assets, flavor)
             )
             out["flavor"] = flavor
+            out["published_version"] = newest_image_version(published, out["version"])
             out["image_version"] = image_version
+            out["install_method"] = method
             out["image_commit"] = out["commit"]
             if image_version and image_version != out["version"]:
                 ic = await client.get(
@@ -513,13 +564,18 @@ def target_image(version: str) -> str:
     return f"{IMAGE_REPO}:{version}"
 
 
-async def start_build(*, version: str, commit: str, then: str) -> dict:
-    """Fetch Strata ``version``'s ready image in the background; ``then``: apply | create | prepare."""
+async def start_build(*, version: str, commit: str, then: str, method: str = "pull") -> dict:
+    """Get Strata ``version``'s image in the background; ``then``: apply | create | prepare.
+
+    ``method``: "pull" the published image, or "build" it from the release's
+    engine package with Strata's own docker/publish.sh (the image they would
+    publish: the package is checked against the signed feed first).
+    """
     if not release_supported(version):
         raise StrataError(TOO_OLD.format(min=MIN_VERSION, version=version))
     current = await _by_role("builder")
     if current and current.get("State") == "running":
-        raise StrataError("Образ Strata уже скачивается")
+        raise StrataError("Образ Strata уже готовится")
     if current:
         await _remove(current["Id"])
     _clear_job_error()
@@ -535,19 +591,25 @@ async def start_build(*, version: str, commit: str, then: str) -> dict:
         project = _project_name(await _self())
     except StrataError:
         project = "infra"
-    source = release_image(version)
-    # Pull, keep it under our own name (uninstall and :current work on
-    # IMAGE_REPO), drop the registry tag (the image itself stays).
-    script = 'docker pull "$0" && docker tag "$0" "$1" && docker rmi "$0" >/dev/null'
+    if method == "build":
+        source = f"v{version}"
+        cmd = ["sh", "-c", BUILD_FROM_RELEASE, source, settings.strata_image_flavor, image]
+    else:
+        source = release_image(version)
+        # Pull, keep it under our own name (uninstall and :current work on
+        # IMAGE_REPO), drop the registry tag (the image itself stays).
+        script = 'docker pull "$0" && docker tag "$0" "$1" && docker rmi "$0" >/dev/null'
+        cmd = ["sh", "-c", script, source, image]
     body = {
         "Image": BUILDER_IMAGE,
-        "Cmd": ["sh", "-c", script, source, image],
+        "Cmd": cmd,
         "Labels": {
             LABEL_ROLE: "builder",
             LABEL_VERSION: version,
             LABEL_COMMIT: commit,
             LABEL_TARGET_IMAGE: image,
             LABEL_THEN: then,
+            LABEL_METHOD: method,
         },
         "HostConfig": {"Binds": ["/var/run/docker.sock:/var/run/docker.sock"]},
     }
@@ -556,7 +618,9 @@ async def start_build(*, version: str, commit: str, then: str) -> dict:
         "create builder",
     ).json()
     _ok(await _post(f"/containers/{created['Id']}/start"), "start builder", 204, 304)
-    logger.info("strata_pull_started", version=version, image=source, then=then)
+    logger.info(
+        "strata_image_job_started", version=version, source=source, method=method, then=then
+    )
     watch()
     return {"image": image, "built": False}
 
@@ -605,6 +669,7 @@ async def job_status() -> dict | None:
         "commit": labels.get(LABEL_COMMIT),
         "image": labels.get(LABEL_TARGET_IMAGE),
         "then": labels.get(LABEL_THEN),
+        "method": labels.get(LABEL_METHOD) or "pull",
         "started_at": state.get("StartedAt"),
         "exit_code": state.get("ExitCode"),
         "error": error,
@@ -740,7 +805,12 @@ async def start_update() -> dict:
                 NO_IMAGE_YET.format(version=latest["version"], flavor=latest.get("flavor") or "")
             )
         raise StrataError(f"Уже установлена последняя версия {current.get('version')}")
-    return await start_build(version=target, commit=latest.get("image_commit") or "", then="apply")
+    return await start_build(
+        version=target,
+        commit=latest.get("image_commit") or "",
+        then="apply",
+        method=latest.get("install_method") or "pull",
+    )
 
 
 async def install_server() -> dict:
@@ -759,7 +829,12 @@ async def install_server() -> dict:
         raise StrataError(
             NO_IMAGE_YET.format(version=latest["version"], flavor=latest.get("flavor") or "")
         )
-    return await start_build(version=target, commit=latest.get("image_commit") or "", then="create")
+    return await start_build(
+        version=target,
+        commit=latest.get("image_commit") or "",
+        then="create",
+        method=latest.get("install_method") or "pull",
+    )
 
 
 # ── The server container ────────────────────────────────────────────────────
