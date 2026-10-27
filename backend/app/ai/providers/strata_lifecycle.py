@@ -36,6 +36,7 @@ import asyncio
 import io
 import json
 import os
+import re
 import shutil
 import tarfile
 import time
@@ -81,6 +82,44 @@ LEGACY_ENV = ("HOST", "LOW_RAM", "RESIDENT_BUDGET_GIB", "REINSTALL", "KV_STREAMI
 
 def release_image(version: str) -> str:
     return f"{IMAGE_SOURCE}:{version}-{settings.strata_image_flavor}"
+
+
+NO_IMAGE_YET = (
+    "Вышла Strata {version}, но готового образа {flavor} к ней пока нет — "
+    "обновление станет доступно, когда авторы его опубликуют"
+)
+NEWER_WITHOUT_IMAGE = "Strata {version} вышла без готового образа; доступна {image_version}"
+_PUBLISHED_TAG = re.compile(r"^(\d+(?:\.\d+)+)-(.+)$")
+
+
+async def published_versions(client: httpx.AsyncClient, flavor: str) -> list[str]:
+    """Versions with a ready image for ``flavor`` in ghcr, oldest first.
+
+    A GitHub release is not an image: 0.2.4-0.2.6 came out with no image
+    while the newest tag was 0.2.3, and the panel pulled 0.2.6-cuda13 —
+    "manifest unknown" (live, 2026-10-26).
+    """
+    repo = IMAGE_SOURCE.removeprefix("ghcr.io/")
+    t = await client.get("https://ghcr.io/token", params={"scope": f"repository:{repo}:pull"})
+    t.raise_for_status()
+    r = await client.get(
+        f"https://ghcr.io/v2/{repo}/tags/list",
+        params={"n": 1000},
+        headers={"Authorization": f"Bearer {t.json()['token']}"},
+    )
+    r.raise_for_status()
+    found = []
+    for tag in r.json().get("tags") or []:
+        m = _PUBLISHED_TAG.match(tag)
+        if m and m.group(2) == flavor:
+            found.append(m.group(1))
+    return sorted(found, key=version_tuple)
+
+
+def newest_image_version(published: list[str], release: str) -> str | None:
+    """The newest published version not newer than the release."""
+    ok = [v for v in published if version_tuple(v) <= version_tuple(release)]
+    return max(ok, key=version_tuple) if ok else None
 
 
 def release_supported(version: str | None) -> bool:
@@ -341,7 +380,19 @@ async def latest_release(*, force: bool = False) -> dict:
                 "url": rel.get("html_url"),
                 "checked_at": int(time.time()),
             }
-        out["supported"] = release_supported(out["version"])
+            flavor = settings.strata_image_flavor
+            image_version = newest_image_version(
+                await published_versions(client, flavor), out["version"]
+            )
+            out["flavor"] = flavor
+            out["image_version"] = image_version
+            out["image_commit"] = out["commit"]
+            if image_version and image_version != out["version"]:
+                ic = await client.get(
+                    f"https://api.github.com/repos/{REPO}/commits/v{image_version}"
+                )
+                out["image_commit"] = ic.json().get("sha") if ic.status_code == 200 else None
+        out["supported"] = release_supported(out.get("image_version"))
         ttl = _RELEASE_TTL_S
     except Exception as exc:  # noqa: BLE001
         out = {"error": f"GitHub недоступен: {str(exc)[:200]}", "checked_at": int(time.time())}
@@ -405,16 +456,28 @@ async def update_info() -> dict:
     job = await job_status()
     if job and job["stage"] in ("building", "built"):
         watch()  # the background loop applies a finished build; a GET never waits for it
-    available = bool(
+    target = latest.get("image_version")
+    newer_release = bool(
         current
         and current.get("version")
         and latest.get("version")
         and version_tuple(latest["version"]) > version_tuple(current["version"])
     )
+    available = bool(
+        newer_release
+        and target
+        and latest.get("supported") is not False
+        and version_tuple(target) > version_tuple(current["version"])
+    )
     blocked = None
-    if available and latest.get("supported") is False:
-        available = False
-        blocked = TOO_OLD.format(min=MIN_VERSION, version=latest["version"])
+    if newer_release and not available:
+        blocked = (
+            NO_IMAGE_YET.format(version=latest["version"], flavor=latest.get("flavor") or "")
+            if not target or release_supported(target)
+            else TOO_OLD.format(min=MIN_VERSION, version=target)
+        )
+    elif available and target != latest.get("version"):
+        blocked = NEWER_WITHOUT_IMAGE.format(version=latest["version"], image_version=target)
     return {
         "current": current,
         "latest": latest,
@@ -665,10 +728,19 @@ async def start_update() -> dict:
     container = await strata_manager._find_container()
     if container is None:
         raise StrataError(strata_manager.NOT_INSTALLED)
+    target = latest.get("image_version")
+    if not target:
+        raise StrataError(
+            NO_IMAGE_YET.format(version=latest["version"], flavor=latest.get("flavor") or "")
+        )
     current = await server_version(container)
-    if current and version_tuple(current.get("version")) >= version_tuple(latest["version"]):
+    if current and version_tuple(current.get("version")) >= version_tuple(target):
+        if version_tuple(target) < version_tuple(latest["version"]):
+            raise StrataError(
+                NO_IMAGE_YET.format(version=latest["version"], flavor=latest.get("flavor") or "")
+            )
         raise StrataError(f"Уже установлена последняя версия {current.get('version')}")
-    return await start_build(version=latest["version"], commit=latest["commit"], then="apply")
+    return await start_build(version=target, commit=latest.get("image_commit") or "", then="apply")
 
 
 async def install_server() -> dict:
@@ -682,7 +754,12 @@ async def install_server() -> dict:
     latest = await latest_release(force=True)
     if latest.get("error"):
         raise StrataError(latest["error"])
-    return await start_build(version=latest["version"], commit=latest["commit"], then="create")
+    target = latest.get("image_version")
+    if not target:
+        raise StrataError(
+            NO_IMAGE_YET.format(version=latest["version"], flavor=latest.get("flavor") or "")
+        )
+    return await start_build(version=target, commit=latest.get("image_commit") or "", then="create")
 
 
 # ── The server container ────────────────────────────────────────────────────

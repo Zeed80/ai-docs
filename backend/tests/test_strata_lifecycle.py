@@ -558,3 +558,108 @@ def test_server_spec_runs_the_script_under_tini_without_legacy_env(monkeypatch):
     assert "MODEL=IQ2_XS" in spec["Env"] and "API_KEY=k" in spec["Env"]
     assert spec["HostConfig"]["ShmSize"] == 2 * 1024**3
     assert spec["StopTimeout"] == 120
+
+
+# ── A release is not an image: install what ghcr actually has ──────────────
+
+
+def _update_harness(monkeypatch, *, current, latest):
+    async def container():
+        return {"Id": "s1"}
+
+    async def cur(_c=None):
+        return {"version": current}
+
+    async def rel(**_kw):
+        return latest
+
+    async def no_job():
+        return None
+
+    monkeypatch.setattr(strata_manager, "_find_container", container)
+    monkeypatch.setattr(strata_lifecycle, "server_version", cur)
+    monkeypatch.setattr(strata_lifecycle, "latest_release", rel)
+    monkeypatch.setattr(strata_lifecycle, "job_status", no_job)
+
+
+def test_newest_image_version_is_not_the_release_number():
+    """0.2.4-0.2.6 came out with no image (newest tag 0.2.3): the panel pulled
+    0.2.6-cuda13 and got "manifest unknown" (live, 2026-10-26)."""
+    published = ["0.2.1", "0.2.3", "0.2.2"]
+    assert strata_lifecycle.newest_image_version(published, "0.2.6") == "0.2.3"
+    assert strata_lifecycle.newest_image_version(published, "0.2.2") == "0.2.2"
+    assert strata_lifecycle.newest_image_version([], "0.2.6") is None
+
+
+def test_published_versions_read_the_flavor_tags(monkeypatch):
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/token":
+            return httpx.Response(200, json={"token": "t"})
+        assert request.headers["Authorization"] == "Bearer t"
+        tags = ["0.2.1-cuda13", "0.2.3-cuda13", "0.2.3-cuda12", "latest-cuda13", "0.2.2-sycl"]
+        return httpx.Response(200, json={"tags": tags})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await strata_lifecycle.published_versions(client, "cuda13")
+
+    assert asyncio.run(run()) == ["0.2.1", "0.2.3"]
+
+
+def test_update_offers_the_newest_published_image(monkeypatch):
+    _update_harness(
+        monkeypatch,
+        current="0.2.1",
+        latest={
+            "version": "0.2.6",
+            "image_version": "0.2.3",
+            "supported": True,
+            "flavor": "cuda13",
+        },
+    )
+    info = asyncio.run(strata_lifecycle.update_info())
+    assert info["update_available"] is True
+    assert "0.2.6" in info["update_blocked"] and "0.2.3" in info["update_blocked"]
+
+
+def test_no_update_while_the_new_release_has_no_image(monkeypatch):
+    _update_harness(
+        monkeypatch,
+        current="0.2.3",
+        latest={
+            "version": "0.2.6",
+            "image_version": "0.2.3",
+            "supported": True,
+            "flavor": "cuda13",
+        },
+    )
+    info = asyncio.run(strata_lifecycle.update_info())
+    assert info["update_available"] is False
+    assert "пока нет" in info["update_blocked"]
+    with pytest.raises(strata_manager.StrataError, match="пока нет"):
+        asyncio.run(strata_lifecycle.start_update())
+
+
+def test_update_pulls_the_published_version(monkeypatch):
+    _update_harness(
+        monkeypatch,
+        current="0.2.1",
+        latest={
+            "version": "0.2.6",
+            "commit": "f" * 40,
+            "image_version": "0.2.3",
+            "image_commit": "c" * 40,
+            "supported": True,
+        },
+    )
+    seen: dict = {}
+
+    async def build(**kw):
+        seen.update(kw)
+        return {"image": "x", "built": False}
+
+    monkeypatch.setattr(strata_lifecycle, "start_build", build)
+    asyncio.run(strata_lifecycle.start_update())
+    assert seen == {"version": "0.2.3", "commit": "c" * 40, "then": "apply"}

@@ -339,6 +339,9 @@ export interface StrataRelease {
   error?: string;
   checked_at?: number;
   supported?: boolean | null;
+  /** Newest version with a ready image for this card (may be older than `version`). */
+  image_version?: string | null;
+  flavor?: string;
 }
 
 export interface StrataBuildJob {

@@ -583,6 +583,9 @@ function StrataServerBlock({
   };
   const job = server.job;
   const latest = server.latest ?? {};
+  // The version an update installs: the newest one with a published image,
+  // which can be older than the newest release (0.2.6 came out without one).
+  const target = latest.image_version ?? latest.version;
   const notCreated = st.phase === "not_created";
   const modelsGb = st.quants
     .filter((q) => q.installed)
@@ -617,7 +620,7 @@ function StrataServerBlock({
       else
         toast.ok(
           info.update_available
-            ? `Доступна Strata ${info.latest.version}`
+            ? `Доступна Strata ${info.latest.image_version ?? info.latest.version}`
             : info.update_blocked
               ? `Вышла Strata ${info.latest.version}`
               : "Установлена последняя версия",
@@ -637,9 +640,9 @@ function StrataServerBlock({
           <div className="text-sm text-slate-100">Strata не установлена</div>
           <div>
             Установка скачает готовый образ последнего выпуска
-            {latest.version ? ` (${latest.version})` : ""} — около 1,5 ГБ,
-            работа не прерывается — и создаст контейнер. Затем скачайте модель в
-            списке ниже и отдайте Strata видеокарту.
+            {target ? ` (${target})` : ""} — около 1,5 ГБ, работа не прерывается
+            — и создаст контейнер. Затем скачайте модель в списке ниже и отдайте
+            Strata видеокарту.
           </div>
           <button
             className={btnPrimary}
@@ -668,18 +671,23 @@ function StrataServerBlock({
           {server.update_available && !job ? (
             <>
               <span className="px-2 py-0.5 rounded bg-emerald-900/60 text-emerald-200">
-                доступна {latest.version}
+                доступна {target}
               </span>
+              {server.update_blocked && (
+                <span className="text-amber-300 min-w-0">
+                  {server.update_blocked}
+                </span>
+              )}
               <button
                 className={btnPrimary}
                 disabled={busy}
                 title="Скачает готовый образ нового выпуска (около 1,5 ГБ, в фоне) и перезапустит Strata на нём; скачанные модели остаются"
-                aria-label={`Обновить Strata до ${latest.version}`}
+                aria-label={`Обновить Strata до ${target}`}
                 onClick={() =>
                   void run(
                     strataUpdate,
                     [
-                      `Обновление до ${latest.version} началось`,
+                      `Обновление до ${target} началось`,
                       "Образ скачивается в фоне; Strata перезапустится, когда он будет готов",
                     ],
                     "Обновление не запущено",
