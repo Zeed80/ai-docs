@@ -91,17 +91,18 @@ async def test_execute_falls_back_when_primary_empty(monkeypatch):
 
     calls: list[str] = []
 
-    async def fake_run(provider, endpoint, payload, api_key, engines=None):
-        calls.append(provider)
-        if provider == "searxng":
+    async def fake_run(spec, payload):
+        calls.append(spec.kind)
+        if spec.kind == "searxng":
             return []  # primary empty → trigger fallback
+        assert spec.api_key == "brave-key"
         return [WebSearchResult(title="hit", url="https://brave.example/x")]
 
-    monkeypatch.setattr(web_search, "_run_provider", fake_run)
+    monkeypatch.setattr(web_search, "_query_provider", fake_run)
 
-    resp = await execute_web_search(WebSearchRequest(query="x"))
+    resp = await execute_web_search(WebSearchRequest(query="x", fresh=True))
     assert calls == ["searxng", "brave"]
-    assert resp.provider == "brave"
+    assert resp.provider == "brave-fallback"
     assert "used_fallback" in resp.diagnostics
     assert len(resp.results) == 1
 
@@ -253,11 +254,11 @@ async def test_fetch_page_passes_include_links_and_returns_them(monkeypatch):
     monkeypatch.setattr(
         ws.wsc,
         "get_config",
-        lambda: type("C", (), {"browsing_enabled": True, "browser_url": "http://browser"})(),
+        lambda: ws.wsc.WebSearchConfig(browser_url="http://browser", per_host_interval_s=0),
     )
 
     result = await ws.fetch_page(
-        ws.WebFetchRequest(url="https://supplier.example/catalog/", include_links=True)
+        ws.WebFetchRequest(url="https://supplier.example/catalog/", include_links=True, fresh=True)
     )
     assert captured["body"]["include_links"] is True
     assert [link.url for link in result.links] == ["https://supplier.example/files/price.pdf"]

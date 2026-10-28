@@ -6,7 +6,7 @@ look like a product listing, extracts rows from each with the same LLM parser
 the web-source path uses, and creates entries draft-first
 (provenance.discovery_method="web_crawl") so nothing lands unreviewed.
 
-Deliberate limits: same host only, depth 3, page budget, per-request delay,
+Deliberate limits: same host only, depth 3, page budget, per-host pace,
 robots.txt respected, and two-level dedup (normalised URL and sha256 of the
 page text) so a paginated listing that repeats content does not double the
 catalog on a re-run.
@@ -14,7 +14,6 @@ catalog on a re-run.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import uuid
 from urllib.parse import urljoin, urlparse, urlunparse
@@ -68,7 +67,8 @@ SKIP_SUFFIXES = (
 )
 DEFAULT_MAX_PAGES = 100
 DEFAULT_MAX_DEPTH = 3
-REQUEST_DELAY_SECONDS = 0.7
+# The pace between page loads is fetch_page's per-host slot, shared with
+# research and browse — a crawl and a research on one site no longer add up.
 
 
 def normalize_url(url: str) -> str:
@@ -179,14 +179,14 @@ async def _crawl_async(supplier_id: str, start_url: str, max_pages: int, max_dep
         if not allowed(url):
             continue
         try:
+            # An ingest reads the site as it is now, not a cached copy.
             fetched = await fetch_page(
-                WebFetchRequest(url=url, max_chars=20000, ocr=False, include_links=True)
+                WebFetchRequest(url=url, max_chars=20000, ocr=False, include_links=True, fresh=True)
             )
         except Exception as exc:  # noqa: BLE001 — one dead page must not end the crawl
             errors.append(f"{url}: {str(exc)[:120]}")
             continue
         pages_read += 1
-        await asyncio.sleep(REQUEST_DELAY_SECONDS)
 
         text = (fetched.text or "").strip()
         if text:

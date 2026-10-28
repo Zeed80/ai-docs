@@ -834,9 +834,12 @@ capabilities:
       документам, счетам, памяти агента, поставщикам. Используй когда
       нужно найти что-то по смыслу запроса, а не по точным фильтрам.
       Также преобразует естественный язык в SQL-запросы и выполняет
-      web-поиск в интернете. action=web ищет через настроенный движок
-      (по умолчанию self-hosted SearXNG — агрегирует Google/Bing/DuckDuckGo/
-      Yandex, без ключей). action=browse открывает конкретный URL в headless-
+      web-поиск в интернете. action=web ищет сразу во всех основных
+      поисковиках из настроек (по умолчанию self-hosted SearXNG — агрегирует
+      Google/Bing/DuckDuckGo/Yandex; могут быть подключены Yandex Search API,
+      Brave, Exa и другие) и объединяет выдачу; found_by — какие поисковики
+      нашли страницу. Ответы кэшируются: для свежих новостей и цен передай
+      fresh=true. Сбой поисковика — в diagnostics, не «ничего нет». action=browse открывает конкретный URL в headless-
       браузере со stealth-режимом (рендерит JS, проходит базовую анти-бот
       защиту) и возвращает читаемый текст страницы, при screenshot=true —
       ещё и скриншот для VLM-анализа. Типовой поток web research: web (найти
@@ -883,6 +886,17 @@ capabilities:
           items:
             type: string
           description: "Для action=research: заранее известные URL (напр. ссылка на PDF-каталог)"
+        providers:
+          type: array
+          items:
+            type: string
+          description: "Для web/research: искать только в этих поисковиках (id из настроек), например когда нужен именно Яндекс"
+        fresh:
+          type: boolean
+          description: "Для web/browse/research: не брать кэш (свежие цены, новости, страница только что изменилась)"
+        language:
+          type: string
+          description: "Для web/research: язык поиска (ru, en, de…); по умолчанию из настроек"
         source_ref:
           type: string
           description: "Для action=read_source: source_ref источника из ответа research/browse"

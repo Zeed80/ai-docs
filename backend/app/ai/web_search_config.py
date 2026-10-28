@@ -2,10 +2,13 @@
 
 Two moving parts are configured here:
 
-* **search** — which engine turns a query into a list of result URLs. The
-  default is the self-hosted ``searxng`` metasearch service (no API key, no
-  third-party cloud). Paid adapters (``tavily``/``serper``/``brave``) remain
-  available as an optional fallback for deployments that want them.
+* **search** — which engines turn a query into a list of result URLs: a list
+  of provider entries (:class:`SearchProvider`), each an adapter from
+  :mod:`app.ai.web_providers`. Primary entries are queried together and their
+  lists fused; fallback entries run only when the primaries found nothing.
+  The default is one self-hosted ``searxng`` (no API key, no third-party
+  cloud). Before the list is saved once, it is derived from the legacy
+  ``provider``/``fallback_provider`` fields.
 * **browsing** — the ``web-browser`` sidecar (headless Chromium with stealth
   patches) that renders a page like a human and returns readable text plus an
   optional screenshot.
@@ -20,23 +23,46 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.ai import secret_box
+from app.ai.web_providers import DEFAULT_ENDPOINTS, KINDS
 
 _REDIS_KEY = "web_search_config"
 
-SUPPORTED_PROVIDERS = ("searxng", "tavily", "serper", "brave", "custom")
+SUPPORTED_PROVIDERS = KINDS
 
-_DEFAULT_ENDPOINTS = {
-    "searxng": "http://searxng:8080/search",
-    "tavily": "https://api.tavily.com/search",
-    "serper": "https://google.serper.dev/search",
-    "brave": "https://api.search.brave.com/res/v1/web/search",
-}
+_DEFAULT_ENDPOINTS = DEFAULT_ENDPOINTS
 
 _DEFAULT_BROWSER_URL = "http://web-browser:8093"
+
+_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+
+
+class SearchProvider(BaseModel):
+    """One search engine the agent may query (server-internal, key in plain)."""
+
+    id: str
+    kind: str
+    enabled: bool = True
+    # primary: queried together, lists fused; fallback: only when primaries found nothing.
+    role: str = "primary"
+    weight: float = Field(1.0, ge=0.0, le=10.0)
+    endpoint: str | None = None
+    api_key: str = ""
+    engines: list[str] = Field(default_factory=list)
+    # Country/market: SearXNG — unused, serper/jina gl, brave country, exa
+    # userLocation, yandex searchType (ru, com, tr, kk, be, uz).
+    region: str | None = None
+    folder_id: str | None = None  # Yandex Cloud folder
+    mcp_tool: str | None = None  # mcp_<server>_<tool> for kind=mcp
+    # Calls per day; None — unlimited (self-hosted). Counted before the call.
+    daily_quota: int | None = Field(default=None, ge=0)
+
+    def resolved_endpoint(self) -> str | None:
+        return self.endpoint or _DEFAULT_ENDPOINTS.get(self.kind)
 
 
 class WebSearchConfig(BaseModel):
@@ -54,6 +80,41 @@ class WebSearchConfig(BaseModel):
     # Human-like browsing sidecar.
     browser_url: str = _DEFAULT_BROWSER_URL
     browsing_enabled: bool = True
+    # Saved provider list; empty → derived from the legacy fields above.
+    providers: list[SearchProvider] = Field(default_factory=list)
+    # Search language passed to engines that take one.
+    language: str = "ru"
+    # Polite pace: seconds between two page loads on one host (plus jitter).
+    per_host_interval_s: float = 1.5
+    search_cache_ttl_s: int = 6 * 3600
+    page_cache_ttl_s: int = 24 * 3600
+    # Pages research reads at the same time.
+    research_concurrency: int = 4
+
+    def effective_providers(self) -> list[SearchProvider]:
+        if self.providers:
+            return list(self.providers)
+        derived = [
+            SearchProvider(
+                id=self.provider or "searxng",
+                kind=self.provider or "searxng",
+                endpoint=self.endpoint,
+                api_key=self.api_key,
+                engines=self.searxng_engines if self.provider == "searxng" else [],
+            )
+        ]
+        if self.fallback_provider:
+            derived.append(
+                SearchProvider(
+                    id=f"{self.fallback_provider}-fallback",
+                    kind=self.fallback_provider,
+                    role="fallback",
+                    endpoint=self.fallback_endpoint,
+                    api_key=self.fallback_api_key,
+                    engines=self.searxng_engines if self.fallback_provider == "searxng" else [],
+                )
+            )
+        return derived
 
     def resolved_endpoint(self) -> str | None:
         return self.endpoint or _DEFAULT_ENDPOINTS.get(self.provider)
@@ -62,6 +123,46 @@ class WebSearchConfig(BaseModel):
         if not self.fallback_provider:
             return None
         return self.fallback_endpoint or _DEFAULT_ENDPOINTS.get(self.fallback_provider)
+
+
+class SearchProviderUpdate(BaseModel):
+    """A provider entry from the GUI; ``api_key`` None or a mask keeps the stored key."""
+
+    id: str
+    kind: str
+    enabled: bool = True
+    role: str = "primary"
+    weight: float = Field(1.0, ge=0.0, le=10.0)
+    endpoint: str | None = None
+    api_key: str | None = None
+    engines: list[str] = Field(default_factory=list)
+    region: str | None = None
+    folder_id: str | None = None
+    mcp_tool: str | None = None
+    daily_quota: int | None = Field(default=None, ge=0)
+
+    @field_validator("id")
+    @classmethod
+    def _id(cls, value: str) -> str:
+        value = value.strip().lower()
+        if not _ID.match(value):
+            raise ValueError("id: латиница, цифры, - и _, до 40 символов")
+        return value
+
+    @field_validator("kind")
+    @classmethod
+    def _kind(cls, value: str) -> str:
+        value = value.strip().lower()
+        if value not in KINDS:
+            raise ValueError(f"kind: один из {', '.join(KINDS)}")
+        return value
+
+    @field_validator("role")
+    @classmethod
+    def _role(cls, value: str) -> str:
+        if value not in ("primary", "fallback"):
+            raise ValueError("role: primary или fallback")
+        return value
 
 
 class WebSearchConfigUpdate(BaseModel):
@@ -76,6 +177,30 @@ class WebSearchConfigUpdate(BaseModel):
     searxng_engines: list[str] | None = None
     browser_url: str | None = None
     browsing_enabled: bool | None = None
+    providers: list[SearchProviderUpdate] | None = None
+    language: str | None = None
+    per_host_interval_s: float | None = Field(default=None, ge=0.0, le=60.0)
+    search_cache_ttl_s: int | None = Field(default=None, ge=0, le=7 * 86400)
+    page_cache_ttl_s: int | None = Field(default=None, ge=0, le=30 * 86400)
+    research_concurrency: int | None = Field(default=None, ge=1, le=12)
+
+
+class SearchProviderView(BaseModel):
+    id: str
+    kind: str
+    enabled: bool
+    role: str
+    weight: float
+    endpoint: str | None
+    endpoint_effective: str | None
+    api_key_mask: str
+    api_key_set: bool
+    engines: list[str]
+    region: str | None
+    folder_id: str | None
+    mcp_tool: str | None
+    daily_quota: int | None
+    used_today: int | None = None
 
 
 class WebSearchConfigView(BaseModel):
@@ -96,6 +221,13 @@ class WebSearchConfigView(BaseModel):
     browsing_enabled: bool
     supported_providers: list[str]
     default_endpoints: dict[str, str]
+    providers: list[SearchProviderView] = []
+    providers_saved: bool = False
+    language: str = "ru"
+    per_host_interval_s: float = 1.5
+    search_cache_ttl_s: int = 6 * 3600
+    page_cache_ttl_s: int = 24 * 3600
+    research_concurrency: int = 4
 
 
 def _redis_get() -> dict | None:
@@ -150,6 +282,25 @@ def get_config() -> WebSearchConfig:
             searxng_engines=env["searxng_engines"],
             browser_url=env["browser_url"],
         )
+    providers = [
+        SearchProvider(
+            **{k: v for k, v in entry.items() if k != "api_key_enc"},
+            api_key=secret_box.decrypt(entry.get("api_key_enc")) or "",
+        )
+        for entry in stored.get("providers") or []
+        if isinstance(entry, dict) and entry.get("kind") in KINDS
+    ]
+    tuning = {
+        key: stored[key]
+        for key in (
+            "language",
+            "per_host_interval_s",
+            "search_cache_ttl_s",
+            "page_cache_ttl_s",
+            "research_concurrency",
+        )
+        if stored.get(key) is not None
+    }
     api_key = secret_box.decrypt(stored.get("api_key_enc")) or env["_api_key_plain"]
     fb_key = (
         secret_box.decrypt(stored.get("fallback_api_key_enc")) or env["_fallback_api_key_plain"]
@@ -164,6 +315,8 @@ def get_config() -> WebSearchConfig:
         searxng_engines=stored.get("searxng_engines") or env["searxng_engines"],
         browser_url=stored.get("browser_url") or env["browser_url"],
         browsing_enabled=stored.get("browsing_enabled", True),
+        providers=providers,
+        **tuning,
     )
 
 
@@ -200,12 +353,46 @@ def update_config(patch: WebSearchConfigUpdate) -> WebSearchConfig:
         stored["browser_url"] = patch.browser_url.strip() or _DEFAULT_BROWSER_URL
     if patch.browsing_enabled is not None:
         stored["browsing_enabled"] = bool(patch.browsing_enabled)
+    if patch.providers is not None:
+        stored["providers"] = _merge_providers(stored.get("providers") or [], patch.providers)
+    for key in (
+        "language",
+        "per_host_interval_s",
+        "search_cache_ttl_s",
+        "page_cache_ttl_s",
+        "research_concurrency",
+    ):
+        value = getattr(patch, key)
+        if value is not None:
+            stored[key] = value.strip().lower() if isinstance(value, str) else value
 
     _redis_set(stored)
     return get_config()
 
 
-def to_view(cfg: WebSearchConfig) -> WebSearchConfigView:
+def _merge_providers(previous: list[dict], entries: list[SearchProviderUpdate]) -> list[dict]:
+    """New provider list; a key not re-entered stays encrypted as it was."""
+    ids = [entry.id for entry in entries]
+    if len(set(ids)) != len(ids):
+        raise ValueError("id провайдеров должны быть разными")
+    old_keys = {e.get("id"): e.get("api_key_enc", "") for e in previous if isinstance(e, dict)}
+    merged = []
+    for entry in entries:
+        data = entry.model_dump(exclude={"api_key"})
+        data["engines"] = [e.strip() for e in entry.engines if e.strip()]
+        data["endpoint"] = (entry.endpoint or "").strip() or None
+        key = entry.api_key
+        if key is None or "…" in key or "•" in key:
+            data["api_key_enc"] = old_keys.get(entry.id, "")
+        elif key == "":
+            data["api_key_enc"] = ""
+        else:
+            data["api_key_enc"] = secret_box.encrypt(key.strip())
+        merged.append(data)
+    return merged
+
+
+def to_view(cfg: WebSearchConfig, used_today: dict[str, int] | None = None) -> WebSearchConfigView:
     return WebSearchConfigView(
         provider=cfg.provider,
         endpoint=cfg.endpoint,
@@ -222,4 +409,30 @@ def to_view(cfg: WebSearchConfig) -> WebSearchConfigView:
         browsing_enabled=cfg.browsing_enabled,
         supported_providers=list(SUPPORTED_PROVIDERS),
         default_endpoints=dict(_DEFAULT_ENDPOINTS),
+        providers=[
+            SearchProviderView(
+                id=p.id,
+                kind=p.kind,
+                enabled=p.enabled,
+                role=p.role,
+                weight=p.weight,
+                endpoint=p.endpoint,
+                endpoint_effective=p.resolved_endpoint(),
+                api_key_mask=secret_box.mask(p.api_key),
+                api_key_set=bool(p.api_key),
+                engines=p.engines,
+                region=p.region,
+                folder_id=p.folder_id,
+                mcp_tool=p.mcp_tool,
+                daily_quota=p.daily_quota,
+                used_today=(used_today or {}).get(p.id),
+            )
+            for p in cfg.effective_providers()
+        ],
+        providers_saved=bool(cfg.providers),
+        language=cfg.language,
+        per_host_interval_s=cfg.per_host_interval_s,
+        search_cache_ttl_s=cfg.search_cache_ttl_s,
+        page_cache_ttl_s=cfg.page_cache_ttl_s,
+        research_concurrency=cfg.research_concurrency,
     )

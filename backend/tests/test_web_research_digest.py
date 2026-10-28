@@ -59,10 +59,18 @@ def test_read_status(status, text, diagnostics, expected):
 async def test_research_answer_fits_the_history_with_every_source(client: AsyncClient, monkeypatch):
     from app.ai import web_search_config as wsc
 
-    monkeypatch.setattr(wsc, "get_config", lambda: wsc.WebSearchConfig(provider="searxng"))
-    long_text = ("Общие сведения о продукции завода. " * 400) + "Масса насоса 120 кг."
-    pages = {f"https://s{i}.example/p": _page(long_text) for i in range(4)} | {
-        "https://wall.example/p": _page("Just a moment", diagnostics=["bot_challenge_detected"])
+    monkeypatch.setattr(
+        wsc, "get_config", lambda: wsc.WebSearchConfig(provider="searxng", per_host_interval_s=0)
+    )
+
+    def long_text(i: int) -> str:
+        topic = ["завода", "склада", "дилера", "сервиса"][i]
+        return (f"Общие сведения о продукции {topic} номер {i}. " * 400) + "Масса насоса 120 кг."
+
+    pages = {f"https://s{i}.example/p": _page(long_text(i)) for i in range(4)} | {
+        "https://wall.example/p": _page("Just a moment", diagnostics=["bot_challenge_detected"]),
+        # A mirror of the first page: read, but not counted twice.
+        "https://mirror.example/p": _page(long_text(0)),
     }
 
     class _Resp:
@@ -91,14 +99,19 @@ async def test_research_answer_fits_the_history_with_every_source(client: AsyncC
         patch("httpx.AsyncClient.post", fake_post),
     ):
         resp = await client.post(
-            "/api/web-search/research", json={"query": "масса насоса", "max_sources": 5}
+            "/api/web-search/research",
+            json={"query": "масса насоса", "max_sources": 6, "fresh": True},
         )
     assert resp.status_code == 200
     body = resp.json()
-    assert [s["n"] for s in body["sources"]] == [1, 2, 3, 4, 5]
+    assert [s["n"] for s in body["sources"]] == [1, 2, 3, 4, 5, 6]
     statuses = {s["url"]: s["read_status"] for s in body["sources"]}
     assert statuses["https://wall.example/p"] == "blocked"
-    readable = [s for s in body["sources"] if s["read_status"] == "ok"]
+    mirror = next(s for s in body["sources"] if s["url"] == "https://mirror.example/p")
+    assert mirror["duplicate_of"] == 1 and mirror["passages"] == []
+    readable = [
+        s for s in body["sources"] if s["read_status"] == "ok" and s["duplicate_of"] is None
+    ]
     assert len(readable) == 4
     assert all(s["text"] == "" and s["source_ref"] for s in readable)
     assert all(any("120 кг" in p["text"] for p in s["passages"]) for s in readable)
@@ -107,7 +120,7 @@ async def test_research_answer_fits_the_history_with_every_source(client: AsyncC
     envelope = json.dumps({"version": 1, "status": "ok", "data": body}, ensure_ascii=False)
     shown = json.loads(_trim_tool_result(envelope))
     assert len(json.dumps(shown, ensure_ascii=False)) <= _MAX_TOOL_RESULT_CHARS
-    assert len(shown["data"]["sources"]) == 5
+    assert len(shown["data"]["sources"]) == 6
 
     # The rest of a page is read on without fetching it again.
     ref = readable[0]["source_ref"]
@@ -116,7 +129,7 @@ async def test_research_answer_fits_the_history_with_every_source(client: AsyncC
     )
     assert more.status_code == 200
     assert more.json()["next_offset"] == 500
-    assert more.json()["text_chars"] == len(long_text)
+    assert more.json()["text_chars"] == len(long_text(0))
 
 
 @pytest.mark.asyncio
