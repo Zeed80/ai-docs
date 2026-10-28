@@ -158,14 +158,20 @@ def _trim_tool_result(content: str) -> str:
     """
     if len(content) <= _MAX_TOOL_RESULT_CHARS:
         return content
+    from app.ai.turn_vault import LIST_KEYS, _tool_envelope_data
+
     try:
         data = json.loads(content)
-        if isinstance(data, dict):
-            list_key = next((k for k in ("items", "results", "hits") if k in data), None)
+        # ToolResult v1 keeps the payload under "data": sampling only the top
+        # level found no list and every large result was cut by characters.
+        inner = _tool_envelope_data(data)
+        target = inner if inner is not None else data
+        if isinstance(target, dict):
+            list_key = next((k for k in LIST_KEYS if isinstance(target.get(k), list)), None)
             if list_key is not None:
-                items = data.get(list_key) or []
-                total = data.get("total", len(items))
-                meta = {k: v for k, v in data.items() if k != list_key}
+                items = target.get(list_key) or []
+                total = target.get("total", len(items))
+                meta = {k: v for k, v in target.items() if k != list_key}
 
                 def _build(sample: list, strip_heavy: bool = False) -> str:
                     if strip_heavy:
@@ -180,6 +186,8 @@ def _trim_tool_result(content: str) -> str:
                         f"[total={total}. Показано {len(sample)} из {len(items)}. "
                         f"Один вызов достаточен.]"
                     )
+                    if inner is not None:
+                        candidate = {**data, "data": candidate}
                     return json.dumps(candidate, ensure_ascii=False)
 
                 # Try progressively smaller samples (never below min)

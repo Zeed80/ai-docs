@@ -34,8 +34,12 @@ VAULT_TTL = 900
 # Number of preview items included in the compact envelope.
 VAULT_PREVIEW_ITEMS = 3
 
-# Keys in a result dict that hold list payloads.
-_LIST_KEYS = ("items", "results", "rows", "hits", "data")
+# Keys in a result dict that hold list payloads. Shared with the history
+# trimmer (agent_loop._trim_tool_result): web research returns "sources", and
+# when only one of the two knew a key, the list was cut by characters and the
+# model saw about one source of five.
+LIST_KEYS = ("items", "results", "rows", "hits", "data", "sources")
+_LIST_KEYS = LIST_KEYS
 
 
 def _list_key(data: dict) -> str | None:

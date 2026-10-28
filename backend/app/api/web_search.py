@@ -16,6 +16,10 @@ backend boundary for the web:
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+import re
+import uuid
 from typing import Any
 
 import httpx
@@ -204,7 +208,9 @@ def _normalize_results(
     limit: int,
 ) -> list[WebSearchResult]:
     results: list[WebSearchResult] = []
-    for item in _raw_results_for_provider(provider, data)[:limit]:
+    for item in _raw_results_for_provider(provider, data):
+        if len(results) >= limit:
+            break
         if not isinstance(item, dict):
             continue
         url = str(item.get("url") or item.get("link") or "")
@@ -308,6 +314,7 @@ async def execute_web_search(payload: WebSearchRequest) -> WebSearchResponse:
                     fb_endpoint,
                     payload,
                     cfg.fallback_api_key or None,
+                    engines=cfg.searxng_engines if cfg.fallback_provider == "searxng" else None,
                 )
                 if results:
                     provider = cfg.fallback_provider
@@ -347,6 +354,9 @@ class WebFetchRequest(BaseModel):
     # Also return the page's outgoing links — a catalog page advertises its PDFs
     # through <a href>, not through the readable text the extractor returns.
     include_links: bool = False
+    # What the agent is looking for on the page: the answer leads with the
+    # passages about it, the full text stays readable through /source.
+    query: str | None = Field(default=None, max_length=500)
 
 
 class PageLink(BaseModel):
@@ -354,11 +364,23 @@ class PageLink(BaseModel):
     text: str = ""
 
 
+class Passage(BaseModel):
+    offset: int
+    text: str
+
+
 class WebFetchResponse(BaseModel):
     url: str
     final_url: str | None = None
     status: int | None = None
     title: str | None = None
+    # ok | blocked | empty | error — a bot wall is not a page that was read.
+    read_status: str = "ok"
+    text_chars: int = 0
+    # Full text for read_source; fields before ``text`` survive the trim of a
+    # long page in the model's history.
+    source_ref: str | None = None
+    passages: list[Passage] = []
     text: str = ""
     links: list[PageLink] = []
     screenshot_b64: str | None = None
@@ -398,6 +420,116 @@ async def _ocr_pdf_pages(images_b64: list[str], max_chars: int) -> str:
         if sum(len(p) for p in parts) >= max_chars:
             break
     return "\n\n".join(parts).strip()[:max_chars]
+
+
+_TERM = re.compile(r"[0-9A-Za-zА-Яа-яЁё]+(?:[.,][0-9]+)?")
+# Prefix length that folds Russian endings ("насоса", "насосы" → "насос").
+_STEM = 5
+
+
+def _query_terms(query: str | None) -> set[str]:
+    terms: set[str] = set()
+    for word in _TERM.findall(query or ""):
+        word = word.lower().replace("ё", "е")
+        if word[0].isdigit():
+            terms.add(word.replace(",", "."))
+        elif len(word) >= 3:
+            terms.add(word[:_STEM])
+    return terms
+
+
+def _window_score(window: str, terms: set[str]) -> int:
+    hits: set[str] = set()
+    for word in _TERM.findall(window):
+        word = word.lower().replace("ё", "е")
+        key = word.replace(",", ".") if word[0].isdigit() else word[:_STEM]
+        if key in terms:
+            hits.add(key)
+    return len(hits)
+
+
+def extract_passages(text: str, query: str | None, budget: int, max_n: int = 3) -> list[Passage]:
+    """Passages of ``text`` that mention the query terms, in page order.
+
+    The model's history holds a few thousand characters per call, so a long
+    page is shown as the places that answer the question; the rest is read
+    on request. Without matching terms the page opening is the passage.
+    """
+    text = text or ""
+    if not text.strip() or budget <= 0:
+        return []
+    size = max(200, budget // max(1, max_n))
+    terms = _query_terms(query)
+    step = max(1, size // 2)
+    scored: list[tuple[int, int]] = []
+    if terms:
+        for start in range(0, max(1, len(text) - size // 2), step):
+            score = _window_score(text[start : start + size], terms)
+            if score:
+                scored.append((score, start))
+    picked: list[int] = []
+    for _, start in sorted(scored, key=lambda item: (-item[0], item[1])):
+        if all(abs(start - other) >= size for other in picked):
+            picked.append(start)
+        if len(picked) >= max_n:
+            break
+    if not picked:
+        picked = [0]
+    return [
+        Passage(offset=start, text=text[start : start + size].strip()) for start in sorted(picked)
+    ]
+
+
+def classify_read(status: int | None, text: str, diagnostics: list[str]) -> str:
+    if any(d.startswith("bot_challenge") for d in diagnostics):
+        return "blocked"
+    if status is not None and status >= 400:
+        return "error"
+    if not (text or "").strip():
+        return "empty"
+    return "ok"
+
+
+# Full page text the agent can read on in later calls of the same work.
+SOURCE_TTL = 6 * 3600
+_SOURCE_PREFIX = "websrc:v1:"
+
+
+async def store_source(url: str, title: str | None, text: str) -> str | None:
+    """Keep the full text owner-scoped; None when Redis is unavailable."""
+    if not text:
+        return None
+    from app.domain.workspace import _owner
+    from app.utils.redis_client import get_async_redis
+
+    ref = f"{_SOURCE_PREFIX}{uuid.uuid4().hex}"
+    try:
+        await get_async_redis().set(
+            ref,
+            json.dumps(
+                {"owner_key": _owner(), "url": url, "title": title, "text": text},
+                ensure_ascii=False,
+            ),
+            ex=SOURCE_TTL,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    return ref
+
+
+async def load_source(ref: str) -> dict | None:
+    from app.domain.workspace import _owner
+    from app.utils.redis_client import get_async_redis
+
+    if not ref.startswith(_SOURCE_PREFIX) or len(ref) != len(_SOURCE_PREFIX) + 32:
+        return None
+    raw = await get_async_redis().get(ref)
+    if not raw:
+        return None
+    stored = json.loads(raw)
+    if not isinstance(stored, dict) or stored.get("owner_key") != _owner():
+        return None
+    return stored
 
 
 async def fetch_page(payload: WebFetchRequest) -> WebFetchResponse:
@@ -456,11 +588,17 @@ async def fetch_page(payload: WebFetchRequest) -> WebFetchResponse:
         if isinstance(item, dict) and item.get("url")
     ]
 
+    read_status = classify_read(data.get("status"), text, diagnostics)
+    source_ref = await store_source(payload.url, data.get("title"), text) if text else None
     return WebFetchResponse(
         url=payload.url,
         final_url=data.get("final_url"),
         status=data.get("status"),
         title=data.get("title"),
+        read_status=read_status,
+        text_chars=len(text),
+        source_ref=source_ref,
+        passages=extract_passages(text, payload.query, 1800) if payload.query else [],
         text=text[: payload.max_chars],
         links=links,
         screenshot_b64=data.get("screenshot_b64"),
@@ -474,6 +612,59 @@ async def fetch_web(payload: WebFetchRequest) -> WebFetchResponse:
     return await fetch_page(payload)
 
 
+class ReadSourceRequest(BaseModel):
+    source_ref: str = Field(..., min_length=10, max_length=80)
+    # With a query: the passages about it; otherwise text from ``offset``.
+    query: str | None = Field(default=None, max_length=500)
+    offset: int = Field(0, ge=0)
+    max_chars: int = Field(4000, ge=200, le=4000)
+
+
+class ReadSourceResponse(BaseModel):
+    source_ref: str
+    url: str
+    title: str | None = None
+    text_chars: int
+    offset: int
+    next_offset: int | None = None
+    passages: list[Passage] = []
+    text: str = ""
+
+
+@router.post("/source", response_model=ReadSourceResponse)
+async def read_source(payload: ReadSourceRequest) -> ReadSourceResponse:
+    """Read on in a page already fetched this work, without fetching it again."""
+    stored = await load_source(payload.source_ref)
+    if stored is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error_code": "web_source_expired",
+                "message": "Источник не найден или устарел — открой страницу заново (browse).",
+            },
+        )
+    text = str(stored.get("text") or "")
+    base = {
+        "source_ref": payload.source_ref,
+        "url": str(stored.get("url") or ""),
+        "title": stored.get("title"),
+        "text_chars": len(text),
+    }
+    if payload.query:
+        return ReadSourceResponse(
+            **base,
+            offset=0,
+            passages=extract_passages(text, payload.query, payload.max_chars, max_n=4),
+        )
+    end = payload.offset + payload.max_chars
+    return ReadSourceResponse(
+        **base,
+        offset=payload.offset,
+        next_offset=end if end < len(text) else None,
+        text=text[payload.offset : end],
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Deep research: search several angles, read many sources (incl. PDF), collate
 # --------------------------------------------------------------------------- #
@@ -485,7 +676,9 @@ class WebResearchRequest(BaseModel):
     max_sources: int = Field(5, ge=1, le=12)
     # Result URLs to pull from search before de-duplicating to max_sources.
     search_limit: int = Field(8, ge=1, le=20)
-    per_page_chars: int = Field(6000, ge=500, le=60000)
+    # Passages are picked on the server, so the whole page is read: at 6000
+    # the value further down a datasheet was never seen.
+    per_page_chars: int = Field(40000, ge=500, le=60000)
     recency_days: int | None = Field(default=None, ge=1, le=3650)
     domains: list[str] | None = None
     intent: str | None = Field(default=None, max_length=120)
@@ -495,13 +688,26 @@ class WebResearchRequest(BaseModel):
     publish: bool = False
     canvas_id: str | None = None
     title: str | None = Field(default=None, max_length=200)
+    # Full page texts in the answer. The agent gets passages and a source_ref
+    # instead: five full pages never fit its history and it saw only the first.
+    include_text: bool = False
+
+
+# Characters of passages for all sources together — the whole answer has to
+# stay under the history budget (agent_loop._MAX_TOOL_RESULT_CHARS).
+RESEARCH_PASSAGE_BUDGET = 3200
 
 
 class WebResearchSource(BaseModel):
+    n: int = 0
     url: str
     title: str | None = None
     snippet: str | None = None
     status: int | None = None
+    read_status: str = "ok"
+    text_chars: int = 0
+    source_ref: str | None = None
+    passages: list[Passage] = []
     text: str = ""
     is_pdf: bool = False
     truncated: bool = False
@@ -533,7 +739,8 @@ def _dedupe_urls(urls: list[str], cap: int) -> list[str]:
 
 def _research_markdown(query: str, sources: list[WebResearchSource]) -> str:
     lines = [f"# Веб-исследование: {query}", ""]
-    lines.append(f"Прочитано источников: **{len(sources)}**")
+    read_ok = sum(1 for s in sources if s.read_status == "ok")
+    lines.append(f"Прочитано источников: **{read_ok}** из {len(sources)}")
     lines.append("")
     for i, s in enumerate(sources, 1):
         head = s.title or s.url
@@ -543,6 +750,11 @@ def _research_markdown(query: str, sources: list[WebResearchSource]) -> str:
         if s.snippet:
             lines.append("")
             lines.append(f"> {s.snippet}")
+        if s.read_status == "blocked":
+            lines.append("")
+            lines.append("_Сайт показал проверку на бота — страница не прочитана._")
+            lines.append("")
+            continue
         excerpt = (s.text or "").strip()
         if excerpt:
             excerpt = excerpt[:1200] + ("…" if len(excerpt) > 1200 else "")
@@ -569,7 +781,7 @@ async def execute_web_research(payload: WebResearchRequest) -> WebResearchRespon
         )
 
     diagnostics: list[str] = []
-    provider = "searxng"
+    provider: str | None = None
     candidate_urls: list[str] = list(payload.urls or [])
     snippet_by_url: dict[str, str] = {}
 
@@ -598,7 +810,7 @@ async def execute_web_research(payload: WebResearchRequest) -> WebResearchRespon
         return WebResearchResponse(
             query=angles[0] if angles else "",
             queries=angles,
-            provider=provider,
+            provider=provider or "none",
             sources=[],
             diagnostics=diagnostics + ["no_urls_found"],
         )
@@ -614,6 +826,9 @@ async def execute_web_research(payload: WebResearchRequest) -> WebResearchRespon
                 url=u,
                 title=page.title,
                 status=page.status,
+                read_status=page.read_status,
+                text_chars=page.text_chars,
+                source_ref=page.source_ref,
                 text=page.text,
                 is_pdf=is_pdf,
                 truncated=page.truncated,
@@ -622,17 +837,26 @@ async def execute_web_research(payload: WebResearchRequest) -> WebResearchRespon
         except HTTPException as exc:
             detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
             return WebResearchSource(
-                url=u, diagnostics=[str(detail.get("error_code") or detail.get("message"))]
+                url=u,
+                read_status="error",
+                diagnostics=[str(detail.get("error_code") or detail.get("message"))],
             )
         except Exception as exc:  # noqa: BLE001
-            return WebResearchSource(url=u, diagnostics=[f"read_error:{str(exc)[:80]}"])
+            return WebResearchSource(
+                url=u, read_status="error", diagnostics=[f"read_error:{str(exc)[:80]}"]
+            )
 
     sources = list(await asyncio.gather(*(_read(u) for u in urls)))
-    for s in sources:
-        if s.url in snippet_by_url:
-            s.snippet = snippet_by_url[s.url]
-
     primary_query = angles[0] if angles else "web research"
+    readable = [s for s in sources if s.read_status == "ok"]
+    per_source = RESEARCH_PASSAGE_BUDGET // max(1, len(readable))
+    passage_query = " ".join(angles) or payload.intent
+    for n, s in enumerate(sources, 1):
+        s.n = n
+        if s.url in snippet_by_url:
+            s.snippet = snippet_by_url[s.url][:240]
+        if s.read_status == "ok":
+            s.passages = extract_passages(s.text, passage_query, per_source)
 
     # 3) Optionally publish a collated report to the workspace desktop.
     published_canvas_id: str | None = None
@@ -641,7 +865,10 @@ async def execute_web_research(payload: WebResearchRequest) -> WebResearchRespon
             from app.core.chat_bus import chat_bus
             from app.domain.workspace import upsert_workspace_block
 
-            canvas_id = payload.canvas_id or f"web-research-{abs(hash(primary_query)) % 10**8}"
+            # hash() is salted per process: the same query got a new block
+            # after every restart instead of updating its report.
+            digest = hashlib.sha1(primary_query.encode("utf-8")).hexdigest()[:10]
+            canvas_id = payload.canvas_id or f"web-research-{digest}"
             block = {
                 "id": canvas_id,
                 "type": "markdown",
@@ -657,13 +884,15 @@ async def execute_web_research(payload: WebResearchRequest) -> WebResearchRespon
         except Exception as exc:  # noqa: BLE001
             diagnostics.append(f"publish_error:{str(exc)[:120]}")
 
-    read_ok = sum(1 for s in sources if s.text)
-    if not read_ok:
+    if not readable:
         diagnostics.append("no_sources_readable")
+    if not payload.include_text:
+        for s in sources:
+            s.text = ""
     return WebResearchResponse(
         query=primary_query,
         queries=angles,
-        provider=provider,
+        provider=provider or "none",
         sources=sources,
         published_canvas_id=published_canvas_id,
         diagnostics=diagnostics,

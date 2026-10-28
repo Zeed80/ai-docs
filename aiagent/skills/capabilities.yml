@@ -848,6 +848,13 @@ capabilities:
       research вместо остановки на первом результате — когда нужен полный
       анализ, сравнение поставщиков, подбор по каталогам. Затем сам напиши
       вывод/сравнение по собранным источникам.
+      Ответ research и browse — не вся страница: у каждого источника n,
+      read_status (ok | blocked — проверка на бота, страница НЕ прочитана |
+      empty | error), passages — места страницы про твой запрос, и source_ref.
+      Чего нет в passages, ищи action=read_source source_ref=… query=… (места
+      страницы про другой вопрос) или offset=… (текст подряд) — без повторной
+      загрузки страницы. Для browse передай query — что ищешь на странице.
+      Факты бери только из источников с read_status=ok.
     path: /api/agent/cap/search
     method: POST
     gate_actions: []
@@ -856,10 +863,10 @@ capabilities:
       properties:
         action:
           type: string
-          description: "hybrid | nl | nl_to_query | web | browse | research | explain | similar | saved_queries"
+          description: "hybrid | nl | nl_to_query | web | browse | research | read_source | explain | similar | saved_queries"
         query:
           type: string
-          description: "Поисковый запрос на естественном языке или web-запрос"
+          description: "Поисковый запрос на естественном языке или web-запрос; для browse/read_source — что ищешь на странице"
         queries:
           type: array
           items:
@@ -876,6 +883,12 @@ capabilities:
           items:
             type: string
           description: "Для action=research: заранее известные URL (напр. ссылка на PDF-каталог)"
+        source_ref:
+          type: string
+          description: "Для action=read_source: source_ref источника из ответа research/browse"
+        offset:
+          type: integer
+          description: "Для action=read_source: читать текст страницы с этой позиции (next_offset из прошлого ответа)"
         url:
           type: string
           description: "Для action=browse: URL страницы, которую нужно открыть и прочитать"
