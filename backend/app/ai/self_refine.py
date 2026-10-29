@@ -48,15 +48,22 @@ _CRITIQUE_PROMPT = """\
 
 Будь конкретным: указывай строки кода, поля, логические ошибки — не общие слова."""
 
+# The answer being revised is part of the prompt: without it the model saw
+# only the task and the issues and wrote a new answer from scratch — the
+# "revision" kept nothing of what was right.
 _REVISE_PROMPT = """\
-Твой предыдущий ответ на задачу:
+Задача:
 {task}
+
+Твой предыдущий ответ:
+{response}
 
 Содержал следующие проблемы:
 {issues}
 
 Исправь ТОЛЬКО эти проблемы. Не переписывай то, что работало правильно.
 Верни исправленную версию ответа (без объяснений, только результат):"""
+_REVISE_RESPONSE_MAX = 8000
 
 _CODE_CRITIQUE_SYSTEM = """Ты старший Python-разработчик, проверяешь сгенерированный AI код.
 Отвечай строго в JSON."""
@@ -166,7 +173,9 @@ async def refine(
 
         # Revise
         issues_text = "\n".join(f"- {issue}" for issue in critique.issues)
-        revise_prompt = _REVISE_PROMPT.format(task=task, issues=issues_text)
+        revise_prompt = _REVISE_PROMPT.format(
+            task=task, response=current[:_REVISE_RESPONSE_MAX], issues=issues_text
+        )
         current = await generate_fn(revise_prompt, None)
 
     final_score = history[-1].score if history else 0.0
@@ -191,7 +200,9 @@ async def revise_with_issues(
     the cost to one inference on local models.
     """
     issues_text = "\n".join(f"- {issue}" for issue in issues if issue) or "- ответ неполный"
-    prompt = _REVISE_PROMPT.format(task=task, issues=issues_text)
+    prompt = _REVISE_PROMPT.format(
+        task=task, response=response[:_REVISE_RESPONSE_MAX], issues=issues_text
+    )
     revised = await generate_fn(prompt, None)
     return revised.strip() or response
 

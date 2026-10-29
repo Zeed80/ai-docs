@@ -527,6 +527,7 @@ async def _run_durable_chat(
                 raise ChatRunStopped("Authorized call changed")
     chunks, errors = [], []
     clarify: list[dict] = []
+    web_sources: list[dict] = []
     tool_evidence: list[dict[str, Any]] = []
 
     async def collect(event):
@@ -554,6 +555,13 @@ async def _run_durable_chat(
             await db.commit()
         if kind == "text":
             chunks.append(str(event.get("content") or ""))
+        if kind == "answer.revised" and str(event.get("content") or "").strip():
+            # The revision is the answer: it was persisted as an event while
+            # the chat kept the first draft (W5 found it: repaired citations
+            # never reached the saved message).
+            chunks[:] = [str(event["content"])]
+        if kind == "web.sources":
+            web_sources[:] = list(event.get("sources") or [])[:50]
         if kind in _VERIFIER_EVIDENCE_EVENTS:
             tool_evidence.append(_verifier_evidence_entry(kind, event))
             del tool_evidence[:-_VERIFIER_EVIDENCE_MAX_ITEMS]
@@ -729,6 +737,8 @@ async def _run_durable_chat(
                     "verified": False,
                     # The answer buttons, so a reloaded chat still shows them.
                     **({"clarify": clarify[-1]} if clarify else {}),
+                    # W5: the pages its [n] marks point to, for the reloaded chat.
+                    **({"web_sources": web_sources} if web_sources else {}),
                 },
             )
             run.result_message_id = message.id

@@ -27,6 +27,11 @@ class AuditCode(StrEnum):
     TOOL_ERROR = "tool_error"  # tool call returned an error
     EMPTY_ANSWER = "empty_answer"  # no text and no workspace output
     TOTAL_OVERSTATED = "total_overstated"  # title claims more rows than were published
+    # W5: the answer against the pages the turn read (app.ai.web_citations).
+    CITED_SOURCE_NOT_READ = "cited_source_not_read"  # [n] or URL no page of the turn has
+    BLOCKED_SOURCE_USED = "blocked_source_used"  # a citation of a page that was not read
+    VALUE_NOT_IN_SOURCE = "value_not_in_source"  # a number next to [n] not in that page
+    UNCITED_WEB_CLAIM = "uncited_web_claim"  # web read, numbers without a source
 
 
 Severity = Literal["blocking", "advisory"]

@@ -354,6 +354,8 @@ class AgentOrchestrator:
         await self._run_semantic_audit(plan, config, audit)
         # Reactive self-refine: only when the auditor flagged a generative answer.
         await self._maybe_refine_answer(plan, config, audit)
+        # W5: citations against the pages read; sources listed under the answer.
+        await self._settle_web_citations(plan, config, audit)
         await self._publish_audit(audit)
 
         # Record turn outcome for adaptive planning in future turns
@@ -1112,12 +1114,161 @@ class AgentOrchestrator:
                 )
                 break
 
+        # W5: what the answer cites against what the turn read.
+        issues.extend(await self._web_citation_issues(final_text))
+
         return AuditReport(
             passed=not _blocking_issues(issues),
             issues=issues,
             workspace_verified=workspace_verified,
             final_channel=plan.workspace.channel,
         )
+
+    def _web_register(self):
+        register = getattr(self._executor, "web_sources", None)
+        return register if register is not None and getattr(register, "entries", None) else None
+
+    async def _web_source_texts(self, register, numbers: list[int]) -> dict[int, str]:
+        """Page texts of the cited sources; a page whose text is gone stays unknown."""
+        from app.api.web_search import load_source
+
+        texts: dict[int, str] = {}
+        for n in numbers:
+            entry = register.get(n)
+            if entry is None:
+                continue
+            if entry.get("text"):
+                texts[n] = entry["text"]
+                continue
+            ref = entry.get("source_ref")
+            if not ref:
+                continue
+            try:
+                stored = await load_source(ref)
+            except Exception as exc:  # noqa: BLE001
+                log_degraded("orchestrator.web_source_text", exc)
+                stored = None
+            if stored and stored.get("text"):
+                texts[n] = str(stored["text"])
+        return texts
+
+    async def _web_citation_issues(self, text: str) -> list[AuditIssue]:
+        register = self._web_register()
+        if register is None or not text:
+            return []
+        from app.ai.web_citations import check_answer, cited_in
+
+        try:
+            texts = await self._web_source_texts(register, cited_in(text))
+            return check_answer(text, register, texts)
+        except Exception as exc:  # noqa: BLE001 — the check never breaks a turn
+            log_degraded("orchestrator.web_citations", exc)
+            return []
+
+    async def _settle_web_citations(
+        self, plan: OrchestratorPlan, config: BuiltinAgentConfig, audit: AuditReport
+    ) -> None:
+        """One repair of wrong citations, then a visible note; sources under the answer.
+
+        The check is on the answer as it stands now (the semantic refine may
+        have rewritten it). A repaired answer is kept only if it has fewer
+        problems than the original; what remains is said, not hidden.
+        """
+        register = self._web_register()
+        text = self._trace.final_text
+        if register is None or not text:
+            return
+        from app.ai.web_citations import (
+            citation_issues,
+            cited_in,
+            mark_unconfirmed,
+            sources_block,
+        )
+
+        problems = citation_issues(await self._web_citation_issues(text))
+        settled = text
+        if problems and self._aux_llm_calls < aux_quality_budget(self._tier):
+            self._aux_llm_calls += 1
+            self._llm_calls += 1
+            listing = "\n".join(
+                f"[{e['n']}] {e.get('title') or e['domain']} — {e['url']}"
+                + (
+                    ""
+                    if e.get("read_status") in (None, "ok")
+                    else f" (НЕ прочитан: {e['read_status']})"
+                )
+                for e in register.entries[:20]
+            )
+            notes = [p.message for p in problems] + [
+                f"Страницы, прочитанные в этом ходе:\n{listing}",
+                "Ссылайся только на них и только на значения, которые на них есть; "
+                "значение, которого на странице нет, убери или прямо скажи, что оно не подтверждено.",
+            ]
+            try:
+                from app.ai.self_refine import revise_with_issues
+
+                candidate = await revise_with_issues(
+                    text, plan.goal, notes, self._revise_generator(config)
+                )
+            except Exception as exc:  # noqa: BLE001
+                log_degraded("orchestrator.web_citation_repair", exc)
+                candidate = ""
+            if candidate and candidate.strip() != text.strip():
+                remaining = citation_issues(await self._web_citation_issues(candidate))
+                if len(remaining) < len(problems):
+                    settled, problems = candidate.strip(), remaining
+        if problems:
+            settled = mark_unconfirmed(settled, problems)
+        block = sources_block(settled, register)
+        if block:
+            settled = f"{settled.rstrip()}\n\n{block}"
+        cited = [register.get(n) for n in cited_in(settled) if register.get(n)]
+        if cited:
+            await self._outer_send(
+                {
+                    "type": "web.sources",
+                    "sources": [
+                        {
+                            k: e.get(k)
+                            for k in ("n", "url", "title", "domain", "kind", "read_status")
+                        }
+                        for e in cited
+                    ],
+                }
+            )
+        if settled != text:
+            await self._outer_send(
+                {"type": "answer.revised", "content": settled, "reason": "web_citations"}
+            )
+            self._trace.text_chunks = [settled]
+
+    def _revise_generator(self, config: BuiltinAgentConfig):
+        async def _generate(prompt: str, system_prompt: str | None) -> str:
+            messages = []
+            if system_prompt:
+                messages.append(ChatMessage(role="system", content=system_prompt))
+            messages.append(ChatMessage(role="user", content=prompt))
+            try:
+                resp = await asyncio.wait_for(
+                    ai_router.run(
+                        AIRequest(
+                            task=AITask.EMAIL_DRAFTING,
+                            messages=messages,
+                            confidential=True,  # generative answers may cite data → stay local
+                            allow_cloud=False,
+                            preferred_model=_registry_model_name(
+                                config.worker_model or config.model
+                            ),
+                        )
+                    ),
+                    timeout=float(config.llm_timeout_seconds),
+                )
+                return getattr(resp, "text", "") or ""
+            except Exception as exc:
+                log_degraded("orchestrator.refine_generate", exc)
+                return ""
+
+        return _generate
 
     def _published_table_brief(self) -> str:
         """Compact snapshot of the published spec-table for the semantic critic:
@@ -1190,9 +1341,19 @@ class AgentOrchestrator:
 
         tools_used = ", ".join(sorted(set(self._trace.tool_calls))) or "нет"
         table_brief = self._published_table_brief()
+        register = self._web_register()
+        web_listing = (
+            "; ".join(
+                f"[{e['n']}] {e['domain']} ({e.get('kind') or e.get('read_status') or 'ok'})"
+                for e in register.entries[:10]
+            )
+            if register is not None
+            else ""
+        )
         prompt = (
             f"Задача пользователя: {plan.goal[:400]}\n"
             f"Использованные инструменты: {tools_used}\n"
+            + (f"Прочитанные страницы: {web_listing}\n" if web_listing else "")
             + (f"Опубликованная таблица: {table_brief}\n" if table_brief else "")
             + f"Ответ агента:\n{final_text[:1500]}\n\n"
             "Решает ли РЕЗУЛЬТАТ (таблица и/или текст) задачу именно так, как "

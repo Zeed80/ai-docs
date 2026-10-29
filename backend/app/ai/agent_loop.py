@@ -3414,6 +3414,9 @@ class AgentSession:
         # при каждом новом сообщении пользователя: одобрение действует на ход,
         # а не навсегда.
         self._granted_approvals: set[str] = set()
+        from app.ai.web_citations import SourceRegister
+
+        self.web_sources = SourceRegister()
         self._session_id = str(uuid.uuid4())
         self._iteration = 0
         # Per-turn response token budget, set by the orchestrator from task tier.
@@ -3797,6 +3800,8 @@ class AgentSession:
         # Одобрение действует на ход, а не навсегда: новое сообщение человека
         # начинает новый ход, и прошлое «да» его не покрывает.
         self._granted_approvals.clear()
+        # W5: pages read in this turn, one number each for the whole turn.
+        self.web_sources.reset()
         message = {"role": "user", "content": content}
         self.messages.append(message)
         self._turn_user_message = message
@@ -5100,6 +5105,13 @@ class AgentSession:
                 tool_result=result if len(str(result)) < 2000 else {"truncated": True},
             )
         )
+        if skill and not _failed(result):
+            from app.ai.web_citations import number_sources
+
+            try:
+                number_sources(self.web_sources, original_name, execution_args, result)
+            except Exception as exc:  # noqa: BLE001 — numbering never breaks a call
+                log_degraded("agent_loop.web_citations", exc)
         await self._send({"type": "tool_result", "tool": fn_name, "result": result})
         return fn_name, result, tc_id
 
