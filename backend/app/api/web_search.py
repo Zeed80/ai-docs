@@ -781,6 +781,15 @@ class WebResearchRequest(BaseModel):
     language: str | None = Field(default=None, max_length=10)
     providers: list[str] | None = Field(default=None, max_length=10)
     fresh: bool = False
+    # W4: "deep" — rounds until the brief is covered (app.ai.web_research).
+    mode: str = Field("quick", pattern="^(quick|deep)$")
+    # The question in the user's words; deep makes the brief from it.
+    question: str | None = Field(default=None, max_length=2000)
+    # A brief from action=plan, possibly edited; skips making a new one.
+    brief: dict | None = None
+    max_rounds: int = Field(3, ge=1, le=4)
+    max_pages: int = Field(12, ge=1, le=30)
+    deadline_s: float = Field(480, ge=30, le=600)
 
 
 # Characters of passages for all sources together — the whole answer has to
@@ -801,6 +810,13 @@ class WebResearchSource(BaseModel):
     # n of an earlier source with the same text (mirror, print version).
     duplicate_of: int | None = None
     cached: bool = False
+    # W4 deep: who publishes the page (the model's reading of it) and why,
+    # whether the owner's source registry approves the site, facts it gave.
+    kind: str | None = None
+    kind_reason: str | None = None
+    trusted: bool = False
+    facts_found: int | None = None
+    challenge: str | None = None
     text: str = ""
     is_pdf: bool = False
     truncated: bool = False
@@ -811,9 +827,142 @@ class WebResearchResponse(BaseModel):
     query: str
     queries: list[str]
     provider: str
+    # W4 deep: facts first — the model's history keeps the head of an answer.
+    mode: str = "quick"
+    facts: list[dict] = []
+    brief: dict | None = None
     sources: list[WebResearchSource]
+    rounds: list[dict] = []
+    stats: dict | None = None
     published_canvas_id: str | None = None
     diagnostics: list[str] = []
+
+
+class WebPlanRequest(BaseModel):
+    question: str = Field(..., min_length=3, max_length=2000)
+    # What is already known (from documents, the chat) — to understand the
+    # question, never copied into queries.
+    context: str | None = Field(default=None, max_length=4000)
+
+
+class WebPlanResponse(BaseModel):
+    brief: dict
+    diagnostics: list[str] = []
+
+
+@router.post("/plan", response_model=WebPlanResponse)
+async def plan_web_research(payload: WebPlanRequest) -> WebPlanResponse:
+    """W4: what to look for, which facts, which sources, which queries."""
+    from app.ai import web_research as wr
+
+    try:
+        brief, diagnostics = await wr.make_brief(payload.question, payload.context)
+    except wr.ResearchModelError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"error_code": "web_research_model_error", "message": str(exc)},
+        ) from exc
+    return WebPlanResponse(brief=brief.model_dump(), diagnostics=diagnostics)
+
+
+async def _publish_markdown(canvas_id: str, title: str, content: str) -> str:
+    from app.core.chat_bus import chat_bus
+    from app.domain.workspace import upsert_workspace_block
+
+    block = {
+        "id": canvas_id,
+        "type": "markdown",
+        "title": title[:200],
+        "content": content,
+        "source": "web_research",
+    }
+    stored = upsert_workspace_block(canvas_id, block)
+    await chat_bus.publish({"type": "workspace.updated", "canvas_id": canvas_id, "block": stored})
+    return canvas_id
+
+
+async def execute_deep_research(payload: WebResearchRequest) -> WebResearchResponse:
+    from app.ai import web_research as wr
+
+    question = (
+        payload.question or payload.query or "; ".join(q for q in payload.queries or [] if q) or ""
+    ).strip()
+    diagnostics: list[str] = []
+    try:
+        if payload.brief:
+            brief, diagnostics = wr._bound_brief(wr.ResearchBrief.model_validate(payload.brief))
+        elif question:
+            brief, diagnostics = await wr.make_brief(question)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail={"error_code": "web_research_no_query", "message": "question required."},
+            )
+    except wr.ResearchModelError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"error_code": "web_research_model_error", "message": str(exc)},
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422, detail={"error_code": "web_research_bad_brief", "message": str(exc)}
+        ) from exc
+    if brief.must_clarify and not payload.brief:
+        # Searching a question nobody can search wastes the budget on guesses.
+        return WebResearchResponse(
+            query=question,
+            queries=[],
+            provider="none",
+            mode="deep",
+            brief=brief.model_dump(),
+            sources=[],
+            diagnostics=[*diagnostics, "must_clarify"],
+        )
+    result = await wr.deep_research(
+        brief,
+        wr.DeepLimits(
+            max_rounds=payload.max_rounds,
+            max_pages=payload.max_pages,
+            deadline_s=payload.deadline_s,
+        ),
+        fresh=payload.fresh,
+        providers=payload.providers,
+    )
+    published = None
+    if payload.publish:
+        try:
+            digest = hashlib.sha1(brief.goal.encode("utf-8")).hexdigest()[:10]
+            published = await _publish_markdown(
+                payload.canvas_id or f"web-research-{digest}",
+                payload.title or brief.goal,
+                wr.deep_markdown(result),
+            )
+        except Exception as exc:  # noqa: BLE001
+            diagnostics.append(f"publish_error:{str(exc)[:120]}")
+    sources = [
+        WebResearchSource(
+            **{k: v for k, v in s.items() if k in WebResearchSource.model_fields and v is not None},
+            diagnostics=[
+                f"{key}:{s[key]}"
+                for key in ("error", "reading_error", "skipped", "facts_dropped")
+                if s.get(key)
+            ],
+        )
+        for s in result["sources"]
+    ]
+    return WebResearchResponse(
+        query=brief.goal,
+        queries=[q for r in result["rounds"] for q in r["queries"]],
+        provider="+".join(payload.providers or []) or "configured",
+        mode="deep",
+        facts=result["facts"],
+        brief=result["brief"],
+        sources=sources,
+        rounds=result["rounds"],
+        stats=result["stats"],
+        published_canvas_id=published,
+        diagnostics=[*diagnostics, *dict.fromkeys(result["diagnostics"])],
+    )
 
 
 def _research_markdown(query: str, sources: list[WebResearchSource]) -> str:
@@ -852,6 +1001,8 @@ def _research_markdown(query: str, sources: list[WebResearchSource]) -> str:
 
 
 async def execute_web_research(payload: WebResearchRequest) -> WebResearchResponse:
+    if payload.mode == "deep":
+        return await execute_deep_research(payload)
     angles = [q.strip() for q in (payload.queries or []) if q and q.strip()]
     if payload.query and payload.query.strip():
         angles.insert(0, payload.query.strip())

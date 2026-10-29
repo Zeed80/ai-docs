@@ -879,7 +879,10 @@ async def execute_skill(
     # for minutes. The default 30s would time out and trigger retries that
     # re-run the whole search. Give these calls a generous budget.
     _action = str(args.get("action") or "").lower()
-    if path.endswith("/cap/search") and _action in {"research", "browse", "web"}:
+    if path.endswith("/cap/search") and _action == "research" and args.get("mode") == "deep":
+        # W4: rounds of search and reading run up to deadline_s (600 s max).
+        timeout = max(float(timeout), 660.0)
+    elif path.endswith("/cap/search") and _action in {"research", "browse", "web", "plan"}:
         timeout = max(float(timeout), 300.0)
     elif "/web-search/" in path:
         timeout = max(float(timeout), 300.0)

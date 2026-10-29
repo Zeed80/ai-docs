@@ -723,6 +723,7 @@ _OPERATIONS = {
     "search.browse": ("POST", "/api/web-search/fetch", [], "read", False),
     "search.research": ("POST", "/api/web-search/research", [], "read", False),
     "search.read_source": ("POST", "/api/web-search/source", [], "read", False),
+    "search.plan": ("POST", "/api/web-search/plan", [], "read", False),
     "search.explain": ("POST", "/api/memory/explain", [], "read", False),
     "search.similar": (
         "GET",

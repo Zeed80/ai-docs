@@ -75,6 +75,7 @@ TASK_DEFAULT_PROFILE: dict[AITask, str] = {
     AITask.ORCHESTRATOR_PLANNING: "structured_reasoning",
     AITask.CODE_GENERATION: "structured_reasoning",
     AITask.EMAIL_DRAFTING: "creative",
+    AITask.WEB_RESEARCH: "anti_hallucination",
     AITask.LONG_CONTEXT_SUMMARIZATION: "balanced",
     AITask.EMBEDDING: "balanced",
     AITask.RERANKING: "balanced",

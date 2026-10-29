@@ -886,6 +886,22 @@ capabilities:
       страницы про другой вопрос) или offset=… (текст подряд) — без повторной
       загрузки страницы. Для browse передай query — что ищешь на странице.
       Факты бери только из источников с read_status=ok.
+      action=plan {question, context} — бриф поиска: goal, entities,
+      facts_needed (что выписать, с единицами), source_preference, queries по
+      языкам, must_clarify и ambiguities (если без уточнения искать
+      бессмысленно — спроси пользователя, а не гадай). action=research
+      mode=deep {question | brief, publish} — исследование кругами: ищет,
+      читает, выписывает факты с дословной цитатой (проверенной по тексту
+      страницы), дозапрашивает недостающее и идёт по ссылкам страниц на
+      паспорта и PDF, пока бриф не закрыт (до 3 кругов, 12 страниц, 8 мин).
+      Ответ — facts: на каждый нужный факт status (confirmed — два разных
+      сайта согласны, single — один источник, conflict — значения расходятся,
+      все показаны, missing — не найден), values со значением, номерами
+      источников [n] и цитатами; sources с kind (manufacturer,
+      official_distributor, distributor, marketplace, catalog, directory,
+      forum, news, reference) и trusted (сайт одобрен в реестре источников).
+      Для характеристик, паспортов, сравнения изделий бери mode=deep; для
+      простого вопроса — обычный research или web.
     path: /api/agent/cap/search
     method: POST
     gate_actions: []
@@ -894,7 +910,7 @@ capabilities:
       properties:
         action:
           type: string
-          description: "hybrid | nl | nl_to_query | web | browse | research | read_source | explain | similar | saved_queries"
+          description: "hybrid | nl | nl_to_query | web | browse | research | read_source | plan | explain | similar | saved_queries"
         query:
           type: string
           description: "Поисковый запрос на естественном языке или web-запрос; для browse/read_source — что ищешь на странице"
@@ -925,6 +941,18 @@ capabilities:
         language:
           type: string
           description: "Для web/research: язык поиска (ru, en, de…); по умолчанию из настроек"
+        question:
+          type: string
+          description: "Для plan и research mode=deep: вопрос словами пользователя"
+        mode:
+          type: string
+          description: "Для research: quick (по умолчанию) | deep — кругами до полноты брифа, факты с цитатами"
+        brief:
+          type: object
+          description: "Для research mode=deep: бриф из action=plan (можно поправить), вместо question"
+        context:
+          type: string
+          description: "Для plan: что уже известно из документов и чата — чтобы понять вопрос; в запросы не попадает"
         source_ref:
           type: string
           description: "Для action=read_source: source_ref источника из ответа research/browse"

@@ -1080,6 +1080,13 @@ routes:
     local_only: true
     fallback_chain: ["qwen3_6_35b_apex_ollama", "qwen3_5_9b_ollama"]
     manual_review_fallback: true
+  web_research:
+    # W4: the search brief and the facts read from pages. Not assigned on the
+    # models screen → the employee's own model (app.ai.web_research._model).
+    required_modalities: ["text"]
+    local_only: true
+    fallback_chain: ["qwen3_6_35b_apex_ollama", "qwen3_5_9b_ollama"]
+    manual_review_fallback: true
   embedding:
     required_modalities: ["embedding"]
     local_only: true

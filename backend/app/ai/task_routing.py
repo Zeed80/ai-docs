@@ -73,6 +73,9 @@ CLOUD_OPT_IN_TASKS: set[AITask] = {
     AITask.EMAIL_DRAFTING,
     AITask.ORCHESTRATOR_PLANNING,
     AITask.TOOL_CALLING,
+    # W4: page text is public, but the question that drives the search may
+    # carry the company's context — local until the operator decides.
+    AITask.WEB_RESEARCH,
 }
 
 # Coordinate extraction is a constrained observation task.  Keep the routing
@@ -96,6 +99,9 @@ TASK_DEFAULT_THINKING: dict[AITask, bool] = {
     # page came back with zero rows in ~57 s. Extraction is transcription, not
     # reasoning, so this slot (invoice fields and catalog rows alike) is off.
     AITask.STRUCTURED_EXTRACTION: False,
+    # W4: a brief and facts with quotes are structured answers; thinking spent
+    # the output budget before the JSON (same failure as extraction above).
+    AITask.WEB_RESEARCH: False,
 }
 
 

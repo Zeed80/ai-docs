@@ -88,6 +88,9 @@ class AITask(str, Enum):
     # Separate from CAD_SPEC_READ because a document specialist beats a general
     # VLM at reading what is written, and the two want different models.
     CAD_TEXT_OCR = "cad_text_ocr"
+    # W4: the brief of a web search and reading what pages say. It sees the
+    # question (which may carry the company's context) and public page text.
+    WEB_RESEARCH = "web_research"
 
 
 class ChatMessage(BaseModel):

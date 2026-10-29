@@ -1808,6 +1808,14 @@ _SLOTS = [
         True,
     ),
     ("agent_email", "Агент", "Письма", "Генерация деловых писем и черновиков", True),
+    (
+        "agent_web",
+        "Агент",
+        "Веб-исследование",
+        "Разбирает, что искать в интернете, и выписывает факты с цитатами из "
+        "прочитанных страниц. Не задано → та же модель, что у сотрудника",
+        True,
+    ),
     # Обе настройки существовали и раньше, но задавались мимо каталога:
     # «модель для сжатия» — свободным текстом в настройках агента (опечатка
     # или имя несуществующей модели молча ломали сжатие), аудитор — вовсе не
@@ -1868,6 +1876,7 @@ _SLOT_MODALITY = {
     "ocr_large": "vision",
     "agent_orchestrator": "tool_calling",
     "agent_email": "text",
+    "agent_web": "text",
     "agent_compression": "text",
     "agent_auditor": "text",
     "embedding": "embedding",
@@ -1885,6 +1894,7 @@ _SLOT_THINKING_TASKS: dict[str, list[str]] = {
     "ocr_fast": ["invoice_ocr", "classification", "drawing_analysis", "drawing_analysis_vlm"],
     "structured_extraction": ["structured_extraction", "long_context_summarization"],
     "agent_email": ["email_drafting"],
+    "agent_web": ["web_research"],
     "cad_spec_read": ["cad_spec_read"],
     "cad_text_ocr": ["cad_text_ocr"],
     "cad_spec_draft": ["cad_spec_draft"],
@@ -1940,6 +1950,10 @@ def _slot_current_model(slot: str, registry) -> str | None:
         return get_routing_for(AITask.RERANKING).primary
     if slot == "agent_email":
         return get_routing_for(AITask.EMAIL_DRAFTING).primary
+    if slot == "agent_web":
+        from app.ai.web_research import web_model_assigned
+
+        return get_routing_for(AITask.WEB_RESEARCH).primary if web_model_assigned() else None
     if slot == "cad_spec_read":
         return get_routing_for(AITask.CAD_SPEC_READ).primary
     if slot == "cad_text_ocr":
@@ -2556,6 +2570,8 @@ def _slot_affected(slot: str) -> list[str]:
         return [AITask.RERANKING.value]
     if slot == "agent_email":
         return [AITask.EMAIL_DRAFTING.value]
+    if slot == "agent_web":
+        return [AITask.WEB_RESEARCH.value]
     if slot == "cad_spec_read":
         return [AITask.CAD_SPEC_READ.value]
     if slot == "cad_text_ocr":
@@ -2890,6 +2906,8 @@ def _apply_slot_assignment(slot: str, model_key: str, registry) -> None:
             _mirror_ai_config(DocumentGroup(rerank_model=key))
         elif slot == "agent_email":
             _assign_task(AITask.EMAIL_DRAFTING, key)
+        elif slot == "agent_web":
+            _assign_task(AITask.WEB_RESEARCH, key)
         elif slot == "cad_text_ocr":
             _assign_task(AITask.CAD_TEXT_OCR, key)
         elif slot == "cad_spec_read":

@@ -375,6 +375,7 @@ class WorkBudgetContext:
             "classification",
             "email_drafting",
             "code_generation",
+            "web_research",
         }
         # Proven single-POST providers: Ollama's /api/chat and Strata's
         # OpenAI-compatible /v1/chat/completions (OpenAICompatibleProvider.chat

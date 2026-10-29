@@ -780,6 +780,7 @@ TASK_LABELS: dict[str, str] = {
     "drawing_analysis_vlm": "VLM чертежи",
     "engineering_reasoning": "Инж. рассуждения",
     "email_drafting": "Генерация писем",
+    "web_research": "Веб-исследование",
     "embedding": "Эмбеддинги",
     "reranking": "Реранкинг",
     "classification": "Классификация",
