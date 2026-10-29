@@ -21,6 +21,12 @@ import { GpuStatusBar } from "@/components/gpu-status-bar";
 import { useMentions } from "@/components/chat/use-mentions";
 import { LinkifiedText } from "@/components/chat/linkified-text";
 import {
+  asWebSources,
+  hasWebDetails,
+  WebToolDetails,
+  type WebSource,
+} from "@/components/chat/web-sources";
+import {
   createChatSession,
   deleteChatSession,
   getChatMessages,
@@ -101,6 +107,8 @@ interface ChatMessage {
   irreversible?: boolean;
   planSteps?: { text: string; irreversible: boolean }[];
   clarify?: ClarifyQuestion;
+  // W6: the pages this answer's [n] marks point to.
+  webSources?: WebSource[];
   approvalId?: string;
   dbId?: string;
   toolsUsedInTurn?: string[];
@@ -448,6 +456,7 @@ export function AssistantPanel() {
             role,
             content: msg.content ?? undefined,
             clarify: asClarify(msg.metadata?.clarify),
+            webSources: asWebSources(msg.metadata?.web_sources),
             attachments:
               msg.attachments
                 ?.filter((item) => item.document_id)
@@ -845,6 +854,23 @@ export function AssistantPanel() {
         return prev.map((m, i) =>
           i === realIdx ? { ...m, status: "done", result: data.result } : m,
         );
+      });
+      return;
+    }
+
+    // W5/W6: the checked answer replaces the draft; its sources go with it.
+    if (type === "answer.revised" || type === "web.sources") {
+      if (isTelegram) return;
+      setMessages((prev) => {
+        const idx = [...prev].reverse().findIndex((m) => m.role === "assistant");
+        if (idx === -1) return prev;
+        const realIdx = prev.length - 1 - idx;
+        return prev.map((m, i) => {
+          if (i !== realIdx) return m;
+          if (type === "web.sources") return { ...m, webSources: asWebSources(data.sources) };
+          const content = typeof data.content === "string" ? data.content : "";
+          return content.trim() ? { ...m, content } : m;
+        });
       });
       return;
     }
@@ -1687,7 +1713,7 @@ export function AssistantPanel() {
                     </div>
                   )}
                   <div className="px-3 py-2">
-                    <LinkifiedText text={msg.content ?? ""} />
+                    <LinkifiedText text={msg.content ?? ""} sources={msg.webSources} />
                   </div>
                 </div>
                 {msg.clarify && isLastAssistant && messages[messages.length - 1]?.id === msg.id && (
@@ -1792,15 +1818,33 @@ export function AssistantPanel() {
             );
           }
           if (msg.role === "tool") {
-            return (
-              <div key={msg.id} className="flex items-center gap-2 px-1">
+            const line = (
+              <>
                 <span
                   className={`w-1.5 h-1.5 rounded-full shrink-0 ${msg.status === "calling" ? "bg-amber-400 animate-pulse" : "bg-green-400"}`}
                 />
                 <span className="text-[10px] text-slate-400 font-mono truncate">
-                  {msg.tool?.replace("__", ".")}{" "}
+                  {msg.tool?.replace("__", ".")}
+                  {typeof msg.args?.action === "string" ? ` · ${msg.args.action}` : ""}{" "}
                   {msg.status === "calling" ? "…" : "✓"}
                 </span>
+              </>
+            );
+            if (msg.status !== "calling" && hasWebDetails(msg.tool, msg.result)) {
+              // W6: what was searched and read, one click away.
+              return (
+                <details key={msg.id} className="px-1 min-w-0">
+                  <summary className="flex cursor-pointer list-none items-center gap-2">
+                    {line}
+                    <span className="text-[10px] text-sky-400">источники ▾</span>
+                  </summary>
+                  <WebToolDetails result={msg.result} />
+                </details>
+              );
+            }
+            return (
+              <div key={msg.id} className="flex items-center gap-2 px-1">
+                {line}
               </div>
             );
           }

@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 
+import { citeText, type WebSource } from "@/components/chat/web-sources";
+
 // [text](url) where url is absolute or an app path, or a bare http(s) address.
 const LINK_RE =
   /\[([^\]\n]+)\]\(((?:https?:\/\/|\/)[^\s)]+)\)|(https?:\/\/[^\s<>"«»]+)/g;
@@ -11,7 +13,7 @@ const TRAILING_RE = /[.,;:!?)\]'"»]+$/;
  * chat stays where it was. Only http(s) and app paths become links: any other
  * scheme (javascript:, data:) stays plain text.
  */
-export function LinkifiedText({ text }: { text: string }) {
+export function LinkifiedText({ text, sources }: { text: string; sources?: WebSource[] }) {
   const parts: ReactNode[] = [];
   let last = 0;
   for (const match of text.matchAll(LINK_RE)) {
@@ -29,7 +31,7 @@ export function LinkifiedText({ text }: { text: string }) {
       label = href;
       consumed = href.length;
     }
-    if (start > last) parts.push(text.slice(last, start));
+    if (start > last) parts.push(...citeText(text.slice(last, start), sources, last));
     parts.push(
       <a
         key={start}
@@ -43,6 +45,6 @@ export function LinkifiedText({ text }: { text: string }) {
     );
     last = start + consumed;
   }
-  if (last < text.length) parts.push(text.slice(last));
+  if (last < text.length) parts.push(...citeText(text.slice(last), sources, last));
   return <>{parts}</>;
 }

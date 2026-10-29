@@ -26,3 +26,22 @@ it("не превращает javascript: в ссылку", () => {
   render(<LinkifiedText text="[жми](javascript:alert(1)) просто текст" />);
   expect(screen.queryByRole("link")).toBeNull();
 });
+
+it("сноска [n] ведёт на прочитанную страницу, неизвестный номер остаётся текстом", () => {
+  render(
+    <LinkifiedText
+      text="Напор 32 м [1], масса — [7]. Каталог: https://a.ru/x"
+      sources={[{ n: 1, url: "https://hms.example/km", title: "Ливгидромаш", kind: "manufacturer" }]}
+    />,
+  );
+  const footnote = screen.getByRole("link", { name: "Источник 1: Ливгидромаш" });
+  expect(footnote.getAttribute("href")).toBe("https://hms.example/km");
+  expect(footnote.getAttribute("title")).toContain("производитель");
+  expect(document.body.textContent).toContain("[7]");
+  expect(screen.getAllByRole("link")).toHaveLength(2);
+});
+
+it("без источников [1] остаётся текстом", () => {
+  render(<LinkifiedText text="Напор 32 м [1]." />);
+  expect(screen.queryByRole("link")).toBeNull();
+});
