@@ -73,7 +73,7 @@ infra/             — docker-compose, traefik, scripts
 - Язык общения и документации: **русский**
 - Код, комментарии в коде, имена переменных: **английский**
 - Pydantic schemas = единый источник правды для AiAgent skills (auto-gen YAML)
-- 23 capability (21 маршрутизируемая + vault/mcp), 344 действия, 45 gate_action
+- 23 capability (21 маршрутизируемая + vault/mcp), 346 действий, 43 gate_action
 - Все endpoints = AiAgent tools (через `infra/scripts/generate-skill-registry.py`)
 
 ## Команды (целевые)
@@ -135,11 +135,11 @@ make agent-test   # AiAgent scenarios на mock skills
 
 ## Skills и endpoints
 
-23 capability, 344 действия. Каждое действие = FastAPI endpoint, описанный Pydantic-схемой. Скрипт `infra/scripts/generate-skill-registry.py` генерирует YAML для AiAgent из Pydantic-схем автоматически. Pydantic схемы = единственный источник правды для AiAgent skills.
+23 capability, 346 действий. Каждое действие = FastAPI endpoint, описанный Pydantic-схемой. Скрипт `infra/scripts/generate-skill-registry.py` генерирует YAML для AiAgent из Pydantic-схем автоматически. Pydantic схемы = единственный источник правды для AiAgent skills.
 
 Категории skills: Documents, Invoices, Email, Suppliers, Anomalies, Tables & Export, Approvals, Calendar, Collections, Normalization, NL & Search, Compare (КП), Audit.
 
-45 gate_action — только они блокируют агента и требуют явного подтверждения человеком. Источник правды — `gate_actions` в `aiagent/skills/capabilities.yml`, enforcement — HTTP-граница `capability_router` (ответ `423 approval_required`). Примеры: `invoices.approve`, `email.send`, `anomalies.resolve`, `memory.prune`.
+43 gate_action — только они блокируют агента и требуют явного подтверждения человеком. Источник правды — `gate_actions` в `aiagent/skills/capabilities.yml`, enforcement — HTTP-граница `capability_router` (ответ `423 approval_required`). Примеры: `invoices.approve`, `email.send`, `anomalies.resolve`, `memory.prune`.
 
 Сверять реестр: `validate_capability_catalog()` и `validate_gateway_grants()` в `backend/app/api/capability_router.py` — оба должны возвращать пустой список.
 

@@ -10,8 +10,22 @@ capabilities:
   - name: computer_use
     description: >
       Брокер управляемой работы с браузером, файлами, shell и снимками страницы.
-      Каждое действие требует короткоживущий grant, привязанный к work_order_id,
-      allowlist хостов/каталогов/команд и лимит действий. Прямого shell, доступа
+      Действия идут по grant, привязанному к work_order_id: allowlist
+      хостов/каталогов/команд и лимит действий. ЧТЕНИЕ СВОБОДНО: если grant'а
+      нет, первое браузерное действие чтения само получает grant чтения на
+      любой публичный сайт (500 действий, 4 ч) — просить доступ для чтения не
+      нужно. Чтение: browser_fetch, desktop_start/observe/read/navigate/tabs,
+      desktop_open {ref, revision} — щелчок по ссылке, вкладке, раскрывашке,
+      кнопке «показать ещё», desktop_search {ref, revision, text, submit} —
+      ввод в поле поиска или фильтра сайта (submit=true — Enter),
+      desktop_select, desktop_press, прокрутка, скачивание, desktop_handoff.
+      Свободные действия браузер выполняет только над тем, что читает: на
+      кнопке формы с данными, вводе логина, полях карты ответ needs_approval
+      с class (submit | login | transact) и card — тогда это действие с
+      эффектом: desktop_click {ref, revision, card} (или desktop_type для
+      полей формы), его подтверждает человек по карточке. В ответе действия
+      sent — что ушло со страницы (отправка формы, запрос с набранным тобой
+      текстом): если ушло то, чего ты не собирался отправлять, — скажи владельцу. Прямого shell, доступа
       ко всему диску или произвольной сети нет. browser_fetch читает страницу,
       desktop_snapshot дополнительно сохраняет визуальное свидетельство;
       desktop_start/observe/click/type/read/navigate/tabs/close ведут короткую
@@ -33,8 +47,9 @@ capabilities:
       указатель (раскрыть меню), desktop_wait {text, wait_ms} ждёт появления
       текста (found), desktop_back/desktop_forward — назад/вперёд по истории,
       desktop_press {key} — клавиша Enter, Tab, Escape, стрелки, PageUp/PageDown,
-      Home/End, Backspace, Space, desktop_select {ref, revision, text} выбирает
-      пункт списка по подписи. Элементы внутри iframe тоже в observe: ref вида
+      Home/End, Backspace, Space (Enter/Space на элементе формы с данными —
+      needs_approval), desktop_select {ref, revision, text} выбирает пункт
+      списка по подписи (список в форме с данными — через desktop_type). Элементы внутри iframe тоже в observe: ref вида
       «3:7@1» и поле frame — действуй по ним как обычно. Сессия идёт в
       постоянном профиле владельца: пройденная проверка на бота и вход
       сохраняются до следующего раза. Если observe/start вернул challenge
@@ -63,14 +78,14 @@ capabilities:
       или URL — недоступное репортится в skipped/diagnostics, не бросает.
     path: /api/agent/cap/computer_use
     method: POST
-    gate_actions: [desktop_click, desktop_type, desktop_press, desktop_select, file_write, shell]
+    gate_actions: [desktop_click, desktop_type, file_write, shell]
     non_recipeable_actions: [desktop_start, desktop_click, desktop_type, desktop_navigate, desktop_fill_secret, desktop_upload, desktop_save_download, desktop_close, desktop_handoff, desktop_press, desktop_select, desktop_back, desktop_forward, file_write, shell]
     parameters:
       type: object
       properties:
         action:
           type: string
-          description: "browser_fetch | desktop_snapshot | desktop_start | desktop_observe | desktop_prepare_submit | desktop_click | desktop_type | desktop_read | desktop_navigate | desktop_tabs | desktop_fill_secret | desktop_upload | desktop_downloads | desktop_save_download | desktop_close | desktop_handoff | desktop_scroll | desktop_press | desktop_hover | desktop_select | desktop_wait | desktop_back | desktop_forward | file_read | file_write | shell | web_discover"
+          description: "browser_fetch | desktop_snapshot | desktop_start | desktop_observe | desktop_prepare_submit | desktop_click | desktop_type | desktop_read | desktop_navigate | desktop_tabs | desktop_fill_secret | desktop_upload | desktop_downloads | desktop_save_download | desktop_close | desktop_handoff | desktop_open | desktop_search | desktop_scroll | desktop_press | desktop_hover | desktop_select | desktop_wait | desktop_back | desktop_forward | file_read | file_write | shell | web_discover"
         work_order_id:
           type: string
           description: "Не указывай: поручение и шаг подставляет система из текущей работы"

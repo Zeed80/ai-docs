@@ -166,8 +166,9 @@ async def _notify_computer_use_needs_grant(
 ) -> None:
     """Ф2.B (AGENT_AUTONOMY_ROADMAP.md): notify-before-scope for computer_use,
     not an approval — deciding the digest-Approval created alongside this
-    (see the caller) never creates a ComputerUseGrant, which only a manager
-    can (POST /work-orders/{id}/computer-grants). Best-effort: a notification
+    (see the caller) never creates a ComputerUseGrant, which only the owner or
+    a manager can (W3: the «Доступ браузера» block of the work order; reading
+    gets an automatic grant and never lands here). Best-effort: a notification
     failure must never break the step-failure path that's already in
     progress when this is called.
     """
@@ -179,12 +180,12 @@ async def _notify_computer_use_needs_grant(
             db,
             user_sub=order.owner_key,
             type=NotificationType.system,
-            title="Нужен доступ в интернет для поручения",
+            title="Сотруднику нужен доступ к действиям на сайте",
             body=(
-                f"Поручение «{order.objective[:200]}» пытается выполнить "
-                f"computer_use.{capability_action}, но для него нет активного "
-                "разрешения (ComputerUseGrant). Создать его может только "
-                f"руководитель: POST /work-orders/{order.id}/computer-grants. "
+                f"Поручение «{order.objective[:200]}» хочет выполнить "
+                f"computer_use.{capability_action}: это уже не чтение, а действие "
+                "на сайте (отправка формы, вход, файлы). Выдайте доступ в блоке "
+                "«Доступ браузера» на странице поручения — вы или руководитель. "
                 f"({reason[:200]})"
             ),
             entity_type="work_order",

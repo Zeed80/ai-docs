@@ -124,6 +124,7 @@ export function BrowserIdentity() {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [report, setReport] = useState<Selftest | null>(null);
+  const [autoRead, setAutoRead] = useState(true);
 
   const load = useCallback(async () => {
     try {
@@ -138,6 +139,7 @@ export function BrowserIdentity() {
       setProxies((settings.proxies || []).map(toDraft));
       setLocale(settings.browser_locale || "ru-RU");
       setTimezone(settings.browser_timezone || "Europe/Moscow");
+      setAutoRead(settings.browser_read_autogrant !== false);
     } catch (e) {
       setError(String((e as Error).message));
     }
@@ -205,6 +207,24 @@ export function BrowserIdentity() {
     }
   }
 
+  async function toggleAutoRead(value: boolean) {
+    setError(null);
+    try {
+      const body = await call("/settings", {
+        method: "PATCH",
+        body: JSON.stringify({ browser_read_autogrant: value }),
+      });
+      setAutoRead(body.browser_read_autogrant !== false);
+      setNotice(
+        value
+          ? "Сотрудник читает сайты без отдельного разрешения."
+          : "Чтение сайтов теперь тоже по выданному доступу.",
+      );
+    } catch (e) {
+      setError(String((e as Error).message));
+    }
+  }
+
   async function selftest() {
     setTesting(true);
     setReport(null);
@@ -239,6 +259,25 @@ export function BrowserIdentity() {
         </p>
       )}
       {notice && <p className="text-sm text-green-600">{notice}</p>}
+
+      <section className="space-y-1" aria-label="Чтение сайтов">
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="mt-1"
+            checked={autoRead}
+            onChange={(e) => void toggleAutoRead(e.target.checked)}
+          />
+          <span>
+            Читать сайты без отдельного разрешения
+            <span className="block text-xs text-muted-foreground">
+              Переходы, поиск и фильтры на любом публичном сайте, скачивание.
+              Отправка форм, вход и оплата — всегда по доступу на странице
+              поручения и с вашим подтверждением.
+            </span>
+          </span>
+        </label>
+      </section>
 
       <section className="space-y-2" aria-label="Профили браузера">
         <h3 className="font-medium">Ваши профили</h3>
@@ -459,8 +498,8 @@ export function BrowserIdentity() {
             </div>
             {report.error && (
               <p className="break-words text-xs text-amber-600">
-                Тестовый сайт не открылся ({report.error}) — ниже только то,
-                что браузер сообщает о себе.
+                Тестовый сайт не открылся ({report.error}) — ниже только то, что
+                браузер сообщает о себе.
               </p>
             )}
             {report.failed.length > 0 && (

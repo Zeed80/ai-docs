@@ -45,7 +45,15 @@ class TestHostAllowedWildcard:
 
 
 @pytest.mark.asyncio
-async def test_web_discover_requires_a_grant(client: AsyncClient):
+async def test_web_discover_requires_a_grant_when_reading_is_not_automatic(
+    client: AsyncClient, monkeypatch
+):
+    """W3: with the automatic read grant switched off, no grant — no web."""
+    from app.ai import web_search_config as wsc
+
+    monkeypatch.setattr(
+        wsc, "get_config", lambda: wsc.WebSearchConfig(browser_read_autogrant=False)
+    )
     created = await client.post(
         "/api/work-orders", json={"objective": "Найди каталоги поставщиков"}
     )
@@ -57,6 +65,37 @@ async def test_web_discover_requires_a_grant(client: AsyncClient):
         json={"work_order_id": order_id, "queries": ["каталог инструмента"]},
     )
     assert resp.status_code == 423
+
+
+@pytest.mark.asyncio
+async def test_web_discover_gets_the_read_grant_by_itself(client: AsyncClient):
+    """W3: reading the web needs nobody's approval; the grant is journaled."""
+    created = await client.post(
+        "/api/work-orders", json={"objective": "Найди каталоги поставщиков"}
+    )
+    order_id = created.json()["id"]
+    with patch(
+        "app.api.web_search.execute_web_search",
+        new=AsyncMock(side_effect=Exception("search down")),
+    ):
+        resp = await client.post(
+            "/api/computer-use/web-discover",
+            json={"work_order_id": order_id, "queries": ["каталог инструмента"]},
+        )
+    assert resp.status_code == 200, resp.text
+    grants = (await client.get(f"/api/work-orders/{order_id}/computer-grants")).json()
+    assert len(grants) == 1 and grants[0]["automatic"] and grants[0]["allowed_hosts"] == ["*"]
+    assert "desktop_click" not in grants[0]["actions"]
+    # A second call reuses it instead of granting again.
+    with patch(
+        "app.api.web_search.execute_web_search",
+        new=AsyncMock(side_effect=Exception("search down")),
+    ):
+        await client.post(
+            "/api/computer-use/web-discover",
+            json={"work_order_id": order_id, "queries": ["ещё"]},
+        )
+    assert len((await client.get(f"/api/work-orders/{order_id}/computer-grants")).json()) == 1
 
 
 @pytest.mark.asyncio
@@ -494,7 +533,7 @@ async def test_computer_use_approval_required_also_notifies_owner_about_the_gran
         ).scalar_one_or_none()
         assert notif is not None
         assert notif.user_sub == "alice"
-        assert "computer-grants" in notif.body
+        assert "Доступ браузера" in notif.body
 
 
 @pytest.mark.asyncio

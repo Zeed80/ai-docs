@@ -114,6 +114,8 @@ class WebSearchConfig(BaseModel):
     # Persona of a profile without a proxy (or a proxy without its own).
     browser_locale: str = "ru-RU"
     browser_timezone: str = "Europe/Moscow"
+    # W3: a work with no grant gets the read grant on its first browser action.
+    browser_read_autogrant: bool = True
 
     def effective_providers(self) -> list[SearchProvider]:
         if self.providers:
@@ -247,6 +249,7 @@ class WebSearchConfigUpdate(BaseModel):
     proxies: list[BrowserProxyUpdate] | None = None
     browser_locale: str | None = Field(default=None, max_length=20)
     browser_timezone: str | None = Field(default=None, max_length=60)
+    browser_read_autogrant: bool | None = None
 
 
 class BrowserProxyView(BaseModel):
@@ -308,6 +311,7 @@ class WebSearchConfigView(BaseModel):
     proxies: list[BrowserProxyView] = []
     browser_locale: str = "ru-RU"
     browser_timezone: str = "Europe/Moscow"
+    browser_read_autogrant: bool = True
 
 
 def _redis_get() -> dict | None:
@@ -457,6 +461,7 @@ _TUNING_KEYS = (
     "research_concurrency",
     "browser_locale",
     "browser_timezone",
+    "browser_read_autogrant",
 )
 
 
@@ -561,4 +566,5 @@ def to_view(cfg: WebSearchConfig, used_today: dict[str, int] | None = None) -> W
         ],
         browser_locale=cfg.browser_locale,
         browser_timezone=cfg.browser_timezone,
+        browser_read_autogrant=cfg.browser_read_autogrant,
     )

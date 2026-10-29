@@ -88,6 +88,12 @@ async def test_a_started_session_can_be_handed_to_the_owner(client, monkeypatch)
 
 @pytest.mark.asyncio
 async def test_without_a_session_grant_there_is_no_handoff(client, monkeypatch):
+    from app.ai import web_search_config as wsc
+
+    # W3: the read grant would cover a handoff; this is the manager-only path.
+    monkeypatch.setattr(
+        wsc, "get_config", lambda: wsc.WebSearchConfig(browser_read_autogrant=False)
+    )
     _Browser().install(monkeypatch)
     order = await _order(client, actions=("browser_fetch",))
     resp = await client.post(

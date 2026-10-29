@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import json
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -28,7 +28,7 @@ router = APIRouter()
 
 class ComputerActionIn(BaseModel):
     action: str = Field(
-        pattern="^(browser_fetch|desktop_snapshot|desktop_start|desktop_observe|desktop_prepare_submit|desktop_click|desktop_type|desktop_read|desktop_navigate|desktop_tabs|desktop_fill_secret|desktop_upload|desktop_downloads|desktop_save_download|desktop_close|desktop_handoff|desktop_scroll|desktop_press|desktop_hover|desktop_select|desktop_wait|desktop_back|desktop_forward|file_read|file_write|shell)$"
+        pattern="^(browser_fetch|desktop_snapshot|desktop_start|desktop_observe|desktop_prepare_submit|desktop_click|desktop_type|desktop_read|desktop_navigate|desktop_tabs|desktop_fill_secret|desktop_upload|desktop_downloads|desktop_save_download|desktop_close|desktop_handoff|desktop_open|desktop_search|desktop_scroll|desktop_press|desktop_hover|desktop_select|desktop_wait|desktop_back|desktop_forward|file_read|file_write|shell)$"
     )
     work_order_id: uuid.UUID
     step_id: uuid.UUID | None = None
@@ -44,6 +44,141 @@ def _safe_path(target: str, roots: list[str]) -> Path:
     if not any(candidate == root or root in candidate.parents for root in allowed):
         raise HTTPException(status_code=403, detail="Target is outside granted roots")
     return candidate
+
+
+# W3: reading the web needs no manager. The first browser action of a work
+# that has no grant for it gets this one — any public site, actions that read
+# (links, tabs, search and filter fields, downloads, handoff), journaled like
+# any grant. Sending a form, signing in, paying stay behind desktop_click /
+# desktop_type with an approval card, and the browser refuses the free
+# actions on anything that is not reading (needs_approval).
+READ_GRANT_ACTIONS = frozenset(
+    {
+        "browser_fetch",
+        "desktop_snapshot",
+        "desktop_start",
+        "desktop_observe",
+        "desktop_prepare_submit",
+        "desktop_read",
+        "desktop_navigate",
+        "desktop_tabs",
+        "desktop_downloads",
+        "desktop_save_download",
+        "desktop_close",
+        "desktop_handoff",
+        "desktop_open",
+        "desktop_search",
+        "desktop_scroll",
+        "desktop_press",
+        "desktop_hover",
+        "desktop_select",
+        "desktop_wait",
+        "desktop_back",
+        "desktop_forward",
+    }
+)
+READ_GRANT_MAX_ACTIONS = 500
+READ_GRANT_TTL = timedelta(hours=4)
+AUTO_READ_GRANTOR = "auto:read"
+# Looking costs nothing: only actions that move or fetch spend the budget.
+FREE_ACTIONS = frozenset(
+    {
+        "desktop_observe",
+        "desktop_read",
+        "desktop_tabs",
+        "desktop_downloads",
+        "desktop_prepare_submit",
+        "desktop_scroll",
+        "desktop_hover",
+        "desktop_wait",
+    }
+)
+
+
+def _target_url(action: str, target: str, body: dict) -> str | None:
+    if action in {"browser_fetch", "desktop_snapshot", "desktop_start"}:
+        return target or None  # web_discover checks each found URL itself
+    if action == "desktop_navigate":
+        return str(body.get("url") or "")
+    return None
+
+
+def _grant_allows(grant: ComputerUseGrant, action: str) -> bool:
+    allowed = set(grant.actions or [])
+    if "desktop_start" in allowed:
+        # T3: a session the agent may start, it may hand to its owner.
+        allowed.add("desktop_handoff")
+    return action in allowed
+
+
+async def acquire_grant(
+    db: AsyncSession,
+    order: WorkOrder,
+    user: UserInfo,
+    action: str,
+    target: str,
+    body: dict,
+    now: datetime,
+) -> ComputerUseGrant:
+    """The grant this call runs under, locked; the read grant if none and allowed.
+
+    A call with a URL needs a grant naming its host, and a grant that names
+    hosts is preferred over the wildcard read grant. A session action carries
+    its grant's hosts to the browser, which refuses to act on a page outside
+    them: a manager's grant to click on one supplier portal does not reach a
+    session the read grant took to another site.
+    """
+    grants = list(
+        (
+            await db.execute(
+                select(ComputerUseGrant)
+                .where(
+                    ComputerUseGrant.work_order_id == order.id,
+                    ComputerUseGrant.granted_to == user.sub,
+                    ComputerUseGrant.revoked_at.is_(None),
+                    ComputerUseGrant.expires_at > now,
+                    ComputerUseGrant.used_actions < ComputerUseGrant.max_actions,
+                )
+                .order_by(ComputerUseGrant.created_at.desc())
+                .with_for_update()
+            )
+        ).scalars()
+    )
+    url = _target_url(action, target, body)
+    # Grants that name hosts before the wildcard read grant.
+    ordered = sorted(grants, key=lambda g: g.granted_by == AUTO_READ_GRANTOR)
+    for grant in ordered:
+        if not _grant_allows(grant, action):
+            continue
+        if url is not None and not _host_allowed(url, list(grant.allowed_hosts or [])):
+            continue
+        return grant
+    from app.ai.web_search_config import get_config
+
+    if action in READ_GRANT_ACTIONS and get_config().browser_read_autogrant:
+        from app.domain.work_orders import append_event
+
+        grant = ComputerUseGrant(
+            work_order_id=order.id,
+            granted_to=user.sub,
+            granted_by=AUTO_READ_GRANTOR,
+            actions=sorted(READ_GRANT_ACTIONS),
+            allowed_hosts=["*"],
+            max_actions=READ_GRANT_MAX_ACTIONS,
+            expires_at=now + READ_GRANT_TTL,
+            reason="Чтение сайтов: выдано автоматически (переходы, поиск, фильтры, скачивание)",
+        )
+        db.add(grant)
+        await db.flush()
+        await append_event(
+            db,
+            order.id,
+            "computer_use.granted",
+            actor=AUTO_READ_GRANTOR,
+            payload={"grant_id": str(grant.id), "class": "read", "allowed_hosts": ["*"]},
+        )
+        return grant
+    raise HTTPException(status_code=423, detail="A matching active computer-use grant is required")
 
 
 def _host_allowed(url: str, hosts: list[str]) -> bool:
@@ -281,6 +416,9 @@ async def _perform(
                 # W2: scroll — pixels (negative: up); press — one allowed key.
                 "dy": body.get("dy"),
                 "key": body.get("key"),
+                "submit": bool(body.get("submit")),
+                # W3: the browser acts only on a page inside this grant's hosts.
+                "grant_hosts": list(grant.allowed_hosts or []),
             }
         )
         if action == "desktop_click" and not isinstance(body.get("card"), dict):
@@ -378,28 +516,7 @@ async def execute_computer_action(
     order = await db.get(WorkOrder, body.work_order_id)
     if order is None or order.owner_key != user.sub:
         raise HTTPException(status_code=404, detail="Work order not found")
-    grant = (
-        await db.execute(
-            select(ComputerUseGrant)
-            .where(
-                ComputerUseGrant.work_order_id == order.id,
-                ComputerUseGrant.granted_to == user.sub,
-                ComputerUseGrant.revoked_at.is_(None),
-                ComputerUseGrant.expires_at > now,
-                ComputerUseGrant.used_actions < ComputerUseGrant.max_actions,
-            )
-            .order_by(ComputerUseGrant.created_at.desc())
-            .with_for_update()
-        )
-    ).scalar_one_or_none()
-    allowed = set(grant.actions or []) if grant is not None else set()
-    if "desktop_start" in allowed:
-        # T3: a session the agent may start, it may hand to its owner.
-        allowed.add("desktop_handoff")
-    if grant is None or body.action not in allowed:
-        raise HTTPException(
-            status_code=423, detail="A matching active computer-use grant is required"
-        )
+    grant = await acquire_grant(db, order, user, body.action, body.target, body.body, now)
     digest = hashlib.sha256(
         json.dumps(body.model_dump(mode="json"), sort_keys=True).encode()
     ).hexdigest()
@@ -414,7 +531,8 @@ async def execute_computer_action(
         status="running",
         started_at=now,
     )
-    grant.used_actions += 1
+    if body.action not in FREE_ACTIONS:
+        grant.used_actions += 1
     db.add(audit)
     await db.commit()
     try:
@@ -717,24 +835,10 @@ async def web_discover(
     order = await db.get(WorkOrder, body.work_order_id)
     if order is None or order.owner_key != user.sub:
         raise HTTPException(status_code=404, detail="Work order not found")
-    grant = (
-        await db.execute(
-            select(ComputerUseGrant)
-            .where(
-                ComputerUseGrant.work_order_id == order.id,
-                ComputerUseGrant.granted_to == user.sub,
-                ComputerUseGrant.revoked_at.is_(None),
-                ComputerUseGrant.expires_at > now,
-                ComputerUseGrant.used_actions < ComputerUseGrant.max_actions,
-            )
-            .order_by(ComputerUseGrant.created_at.desc())
-            .with_for_update()
-        )
-    ).scalar_one_or_none()
-    if grant is None or "browser_fetch" not in set(grant.actions or []):
-        raise HTTPException(
-            status_code=423, detail="A matching active computer-use grant is required"
-        )
+    # Reading search results is reading: the read grant covers it too.
+    grant = await acquire_grant(db, order, user, "browser_fetch", "", {}, now)
+    await db.commit()
+    await db.refresh(grant)
 
     search_diagnostics: list[str] = []
     candidate_urls: list[str] = []

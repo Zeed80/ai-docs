@@ -52,6 +52,8 @@ _OPERATIONS = {
     ),
     "computer_use.desktop_close": ("POST", "/api/computer-use/execute", [], "interact", False),
     "computer_use.desktop_handoff": ("POST", "/api/computer-use/execute", [], "interact", False),
+    "computer_use.desktop_open": ("POST", "/api/computer-use/execute", [], "read", False),
+    "computer_use.desktop_search": ("POST", "/api/computer-use/execute", [], "read", False),
     "computer_use.desktop_scroll": ("POST", "/api/computer-use/execute", [], "read", False),
     "computer_use.desktop_press": ("POST", "/api/computer-use/execute", [], "interact", False),
     "computer_use.desktop_hover": ("POST", "/api/computer-use/execute", [], "read", False),

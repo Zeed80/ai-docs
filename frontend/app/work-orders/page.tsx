@@ -3,6 +3,7 @@
 import { getApiBaseUrl } from "@/lib/api-base";
 import { pauseLabel } from "@/lib/work-order-pause";
 import { csrfHeaders } from "@/lib/auth";
+import { BrowserAccess } from "@/components/work-orders/browser-access";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { genId } from "@/lib/ws-url";
 import { tz } from "@/lib/user-time";
@@ -749,6 +750,7 @@ export default function WorkOrdersPage() {
                   )}
                 </div>
               </div>
+              {selected && <BrowserAccess workOrderId={selected} />}
               <div className="bg-slate-900 border border-slate-700 rounded-xl p-4">
                 <h3 className="font-medium mb-3">План</h3>
                 <div className="space-y-2">

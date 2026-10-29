@@ -89,6 +89,8 @@ def test_browser_script_mcp_allowlist_matches_reviewed_catalog_inventory():
             "computer_use.desktop_close",
             "computer_use.desktop_handoff",
             # W2: human-paced browsing — never retried by the transport either.
+            "computer_use.desktop_open",
+            "computer_use.desktop_search",
             "computer_use.desktop_scroll",
             "computer_use.desktop_press",
             "computer_use.desktop_hover",

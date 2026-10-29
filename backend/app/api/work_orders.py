@@ -117,11 +117,11 @@ class VerifierVerdictIn(BaseModel):
 
 
 class ComputerUseGrantIn(BaseModel):
-    actions: list[str] = Field(min_length=1, max_length=10)
+    actions: list[str] = Field(min_length=1, max_length=40)
     allowed_roots: list[str] = Field(default_factory=list, max_length=10)
     allowed_hosts: list[str] = Field(default_factory=list, max_length=50)
     allowed_commands: list[str] = Field(default_factory=list, max_length=30)
-    max_actions: int = Field(20, ge=1, le=200)
+    max_actions: int = Field(20, ge=1, le=1000)
     ttl_seconds: int = Field(3600, ge=60, le=86400)
     reason: str = Field(min_length=1, max_length=1000)
     # E34: stored browser secrets of the order's owner this grant may type.
@@ -847,16 +847,76 @@ async def get_evidence(
     }
 
 
+def _may_grant(order: WorkOrder, user: UserInfo) -> bool:
+    """W3: the person the work is for, or a manager — never the agent.
+
+    get_current_user resolves the agent's service key to "agent-service",
+    which owns no order; an acting-user relay does not reach this check.
+    """
+    if getattr(user, "via_agent", False) or user.sub == "agent-service":
+        return False
+    return order.owner_key == user.sub or bool(
+        {UserRole.manager, UserRole.admin} & set(user.roles or [])
+    )
+
+
+def _grant_out(grant: ComputerUseGrant, now: datetime) -> dict:
+    expires_at = grant.expires_at
+    if expires_at is not None and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    return {
+        "id": str(grant.id),
+        "granted_to": grant.granted_to,
+        "granted_by": grant.granted_by,
+        "automatic": grant.granted_by == "auto:read",
+        "actions": grant.actions,
+        "allowed_hosts": grant.allowed_hosts,
+        "secret_ids": grant.secret_ids,
+        "max_actions": grant.max_actions,
+        "used_actions": grant.used_actions,
+        "expires_at": expires_at,
+        "revoked_at": grant.revoked_at,
+        "reason": grant.reason,
+        "active": grant.revoked_at is None
+        and expires_at is not None
+        and expires_at > now
+        and grant.used_actions < grant.max_actions,
+    }
+
+
+@router.get("/{work_order_id}/computer-grants")
+async def list_computer_grants(
+    work_order_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: UserInfo = Depends(get_current_user),
+) -> list[dict]:
+    """W3: the browser and computer access of one work, newest first."""
+    order = await db.get(WorkOrder, work_order_id)
+    if order is None or not _may_grant(order, user):
+        raise HTTPException(status_code=404, detail="Work order not found")
+    rows = await db.scalars(
+        select(ComputerUseGrant)
+        .where(ComputerUseGrant.work_order_id == order.id)
+        .order_by(ComputerUseGrant.created_at.desc())
+    )
+    now = datetime.now(UTC)
+    return [_grant_out(g, now) for g in rows]
+
+
 @router.post("/{work_order_id}/computer-grants", status_code=status.HTTP_201_CREATED)
 async def grant_computer_use(
     work_order_id: uuid.UUID,
     body: ComputerUseGrantIn,
     db: AsyncSession = Depends(get_db),
-    user: UserInfo = Depends(require_role(UserRole.manager)),
+    user: UserInfo = Depends(get_current_user),
 ) -> dict:
     order = await db.get(WorkOrder, work_order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="Work order not found")
+    if not _may_grant(order, user):
+        raise HTTPException(
+            status_code=403, detail="Only the work's owner or a manager grants computer use"
+        )
     valid_actions = {
         "browser_fetch",
         "desktop_snapshot",
@@ -874,6 +934,8 @@ async def grant_computer_use(
         "desktop_save_download",
         "desktop_close",
         "desktop_handoff",
+        "desktop_open",
+        "desktop_search",
         "desktop_scroll",
         "desktop_press",
         "desktop_hover",
@@ -983,7 +1045,7 @@ async def revoke_computer_use(
     work_order_id: uuid.UUID,
     grant_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    user: UserInfo = Depends(require_role(UserRole.manager)),
+    user: UserInfo = Depends(get_current_user),
 ) -> dict:
     """E24: take a computer-use grant back before it expires.
 
@@ -992,6 +1054,9 @@ async def revoke_computer_use(
     consumes it, so a revoked grant authorizes nothing more; an action that
     already passed that commit is not undone.
     """
+    order = await db.get(WorkOrder, work_order_id)
+    if order is None or not _may_grant(order, user):
+        raise HTTPException(status_code=404, detail="Computer-use grant not found")
     grant = await db.get(ComputerUseGrant, grant_id, with_for_update=True)
     if grant is None or grant.work_order_id != work_order_id:
         raise HTTPException(status_code=404, detail="Computer-use grant not found")

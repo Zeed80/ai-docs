@@ -320,6 +320,42 @@ def _adopt_page(session: dict, page) -> None:
     session["pages"].append(page)
     _watch_downloads(session, page)
     page.on("popup", lambda popup: _adopt_page(session, popup))
+    page.on("request", lambda request: _note_write(session, request))
+
+
+# W3: what left the page. A form that navigated with POST, or any request
+# whose body carries text the agent typed in this session, is recorded and
+# reported with the action that caused it — a "read" click on a script
+# button that sent data is not hidden behind its class.
+_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_TYPED_MIN = 3
+
+
+def _note_write(session: dict, request) -> None:
+    try:
+        if request.method not in _WRITE_METHODS:
+            return
+        body = request.post_data or ""
+    except Exception:  # noqa: BLE001 — a binary body cannot be decoded
+        body = ""
+    from urllib.parse import unquote_plus
+
+    decoded = unquote_plus(body)
+    typed = [t for t in session.get("typed", ()) if len(t) >= _TYPED_MIN]
+    carries = any(t in body or t in decoded for t in typed)
+    if not carries and request.resource_type != "document":
+        return
+    parts = urlparse(request.url)
+    session.setdefault("writes", []).append(
+        {
+            "method": request.method,
+            "url": f"{parts.scheme}://{parts.netloc}{parts.path}"[:300],
+            "form_navigation": request.resource_type == "document",
+            "carries_typed_text": carries,
+            "at": time.monotonic(),
+        }
+    )
+    del session["writes"][:-50]
 
 
 def _session_alive(session: dict) -> bool:
@@ -484,7 +520,7 @@ class DesktopActionRequest(BaseModel):
     session_id: str
     owner: str = Field(min_length=1, max_length=200)
     action: str = Field(
-        pattern="^(observe|describe|click|type|fill_secret|upload|read|screenshot|navigate|tabs|switch_tab|downloads|take_download|close|handoff|scroll|press|hover|select|wait_for|back|forward)$"
+        pattern="^(observe|describe|click|type|fill_secret|upload|read|screenshot|navigate|tabs|switch_tab|downloads|take_download|close|handoff|scroll|press|hover|select|wait_for|back|forward|open|search)$"
     )
     # E32: click/type address an element by the ref an observe returned,
     # under that observe's revision — never a model-written CSS selector
@@ -510,6 +546,10 @@ class DesktopActionRequest(BaseModel):
     # W2: scroll — pixels down (negative: up); press — one key of _AGENT_KEYS.
     dy: int | None = Field(default=None, ge=-20000, le=20000)
     key: str | None = Field(default=None, max_length=20)
+    # W3: search — press Enter in the field after typing.
+    submit: bool = False
+    # W3: hosts of the grant this action runs under; the page must be in them.
+    grant_hosts: list[str] | None = Field(default=None, max_length=50)
 
 
 class DesktopHumanRequest(BaseModel):
@@ -585,9 +625,74 @@ def _card_hash(card: dict) -> str:
     ).hexdigest()
 
 
+# W3: what acting on an element would do, from facts of the DOM only — no
+# words of the page are read. read: a link, a tab, a toggle, a button outside
+# any data form, a search or filter field, a GET form of such fields.
+# submit: a form that sends data (POST, or e-mail/phone/name/address/text
+# fields); login: a form with a password; transact: payment card fields
+# (autocomplete="cc-*"). Inside a form the form decides, whatever the button's
+# type: a type=button that submits by script is still that form's submit.
+_CLASSIFY_JS = """
+(el) => {
+  const tag = el.tagName.toLowerCase();
+  const type = (el.getAttribute('type') || '').toLowerCase();
+  const role = (el.getAttribute('role') || '').toLowerCase();
+  const ac = f => (f.getAttribute && f.getAttribute('autocomplete') || '').toLowerCase();
+  const PERSONAL = /^(name|given-name|family-name|additional-name|email|tel|street-address|address-line|address-level|postal-code|country-name|organization|organization-title|username|new-password|current-password|bday|sex|cc-)/;
+  const personalField = f => {
+    const t = (f.type || '').toLowerCase();
+    return ['email', 'tel', 'password', 'file'].includes(t) || f.tagName === 'TEXTAREA'
+      || f.isContentEditable || PERSONAL.test(ac(f));
+  };
+  const form = el.form || el.closest('form');
+  let formClass = null, method = null;
+  if (form) {
+    const fields = Array.from(form.elements);
+    method = (form.getAttribute('method') || 'get').toLowerCase();
+    if (fields.some(f => ac(f).startsWith('cc-'))) formClass = 'transact';
+    else if (fields.some(f => (f.type || '').toLowerCase() === 'password')) formClass = 'login';
+    else if (method !== 'get' || fields.some(personalField)) formClass = 'submit';
+    else formClass = 'read';
+  }
+  let kind = 'other', cls = formClass || 'read';
+  if (tag === 'a' && el.getAttribute('href') && !/^javascript:/i.test(el.getAttribute('href'))) {
+    kind = 'link';
+    const m = (el.getAttribute('data-method') || '').toLowerCase();
+    cls = m && m !== 'get' ? 'submit' : 'read';
+  } else if (tag === 'input' || tag === 'textarea' || tag === 'select' || el.isContentEditable) {
+    kind = 'field';
+    if (type === 'password') cls = 'login';
+    else if (ac(el).startsWith('cc-')) cls = 'transact';
+    else if (personalField(el)) cls = formClass && formClass !== 'read' ? formClass : 'submit';
+    if (['submit', 'image'].includes(type)) kind = 'button';
+  } else if (tag === 'button' || role === 'button') {
+    kind = 'button';
+  } else if (['tab', 'menuitem', 'option', 'treeitem', 'switch'].includes(role)
+             || tag === 'summary' || el.hasAttribute('aria-expanded')) {
+    kind = 'toggle';
+    cls = formClass === 'transact' ? 'transact' : 'read';
+  }
+  return {class: cls, kind, form_method: method};
+}
+"""
+
+# Order of the classes by what they may cost: a mismatch is refused upward.
+_CLASS_RANK = {"read": 0, "submit": 1, "login": 2, "transact": 3}
+
+
+async def _classify(target) -> dict:
+    return await target.evaluate(_CLASSIFY_JS)
+
+
 async def _describe(page, target) -> dict:
     described = await target.evaluate(_DESCRIBE_JS)
-    card = {"origin": _page_origin(page.url), "url": page.url, **described}
+    facts = await _classify(target)
+    card = {
+        "origin": _page_origin(page.url),
+        "url": page.url,
+        "class": facts["class"],
+        **described,
+    }
     card["card_hash"] = _card_hash(card)
     return card
 
@@ -646,10 +751,13 @@ _OBSERVE_JS = """
 
 
 def _session_host_allowed(url: str, hosts: list[str]) -> bool:
+    """W3: "*" — any public site (the read grant); egress still refuses
+    private and internal addresses, whatever the allowlist says."""
     parsed = urlparse(url)
     host = (parsed.hostname or "").casefold()
     return parsed.scheme in {"http", "https"} and any(
-        host == allowed.casefold() or host.endswith("." + allowed.casefold()) for allowed in hosts
+        allowed == "*" or host == allowed.casefold() or host.endswith("." + allowed.casefold())
+        for allowed in hosts
     )
 
 
@@ -843,6 +951,13 @@ async def desktop_action(req: DesktopActionRequest) -> dict:
         if req.action == "handoff":
             session["handoff"] = {"reason": (req.reason or "")[:500], "since": time.time()}
             return {"ok": True, "handed_off": True, "url": session["page"].url}
+        if req.grant_hosts is not None and not _session_host_allowed(
+            session["page"].url, req.grant_hosts
+        ):
+            # W3: a grant for one portal does not act on a page of another
+            # site this session reached under the read grant.
+            return {"ok": False, "error": "page_outside_grant", "url": session["page"].url}
+        started = time.monotonic()
         try:
             result = await _desktop_step(session, req)
         except Exception as exc:  # noqa: BLE001
@@ -859,6 +974,16 @@ async def desktop_action(req: DesktopActionRequest) -> dict:
             return _redact(session, {"ok": False, "error": error})
         if result.get("ok") is False:
             return result
+        if req.action in {"open", "search", "press", "select", "click", "type"}:
+            # Requests a page fires a moment after the action are its doing.
+            await asyncio.sleep(0.3)
+        sent = [
+            {k: v for k, v in w.items() if k != "at"}
+            for w in session.get("writes", [])
+            if w["at"] >= started
+        ]
+        if sent:
+            result["sent"] = sent
         page = session["page"]
         if not _session_host_allowed(page.url, session["allowed_hosts"]):
             await _close_session(req.session_id)
@@ -1035,6 +1160,18 @@ async def _desktop_step(session: dict, req: DesktopActionRequest) -> dict:
     if req.action == "press":
         if req.key not in _AGENT_KEYS:
             return {"ok": False, "error": "key_not_allowed"}
+        if req.key in {"Enter", "Space"}:
+            # W3: Enter in a data form is its submit, Space on its button too.
+            focused = page.locator(":focus")
+            if await focused.count() == 1:
+                facts = await _classify(focused.first)
+                if facts["class"] != "read":
+                    return {
+                        "ok": False,
+                        "error": "needs_approval",
+                        "class": facts["class"],
+                        "card": await _describe(page, focused.first),
+                    }
         await page.keyboard.press(" " if req.key == "Space" else req.key)
         await page.wait_for_timeout(req.wait_ms or random.randint(250, 600))
         return {"done": "press"}
@@ -1121,7 +1258,34 @@ async def _desktop_step(session: dict, req: DesktopActionRequest) -> dict:
         session.setdefault("secrets", set()).add(req.secret)
         await target.fill(req.secret, timeout=10000)
         return {"done": "fill_secret"}
-    if req.action == "select":
+    if req.action in {"open", "search", "select"}:
+        # W3: the free actions act only on what is reading, not sending.
+        facts = await _classify(target)
+        if facts["class"] != "read":
+            return {
+                "ok": False,
+                "error": "needs_approval",
+                "class": facts["class"],
+                "card": await _describe(page, target),
+            }
+        if req.action == "open":
+            await humanize.click(page, target, session)
+            if req.wait_ms:
+                await page.wait_for_timeout(req.wait_ms)
+            return {"done": "open", "class": "read", "kind": facts["kind"]}
+        if req.action == "search":
+            if facts["kind"] != "field" or req.text is None:
+                return {"ok": False, "error": "not_a_search_field"}
+            session.setdefault("typed", set()).add(req.text)
+            await humanize.type_text(page, target, req.text, session)
+            if req.submit:
+                await page.keyboard.press("Enter")
+                await page.wait_for_timeout(req.wait_ms or random.randint(600, 1200))
+            return {"done": "search", "class": "read"}
+    if req.action == "select" or (
+        req.action == "type" and await target.evaluate("e => e.tagName") == "SELECT"
+    ):
+        # A select in a data form takes the approved desktop_type path.
         if not req.text:
             return {"ok": False, "error": "text_required"}
         await humanize.click(page, target, session)
@@ -1133,6 +1297,7 @@ async def _desktop_step(session: dict, req: DesktopActionRequest) -> dict:
     if req.action == "click":
         await humanize.click(page, target, session)
     else:
+        session.setdefault("typed", set()).add(req.text or "")
         await humanize.type_text(page, target, req.text or "", session)
     if req.wait_ms:
         await page.wait_for_timeout(req.wait_ms)
