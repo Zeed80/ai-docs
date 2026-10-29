@@ -28,7 +28,7 @@ router = APIRouter()
 
 class ComputerActionIn(BaseModel):
     action: str = Field(
-        pattern="^(browser_fetch|desktop_snapshot|desktop_start|desktop_observe|desktop_prepare_submit|desktop_click|desktop_type|desktop_read|desktop_navigate|desktop_tabs|desktop_fill_secret|desktop_upload|desktop_downloads|desktop_save_download|desktop_close|desktop_handoff|file_read|file_write|shell)$"
+        pattern="^(browser_fetch|desktop_snapshot|desktop_start|desktop_observe|desktop_prepare_submit|desktop_click|desktop_type|desktop_read|desktop_navigate|desktop_tabs|desktop_fill_secret|desktop_upload|desktop_downloads|desktop_save_download|desktop_close|desktop_handoff|desktop_scroll|desktop_press|desktop_hover|desktop_select|desktop_wait|desktop_back|desktop_forward|file_read|file_write|shell)$"
     )
     work_order_id: uuid.UUID
     step_id: uuid.UUID | None = None
@@ -175,6 +175,8 @@ def _browser_action(action: str, body: dict) -> str:
         return "describe"
     if name == "tabs" and body.get("tab") is not None:
         return "switch_tab"
+    if name == "wait":
+        return "wait_for"
     return name
 
 
@@ -245,8 +247,22 @@ async def _perform(
         # E31: the session belongs to this work order; the browser service
         # refuses another owner's session id as if it did not exist.
         owner = browser_session_owner(grant.work_order_id)
+        if action == "desktop_start":
+            from app.api.web_search import browser_profile_fields
+
+            # W2: the session runs in the person's kept profile — cookies of a
+            # passed bot check or a login survive it. A grant that signs in
+            # gets its own "login" profile, apart from everyday reading.
+            profile = browser_profile_fields(
+                grant.granted_to, "login" if grant.secret_ids else "reader"
+            )
         payload = (
-            {"url": target, "allowed_hosts": list(grant.allowed_hosts or []), "owner": owner}
+            {
+                "url": target,
+                "allowed_hosts": list(grant.allowed_hosts or []),
+                "owner": owner,
+                **profile,
+            }
             if action == "desktop_start"
             else {
                 "session_id": target,
@@ -262,6 +278,9 @@ async def _perform(
                 "card": body.get("card"),
                 "wait_ms": min(int(body.get("wait_ms", 0)), 15000),
                 "reason": str(body.get("reason") or "")[:500] or None,
+                # W2: scroll — pixels (negative: up); press — one allowed key.
+                "dy": body.get("dy"),
+                "key": body.get("key"),
             }
         )
         if action == "desktop_click" and not isinstance(body.get("card"), dict):

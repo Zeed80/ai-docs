@@ -135,16 +135,23 @@ def test_an_old_revision_number_is_refused(client, site):
     )
 
 
-def test_an_iframe_is_listed_but_not_actionable(client, site):
+def test_an_iframe_element_is_not_actionable_but_its_content_is(client, site):
+    """W2: an embedded catalog or search widget is addressable by its own refs."""
     s = _Session(client, site, "/frame")
     snap = s.observe()
     frame = next(e for e in snap["elements"] if e["role"] == "frame")
-    assert snap["frames"] == 1
-    assert all(e["name"] != "Найти" for e in snap["elements"])
+    assert len(snap["frames"]) == 1
+    inner = next(e for e in snap["elements"] if e["name"] == "Найти")
+    assert inner["ref"].endswith("@1") and inner["frame"] == 1
     assert (
         s.act("click", ref=frame["ref"], revision=snap["revision"])["error"]
         == "frame_not_actionable"
     )
+    assert s.act("click", ref=inner["ref"], revision=snap["revision"])["ok"]
+    # A ref of another revision, or of a frame that is not there, names nothing.
+    assert s.act("click", ref=inner["ref"].replace("@1", "@5"), revision=snap["revision"])[
+        "error"
+    ] == "stale_ref"
 
 
 def test_a_new_tab_is_listed_and_can_be_switched_to(client, site):

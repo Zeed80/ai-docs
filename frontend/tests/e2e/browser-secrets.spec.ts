@@ -63,7 +63,7 @@ test("a password is stored without coming back and revoked after a confirmation"
   await page.getByLabel("Название").fill("Кабинет поставщика");
   await page.getByLabel("Сайт").fill("https://portal.example.ru");
   await page.getByLabel("Пароль", { exact: true }).fill("s3cret");
-  await page.getByRole("button", { name: "Сохранить" }).click();
+  await page.getByRole("button", { name: "Сохранить", exact: true }).click();
   await expect(page.getByText("Кабинет поставщика")).toBeVisible();
   await expect(page.getByLabel("Пароль", { exact: true })).toHaveValue("");
   await expect(page.getByText("s3cret")).toHaveCount(0);
@@ -91,7 +91,7 @@ test("the browser secrets page fits a 320 px screen", async ({
   await setAuthCookie(context);
   await setup(page, []);
   await page.goto("/settings/browser");
-  await expect(page.getByRole("button", { name: "Сохранить" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Сохранить", exact: true })).toBeVisible();
   const overflow = await page.evaluate(
     () =>
       document.documentElement.scrollWidth -

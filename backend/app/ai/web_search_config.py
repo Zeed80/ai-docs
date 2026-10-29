@@ -65,6 +65,25 @@ class SearchProvider(BaseModel):
         return self.endpoint or _DEFAULT_ENDPOINTS.get(self.kind)
 
 
+class BrowserProxy(BaseModel):
+    """W2: an upstream exit for the browser (residential, mobile, datacenter).
+
+    A kept profile is bound to one proxy for good (see
+    :func:`app.api.web_search.browser_profile_fields`), and the proxy's
+    locale and timezone become the profile's, so IP, clock and language agree.
+    """
+
+    id: str
+    server: str  # http://host:port
+    username: str = ""
+    password: str = ""  # plaintext, resolved from the encrypted store
+    kind: str = "residential"  # residential | mobile | datacenter
+    country: str | None = None
+    locale: str | None = None  # ru-RU
+    timezone: str | None = None  # Europe/Moscow
+    enabled: bool = True
+
+
 class WebSearchConfig(BaseModel):
     """Resolved web-search + browsing configuration (server-internal)."""
 
@@ -90,6 +109,11 @@ class WebSearchConfig(BaseModel):
     page_cache_ttl_s: int = 24 * 3600
     # Pages research reads at the same time.
     research_concurrency: int = 4
+    # W2: the browser's exits; empty → direct from the server's address.
+    proxies: list[BrowserProxy] = Field(default_factory=list)
+    # Persona of a profile without a proxy (or a proxy without its own).
+    browser_locale: str = "ru-RU"
+    browser_timezone: str = "Europe/Moscow"
 
     def effective_providers(self) -> list[SearchProvider]:
         if self.providers:
@@ -165,6 +189,43 @@ class SearchProviderUpdate(BaseModel):
         return value
 
 
+class BrowserProxyUpdate(BaseModel):
+    """A proxy from the GUI; ``password`` None or a mask keeps the stored one."""
+
+    id: str
+    server: str
+    username: str = ""
+    password: str | None = None
+    kind: str = "residential"
+    country: str | None = None
+    locale: str | None = None
+    timezone: str | None = None
+    enabled: bool = True
+
+    @field_validator("id")
+    @classmethod
+    def _id(cls, value: str) -> str:
+        value = value.strip().lower()
+        if not _ID.match(value):
+            raise ValueError("id: латиница, цифры, - и _, до 40 символов")
+        return value
+
+    @field_validator("server")
+    @classmethod
+    def _server(cls, value: str) -> str:
+        value = value.strip()
+        if not re.match(r"^http://[^/\s:@]+:\d{2,5}/?$", value):
+            raise ValueError("server: http://host:port (адрес HTTP-прокси)")
+        return value.rstrip("/")
+
+    @field_validator("kind")
+    @classmethod
+    def _kind(cls, value: str) -> str:
+        if value not in ("residential", "mobile", "datacenter"):
+            raise ValueError("kind: residential, mobile или datacenter")
+        return value
+
+
 class WebSearchConfigUpdate(BaseModel):
     """Patch payload from the GUI. Only provided fields are applied."""
 
@@ -183,6 +244,22 @@ class WebSearchConfigUpdate(BaseModel):
     search_cache_ttl_s: int | None = Field(default=None, ge=0, le=7 * 86400)
     page_cache_ttl_s: int | None = Field(default=None, ge=0, le=30 * 86400)
     research_concurrency: int | None = Field(default=None, ge=1, le=12)
+    proxies: list[BrowserProxyUpdate] | None = None
+    browser_locale: str | None = Field(default=None, max_length=20)
+    browser_timezone: str | None = Field(default=None, max_length=60)
+
+
+class BrowserProxyView(BaseModel):
+    id: str
+    server: str
+    username: str
+    password_mask: str
+    password_set: bool
+    kind: str
+    country: str | None
+    locale: str | None
+    timezone: str | None
+    enabled: bool
 
 
 class SearchProviderView(BaseModel):
@@ -228,6 +305,9 @@ class WebSearchConfigView(BaseModel):
     search_cache_ttl_s: int = 6 * 3600
     page_cache_ttl_s: int = 24 * 3600
     research_concurrency: int = 4
+    proxies: list[BrowserProxyView] = []
+    browser_locale: str = "ru-RU"
+    browser_timezone: str = "Europe/Moscow"
 
 
 def _redis_get() -> dict | None:
@@ -290,17 +370,15 @@ def get_config() -> WebSearchConfig:
         for entry in stored.get("providers") or []
         if isinstance(entry, dict) and entry.get("kind") in KINDS
     ]
-    tuning = {
-        key: stored[key]
-        for key in (
-            "language",
-            "per_host_interval_s",
-            "search_cache_ttl_s",
-            "page_cache_ttl_s",
-            "research_concurrency",
+    proxies = [
+        BrowserProxy(
+            **{k: v for k, v in entry.items() if k != "password_enc"},
+            password=secret_box.decrypt(entry.get("password_enc")) or "",
         )
-        if stored.get(key) is not None
-    }
+        for entry in stored.get("proxies") or []
+        if isinstance(entry, dict) and entry.get("server")
+    ]
+    tuning = {key: stored[key] for key in _TUNING_KEYS if stored.get(key) is not None}
     api_key = secret_box.decrypt(stored.get("api_key_enc")) or env["_api_key_plain"]
     fb_key = (
         secret_box.decrypt(stored.get("fallback_api_key_enc")) or env["_fallback_api_key_plain"]
@@ -316,6 +394,7 @@ def get_config() -> WebSearchConfig:
         browser_url=stored.get("browser_url") or env["browser_url"],
         browsing_enabled=stored.get("browsing_enabled", True),
         providers=providers,
+        proxies=proxies,
         **tuning,
     )
 
@@ -355,19 +434,49 @@ def update_config(patch: WebSearchConfigUpdate) -> WebSearchConfig:
         stored["browsing_enabled"] = bool(patch.browsing_enabled)
     if patch.providers is not None:
         stored["providers"] = _merge_providers(stored.get("providers") or [], patch.providers)
-    for key in (
-        "language",
-        "per_host_interval_s",
-        "search_cache_ttl_s",
-        "page_cache_ttl_s",
-        "research_concurrency",
-    ):
+    if patch.proxies is not None:
+        stored["proxies"] = _merge_proxies(stored.get("proxies") or [], patch.proxies)
+    for key in _TUNING_KEYS:
         value = getattr(patch, key)
         if value is not None:
-            stored[key] = value.strip().lower() if isinstance(value, str) else value
+            if isinstance(value, str):
+                # Only the search language is a lowercase code; "ru-RU" and
+                # "Europe/Moscow" are case-sensitive.
+                value = value.strip().lower() if key == "language" else value.strip()
+            stored[key] = value
 
     _redis_set(stored)
     return get_config()
+
+
+_TUNING_KEYS = (
+    "language",
+    "per_host_interval_s",
+    "search_cache_ttl_s",
+    "page_cache_ttl_s",
+    "research_concurrency",
+    "browser_locale",
+    "browser_timezone",
+)
+
+
+def _merge_proxies(previous: list[dict], entries: list[BrowserProxyUpdate]) -> list[dict]:
+    ids = [entry.id for entry in entries]
+    if len(set(ids)) != len(ids):
+        raise ValueError("id прокси должны быть разными")
+    old = {e.get("id"): e.get("password_enc", "") for e in previous if isinstance(e, dict)}
+    merged = []
+    for entry in entries:
+        data = entry.model_dump(exclude={"password"})
+        password = entry.password
+        if password is None or "…" in password or "•" in password:
+            data["password_enc"] = old.get(entry.id, "")
+        elif password == "":
+            data["password_enc"] = ""
+        else:
+            data["password_enc"] = secret_box.encrypt(password)
+        merged.append(data)
+    return merged
 
 
 def _merge_providers(previous: list[dict], entries: list[SearchProviderUpdate]) -> list[dict]:
@@ -435,4 +544,21 @@ def to_view(cfg: WebSearchConfig, used_today: dict[str, int] | None = None) -> W
         search_cache_ttl_s=cfg.search_cache_ttl_s,
         page_cache_ttl_s=cfg.page_cache_ttl_s,
         research_concurrency=cfg.research_concurrency,
+        proxies=[
+            BrowserProxyView(
+                id=x.id,
+                server=x.server,
+                username=x.username,
+                password_mask=secret_box.mask(x.password),
+                password_set=bool(x.password),
+                kind=x.kind,
+                country=x.country,
+                locale=x.locale,
+                timezone=x.timezone,
+                enabled=x.enabled,
+            )
+            for x in cfg.proxies
+        ],
+        browser_locale=cfg.browser_locale,
+        browser_timezone=cfg.browser_timezone,
     )

@@ -3,7 +3,7 @@ uvicorn==0.34.*
 pydantic==2.*
 # patchright: drop-in Playwright with anti-detection patches (navigator.webdriver,
 # CDP leak fixes, realistic fingerprint) so pages load like a real browser.
-patchright==1.49.*
+patchright==1.64.3
 # Readable text extraction from rendered HTML.
 trafilatura==1.12.*
 # PDF catalog / datasheet text extraction (supplier catalogs are often PDFs).

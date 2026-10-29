@@ -459,9 +459,10 @@ services:
       - app
 
   # === Web Browser (human-like page fetcher) ===
-  # Headless Chromium with stealth patches (patchright): renders JavaScript,
-  # hides automation fingerprints, clears basic bot walls. Returns readable
-  # text + optional screenshot. Internal-only; backend reads
+  # Google Chrome in a window on a virtual display (patchright): renders
+  # JavaScript, keeps per-person profiles (cookies of passed bot checks and
+  # logins) on browser_profiles, types and moves like a person. Returns
+  # readable text + optional screenshot. Internal-only; backend reads
   # http://web-browser:8093/fetch. The ONLY browsing egress point.
   web-browser:
     build:
@@ -469,10 +470,13 @@ services:
       dockerfile: Dockerfile
     security_opt:
       - no-new-privileges:true
-    mem_limit: 2g
-    cpus: 2.0
-    pids_limit: 512
-    shm_size: 1g
+    # Each open profile is its own Chrome (up to BROWSER_MAX_OPEN_PROFILES=4).
+    mem_limit: 4g
+    cpus: 4.0
+    pids_limit: 1024
+    shm_size: 2g
+    volumes:
+      - browser_profiles:/profiles
     environment:
       # E33: the egress proxy (public unicast only, pinned to the checked IP)
       # also serves the workers' direct downloads of model-chosen URLs.
@@ -1373,6 +1377,8 @@ services:
       - app
 
 volumes:
+  # W2: kept browser profiles (cookies, logins, cache), one directory per person.
+  browser_profiles:
   # LoRA training data (datasets, run configs, outputs) — shared between the
   # celery worker and on-demand trainer containers.
   lora_data:

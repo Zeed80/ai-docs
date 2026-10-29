@@ -25,6 +25,7 @@ type View = {
   outside_allowlist: boolean;
   viewport: { width: number; height: number };
   screenshot_b64: string;
+  image_type?: "png" | "jpeg";
 };
 
 type SessionRow = {
@@ -98,21 +99,27 @@ function BrowserHandoff() {
   }, [workOrderId, sessionId]);
 
   // A live picture while the page is open: the site may change on its own.
-  // Every second while the owner holds the session (typing a code, solving a
-  // CAPTCHA), every 3 s while only watching; nothing in a hidden tab.
+  // About 2–3 frames a second while the owner holds the session (a CAPTCHA
+  // reacts to the pointer), every 3 s while only watching; nothing in a
+  // hidden tab, and never a second request while one is still on its way.
   const held = Boolean(view?.handoff);
+  const inFlight = useRef(false);
   useEffect(() => {
     if (!sessionId) return;
     const tick = () => {
       if (
-        typeof document === "undefined" ||
-        document.visibilityState === "visible"
+        !inFlight.current &&
+        (typeof document === "undefined" ||
+          document.visibilityState === "visible")
       ) {
-        void call("view");
+        inFlight.current = true;
+        void Promise.resolve(call("view")).finally(() => {
+          inFlight.current = false;
+        });
       }
     };
     tick();
-    const id = setInterval(tick, held ? 1000 : 3000);
+    const id = setInterval(tick, held ? 350 : 3000);
     document.addEventListener("visibilitychange", tick);
     return () => {
       clearInterval(id);
@@ -199,7 +206,7 @@ function BrowserHandoff() {
           {/* eslint-disable-next-line @next/next/no-img-element -- a live data: screenshot */}
           <img
             ref={imgRef}
-            src={`data:image/png;base64,${view.screenshot_b64}`}
+            src={`data:image/${view.image_type || "png"};base64,${view.screenshot_b64}`}
             alt="Страница в браузере сотрудника"
             onClick={clickShot}
             className={`w-full rounded-md border border-border ${held ? "cursor-crosshair" : ""}`}

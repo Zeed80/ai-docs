@@ -13,6 +13,7 @@ import { useCallback, useEffect, useState } from "react";
 import { getApiBaseUrl } from "@/lib/api-base";
 import { csrfHeaders } from "@/lib/auth";
 import { ProtectedRoute } from "@/components/auth/protected-route";
+import { BrowserIdentity } from "@/components/settings/browser-identity";
 
 const API = getApiBaseUrl();
 const URL = `${API}/api/browser-secrets`;
@@ -221,7 +222,10 @@ function BrowserSecretsContent() {
 export default function BrowserSecretsPage() {
   return (
     <ProtectedRoute>
-      <BrowserSecretsContent />
+      <div className="space-y-10">
+        <BrowserIdentity />
+        <BrowserSecretsContent />
+      </div>
     </ProtectedRoute>
   );
 }

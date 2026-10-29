@@ -337,6 +337,9 @@ class WebFetchResponse(BaseModel):
     title: str | None = None
     # ok | blocked | empty | error — a bot wall is not a page that was read.
     read_status: str = "ok"
+    # Kind of the bot wall that stayed (cloudflare, ddos_guard, qrator,
+    # yandex_smartcaptcha, …): a desktop session + handoff gets past it.
+    challenge: str | None = None
     text_chars: int = 0
     # Full text for read_source; fields before ``text`` survive the trim of a
     # long page in the model's history.
@@ -531,10 +534,51 @@ async def wait_for_host_slot(url: str, interval: float) -> float:
     return wait
 
 
-def _page_cache_key(payload: WebFetchRequest) -> str:
+def profile_owner() -> str:
+    """Whose kept browser profile a read uses: the person the work is for.
+
+    Background jobs with no acting user (catalog crawl, reflection) share the
+    ``system`` profile; nobody signs in there.
+    """
+    from app.ai.actor_context import get_acting_user
+
+    return get_acting_user() or "system"
+
+
+def browser_profile_fields(
+    owner: str, profile: str = "reader", cfg: wsc.WebSearchConfig | None = None
+) -> dict:
+    """Profile, exit and persona the browser service is asked to use.
+
+    A profile keeps one proxy for good — chosen by a hash of the profile, so
+    it survives restarts without a table — and takes that proxy's language
+    and timezone: a returning visitor does not jump countries between visits.
+    """
+    cfg = cfg or wsc.get_config()
+    persona = {"locale": cfg.browser_locale, "timezone": cfg.browser_timezone}
+    fields: dict = {"profile_owner": owner, "profile": profile, "persona": persona}
+    pool = sorted((p for p in cfg.proxies if p.enabled), key=lambda p: p.id)
+    if pool:
+        digest = hashlib.sha256(f"{owner}|{profile}".encode()).digest()
+        chosen = pool[int.from_bytes(digest[:8], "big") % len(pool)]
+        fields["proxy"] = {
+            "id": chosen.id,
+            "server": chosen.server,
+            "username": chosen.username or None,
+            "password": chosen.password or None,
+        }
+        persona.update(
+            {k: v for k, v in (("locale", chosen.locale), ("timezone", chosen.timezone)) if v}
+        )
+    return fields
+
+
+def _page_cache_key(payload: WebFetchRequest, owner: str) -> str:
     material = "|".join(
         str(part)
         for part in (
+            # A page read in someone's profile may show what only they see.
+            owner,
             web_urls.url_key(payload.url),
             payload.max_chars,
             payload.include_links,
@@ -546,9 +590,12 @@ def _page_cache_key(payload: WebFetchRequest) -> str:
     return f"webpage:v1:{hashlib.sha1(material.encode()).hexdigest()}"
 
 
-async def _fetch_live(payload: WebFetchRequest, cfg: wsc.WebSearchConfig) -> WebFetchResponse:
+async def _fetch_live(
+    payload: WebFetchRequest, cfg: wsc.WebSearchConfig, owner: str
+) -> WebFetchResponse:
     base = cfg.browser_url.rstrip("/")
     body = {
+        **browser_profile_fields(owner, cfg=cfg),
         "url": payload.url,
         "screenshot": payload.screenshot,
         "max_chars": payload.max_chars,
@@ -599,6 +646,9 @@ async def _fetch_live(payload: WebFetchRequest, cfg: wsc.WebSearchConfig) -> Web
         status=data.get("status"),
         title=data.get("title"),
         read_status=classify_read(data.get("status"), text, diagnostics),
+        challenge=next(
+            (d.split(":", 1)[1] for d in diagnostics if d.startswith("challenge:")), None
+        ),
         text_chars=len(text),
         text=text[: payload.max_chars],
         links=links,
@@ -620,7 +670,8 @@ async def fetch_page(payload: WebFetchRequest) -> WebFetchResponse:
         )
     # A screenshot shows the page now; only text reads are cached.
     cacheable = not payload.screenshot
-    cache_key = _page_cache_key(payload) if cacheable else ""
+    owner = profile_owner()
+    cache_key = _page_cache_key(payload, owner) if cacheable else ""
     page = None
     if cacheable and not payload.fresh:
         cached = await _cache_get(cache_key)
@@ -628,7 +679,7 @@ async def fetch_page(payload: WebFetchRequest) -> WebFetchResponse:
             page = WebFetchResponse(**cached)
             page.diagnostics = [*page.diagnostics, "cached"]
     if page is None:
-        page = await _fetch_live(payload, cfg)
+        page = await _fetch_live(payload, cfg, owner)
         # Only a page that was read is kept: a bot wall must be retried.
         if cacheable and page.read_status == "ok":
             stamped = page.model_copy(update={"cached_at": datetime.now(UTC).isoformat()})
@@ -1041,3 +1092,55 @@ async def clear_cache() -> CacheClearResponse:
         if batch:
             removed += await r.delete(*batch)
     return CacheClearResponse(removed=removed)
+
+
+# --------------------------------------------------------------------------- #
+# W2: the person's kept browser profiles and the fingerprint self-check
+# --------------------------------------------------------------------------- #
+async def _browser_call(path: str, body: dict, timeout: float = 30.0) -> dict:
+    cfg = wsc.get_config()
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(cfg.browser_url.rstrip("/") + path, json=body)
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502, detail={"error_code": "web_browser_unreachable", "message": str(exc)}
+        ) from exc
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail={"error_code": "web_browser_error", "message": response.text[:300]},
+        )
+    return response.json()
+
+
+@router.get("/browser/profiles")
+async def list_browser_profiles() -> dict:
+    """The current person's kept profiles: size, last use, bound proxy."""
+    return await _browser_call("/profiles/list", {"owner": profile_owner()})
+
+
+@router.delete("/browser/profiles/{name}")
+async def delete_browser_profile(name: str) -> dict:
+    """Forget a profile — cookies, logins, passed bot checks — of the current person."""
+    answer = await _browser_call("/profiles/delete", {"owner": profile_owner(), "name": name})
+    if not answer.get("ok"):
+        raise HTTPException(
+            status_code=409,
+            detail={"error_code": answer.get("error"), "message": "Профиль сейчас используется"},
+        )
+    return answer
+
+
+class SelftestRequest(BaseModel):
+    url: str = Field("https://bot.sannysoft.com/", max_length=500)
+
+
+@router.post("/browser/selftest")
+async def browser_selftest(body: SelftestRequest | None = None) -> dict:
+    """What a site's bot detector sees: in the current person's reading
+    profile, through the proxy that profile is bound to."""
+    body = body or SelftestRequest()
+    return await _browser_call(
+        "/selftest", {"url": body.url, **browser_profile_fields(profile_owner())}, timeout=90.0
+    )
