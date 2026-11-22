@@ -32,7 +32,9 @@ x-eval-env: &eval-env
   # The world's own browser; it reaches only the world's test sites.
   WEB_BROWSER_URL: http://eval-browser:8093
   EGRESS_PROXY_URL: http://eval-browser:8094
-  WEB_SEARCH_ENDPOINT: http://eval-unavailable:8080/search
+  # W7: a search inside the world — a fixed SearXNG answer listing the test
+  # sites (nginx ignores the query). Nothing outside the world is searched.
+  WEB_SEARCH_ENDPOINT: http://eval-sites/search/searxng.json
   OLLAMA_URL: http://host-gateway:11434
   STRATA_URL: ${EVAL_STRATA_URL:-http://host-gateway:8090}
   STRATA_API_KEY: ${STRATA_API_KEY:-}
@@ -145,8 +147,9 @@ services:
     image: infra-web-browser:latest
     security_opt:
       - no-new-privileges:true
-    mem_limit: 2g
-    shm_size: 1g
+    # W2: windowed Chrome, one process per kept profile.
+    mem_limit: 3g
+    shm_size: 2g
     environment:
       BROWSER_EGRESS_PROXY_HOST: 0.0.0.0
       BROWSER_EGRESS_PROXY_PORT: "8094"
