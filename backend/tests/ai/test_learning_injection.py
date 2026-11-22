@@ -55,7 +55,11 @@ class _FakeClient:
     async def __aexit__(self, *a):
         return False
 
-    async def get(self, url, params=None):
+    async def get(self, url, params=None, headers=None):
+        # 2026-10-20 the call gained internal service headers (without them
+        # every turn got 401); this fake still refused the kwarg, the
+        # injection swallowed the TypeError and the rules silently never
+        # reached the prompt — the three "failing" tests were the fake's.
         return _FakeResp(self._p)
 
 

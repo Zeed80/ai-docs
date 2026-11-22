@@ -43,8 +43,12 @@ COPY --from=libredwg-builder /opt/libredwg/bin/dxf2dwg /usr/local/bin/dxf2dwg
 COPY --from=libredwg-builder /opt/libredwg/lib/libredwg.so* /usr/local/lib/
 RUN ldconfig
 
-COPY pyproject.toml .
-RUN pip install --no-cache-dir .
+COPY pyproject.toml constraints.txt ./
+# SQLAlchemy 2.1 (freshly released, pulled by an unpinned build) resolves the
+# plain "postgresql://" URL to the psycopg3 dialect, while the project ships
+# psycopg2-binary: every container died in alembic with "No module named
+# psycopg". Stay on the 2.0 series the config targets.
+RUN pip install --no-cache-dir --constraint constraints.txt .
 
 COPY . .
 

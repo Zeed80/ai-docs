@@ -1441,6 +1441,8 @@ async def _call_ollama_streaming(
                         await on_token(trailing)
                     final_message = msg
                     final_message["content"] = full_content
+                    if chunk.get("done_reason"):
+                        final_message["_finish_reason"] = str(chunk["done_reason"])
                     if accumulated_tool_calls and not final_message.get("tool_calls"):
                         final_message["tool_calls"] = accumulated_tool_calls
                     # Б15: Ollama's final streaming chunk carries token counts as
@@ -1672,6 +1674,7 @@ async def _call_openai_streaming(
     scrubber = StreamingContextScrubber()
     # Accumulate streamed tool calls: index → {id, name, arguments}
     tool_acc: dict[int, dict[str, str]] = {}
+    finish_reason: str | None = None
 
     async with httpx.AsyncClient(timeout=float(config.llm_timeout_seconds)) as client:
         async with client.stream(
@@ -1700,6 +1703,8 @@ async def _call_openai_streaming(
                         {"usage": chunk["usage"], "choices": [{"finish_reason": "stop"}]}
                     )
                 choice = (chunk.get("choices") or [{}])[0]
+                if choice.get("finish_reason"):
+                    finish_reason = str(choice["finish_reason"])
                 delta = choice.get("delta", {})
 
                 token: str = delta.get("content") or ""
@@ -1750,6 +1755,10 @@ async def _call_openai_streaming(
         "role": "assistant",
         "content": full_content,
         "tool_calls": normalized_tool_calls or None,
+        # "length" = the answer hit max_tokens mid-sentence; the turn must not
+        # deliver it as a complete reply (live W4: ended on "указывается в
+        # паспорте/" and read as a finished answer).
+        "_finish_reason": finish_reason,
     }
 
 
@@ -1850,9 +1859,6 @@ async def _call_responses_streaming(
              "function": {"name": call["function"]["name"], "arguments": args}}
         )  # fmt: skip
     return {"role": "assistant", "content": full_content, "tool_calls": tool_calls or None}
-
-
-# ── Anthropic streaming ───────────────────────────────────────────────────────
 
 
 def _convert_messages_to_anthropic(
@@ -2019,6 +2025,7 @@ async def _call_anthropic_streaming(
     # Accumulate tool_use blocks: index → {id, name, input_json}
     tool_acc: dict[int, dict[str, str]] = {}
     current_idx: int = 0
+    stop_reason: str | None = None
 
     async with httpx.AsyncClient(timeout=float(config.llm_timeout_seconds)) as client:
         async with client.stream("POST", messages_url, headers=headers, json=payload) as resp:
@@ -2033,6 +2040,9 @@ async def _call_anthropic_streaming(
                     continue
 
                 etype = event.get("type", "")
+
+                if etype == "message_delta":
+                    stop_reason = str((event.get("delta") or {}).get("stop_reason") or "") or None
 
                 if etype == "content_block_start":
                     current_idx = event.get("index", 0)
@@ -2081,6 +2091,7 @@ async def _call_anthropic_streaming(
         "role": "assistant",
         "content": full_content,
         "tool_calls": normalized_tool_calls or None,
+        "_finish_reason": stop_reason,
     }
 
 
@@ -4337,6 +4348,15 @@ class AgentSession:
                         continue
                     if budget_context is not None:
                         budget_context.raise_if_stopped()
+                    if self._hit_token_limit(message):
+                        continued = await self._continue_truncated_answer(full_text, message)
+                        if continued:
+                            full_text = continued
+                        else:
+                            full_text = (
+                                full_text.rstrip()
+                                + "\n\n_(Ответ оборвался на пределе длины — скажи «продолжи».)_"
+                            )
                     delivered_text = await self._deliver_final_content(full_text)
                     self._record_assistant_reply(delivered_text)
                     # Fire-and-forget: index this turn into memory
@@ -4534,6 +4554,58 @@ class AgentSession:
 
         await self._send({"type": "text", "content": text})
         return text
+
+    def _hit_token_limit(self, message: dict) -> bool:
+        reason = str((message or {}).get("_finish_reason") or "").lower()
+        return reason in {"length", "max_tokens", "max_output_tokens"}
+
+    async def _continue_truncated_answer(self, full_text: str, message: dict) -> str | None:
+        """One continuation when the answer hit max_tokens mid-sentence.
+
+        Live W4 (Strata Swift): the reply ended on «указывается в паспорте/»
+        and was delivered as a finished answer — the user got half a
+        sentence with no sign anything was missing. finish_reason=length is
+        a fact of the response, not a guess from the wording: the model is
+        asked once to finish the thought, within the same turn budget. If
+        that fails, the caller marks the cut instead of hiding it.
+        """
+        self.messages.append(message)
+        self.messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "Твой предыдущий ответ оборвался на пределе длины. "
+                    "Продолжи его РОВНО с места обрыва и закончи мысль кратко "
+                    "(несколько предложений). Не повторяй уже сказанное и не "
+                    "вызывай инструменты."
+                ),
+            }
+        )
+        acc: list[str] = []
+
+        async def _on_token(token: str) -> None:
+            acc.append(token)
+
+        try:
+            more = await _call_provider_streaming(
+                self._messages_for_call(),
+                [],
+                self._effective_system(),
+                self._config,
+                _on_token,
+                disable_thinking_override=True,
+                max_tokens=min(1024, self._response_budget),
+                budget_context=getattr(self, "_work_budget_context", None),
+            )
+            self._accumulate_usage(more)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("answer_continuation_failed", error=str(exc)[:200])
+            return None
+        extra = "".join(acc).strip() or str(more.get("content") or "").strip()
+        self.messages.pop()  # the continuation request is not part of the dialogue
+        if not extra:
+            return None
+        return f"{full_text.rstrip()} {extra}".strip()
 
     async def _force_final_answer(
         self, *, instruction: str | None = None, fallback: str | None = None
