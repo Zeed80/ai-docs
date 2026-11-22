@@ -182,7 +182,14 @@ async def test_agent_slots_are_the_one_employee(client: AsyncClient):
     """No router or builder slots since 2026-10-20: one employee model."""
     resp = await client.get("/api/providers/slots")
     agent = [s["slot"] for s in resp.json() if s["group"] == "Агент"]
-    assert agent == ["agent_orchestrator", "agent_email", "agent_compression", "agent_auditor"]
+    # W4 adds agent_web (search brief and page reading) to the same group.
+    assert agent == [
+        "agent_orchestrator",
+        "agent_email",
+        "agent_web",
+        "agent_compression",
+        "agent_auditor",
+    ]
 
 
 @pytest.mark.asyncio
