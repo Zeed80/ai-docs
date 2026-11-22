@@ -5036,9 +5036,16 @@ class AgentSession:
         # answer is already above. E52 2026-10-19: procurement.list_requests
         # four times in a row instead of the drafts the task asked for.
         definition = _tool_definition(fn_name, args) if skill else None
+        # computer_use is grant-bound, not path-bound: desktop_read/observe/
+        # tabs always carry the same arguments, so the read-key looked
+        # unchanged while the page changed under the agent (live W7: the
+        # search results and the product page came back as "already_read"
+        # of the previous page and the head value was never read).
         read_key = (
             f"{fn_name}\n{json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)}"
-            if definition is not None and definition.effect == "read"
+            if definition is not None
+            and definition.effect == "read"
+            and original_name.split(".", 1)[0] != "computer_use"
             else None
         )
         turn_reads = getattr(self, "_turn_reads", {})

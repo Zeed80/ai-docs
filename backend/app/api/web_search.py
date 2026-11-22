@@ -890,7 +890,25 @@ async def execute_deep_research(payload: WebResearchRequest) -> WebResearchRespo
     diagnostics: list[str] = []
     try:
         if payload.brief:
-            brief, diagnostics = wr._bound_brief(wr.ResearchBrief.model_validate(payload.brief))
+            # The agent re-types the brief from plan's answer and drops the
+            # nullable fields the schema marks required (site, why, unit …).
+            # Fill them back instead of making the model retry the same JSON.
+            filled = dict(payload.brief)
+            for name in ("goal", "stop_when"):
+                if not filled.get(name):
+                    filled[name] = question or "веб-исследование"
+            for name in ("entities", "facts_needed", "queries", "ambiguities", "source_preference"):
+                filled.setdefault(name, [])
+            filled.setdefault("must_clarify", False)
+            for query in filled["queries"]:
+                if isinstance(query, dict):
+                    query.setdefault("site", None)
+                    query.setdefault("language", "ru")
+            for fact in filled["facts_needed"]:
+                if isinstance(fact, dict):
+                    fact.setdefault("unit", None)
+                    fact.setdefault("why", None)
+            brief, diagnostics = wr._bound_brief(wr.ResearchBrief.model_validate(filled))
         elif question:
             brief, diagnostics = await wr.make_brief(question)
         else:

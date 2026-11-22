@@ -79,6 +79,12 @@ async def _run_scenario(scenario_data: dict, trigger: dict | None = None) -> dic
             return_value=scenario_data,
         ),
         patch("asyncio.create_task", side_effect=mock_create_task),
+        # Polling steps (cad_digitize_release: until=done, 60 polls × 10 s)
+        # would sleep ten minutes against the universal mock whose status is
+        # always "ok" — the meta-test hung on the first such step (found when
+        # the full run stopped at 53%, 2026-11-22). The sleep is skipped; the
+        # poll itself and its until-expression still run.
+        patch("asyncio.sleep", side_effect=lambda *_a, **_k: None),
     ):
         runner = ScenarioRunner()
         result = await runner.run(

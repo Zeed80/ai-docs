@@ -34,7 +34,7 @@ x-eval-env: &eval-env
   EGRESS_PROXY_URL: http://eval-browser:8094
   # W7: a search inside the world — a fixed SearXNG answer listing the test
   # sites (nginx ignores the query). Nothing outside the world is searched.
-  WEB_SEARCH_ENDPOINT: http://eval-sites/search/searxng.json
+  WEB_SEARCH_ENDPOINT: http://eval-search:8080/search
   OLLAMA_URL: http://host-gateway:11434
   STRATA_URL: ${EVAL_STRATA_URL:-http://host-gateway:8090}
   STRATA_API_KEY: ${STRATA_API_KEY:-}
@@ -167,6 +167,15 @@ services:
       eval:
         # The same sites under a host no case grants: a grant limits hosts.
         aliases: [eval-other]
+
+  # W7: a real (tiny) search endpoint over the world's pages, so the agent's
+  # queries select pages instead of receiving the same fixed list.
+  eval-search:
+    image: python:3.11-slim
+    command: python /sites/search/index.py
+    volumes:
+      - ./sites:/sites:ro
+    networks: [eval]
 
 networks:
   eval:

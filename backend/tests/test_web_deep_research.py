@@ -286,3 +286,21 @@ async def test_a_single_source_value_gets_one_confirmation_round(world):
     # Round 1 (maker) gives both; напор is single → one more round, then stop.
     assert len(rounds) == 2
     assert any("напор" in q for q in rounds[1]["queries"])
+
+
+@pytest.mark.asyncio
+async def test_a_partial_brief_from_the_agent_is_filled_not_rejected(world):
+    """Live W7: the agent re-typed the brief and dropped nullable fields the
+    strict schema requires (site, unit, why); three retries, no search."""
+    searches, fetched = world
+    brief = _brief().model_dump()
+    for q in brief["queries"]:
+        q.pop("site")
+    for f in brief["facts_needed"]:
+        f.pop("unit")
+        f.pop("why")
+    brief.pop("ambiguities")
+    answer = await ws.execute_web_research(
+        ws.WebResearchRequest(mode="deep", brief=brief, max_rounds=1, max_pages=3)
+    )
+    assert answer.facts and searches  # searched, not 422 web_research_bad_brief

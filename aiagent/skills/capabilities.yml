@@ -886,6 +886,11 @@ capabilities:
       страницы про другой вопрос) или offset=… (текст подряд) — без повторной
       загрузки страницы. Для browse передай query — что ищешь на странице.
       Факты бери только из источников с read_status=ok.
+      action=research с brief: бриф передаётся ЦЕЛИКОМ из ответа action=plan,
+      без переписывания и сокращений — у каждого запроса обязательны text,
+      language, site (null, если сайт не задан), у каждого факта name, unit,
+      why; целиком сохраняются goal, stop_when, ambiguities, must_clarify.
+      Не перепечатывай бриф своими словами.
       action=plan {question, context} — бриф поиска: goal, entities,
       facts_needed (что выписать, с единицами), source_preference, queries по
       языкам, must_clarify и ambiguities (если без уточнения искать
