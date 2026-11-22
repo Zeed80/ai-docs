@@ -129,13 +129,13 @@ def test_a_call_for_a_family_strata_does_not_hold_is_refused(monkeypatch):
 
 
 def test_every_family_has_a_catalog_entry_with_its_served_name():
-    from app.ai.model_registry import ModelRegistry
+    from app.ai.providers.strata_catalog import catalog_capability, load_bundled_catalog
 
-    reg = ModelRegistry.from_yaml("app/ai/config/model_registry.yaml")
-    for family in strata_manager.FAMILIES.values():
-        cap = reg.models[family["catalog_key"]]
+    catalog = load_bundled_catalog()
+    for family in catalog.families:
+        cap = catalog_capability(family)
         assert cap.provider.value == "strata"
-        assert cap.provider_model == family["served_name"]
+        assert cap.provider_model == family.served_name
 
 
 # ── Versions ────────────────────────────────────────────────────────────────

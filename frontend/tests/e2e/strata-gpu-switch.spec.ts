@@ -6,6 +6,7 @@
 
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { mockEmptyApi, setAuthCookie } from "./helpers/mock-api";
+import type { StrataStatus } from "@/lib/models/types";
 
 const deleted: string[] = [];
 
@@ -54,6 +55,11 @@ function status(over: Record<string, unknown> = {}) {
       reinstall_pending: false,
       install_only: false,
       low_ram: "auto",
+      known: true,
+      valid: true,
+      origin: "official",
+      setup_id: "IQ3_S",
+      catalog_key: "strata_qwen3_8_flash_next",
     },
     installed: ["IQ3_S", "IQ2_XS", "qwen36-UD-Q4_K_XL"],
     installed_context: 65536,
@@ -88,6 +94,16 @@ function status(over: Record<string, unknown> = {}) {
             : "strata_qwen3_8_flash_next",
         min_version: family === "qwen36" ? "0.1.45" : null,
         installed_settings: installed ? { context: 65536, vision: true } : null,
+        origin: "official",
+        upstream_present: true,
+        supported: true,
+        unsupported_reason: null,
+        downloadable: true,
+        loadable: installed,
+        deletable: installed,
+        download_blocker: null,
+        load_blocker: installed ? null : "Модель ещё не скачана",
+        delete_blocker: installed ? null : "Модель ещё не скачана",
       };
     }),
     families: [
@@ -105,6 +121,19 @@ function status(over: Record<string, unknown> = {}) {
       },
     ],
     served_catalog_key: "strata_qwen3_8_flash_next",
+    active_variant_id: null,
+    catalog: {
+      schema_version: 1,
+      source: "official_mcp",
+      source_revision: "image:test",
+      feed_revision: null,
+      fetched_at: "2026-11-22T00:00:00Z",
+      last_attempt_at: null,
+      last_error: null,
+      warnings: [],
+      refreshing: false,
+      stale: false,
+    },
     ram_plan: {
       reserve_gb: 0,
       limit_gb: null,
@@ -206,6 +235,7 @@ async function setup(
               reason: "→ strata_qwen3_6_35b",
             },
           ],
+          blockers: [],
           warnings: [],
         },
       });
@@ -397,7 +427,7 @@ test("an available update is offered and started with one button", async ({
   await setAuthCookie(context);
   await setup(page, []);
   await page.goto("/settings/models?tab=overview");
-  await expect(page.getByText("0.1.43.1")).toBeVisible();
+  await expect(page.getByText("0.1.43.1", { exact: true })).toBeVisible();
   await expect(page.getByText("доступна 0.1.45")).toBeVisible();
   await page.getByRole("button", { name: "Что нового" }).click();
   await expect(page.getByText("Qwen3.6-35B-A3B reads pictures")).toBeVisible();
@@ -477,8 +507,14 @@ test("without a container Strata is offered for install", async ({
   });
   await page.goto("/settings/models?tab=overview");
   await expect(page.getByText("Strata не установлена")).toBeVisible();
-  // Без контейнера скачивать модели некуда: списка нет.
-  await expect(page.getByRole("button", { name: /^Скачать / })).toHaveCount(0);
+  // Каталог виден из offline snapshot, но скачивание заблокировано до установки сервера.
+  const downloads = page.getByRole("button", { name: /^Скачать / });
+  await expect(downloads).toHaveCount(2);
+  await expect(downloads.first()).toBeDisabled();
+  await expect(downloads.first()).toHaveAttribute(
+    "title",
+    "Сначала установите Strata",
+  );
   await page.getByRole("button", { name: "Установить Strata" }).click();
   await expect
     .poll(() => calls)
@@ -498,4 +534,72 @@ test("a family newer than the installed Strata asks for the update first", async
   await expect(
     page.getByText("нужна Strata 0.1.45 или новее").first(),
   ).toBeVisible();
+});
+
+test("catalog refresh shows a dynamic variant and keeps retired entries", async ({
+  page,
+  context,
+}) => {
+  await setAuthCookie(context);
+  await setup(page, []);
+  const updated = status() as StrataStatus;
+  updated.quants.push(
+    {
+      ...updated.quants[0],
+      id: "IQ4_NL",
+      model: "IQ4_NL",
+      label: "IQ4_NL — новый официальный вариант",
+      installed: false,
+      downloadable: true,
+      loadable: false,
+      deletable: false,
+    },
+    {
+      ...updated.quants[1],
+      id: "legacy__unknown",
+      family: "legacy",
+      label: "Неизвестная локальная установка",
+      origin: "orphan",
+      upstream_present: false,
+      supported: false,
+      unsupported_reason:
+        "Локальная конфигурация отсутствует в каталоге Strata",
+      downloadable: false,
+      loadable: false,
+      deletable: false,
+    },
+  );
+  updated.quants[2].origin = "retired";
+  updated.quants[2].upstream_present = false;
+  updated.quants[2].downloadable = false;
+  let refreshed = false;
+  await page.route(
+    "**/api/local-models/strata/catalog/refresh",
+    async (route) => {
+      refreshed = true;
+      await route.fulfill({
+        json: {
+          changed: true,
+          added: 1,
+          updated: 0,
+          retired: 1,
+          status: updated.catalog,
+        },
+      });
+    },
+  );
+  await page.route("**/api/local-models/strata/status", async (route) => {
+    await route.fulfill({ json: refreshed ? updated : status() });
+  });
+  await page.goto("/settings/models?tab=overview");
+  await page.getByRole("button", { name: "Перечитать каталог" }).click();
+  await expect(
+    page.getByText("IQ4_NL — новый официальный вариант"),
+  ).toBeVisible();
+  await expect(page.getByText("более не публикуется")).toBeVisible();
+  await page.getByLabel("Фильтр моделей Strata").selectOption("installed");
+  await expect(
+    page.getByText("IQ4_NL — новый официальный вариант"),
+  ).toHaveCount(0);
+  await expect(page.getByText("неизвестная установка")).toBeVisible();
 });

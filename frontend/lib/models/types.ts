@@ -297,16 +297,26 @@ export interface StrataQuant {
   family: string;
   model: string;
   label: string;
-  download_gb: number;
-  disk_need_gb: number;
-  experts_gb: number;
-  ram_gb: number;
+  download_gb: number | null;
+  disk_need_gb: number | null;
+  experts_gb: number | null;
+  ram_gb: number | null;
   installed: boolean;
   size_on_disk_gb: number | null;
   low_ram_mode: boolean;
-  ram_mode: StrataRamMode;
-  fits_ram: boolean;
-  catalog_key: string;
+  ram_mode: StrataRamMode | null;
+  fits_ram: boolean | null;
+  catalog_key: string | null;
+  origin: "official" | "retired" | "bundled" | "orphan";
+  upstream_present: boolean;
+  supported: boolean;
+  unsupported_reason: string | null;
+  downloadable: boolean;
+  loadable: boolean;
+  deletable: boolean;
+  download_blocker: string | null;
+  load_blocker: string | null;
+  delete_blocker: string | null;
   /** Strata, начиная с которой setup знает это семейство (Qwen3.6 — 0.1.45). */
   min_version: string | null;
   installed_settings: { context: number | null; vision: boolean | null } | null;
@@ -406,14 +416,32 @@ export interface StrataStatus {
     reinstall_pending: boolean;
     install_only: boolean;
     low_ram: string;
+    known: boolean;
+    valid: boolean;
+    origin: string;
+    setup_id: string | null;
+    catalog_key: string | null;
   };
   down_while_owner: boolean;
   installed: string[];
   installed_context: number | null;
   quants: StrataQuant[];
   families: StrataFamily[];
-  served_catalog_key: string;
-  ram_plan: StrataRamPlan;
+  served_catalog_key: string | null;
+  active_variant_id: string | null;
+  catalog: {
+    schema_version: number;
+    source: string;
+    source_revision: string;
+    feed_revision: string | null;
+    fetched_at: string;
+    last_attempt_at: string | null;
+    last_error: string | null;
+    warnings: string[];
+    refreshing: boolean;
+    stale: boolean;
+  };
+  ram_plan: StrataRamPlan | null;
   reserve_choices: number[];
   contexts: number[];
   disk_free_gb: number | null;
@@ -442,6 +470,7 @@ export interface StrataLoadPlan {
   setup_pass: boolean;
   ram_plan: StrataRamPlan;
   follow: StrataSlotPlanItem[];
+  blockers: string[];
   warnings: string[];
 }
 

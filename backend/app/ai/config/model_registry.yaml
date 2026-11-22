@@ -145,84 +145,8 @@ providers:
     is_local: true
 
 models:
-  strata_qwen3_8_flash_next:
-    provider: "strata"
-    # Strata serves one model name whatever the quantization; the quant
-    # (Q2_0 / IQ2_XS / IQ3_XXS / IQ3_S) is a server setting, chosen in the UI.
-    provider_model: "qwen3.8-flash-next"
-    status: "production"
-    modalities: ["text", "vision", "tool_calling"]
-    max_context_tokens: 65536
-    supports_structured_output: true
-    supports_tool_calling: true
-    thinking_supported: true
-    # Low reasoning by default: measured 2026-10-06, with reasoning off the
-    # model answered a two-step arithmetic question wrong (1332 instead of
-    # 431) in 0.7 s; "low" got it right in 6.8 s. Slots with an explicit
-    # off keep it off.
-    thinking_enabled: true
-    thinking_level_default: "low"
-    local_only: true
-    # Dense weights + KV + the image encoder; the GPU's free rest is filled
-    # with an expert cache, so in practice Strata takes the whole card.
-    vram_gb_estimate: 22.0
-    quality_score: 0.95
-    speed_score: 0.55
-    notes: "Qwen3.8-Flash-Next 125B MoE via Strata (GPU expert cache + experts in RAM). Vision through the server's image encoder when it is installed with images. Exclusive with GPU-Ollama."
-  # The other model families Strata serves. Strata holds ONE model at a time
-  # and answers to any name: a slot points at the entry of the family loaded
-  # now (loading another family in the panel moves the slots along), and
-  # gpu_runtime refuses a call that names a family Strata does not hold.
-  strata_qwen3_6_35b:
-    provider: "strata"
-    provider_model: "qwen3.6-35b-a3b"
-    status: "production"
-    modalities: ["text", "vision", "tool_calling"]
-    max_context_tokens: 65536
-    supports_structured_output: true
-    supports_tool_calling: true
-    thinking_supported: true
-    thinking_enabled: true
-    thinking_level_default: "low"
-    local_only: true
-    # UD-Q4_K_XL is 23 GB: nearly every expert sits in VRAM, the rest is
-    # computed on the CPU from a RAM copy (Strata's hybrid mode).
-    vram_gb_estimate: 22.0
-    quality_score: 0.85
-    speed_score: 0.8
-    notes: "Qwen3.6-35B-A3B (35B MoE, 3B active) via Strata's own engine path. Pictures through Unsloth's mmproj (Strata 0.1.45+). Read invoices well as qwen3.6:35b on Ollama. Exclusive with GPU-Ollama."
-  strata_swift_1_5:
-    provider: "strata"
-    provider_model: "swift-1.5"
-    status: "production"
-    modalities: ["text", "vision", "tool_calling"]
-    max_context_tokens: 65536
-    supports_structured_output: true
-    supports_tool_calling: true
-    thinking_supported: true
-    thinking_enabled: true
-    thinking_level_default: "low"
-    local_only: true
-    vram_gb_estimate: 22.0
-    quality_score: 0.93
-    speed_score: 0.6
-    notes: "Swift 1.5 — UkisAI's fine-tune of Qwen3.8-Flash-Next via Strata: ~63% fewer thinking tokens by its authors' numbers. Exclusive with GPU-Ollama."
-  strata_qwen3_8_flash_next_coder:
-    provider: "strata"
-    provider_model: "qwen3.8-flash-next-coder"
-    status: "production"
-    modalities: ["text", "vision", "tool_calling"]
-    max_context_tokens: 65536
-    supports_structured_output: true
-    supports_tool_calling: true
-    thinking_supported: true
-    thinking_enabled: true
-    thinking_level_default: "low"
-    local_only: true
-    vram_gb_estimate: 22.0
-    quality_score: 0.85
-    speed_score: 0.65
-    notes: "Qwen3.8-Flash-Next Coder via Strata: half of the experts kept (code, tool use, vision); ~32 GB of RAM, weaker outside coding. Exclusive with GPU-Ollama."
+  # Strata families are published from strata_official_catalog.v1.json and the
+  # durable official-image snapshots, before runtime overlays are hydrated.
   gemma4_e2b_ollama:
     provider: "ollama"
     provider_model: "gemma4:e2b"

@@ -32,6 +32,7 @@ import {
   strataInstallServer,
   strataLoad,
   strataLoadPlan,
+  strataRefreshCatalog,
   strataRetryApply,
   strataRuntime,
   strataSlotPlan,
@@ -261,6 +262,12 @@ export function StrataPanel() {
       </div>
       <div className="p-4 space-y-4">
         <StrataServerBlock st={st} onStatus={setSt} />
+        {loadError && (
+          <div className="rounded border border-amber-900 bg-amber-950/30 p-2 text-xs text-amber-200">
+            Не удалось обновить статус; показаны последние полученные данные:{" "}
+            {loadError}
+          </div>
+        )}
 
         {/* Переключатель */}
         <div className="flex flex-wrap items-center gap-3">
@@ -348,7 +355,7 @@ export function StrataPanel() {
               {needsDownload && current && (
                 <li className="text-amber-200">
                   {current.id} ещё не скачана: первый запуск скачает её и займёт
-                  ~{Math.round(current.disk_need_gb)} ГБ (свободно{" "}
+                  ~{Math.round(current.disk_need_gb ?? 0)} ГБ (свободно{" "}
                   {st.disk_free_gb?.toFixed(0) ?? "?"} ГБ). Быстрее — скачать
                   заранее кнопкой «Скачать» ниже.
                 </li>
@@ -471,10 +478,8 @@ export function StrataPanel() {
           </pre>
         )}
 
-        {/* Модели: семейства и размеры */}
-        {!notCreated && (
-          <StrataModels st={st} params={params} onStatus={setSt} />
-        )}
+        {/* Каталог доступен и из bundled snapshot до установки сервера. */}
+        <StrataModels st={st} params={params} onStatus={setSt} />
 
         {/* Параметры выбранной модели (и новых скачиваний) */}
         {params && !notCreated && (
@@ -529,7 +534,9 @@ export function StrataPanel() {
         )}
 
         {!notCreated && <StrataResidency st={st} onStatus={setSt} />}
-        {!notCreated && <StrataMemory st={st} onStatus={setSt} />}
+        {!notCreated && st.ram_plan && (
+          <StrataMemory st={st} onStatus={setSt} />
+        )}
         {!notCreated && <StrataAccessBlock externalUrl={st.external_url} />}
       </div>
     </div>
@@ -895,10 +902,29 @@ function StrataModels({
 }) {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
+  const [filter, setFilter] = useState<"all" | "installed" | "available">(
+    "all",
+  );
   const [loadPlan, setLoadPlan] = useState<StrataLoadPlan | null>(null);
   const installer = st.installer;
   const downloading =
     installer?.stage === "downloading" ? installer.variant : null;
+
+  const refreshCatalog = async () => {
+    setBusy(true);
+    try {
+      const result = await strataRefreshCatalog();
+      onStatus(await strataStatus());
+      toast.ok(
+        "Каталог Strata перечитан",
+        `Новых: ${result.added}; обновлено: ${result.updated}; снято с публикации: ${result.retired}`,
+      );
+    } catch (e) {
+      toast.error("Каталог не обновлён; прежний список сохранён", errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const openLoad = async (q: StrataQuant) => {
     try {
@@ -965,6 +991,7 @@ function StrataModels({
   };
 
   const running = st.container === "running";
+  const notCreated = st.phase === "not_created";
 
   const renderRow = (q: StrataQuant) => {
     const selected = q.id === st.desired.id;
@@ -982,39 +1009,57 @@ function StrataModels({
             {q.label}
             {selected && (
               <span className="ml-2 text-blue-300 font-normal">
-                {running ? "загружена" : "выбрана"}
+                {st.active_variant_id === q.id
+                  ? "загружена"
+                  : running
+                    ? "выбрана"
+                    : "выбрана, сервер выключен"}
               </span>
             )}
             {q.installed && !selected && (
               <span className="ml-2 text-emerald-300 font-normal">скачана</span>
             )}
+            {q.origin === "retired" && (
+              <span className="ml-2 text-amber-300 font-normal">
+                более не публикуется
+              </span>
+            )}
+            {q.origin === "orphan" && (
+              <span className="ml-2 text-amber-300 font-normal">
+                неизвестная установка
+              </span>
+            )}
           </span>
           <span className="block text-slate-400">
             {isDownloading
-              ? `скачивается: ${installer?.size_on_disk_gb ?? 0} из ~${Math.round(q.disk_need_gb)} ГБ`
+              ? `скачивается: ${installer?.size_on_disk_gb ?? 0} из ~${Math.round(q.disk_need_gb ?? 0)} ГБ`
               : q.installed
                 ? `на диске ${q.size_on_disk_gb ?? "?"} ГБ`
-                : `скачать ~${q.download_gb} ГБ, займёт ~${Math.round(q.disk_need_gb)} ГБ`}
+                : `скачать ~${q.download_gb} ГБ, займёт ~${Math.round(q.disk_need_gb ?? 0)} ГБ`}
             {" · "}ОЗУ ~{q.ram_gb} ГБ
-            {RAM_MODE[q.ram_mode] && ` · ${RAM_MODE[q.ram_mode]}`}
+            {q.ram_mode && RAM_MODE[q.ram_mode] && ` · ${RAM_MODE[q.ram_mode]}`}
           </span>
           {tooOld && (
             <span className="block text-amber-300">
               нужна Strata {q.min_version} или новее — сначала обновите Strata
             </span>
           )}
-          {!q.fits_ram && (
+          {q.fits_ram === false && (
             <span className="block text-amber-300">
               не помещается в память, оставленную Strata
             </span>
           )}
+          {q.unsupported_reason && (
+            <span className="block text-amber-300">{q.unsupported_reason}</span>
+          )}
         </span>
         <span className="flex flex-wrap items-center gap-2">
-          {q.installed && !selected && (
+          {q.installed && !selected && q.loadable && (
             <button
               type="button"
               className={btnSecondary}
               disabled={busy || !!loadPlan || tooOld}
+              title={q.load_blocker ?? undefined}
               aria-label={`Загрузить ${q.id}`}
               onClick={() => void openLoad(q)}
             >
@@ -1025,11 +1070,16 @@ function StrataModels({
             <button
               type="button"
               className={btnSecondary}
-              disabled={busy || !!downloading || tooOld}
+              disabled={
+                busy || !!downloading || tooOld || notCreated || !q.downloadable
+              }
               title={
-                downloading
-                  ? `Сейчас скачивается ${downloading}`
-                  : "Скачать рядом с работающей Strata, без простоя"
+                notCreated
+                  ? "Сначала установите Strata"
+                  : (q.download_blocker ??
+                    (downloading
+                      ? `Сейчас скачивается ${downloading}`
+                      : "Скачать рядом с работающей Strata, без простоя"))
               }
               aria-label={`Скачать ${q.id}`}
               onClick={() => void download(q)}
@@ -1047,7 +1097,7 @@ function StrataModels({
               Остановить
             </button>
           )}
-          {q.installed && !selected && (
+          {q.installed && !selected && q.deletable && (
             <QuantDelete
               model={q.id}
               sizeGb={q.size_on_disk_gb}
@@ -1059,9 +1109,68 @@ function StrataModels({
     );
   };
 
+  const visibleQuants = st.quants.filter((q) =>
+    filter === "installed"
+      ? q.installed
+      : filter === "available"
+        ? q.downloadable
+        : true,
+  );
+  const familyGroups = st.quants.some((q) => q.origin === "orphan")
+    ? [
+        ...st.families,
+        {
+          family: "legacy",
+          title: "Локальные конфигурации",
+          about: "вне официального каталога",
+          catalog_key: "",
+        },
+      ]
+    : st.families;
+
   return (
     <div className="space-y-3">
-      <div className="text-xs font-medium text-slate-300">Модели</div>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs font-medium text-slate-300">
+          Каталог Strata {st.server.current?.version ?? "(офлайн-снимок)"}
+        </span>
+        {st.catalog.stale && (
+          <span className="text-xs text-amber-300">требует перечитывания</span>
+        )}
+        <button
+          type="button"
+          className={btnSecondary}
+          disabled={busy || notCreated}
+          title={
+            notCreated
+              ? "Сначала установите Strata"
+              : "Перечитать установленную версию"
+          }
+          onClick={() => void refreshCatalog()}
+        >
+          Перечитать каталог
+        </button>
+        <select
+          aria-label="Фильтр моделей Strata"
+          className={`${select} !w-auto`}
+          value={filter}
+          onChange={(e) => setFilter(e.target.value as typeof filter)}
+        >
+          <option value="all">Все</option>
+          <option value="installed">Скачанные</option>
+          <option value="available">Доступные</option>
+        </select>
+      </div>
+      {st.catalog.last_error && (
+        <div className="text-xs text-amber-300">
+          Последняя ошибка каталога: {st.catalog.last_error}
+        </div>
+      )}
+      {st.catalog.warnings.map((warning) => (
+        <div key={warning} className="text-xs text-slate-400">
+          {warning}
+        </div>
+      ))}
 
       {installer?.stage === "failed" && (
         <div className="space-y-2 rounded border border-red-900 bg-red-950/30 p-3 text-xs text-red-100">
@@ -1111,6 +1220,11 @@ function StrataModels({
                 {loadPlan.follow.map((f) => f.label).join(", ")}
               </li>
             )}
+            {loadPlan.blockers.map((blocker) => (
+              <li key={blocker} className="text-red-300">
+                {blocker}
+              </li>
+            ))}
             {loadPlan.warnings.map((w) => (
               <li key={w} className="text-amber-300">
                 {w}
@@ -1120,7 +1234,7 @@ function StrataModels({
           <div className="flex flex-wrap gap-2">
             <button
               className={btnPrimary}
-              disabled={busy}
+              disabled={busy || loadPlan.blockers.length > 0}
               onClick={() => void load()}
             >
               {busy ? "Загружаю…" : "Да, загрузить"}
@@ -1136,8 +1250,8 @@ function StrataModels({
         </div>
       )}
 
-      {st.families.map((fam) => {
-        const items = st.quants.filter((q) => q.family === fam.family);
+      {familyGroups.map((fam) => {
+        const items = visibleQuants.filter((q) => q.family === fam.family);
         if (!items.length) return null;
         return (
           <div key={fam.family} className="space-y-1">
@@ -1173,6 +1287,7 @@ function StrataMemory({
   const [busy, setBusy] = useState(false);
   const total = st.ram_total_gb ?? 0;
   const plan = st.ram_plan;
+  if (!plan) return null;
 
   const apply = async () => {
     setBusy(true);

@@ -4604,6 +4604,24 @@ class ModelCatalogRuntimeEntry(UUIDPrimaryKey, TimestampMixin, Base):
     )
 
 
+class StrataCatalogSnapshot(UUIDPrimaryKey, TimestampMixin, Base):
+    """Validated official Strata model catalog tied to an installed image."""
+
+    __tablename__ = "strata_catalog_snapshots"
+    __table_args__ = (
+        Index("ix_strata_catalog_snapshots_source_revision", "source_revision"),
+        Index("ix_strata_catalog_snapshots_fetched_at", "fetched_at"),
+    )
+
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    source: Mapped[str] = mapped_column(String(50), nullable=False)
+    source_revision: Mapped[str] = mapped_column(String(500), nullable=False)
+    feed_revision: Mapped[str | None] = mapped_column(String(120))
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ModelRuntimeOverride(UUIDPrimaryKey, TimestampMixin, Base):
     """Per-model runtime overrides that used to live only in Redis."""
 
