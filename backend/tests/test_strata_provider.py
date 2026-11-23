@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.ai import gpu_runtime
-from app.ai.providers import strata_manager
+from app.ai.providers import strata_lifecycle, strata_manager
 from app.ai.schemas import ProviderKind
 from app.ai.thinking_params import thinking_request_params
 
@@ -56,7 +56,17 @@ def test_guard_error_is_a_runtime_error_the_router_skips():
 
 def test_desired_settings_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setenv("STRATA_DATA_DIR", str(tmp_path))
-    base = {"id": "IQ2_XS", "family": "qwen", "model": "IQ2_XS", "low_ram": "auto"}
+    base = {
+        "id": "IQ2_XS",
+        "family": "qwen",
+        "model": "IQ2_XS",
+        "low_ram": "auto",
+        "known": True,
+        "valid": True,
+        "origin": "bundled",
+        "setup_id": "IQ2_XS",
+        "catalog_key": "strata_qwen3_8_flash_next",
+    }
     assert strata_manager.read_desired() == {
         **base,
         "context": 65536,
@@ -115,6 +125,69 @@ def test_desired_rejects_unknown_quant_and_context(tmp_path, monkeypatch):
         strata_manager.write_desired(model="IQ3_S", context=1000, vision=True, reinstall=False)
 
 
+def test_unknown_desired_is_not_replaced_with_default(tmp_path, monkeypatch):
+    monkeypatch.setenv("STRATA_DATA_DIR", str(tmp_path))
+    (tmp_path / "aiw.env").write_text("FAMILY=qwen\nMODEL=RETIRED_VARIANT\n")
+    desired = strata_manager.read_desired()
+    assert desired["id"] == "RETIRED_VARIANT"
+    assert desired["known"] is False
+    assert desired["catalog_key"] is None
+
+
+def test_unknown_run_config_is_visible_as_orphan(tmp_path, monkeypatch):
+    monkeypatch.setenv("STRATA_DATA_DIR", str(tmp_path))
+    (tmp_path / "install").mkdir()
+    (tmp_path / "install" / "strata-retired-variant.json").write_text(json.dumps({"args": []}))
+    assert strata_manager.installed_quants() == ["legacy__retired-variant"]
+    assert strata_manager._orphan_installs([])[0]["origin"] == "orphan"
+
+
+@pytest.mark.asyncio
+async def test_active_variant_requires_loaded_health_and_served_match(tmp_path, monkeypatch):
+    monkeypatch.setenv("STRATA_DATA_DIR", str(tmp_path))
+    strata_manager.write_desired(model="IQ2_XS", context=65536, vision=True, reinstall=False)
+
+    async def container():
+        return {"Id": "c", "State": "running"}
+
+    async def healthy():
+        return {"loaded": True, "model": "qwen3.8-flash-next-iq2_xs"}
+
+    async def no_server():
+        return {"current": None, "latest": {}, "update_available": False, "job": None}
+
+    monkeypatch.setattr(strata_manager, "_find_container", container)
+    monkeypatch.setattr(strata_manager, "health", healthy)
+    monkeypatch.setattr(strata_lifecycle, "update_info", no_server)
+    monkeypatch.setattr(strata_lifecycle, "installer_status", no_server)
+    result = await strata_manager.status()
+    assert result["active_variant_id"] == "IQ2_XS"
+
+
+@pytest.mark.asyncio
+async def test_status_accepts_unknown_desired_and_exposes_orphan(tmp_path, monkeypatch):
+    monkeypatch.setenv("STRATA_DATA_DIR", str(tmp_path))
+    (tmp_path / "aiw.env").write_text("FAMILY=qwen\nMODEL=RETIRED_VARIANT\n")
+    (tmp_path / "install").mkdir()
+    (tmp_path / "install" / "strata-other-local.json").write_text("{}")
+
+    async def no_container():
+        return None
+
+    async def no_server():
+        return {"current": None, "latest": {}, "update_available": False, "job": None}
+
+    monkeypatch.setattr(strata_manager, "_find_container", no_container)
+    monkeypatch.setattr(strata_lifecycle, "update_info", no_server)
+    monkeypatch.setattr(strata_lifecycle, "installer_status", no_container)
+    result = await strata_manager.status()
+    assert result["desired"]["known"] is False
+    assert result["served_catalog_key"] is None
+    assert result["ram_plan"] is None
+    orphan = next(q for q in result["quants"] if q["id"] == "legacy__other-local")
+    assert orphan["loadable"] is False and orphan["deletable"] is False
+
+
 def test_installed_quants_are_the_finished_setups(tmp_path, monkeypatch):
     monkeypatch.setenv("STRATA_DATA_DIR", str(tmp_path))
     (tmp_path / "config").mkdir()
@@ -170,12 +243,32 @@ def test_strata_is_a_local_reasoning_effort_provider():
 
 def test_catalog_has_the_strata_model():
     from app.ai.model_registry import ModelRegistry
+    from app.ai.providers.strata_catalog import catalog_capability, load_bundled_catalog
 
-    reg = ModelRegistry.from_yaml("app/ai/config/model_registry.yaml")
-    cap = reg.models["strata_qwen3_8_flash_next"]
+    catalog = load_bundled_catalog()
+    family = next(f for f in catalog.families if f.catalog_key == "strata_qwen3_8_flash_next")
+    cap = catalog_capability(family)
     assert cap.provider == ProviderKind.STRATA
     assert "vision" in cap.modalities and cap.local_only
-    assert ProviderKind.STRATA in reg.providers
+    assert (
+        ProviderKind.STRATA
+        in ModelRegistry.from_yaml("app/ai/config/model_registry.yaml").providers
+    )
+
+
+def test_unknown_family_capabilities_block_slot_transfer(monkeypatch):
+    from app.api import providers_api as pa
+    from app.api import strata_api
+
+    cap = SimpleNamespace(
+        capabilities_unknown=True, modalities={"text"}, supports_tool_calling=None
+    )
+    monkeypatch.setattr(pa, "_registry", lambda: SimpleNamespace(models={"new": cap}))
+    assert "не подтверждены" in strata_api._capability_blocker("new", "text", vision=True)
+    cap.capabilities_unknown = False
+    assert strata_api._capability_blocker("new", "text", vision=True) is None
+    assert "картинками" in strata_api._capability_blocker("new", "vision", vision=True)
+    assert "инструментов" in strata_api._capability_blocker("new", "tool_calling", vision=True)
 
 
 def test_restore_reaches_slots_that_share_a_chain(monkeypatch):
@@ -369,6 +462,7 @@ def test_slotless_tasks_move_to_strata_and_come_back(monkeypatch):
         )(),
     )
     monkeypatch.setattr(strata_api, "_on_gpu_ollama", lambda cap: True)
+    monkeypatch.setattr(strata_api, "_capability_blocker", lambda *_a, **_k: None)
     monkeypatch.setattr(model_runtime_store, "persist_task_routing", noop)
     monkeypatch.setattr(model_runtime_store, "hydrate_runtime_cache", noop)
     monkeypatch.setattr(strata_manager, "get_switch_tasks", lambda: saved_tasks)
@@ -442,6 +536,11 @@ def test_delete_quant_removes_only_its_own_files(tmp_path, monkeypatch):
     (tmp_path / "models/mmproj-Qwen3.8-Flash-Next-BF16.gguf").write_bytes(b"shared")
     for tag in ("iq2_xs", "iq3_s"):
         (tmp_path / f"config/strata-{tag}.json").write_text("{}")
+
+    async def legacy_version():
+        return {"version": "0.1.45"}
+
+    monkeypatch.setattr(strata_lifecycle, "server_version", legacy_version)
     strata_manager.write_desired(model="IQ2_XS", context=65536, vision=True, reinstall=False)
 
     # The selected quant would just be downloaded again on the next start.
@@ -543,6 +642,77 @@ def test_parallel_and_conversation_cache_become_config_keys_and_flags(tmp_path, 
         strata_manager.write_runtime(parallel=3)
     with pytest.raises(strata_manager.StrataError):
         strata_manager.write_runtime(conversation_cache_mib=1000)
+
+
+def test_inkling_parallel_and_shape_engine_cache_policy(tmp_path, monkeypatch):
+    monkeypatch.setenv("STRATA_DATA_DIR", str(tmp_path))
+    strata_manager.write_desired(
+        model="inkling-2-mini-SQ-20", context=32768, vision=True, reinstall=False
+    )
+    # The global Qwen default 2 is not valid for Inkling: its official default is 1.
+    assert "PARALLEL=1" in (tmp_path / "aiw.env").read_text()
+
+    strata_manager.write_runtime(parallel=4)
+    body = json.loads((tmp_path / "aiw-runtime.json").read_text())
+    assert body["config_keys"]["parallel"] == 4
+    assert body["config_args"] == {
+        "--conversation-cache-mib": None,
+        "--conversation-cache-slots": None,
+    }
+    with pytest.raises(strata_manager.StrataError):
+        strata_manager.write_runtime(parallel=2)
+    with pytest.raises(strata_manager.StrataError, match="не поддерживает"):
+        strata_manager.write_runtime(conversation_cache_mib=2048)
+
+    (tmp_path / "install").mkdir()
+    cfg_path = tmp_path / "install" / "strata-inkling-2-mini-sq-20.json"
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "args": [
+                    "--conversation-cache-mib",
+                    "2048",
+                    "--conversation-cache-slots",
+                    "4",
+                ]
+            }
+        )
+    )
+    assert strata_manager.apply_runtime_keys() == ["inkling-2-mini-SQ-20"]
+    cfg = json.loads(cfg_path.read_text())
+    assert cfg["parallel"] == 4 and cfg["args"] == []
+
+
+@pytest.mark.asyncio
+async def test_even_bundled_variant_gets_official_install_preflight(tmp_path, monkeypatch):
+    monkeypatch.setenv("STRATA_DATA_DIR", str(tmp_path))
+    calls = []
+
+    async def no_installer():
+        return None
+
+    async def container():
+        return {"Id": "c", "State": "stopped"}
+
+    async def version(_container=None):
+        return {"version": "0.2.20"}
+
+    async def preflight(variant):
+        calls.append(variant["id"])
+        return {"ok": True}
+
+    async def run_installer(vid, _env):
+        calls.append(f"run:{vid}")
+
+    monkeypatch.setattr(strata_lifecycle, "installer_variant", no_installer)
+    monkeypatch.setattr(strata_manager, "_find_container", container)
+    monkeypatch.setattr(strata_lifecycle, "server_version", version)
+    monkeypatch.setattr(strata_manager, "check_quant_fits_disk", lambda _vid: None)
+    monkeypatch.setattr("app.ai.providers.strata_catalog_source.validate_install_plan", preflight)
+    monkeypatch.setattr(strata_lifecycle, "run_installer", run_installer)
+
+    assert await strata_manager.install_strata("IQ2_XS") == "IQ2_XS"
+    assert calls == ["IQ2_XS", "run:IQ2_XS"]
 
 
 def test_merge_run_config_sets_replaces_and_removes_flags():

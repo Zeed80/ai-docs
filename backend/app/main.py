@@ -250,16 +250,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         from app.ai.model_runtime_store import hydrate_runtime_cache
         from app.ai.provider_bootstrap import seed_and_refresh_providers
+        from app.ai.providers.strata_catalog_store import ensure_strata_catalog
         from app.db.session import _get_session_factory
 
         async with _get_session_factory()() as db:
             await seed_and_refresh_providers(db)
+            await ensure_strata_catalog(db)
             await hydrate_runtime_cache(db)
             # Per-slot cloud choice moved from a Redis-only set into the
             # durable agent config; carry an existing one over, once.
             from app.api.providers_api import migrate_slot_cloud_choice
 
             await migrate_slot_cloud_choice(db)
+
+        from app.ai.providers import strata_lifecycle
+
+        asyncio.create_task(strata_lifecycle.refresh_catalog(only_if_image_changed=True))
     except Exception as exc:
         logger.warning("provider_instances_bootstrap_failed", error=str(exc))
 

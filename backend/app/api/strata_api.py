@@ -31,7 +31,12 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai import gpu_runtime, model_runtime_store
-from app.ai.providers import strata_lifecycle, strata_manager
+from app.ai.providers import (
+    strata_catalog_source,
+    strata_catalog_store,
+    strata_lifecycle,
+    strata_manager,
+)
 from app.ai.schemas import ProviderKind
 from app.auth.jwt import get_current_user, require_role
 from app.auth.models import UserInfo, UserRole
@@ -105,6 +110,22 @@ def _on_gpu_ollama(cap) -> bool:
     return gpu_runtime.is_gpu_ollama(node.base_url)
 
 
+def _capability_blocker(key: str, modality: str | None, *, vision: bool) -> str | None:
+    """Never transfer a slot onto an unverified family capability."""
+    from app.api import providers_api as pa
+
+    cap = pa._registry().models.get(key)
+    if cap is None or cap.capabilities_unknown:
+        return f"возможности {key} ещё не подтверждены — автоматический перенос запрещён"
+    if modality == "vision" and (not vision or "vision" not in cap.modalities):
+        return "загружаемая семья не подтвердила работу с картинками"
+    if modality == "tool_calling" and cap.supports_tool_calling is not True:
+        return "загружаемая семья не подтвердила вызов инструментов"
+    if modality == "text" and "text" not in cap.modalities:
+        return "загружаемая семья не подтвердила текстовую работу"
+    return None
+
+
 def _slot_plan(vision: bool) -> list[SlotPlanItem]:
     from app.api import providers_api as pa
 
@@ -159,6 +180,12 @@ def _slot_plan(vision: bool) -> list[SlotPlanItem]:
                     move=False,
                     reason="нужны картинки, а Strata установлена без них — слот перестанет работать",
                 )
+            )
+            continue
+        blocker = _capability_blocker(_served_key(), modality, vision=vision)
+        if blocker:
+            plan.append(
+                SlotPlanItem(slot=slot, label=label, current_model=key, move=False, reason=blocker)
             )
             continue
         plan.append(
@@ -222,6 +249,20 @@ def _task_plan(vision: bool) -> list[SlotPlanItem]:
                     current_model=key,
                     move=False,
                     reason="нужны картинки, а Strata установлена без них — задача перестанет работать",
+                )
+            )
+            continue
+        blocker = _capability_blocker(
+            _served_key(), "vision" if name in _VISION_TASKS else "text", vision=vision
+        )
+        if blocker:
+            plan.append(
+                SlotPlanItem(
+                    slot=TASK_PREFIX + name,
+                    label=label,
+                    current_model=key,
+                    move=False,
+                    reason=blocker,
                 )
             )
             continue
@@ -321,6 +362,22 @@ async def _apply_slots(
 @router.get("/status", dependencies=_admin)
 async def strata_status() -> dict:
     return await strata_manager.status()
+
+
+@router.post("/catalog/refresh", dependencies=_admin)
+async def strata_refresh_catalog(db: AsyncSession = Depends(get_db)) -> dict:
+    """Re-read the installed image; this never checks for or installs a release."""
+    try:
+        _catalog, counts = await strata_catalog_store.refresh_strata_catalog(
+            db, strata_catalog_source.load_official_catalog
+        )
+    except strata_catalog_store.StrataCatalogRefreshInProgress as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except strata_catalog_source.StrataCatalogSourceError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {**counts, "status": strata_catalog_store.catalog_status()}
 
 
 @router.get("/slot-plan", response_model=list[SlotPlanItem], dependencies=_admin)
@@ -495,13 +552,37 @@ async def _follow(db: AsyncSession, user: UserInfo, new_key: str) -> list[str]:
     return moved
 
 
+def _follow_blockers(new_key: str, vision: bool) -> list[str]:
+    from app.ai.task_routing import get_task_routing
+    from app.api import providers_api as pa
+
+    registry = pa._registry()
+    blockers = []
+    for slot, _group, label, _hint, _local in pa._SLOTS:
+        key = pa._slot_current_model(slot, registry)
+        if _is_strata_key(key) and key != new_key:
+            reason = _capability_blocker(new_key, pa._SLOT_MODALITY.get(slot), vision=vision)
+            if reason:
+                blockers.append(f"«{label}»: {reason}")
+    covered = _slot_covered_tasks()
+    for task, routing in get_task_routing().items():
+        name = task.value
+        if name in covered or not _is_strata_key(routing.primary) or routing.primary == new_key:
+            continue
+        modality = "vision" if name in _VISION_TASKS else "text"
+        reason = _capability_blocker(new_key, modality, vision=vision)
+        if reason:
+            blockers.append(f"«Служебная задача {name}»: {reason}")
+    return blockers
+
+
 def _load_settings(vid: str) -> tuple[int, bool]:
     """Context and images for loading an installed variant: the ones it was set up with."""
     desired = strata_manager.read_desired()
     installed = strata_manager.installed_settings(vid)
     context = (
         installed["context"]
-        if installed["context"] in strata_manager.CONTEXTS
+        if installed["context"] in strata_manager.context_choices(vid)
         else desired["context"]
     )
     vision = desired["vision"] if installed["vision"] is None else installed["vision"]
@@ -518,7 +599,8 @@ async def strata_load_plan(id: str) -> dict:
     plan = strata_manager.ram_plan(id, context)
     _slots, _tasks, items = _follow_plan(new_key)
     warnings = []
-    if not vision:
+    blockers = _follow_blockers(new_key, vision)
+    if not vision and strata_manager.read_desired()["known"]:
         warnings += [
             f"«{label}» читает картинки, а {id} установлена без них — слот перестанет работать"
             for label in _vision_slots_on(_served_key())
@@ -533,6 +615,7 @@ async def strata_load_plan(id: str) -> dict:
         "setup_pass": strata_manager.ram_setup_needed(id, plan),
         "ram_plan": plan,
         "follow": [i.model_dump() for i in items],
+        "blockers": blockers,
         "warnings": warnings,
     }
 
@@ -551,6 +634,8 @@ async def strata_load(
     """
     vid = body.id
     try:
+        if vid not in strata_manager.QUANTS:
+            raise strata_manager.StrataError(f"Неизвестная локальная конфигурация: {vid}")
         if vid not in strata_manager.installed_quants():
             raise strata_manager.StrataError(f"{vid} не скачана — сначала скачайте её")
         desired = strata_manager.read_desired()
@@ -559,6 +644,11 @@ async def strata_load(
         current = await strata_lifecycle.server_version()
         strata_manager.check_version(vid, (current or {}).get("version"))
         context, vision = _load_settings(vid)
+        blockers = _follow_blockers(strata_manager.catalog_key(vid), vision)
+        if blockers:
+            raise strata_manager.StrataError(
+                "Перенос назначений заблокирован: " + "; ".join(blockers)
+            )
         plan = strata_manager.ram_plan(vid, context)
         setup_pass = strata_manager.ram_setup_needed(vid, plan)
         strata_manager.write_desired(
@@ -618,6 +708,12 @@ async def strata_config(
             desired["vision"] if recorded.get("vision") is None else recorded["vision"],
         )
         plan = strata_manager.ram_plan(vid, body.context)
+        new_key = strata_manager.catalog_key(vid)
+        blockers = _follow_blockers(new_key, body.vision)
+        if blockers:
+            raise strata_manager.StrataError(
+                "Перенос назначений заблокирован: " + "; ".join(blockers)
+            )
         strata_manager.write_desired(
             model=vid,
             context=body.context,
@@ -627,8 +723,9 @@ async def strata_config(
             or (desired["reinstall_pending"] and vid == desired["id"]),
             ram=plan,
         )
-        if strata_manager.catalog_key(vid) != strata_manager.catalog_key(desired["id"]):
-            moved = await _follow(db, user, strata_manager.catalog_key(vid))
+        old_key = strata_manager.catalog_key(desired["id"]) if desired["known"] else None
+        if new_key != old_key:
+            moved = await _follow(db, user, new_key)
         restarted = await strata_manager.restart_if_running()
     except strata_manager.StrataError as exc:
         raise HTTPException(409, str(exc)) from exc

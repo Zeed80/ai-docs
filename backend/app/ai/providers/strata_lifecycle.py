@@ -725,6 +725,27 @@ async def dismiss_job() -> None:
     _clear_job_error()
 
 
+async def refresh_catalog(*, only_if_image_changed: bool = False) -> None:
+    """Refresh after an image change without turning a working server into a failed update."""
+    from app.ai.providers import strata_catalog_source, strata_catalog_store
+    from app.db.session import _get_session_factory
+
+    try:
+        server = await server_version()
+        if not server:
+            return
+        current = strata_catalog_store.catalog_status()
+        revision = strata_catalog_source.source_revision(server)
+        if only_if_image_changed and current["source_revision"] == revision:
+            return
+        async with _get_session_factory()() as db:
+            await strata_catalog_store.refresh_strata_catalog(
+                db, strata_catalog_source.load_official_catalog
+            )
+    except Exception as exc:  # noqa: BLE001 — last-known-good remains active
+        logger.warning("strata_catalog_automatic_refresh_failed", error=str(exc)[:500])
+
+
 async def _finish(image: str, then: str) -> None:
     """Point :current at ``image`` and put the server on it (create it for an install)."""
     built = await _image(image)
@@ -748,6 +769,7 @@ async def _finish(image: str, then: str) -> None:
         await _remove(builder["Id"])
     _clear_job_error()
     logger.info("strata_image_applied", image=image, then=then)
+    await refresh_catalog()
 
 
 _watcher: asyncio.Task | None = None
@@ -820,6 +842,7 @@ async def install_server() -> dict:
     existing = await _image(f"{IMAGE_REPO}:{CURRENT_TAG}")
     if existing:
         await create_server(f"{IMAGE_REPO}:{CURRENT_TAG}")
+        await refresh_catalog()
         return {"built": True}
     latest = await latest_release(force=True)
     if latest.get("error"):

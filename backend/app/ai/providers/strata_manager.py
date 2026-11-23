@@ -1,7 +1,9 @@
 """Strata server manager — container state, quantization, GPU switch.
 
-Strata (https://github.com/Niko1221/Strata) serves ONE model,
-Qwen3.8-Flash-Next (125B MoE), in several quantizations. It runs as the
+Strata (https://github.com/Niko1221/Strata) serves one selected official model
+at a time. Its dynamic catalog supplies the supported families and variants;
+runtime-specific resource and setup policies remain curated by this backend.
+Strata runs as the
 optional compose service ``strata`` (profile ``strata``) whose entrypoint reads
 its setup choices (MODEL, CONTEXT, VISION, ...) from the environment. The
 backend never recreates that container: it writes the choices into
@@ -23,6 +25,7 @@ import os
 import re
 import shutil
 import struct
+from collections.abc import Mapping
 from pathlib import Path
 
 import httpx
@@ -37,84 +40,42 @@ _DOCKER_SOCK = "/var/run/docker.sock"
 ENV_FILE_NAME = "aiw.env"
 INSTALL_ENV_FILE_NAME = "aiw-install.env"
 
-# Model families Strata's setup offers (setup.py FAMILIES + OWN_PATH_FAMILIES,
-# 0.1.45). "kind" is how setup lays a family out: "pack" — GSQ-RCO files with
-# an expert pack and the low-RAM mode; "budget" — Unsloth's GGUF read in
-# place, a RAM budget of experts and the rest from the SSD
-# (--resident-budget-gib); "own" — a model with its own engine path
-# (Qwen3.6-35B-A3B): no pack, no MTP download, every expert it can in VRAM and
-# a RAM copy of the rest. "tag" is setup's prefix of the pack, config and
-# model-folder names; the entrypoint derives it as "<family>-" too.
-# catalog_key is the model_registry.yaml entry slots point at while that
-# family is loaded: Unsloth's files are the same model as the original, so
-# they share its catalog entry.
-FAMILIES: dict[str, dict] = {
-    "qwen": {
-        "title": "Qwen3.8-Flash-Next",
-        "about": "исходная модель, 125B MoE",
-        "tag": "",
-        "kind": "pack",
-        "catalog_key": "strata_qwen3_8_flash_next",
-        "served_name": "qwen3.8-flash-next",
-    },
-    "swift": {
-        "title": "Swift 1.5",
-        "about": "дообучение Flash-Next: рассуждает на ~63% короче, отвечает в ~1,8 раза раньше",
-        "tag": "swift-",
-        "kind": "pack",
-        "catalog_key": "strata_swift_1_5",
-        "served_name": "swift-1.5",
-    },
-    "coder": {
-        "title": "Qwen3.8-Flash-Next Coder",
-        "about": "половина экспертов (код, инструменты, картинки): ~32 ГБ ОЗУ, быстрее, слабее вне кода",
-        "tag": "coder-",
-        "kind": "pack",
-        "catalog_key": "strata_qwen3_8_flash_next_coder",
-        "served_name": "qwen3.8-flash-next-coder",
-    },
-    "unsloth": {
-        "title": "Qwen3.8-Flash-Next (Unsloth)",
-        "about": "4-битные файлы Unsloth: точнее, но при ОЗУ меньше ~80 ГБ часть экспертов читается с SSD",
-        "tag": "unsloth-",
-        "kind": "budget",
-        "catalog_key": "strata_qwen3_8_flash_next",
-        "served_name": "qwen3.8-flash-next",
-    },
-    "qwen36": {
-        "title": "Qwen3.6-35B-A3B",
-        "about": "35B MoE, 3B активных: почти целиком на видеокарте, быстрая; читает картинки",
-        "tag": "qwen36-",
-        "kind": "own",
-        "catalog_key": "strata_qwen3_6_35b",
-        "served_name": "qwen3.6-35b-a3b",
-        # Setup knows the family from 0.1.44; pictures for it came in 0.1.45.
-        "min_version": "0.1.45",
-    },
-}
-DEFAULT_FAMILY = "qwen"
 
-# The sizes (setup.py MODELS / OWN_PATH_FAMILIES[*]["models"]). experts_gb is
-# what must sit in RAM+GPU expert cache (setup's arena_gb; for Qwen3.6 the
-# file itself); ram_gb is setup's own "comfortable" RAM figure. On a PC below
-# it a "pack" family switches to the low-RAM mode by itself (the GPU holds the
-# most-used experts, the rest is copied into RAM), which is how IQ3_S runs
-# with a 24 GB card and ~60 GB RAM.
-_SIZES: list[tuple[str, str, dict]] = [
-    ("qwen", "Q2_0", {"label": "Q2_0 — самая быстрая", "download_gb": 66.4, "experts_gb": 34.0, "ram_gb": 48}),
-    ("qwen", "IQ2_XS", {"label": "IQ2_XS — рекомендуемая", "download_gb": 68.0, "experts_gb": 35.5, "ram_gb": 48}),
-    ("qwen", "IQ3_XXS", {"label": "IQ3_XXS — точнее, медленнее", "download_gb": 75.8, "experts_gb": 42.9, "ram_gb": 60}),
-    ("qwen", "IQ3_S", {"label": "IQ3_S — лучшее качество", "download_gb": 83.6, "experts_gb": 50.3, "ram_gb": 62}),
-    ("swift", "IQ2_XS", {"label": "IQ2_XS — быстрая", "download_gb": 68.0, "experts_gb": 35.5, "ram_gb": 48}),
-    ("swift", "IQ3_XXS", {"label": "IQ3_XXS — точнее", "download_gb": 75.8, "experts_gb": 42.9, "ram_gb": 60}),
-    ("swift", "IQ3_S", {"label": "IQ3_S — лучшее качество", "download_gb": 83.6, "experts_gb": 50.3, "ram_gb": 62}),
-    ("coder", "IQ1_M", {"label": "IQ1_M — единственный размер", "download_gb": 58.4, "experts_gb": 23.4, "ram_gb": 32}),
-    ("unsloth", "UD-IQ4_XS", {"label": "UD-IQ4_XS — ~4 бита", "download_gb": 93.7, "experts_gb": 59.5, "ram_gb": 48}),
-    ("unsloth", "UD-Q4_K_XL", {"label": "UD-Q4_K_XL — 4 бита, K-кванты", "download_gb": 111.3, "experts_gb": 77.0, "ram_gb": 48}),
-    ("qwen36", "UD-Q4_K_XL", {"label": "UD-Q4_K_XL — 4 бита, самая лёгкая", "download_gb": 22.9, "experts_gb": 21.0, "ram_gb": 32}),
-    ("qwen36", "UD-Q6_K_XL", {"label": "UD-Q6_K_XL — 6 бит, ближе к полной", "download_gb": 32.6, "experts_gb": 30.0, "ram_gb": 44}),
-    ("qwen36", "Q8_0", {"label": "Q8_0 — 8 бит, ближе всего к полной", "download_gb": 37.8, "experts_gb": 35.0, "ram_gb": 52}),
-]  # fmt: skip
+class _FamiliesMapping(Mapping[str, dict]):
+    def __getitem__(self, key: str) -> dict:
+        return _catalog_maps()[0][key]
+
+    def __iter__(self):
+        return iter(_catalog_maps()[0])
+
+    def __len__(self) -> int:
+        return len(_catalog_maps()[0])
+
+
+class _VariantsMapping(Mapping[str, dict]):
+    def __getitem__(self, key: str) -> dict:
+        return _catalog_maps()[1][key]
+
+    def __iter__(self):
+        return iter(_catalog_maps()[1])
+
+    def __len__(self) -> int:
+        return len(_catalog_maps()[1])
+
+
+def _catalog_maps() -> tuple[dict[str, dict], dict[str, dict]]:
+    from app.ai.providers.strata_catalog import family_map, variant_map
+    from app.ai.providers.strata_catalog_store import current_catalog
+
+    catalog = current_catalog()
+    return family_map(catalog), variant_map(catalog)
+
+
+# Live read-only views over the active durable catalog, including retained keys.
+FAMILIES: Mapping[str, dict] = _FamiliesMapping()
+QUANTS: Mapping[str, dict] = _VariantsMapping()
+
+DEFAULT_FAMILY = "qwen"
 
 
 def variant_id(family: str, model: str) -> str:
@@ -122,11 +83,6 @@ def variant_id(family: str, model: str) -> str:
     return FAMILIES[family]["tag"] + model
 
 
-# Keyed by variant id. The original family's ids are the bare size names, so
-# everything written before families existed ("IQ2_XS") keeps its meaning.
-QUANTS: dict[str, dict] = {
-    variant_id(fam, model): {**meta, "family": fam, "model": model} for fam, model, meta in _SIZES
-}
 # IQ2_XS: measured 2026-10-06 on the RTX 3090 + 59 GB, ~1.5x IQ3_S's decode
 # speed with the same results on known-answer tasks, half the disk (66 GB).
 DEFAULT_QUANT = "IQ2_XS"
@@ -162,6 +118,14 @@ def catalog_key(vid: str) -> str:
     return FAMILIES[QUANTS[vid]["family"]]["catalog_key"]
 
 
+def variant_supported(vid: str) -> bool:
+    family = FAMILIES[QUANTS[vid]["family"]]
+    return all(
+        family.get(field) != "unknown"
+        for field in ("kind", "runtime_profile", "setup_policy", "disk_layout")
+    )
+
+
 def catalog_keys() -> set[str]:
     return {f["catalog_key"] for f in FAMILIES.values()}
 
@@ -174,10 +138,11 @@ def check_version(vid: str, version: str | None) -> None:
     """Refuse a variant this Strata version cannot set up (setup would fail at its family)."""
     from app.ai.providers.strata_lifecycle import version_tuple
 
-    need = FAMILIES[QUANTS[vid]["family"]].get("min_version")
+    quant = QUANTS[vid]
+    need = quant.get("min_version") or FAMILIES[quant["family"]].get("min_version")
     if need and version and version_tuple(version) < version_tuple(need):
         raise StrataError(
-            f"{FAMILIES[QUANTS[vid]['family']]['title']} работает со Strata {need} и новее, "
+            f"{FAMILIES[quant['family']]['title']} {quant['model']} работает со Strata {need} и новее, "
             f"установлена {version}. Сначала обновите Strata."
         )
 
@@ -199,6 +164,34 @@ IDLE_CHOICES = (0, 60, 300, 600, 1800)
 # RAM: an agent turn after a foreign request read 0.5 s instead of re-reading
 # 60K tokens for 28 s (4 parked chats took 3 GB of the 6 GB budget).
 PARALLEL_CHOICES = (1, 2)
+INKLING_PARALLEL_CHOICES = (1, 4, 8, 32, 64)
+SHAPE_RUNTIME_PROFILES = {"hy4_shape", "inkling_shape"}
+_RUNTIME_CONTEXTS = {
+    "hy4_shape": (8192, 32768, 65536, 131072),
+    "inkling_shape": (8192, 32768, 65536, 131072, 262144),
+}
+
+
+def _runtime_profile(vid: str) -> str:
+    return FAMILIES[QUANTS[vid]["family"]]["runtime_profile"]
+
+
+def context_choices(vid: str) -> tuple[int, ...]:
+    return _RUNTIME_CONTEXTS.get(_runtime_profile(vid), CONTEXTS)
+
+
+def parallel_choices(vid: str) -> tuple[int, ...]:
+    if _runtime_profile(vid) == "inkling_shape":
+        return INKLING_PARALLEL_CHOICES
+    return PARALLEL_CHOICES
+
+
+def _parallel_for(vid: str, runtime: dict) -> int:
+    configured = int(runtime["parallel"])
+    choices = parallel_choices(vid)
+    return configured if configured in choices else choices[0]
+
+
 CONVERSATION_CACHE_CHOICES = (0, 2048, 4096, 6144, 8192)
 CONVERSATION_CACHE_SLOTS = 4
 DEFAULT_RUNTIME = {
@@ -240,22 +233,28 @@ def models_dir() -> Path:
     return data_dir() / STRATA_DATA / "models"
 
 
+def _setup_id(model: str) -> str:
+    return QUANTS.get(model, {}).get("setup_id", model)
+
+
 def _model_dir(model: str) -> Path:
-    new = models_dir() / model
-    return new if new.exists() else data_dir() / "models" / model
+    setup_id = _setup_id(model)
+    new = models_dir() / setup_id
+    return new if new.exists() else data_dir() / "models" / setup_id
 
 
 def _pack_dir(model: str) -> Path:
-    new = data_dir() / STRATA_DATA / "packs" / _tag(model)
-    return new if new.exists() else data_dir() / "packs" / _tag(model)
+    setup_id = _setup_id(model)
+    new = data_dir() / STRATA_DATA / "packs" / _tag(setup_id)
+    return new if new.exists() else data_dir() / "packs" / _tag(setup_id)
 
 
 def _config_path(model: str) -> Path:
-    return data_dir() / INSTALL_DIR / f"strata-{_tag(model)}.json"
+    return data_dir() / INSTALL_DIR / f"strata-{_tag(_setup_id(model))}.json"
 
 
 def _legacy_config_path(model: str) -> Path:
-    return data_dir() / LEGACY_CONFIG_DIR / f"strata-{_tag(model)}.json"
+    return data_dir() / LEGACY_CONFIG_DIR / f"strata-{_tag(_setup_id(model))}.json"
 
 
 def _env_path() -> Path:
@@ -281,16 +280,20 @@ def read_desired() -> dict:
     family = values.get("FAMILY", DEFAULT_FAMILY)
     model = values.get("MODEL", DEFAULT_QUANT)
     vid = variant_id(family, model) if family in FAMILIES else model
-    if vid not in QUANTS:
-        vid = DEFAULT_QUANT
     try:
         context = int(values.get("CONTEXT", DEFAULT_CONTEXT))
     except ValueError:
         context = DEFAULT_CONTEXT
+    quant = QUANTS.get(vid)
+    valid = bool(
+        re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", family)
+        and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", model)
+    )
+    known = quant is not None
     return {
         "id": vid,
-        "family": QUANTS[vid]["family"],
-        "model": QUANTS[vid]["model"],
+        "family": quant["family"] if known else family,
+        "model": quant["model"] if known else model,
         "context": context,
         "vision": values.get("VISION", "yes") != "no",
         "reinstall_pending": values.get("REINSTALL") == "1",
@@ -298,16 +301,26 @@ def read_desired() -> dict:
         # not serve and does not take the GPU from Ollama.
         "install_only": values.get("INSTALL_ONLY") == "1",
         "low_ram": values.get("LOW_RAM", "auto"),
+        "known": known,
+        "valid": valid,
+        "origin": quant.get("origin", "official") if known else "unknown",
+        "setup_id": quant.get("setup_id", vid) if known else None,
+        "catalog_key": catalog_key(vid) if known else None,
     }
 
 
 def _env_lines(vid: str, context: int, vision: bool, ram: dict | None) -> list[str]:
     if vid not in QUANTS:
         raise StrataError(f"Неизвестное квантование: {vid}")
-    if context not in CONTEXTS:
-        raise StrataError(f"Контекст должен быть одним из {', '.join(map(str, CONTEXTS))}")
+    if not variant_supported(vid):
+        raise StrataError(f"Runtime profile {vid} приложением не подтверждён — действие запрещено")
+    if context not in context_choices(vid):
+        raise StrataError(
+            f"Контекст должен быть одним из {', '.join(map(str, context_choices(vid)))}"
+        )
     q = QUANTS[vid]
     ram = ram or ram_plan(vid, context)
+    parallel = _parallel_for(vid, read_runtime())
     lines = [
         "# Written by the AI workspace backend (strata_manager). Sourced by the",
         "# strata container before `strata launch` (Strata's entrypoint.sh).",
@@ -315,7 +328,7 @@ def _env_lines(vid: str, context: int, vision: bool, ram: dict | None) -> list[s
         f"MODEL={q['model']}",
         f"CONTEXT={context}",
         f"VISION={'yes' if vision else 'no'}",
-        f"PARALLEL={read_runtime()['parallel']}",
+        f"PARALLEL={parallel}",
         # setup reads the host's RAM, not the container's limit: with a
         # reserve the mode it must pick is spelled out (see ram_plan); the
         # container passes it to a `strata install` pass before the launch.
@@ -428,6 +441,19 @@ def ram_plan(
     if kind == "own":
         out["mode"] = "own"
         out["fits"] = ram >= q["ram_gb"]
+        return out
+    if kind == "mem_total":
+        # Gyro's official ram_gb is VRAM + RAM together, not a RAM-only arena.
+        out["mode"] = "mem_total"
+        out["fits"] = ram + vram >= q["ram_gb"]
+        return out
+    if kind == "shape":
+        # Hy4/Inkling placement belongs to their official shape engines. Never
+        # pass Flash-Next low-RAM or Unsloth budget flags to those installers.
+        out["mode"] = "shape"
+        # Their official fit is a combined RAM+VRAM residency estimate; the
+        # engine may still stream experts from SSD when this is false.
+        out["fits"] = ram + vram >= q["ram_gb"]
         return out
     if kind == "budget":
         out["mode"] = "budget"
@@ -584,14 +610,17 @@ def write_runtime(
     if free_comfyui is not None:
         runtime["free_comfyui"] = bool(free_comfyui)
     if parallel is not None:
-        if parallel not in PARALLEL_CHOICES:
-            raise StrataError("Параллельных запросов может быть 1 или 2")
         desired = read_desired()
-        check_vram_fit(
-            desired["id"], desired["context"], vision=desired["vision"], parallel=parallel
-        )
+        vid = desired["id"] if desired["known"] else DEFAULT_QUANT
+        choices = parallel_choices(vid)
+        if parallel not in choices:
+            raise StrataError("Параллельных запросов может быть: " + ", ".join(map(str, choices)))
+        check_vram_fit(vid, desired["context"], vision=desired["vision"], parallel=parallel)
         runtime["parallel"] = parallel
     if conversation_cache_mib is not None:
+        desired = read_desired()
+        if desired["known"] and _runtime_profile(desired["id"]) in SHAPE_RUNTIME_PROFILES:
+            raise StrataError("Этот движок Strata не поддерживает общий кэш разговоров")
         if conversation_cache_mib not in CONVERSATION_CACHE_CHOICES:
             raise StrataError(
                 "Кэш разговоров: "
@@ -637,25 +666,30 @@ def _save_runtime(runtime: dict) -> None:
     if not path.parent.is_dir():
         raise StrataError(f"Том Strata не подключён к бэкенду ({path.parent}).")
     body = {k: runtime[k] for k in DEFAULT_RUNTIME}
-    body["config_keys"] = _config_keys(body)
-    body["config_args"] = _config_args(body)
+    desired = read_desired()
+    vid = desired["id"] if desired["known"] else DEFAULT_QUANT
+    body["config_keys"] = _config_keys(body, vid)
+    body["config_args"] = _config_args(body, vid)
     _atomic_write(path, json.dumps(body, indent=1))
 
 
-def _config_keys(runtime: dict) -> dict:
+def _config_keys(runtime: dict, vid: str | None = None) -> dict:
     """Run-config keys for these settings; None means "remove the key"."""
     idle = int(runtime["idle_unload_s"])
+    parallel = _parallel_for(vid or DEFAULT_QUANT, runtime)
     return {
         "idle_unload_s": idle or None,
         "min_free_vram_mib": int(runtime["min_free_vram_mib"]) if idle else None,
         "before_load": _comfyui_free_command() if idle and runtime["free_comfyui"] else None,
-        "parallel": int(runtime["parallel"]) if int(runtime["parallel"]) > 1 else None,
+        "parallel": parallel if parallel > 1 else None,
     }
 
 
-def _config_args(runtime: dict) -> dict:
+def _config_args(runtime: dict, vid: str | None = None) -> dict:
     """Engine flags in the run config's "args"; None means "remove the flag and its value"."""
     mib = int(runtime["conversation_cache_mib"])
+    if _runtime_profile(vid or DEFAULT_QUANT) in SHAPE_RUNTIME_PROFILES:
+        mib = 0
     return {
         "--conversation-cache-mib": str(mib) if mib else None,
         "--conversation-cache-slots": str(CONVERSATION_CACHE_SLOTS) if mib else None,
@@ -707,14 +741,14 @@ def apply_runtime_keys() -> list[str]:
     restart. Returns the quants whose config changed.
     """
     runtime = read_runtime()
-    keys = _config_keys(runtime)
-    args = _config_args(runtime)
     try:
         _save_runtime(runtime)  # the container re-applies these at every start
     except StrataError as exc:
         logger.warning("strata_runtime_file_unwritable", error=str(exc)[:200])
     changed: list[str] = []
     for model in installed_quants():
+        if model not in QUANTS:
+            continue  # orphan run configs have no confirmed runtime policy
         path = _config_path(model)
         if not path.is_file():
             continue  # a 0.1 config: the container's setup pass writes the 0.2 one, keys included
@@ -723,7 +757,7 @@ def apply_runtime_keys() -> list[str]:
         except (OSError, ValueError) as exc:
             logger.warning("strata_config_unreadable", path=str(path), error=str(exc)[:200])
             continue
-        new = merge_run_config(cfg, keys, args)
+        new = merge_run_config(cfg, _config_keys(runtime, model), _config_args(runtime, model))
         if new != cfg:
             try:
                 _atomic_write(path, json.dumps(new, indent=1))
@@ -758,13 +792,38 @@ def _tag(model: str) -> str:
     return model.lower()
 
 
-def installed_quants() -> list[str]:
-    """Quantizations whose setup finished on the volume (their run config exists)."""
+def _orphan_installs(known: list[str]) -> list[dict]:
+    known_tags = {_tag(QUANTS[model].get("setup_id", model)) for model in known}
+    found: dict[str, Path] = {}
+    for directory in (data_dir() / INSTALL_DIR, data_dir() / LEGACY_CONFIG_DIR):
+        if not directory.is_dir():
+            continue
+        for path in directory.glob("strata-*.json"):
+            match = re.fullmatch(r"strata-([a-z0-9][a-z0-9_.-]{0,127})\.json", path.name)
+            if match and match.group(1) not in known_tags:
+                found.setdefault(match.group(1), path)
     return [
+        {
+            "id": f"legacy__{tag}",
+            "setup_id": None,
+            "family": "legacy",
+            "model": tag,
+            "label": f"Неизвестная локальная установка: {tag}",
+            "origin": "orphan",
+            "config_path": str(path),
+        }
+        for tag, path in sorted(found.items())
+    ]
+
+
+def installed_quants() -> list[str]:
+    """Known completed setups plus safe synthetic ids for unknown local configs."""
+    known = [
         model
         for model in QUANTS
         if _config_path(model).is_file() or _legacy_config_path(model).is_file()
     ]
+    return [*known, *(item["id"] for item in _orphan_installs(known))]
 
 
 def _installed_config(model: str) -> dict:
@@ -1029,12 +1088,21 @@ async def status() -> dict:
         except Exception:  # noqa: BLE001
             logs = []
     installed = installed_quants()
+    orphans = _orphan_installs([vid for vid in installed if vid in QUANTS])
     ram = ram_total_gb()
     runtime = read_runtime()
     active_cfg = _installed_config(desired["id"]) if desired["id"] in installed else {}
     quants = []
     for vid, meta in QUANTS.items():
-        plan = ram_plan(vid, desired["context"], reserve_gb=runtime["ram_reserve_gb"], total_gb=ram)
+        supported = variant_supported(vid)
+        plan = (
+            ram_plan(vid, desired["context"], reserve_gb=runtime["ram_reserve_gb"], total_gb=ram)
+            if supported
+            else None
+        )
+        family = FAMILIES[meta["family"]]
+        available = bool(meta.get("available", True) and family.get("available", True))
+        downloadable = bool(meta.get("upstream_present", True)) and supported and available
         quants.append(
             {
                 "id": vid,
@@ -1042,33 +1110,140 @@ async def status() -> dict:
                 "model": meta["model"],
                 "label": meta["label"],
                 "download_gb": meta["download_gb"],
-                "disk_need_gb": disk_need_gb(vid),
-                "experts_gb": meta["experts_gb"],
+                "disk_need_gb": disk_need_gb(vid) if supported else None,
+                "experts_gb": meta.get("experts_gb"),
                 "ram_gb": meta["ram_gb"],
                 "installed": vid in installed,
                 # Model files + the expert pack built from them.
                 "size_on_disk_gb": _size_on_disk_gb(vid),
                 # Below setup's own figure the model runs in the low-RAM mode
                 # (slower: the GPU holds the hot experts, the rest is in RAM).
-                "low_ram_mode": plan["mode"] in ("resident", "mmap"),
-                "ram_mode": plan["mode"],
-                "fits_ram": plan["fits"],
+                "low_ram_mode": bool(plan and plan["mode"] in ("resident", "mmap")),
+                "ram_mode": plan["mode"] if plan else None,
+                "fits_ram": plan["fits"] if plan else None,
                 "catalog_key": catalog_key(vid),
-                "min_version": FAMILIES[meta["family"]].get("min_version"),
+                "min_version": meta.get("min_version") or family.get("min_version"),
                 "installed_settings": installed_settings(vid) if vid in installed else None,
+                "origin": meta.get("origin", "official"),
+                "upstream_present": meta.get("upstream_present", True),
+                "supported": supported,
+                "unsupported_reason": (
+                    None
+                    if supported
+                    else "Runtime profile этого семейства приложением не подтверждён"
+                ),
+                "downloadable": downloadable,
+                "loadable": vid in installed and supported,
+                "deletable": vid in installed and supported,
+                "download_blocker": (
+                    "Runtime profile не подтверждён"
+                    if not supported
+                    else "Модель более не публикуется Strata"
+                    if not meta.get("upstream_present", True)
+                    else meta.get("unavailable_reason")
+                    or family.get("unavailable_reason")
+                    or "Strata не разрешает скачивание в этой конфигурации"
+                    if not available
+                    else None
+                ),
+                "load_blocker": (
+                    "Runtime profile не подтверждён"
+                    if not supported
+                    else None
+                    if vid in installed
+                    else "Модель ещё не скачана"
+                ),
+                "delete_blocker": (
+                    "Runtime profile не подтверждён"
+                    if not supported
+                    else None
+                    if vid in installed
+                    else "Модель ещё не скачана"
+                ),
+            }
+        )
+    for orphan in orphans:
+        quants.append(
+            {
+                **{
+                    key: None
+                    for key in (
+                        "download_gb",
+                        "disk_need_gb",
+                        "experts_gb",
+                        "ram_gb",
+                        "catalog_key",
+                        "min_version",
+                        "installed_settings",
+                    )
+                },
+                **orphan,
+                "installed": True,
+                "size_on_disk_gb": None,
+                "low_ram_mode": False,
+                "ram_mode": None,
+                "fits_ram": None,
+                "upstream_present": False,
+                "supported": False,
+                "unsupported_reason": "Локальная конфигурация отсутствует в каталоге Strata",
+                "downloadable": False,
+                "loadable": False,
+                "deletable": False,
+                "download_blocker": "Неизвестная локальная конфигурация",
+                "load_blocker": "Неизвестная локальная конфигурация",
+                "delete_blocker": "Неизвестные установки приложение не удаляет",
             }
         )
     owner = gpu_runtime.current_owner()
     from app.ai.providers import strata_lifecycle
+    from app.ai.providers.strata_catalog_store import catalog_status
 
     try:
         server = await strata_lifecycle.update_info()
     except Exception as exc:  # noqa: BLE001 — the panel still shows the rest
         server = {"error": str(exc)[:200]}
+    catalog = catalog_status()
+    current_image = (server.get("current") or {}).get("image_id")
+    catalog["stale"] = bool(
+        catalog.get("last_error")
+        or (
+            current_image
+            and (
+                catalog.get("source") == "bundled"
+                or current_image not in str(catalog.get("source_revision"))
+            )
+        )
+    )
+    served_name_now = (h or {}).get("model") or (h or {}).get("loaded_model")
+    expected_served = {served_name(desired["id"])} if desired["known"] else set()
+    if desired["known"]:
+        expected_served.add(f"{served_name(desired['id'])}-{desired['model'].lower()}")
+    active_variant_id = (
+        desired["id"]
+        if desired["known"] and h and h.get("loaded", True) and served_name_now in expected_served
+        else None
+    )
+    desired_plan = (
+        ram_plan(
+            desired["id"], desired["context"], reserve_gb=runtime["ram_reserve_gb"], total_gb=ram
+        )
+        if desired["known"] and variant_supported(desired["id"])
+        else None
+    )
     try:
         installer = await strata_lifecycle.installer_status()
     except Exception as exc:  # noqa: BLE001
         installer = {"stage": "failed", "variant": None, "log_tail": [str(exc)[:200]]}
+    runtime_view = dict(runtime)
+    if desired["known"]:
+        runtime_view["parallel"] = _parallel_for(desired["id"], runtime)
+    contexts = context_choices(desired["id"]) if desired["known"] else CONTEXTS
+    parallels = parallel_choices(desired["id"]) if desired["known"] else PARALLEL_CHOICES
+    cache_choices = (
+        []
+        if desired["known"] and _runtime_profile(desired["id"]) in SHAPE_RUNTIME_PROFILES
+        else list(CONVERSATION_CACHE_CHOICES)
+    )
     return {
         "owner": owner,
         "server": server,
@@ -1084,23 +1259,23 @@ async def status() -> dict:
         "installed": installed,
         "installed_context": active_cfg.get("context") or active_cfg.get("max_context"),
         "quants": quants,
-        "contexts": list(CONTEXTS),
+        "contexts": list(contexts),
         "disk_free_gb": disk_free_gb(),
         "ram_total_gb": ram,
         "log_tail": logs[-12:],
-        "runtime": runtime,
+        "runtime": runtime_view,
         "families": [
             {"family": k, "title": v["title"], "about": v["about"], "catalog_key": v["catalog_key"]}
             for k, v in FAMILIES.items()
         ],
-        "served_catalog_key": catalog_key(desired["id"]),
-        "ram_plan": ram_plan(
-            desired["id"], desired["context"], reserve_gb=runtime["ram_reserve_gb"], total_gb=ram
-        ),
+        "served_catalog_key": catalog_key(desired["id"]) if desired["known"] else None,
+        "active_variant_id": active_variant_id,
+        "catalog": catalog,
+        "ram_plan": desired_plan,
         "reserve_choices": list(RESERVE_CHOICES),
         "idle_choices": list(IDLE_CHOICES),
-        "parallel_choices": list(PARALLEL_CHOICES),
-        "conversation_cache_choices": list(CONVERSATION_CACHE_CHOICES),
+        "parallel_choices": list(parallels),
+        "conversation_cache_choices": cache_choices,
         "external_url": settings.strata_public_url or None,
         "switch_revision": _get_switch_revision() or ("tasks" if get_switch_tasks() else None),
     }
@@ -1137,12 +1312,21 @@ def disk_need_gb(model: str) -> float:
     read in place, + MTP/encoder. "own" (Qwen3.6): the file + its encoder.
     """
     meta = QUANTS[model]
+    profile = _runtime_profile(model)
     kind = FAMILIES[meta["family"]]["kind"]
+    if profile in SHAPE_RUNTIME_PROFILES:
+        # MCP download_gb already includes the native build/GGUF, drafter and
+        # vision. Hy4 also includes its shared Engram shard; no pack is built.
+        return round(meta["download_gb"], 1)
+    if profile == "nvfp4_pack":
+        # NVFP4 and NVFP4-NVIDIA are ready packs. QAD additionally needs the
+        # official prepare workspace, but not a second experts_gb pack.
+        return round(meta["download_gb"] + (meta.get("prepare_gb") or 0) + 1.0, 1)
     if kind == "own":
         return round(meta["download_gb"] + 1.0, 1)
     if kind == "budget":
         return round(meta["download_gb"] + EXTRA_DOWNLOAD_GB, 1)
-    return round(meta["download_gb"] + meta["experts_gb"] + EXTRA_DOWNLOAD_GB, 1)
+    return round(meta["download_gb"] + (meta["experts_gb"] or 0) + EXTRA_DOWNLOAD_GB, 1)
 
 
 _SWITCH_TASKS_KEY = "strata:switch_tasks"
@@ -1191,6 +1375,11 @@ async def start_strata() -> list[str]:
     from app.ai.providers import strata_lifecycle
 
     desired = read_desired()
+    if not desired["known"] or not desired["valid"]:
+        raise StrataError(
+            f"В {ENV_FILE_NAME} сохранена неизвестная модель {desired['family']}/{desired['model']}. "
+            "Выберите известную модель явно; автоматическая подмена запрещена."
+        )
     downloading = await strata_lifecycle.installer_variant()
     if downloading == desired["id"]:
         raise StrataError(
@@ -1248,11 +1437,30 @@ async def delete_quant(model: str) -> float:
 
     if model not in QUANTS:
         raise StrataError(f"Неизвестное квантование: {model}")
+    if not variant_supported(model):
+        raise StrataError(f"Runtime profile {model} не подтверждён — удаление запрещено")
     desired = read_desired()
     if model == desired["id"]:
         raise StrataError(f"{model} выбрана для запуска. Сначала загрузите в Strata другую модель.")
     if await strata_lifecycle.installer_variant() == model:
         raise StrataError(f"{model} сейчас скачивается. Остановите скачивание, затем удаляйте.")
+    current = await strata_lifecycle.server_version()
+    if strata_lifecycle.version_tuple((current or {}).get("version")) >= (0, 2):
+        from app.ai.providers.strata_catalog_source import (
+            StrataCatalogSourceError,
+            remove_official_variant,
+        )
+
+        try:
+            result = await remove_official_variant(dict(QUANTS[model]))
+        except StrataCatalogSourceError as exc:
+            raise StrataError(str(exc)) from exc
+        freed = (result.get("plan") or {}).get("gb") or result.get("freed_gb") or 0.0
+        logger.info("strata_quant_deleted_official", model=model, freed_gb=freed)
+        return float(freed)
+
+    # Legacy 0.1 images have no removal MCP. Only the old, locally curated
+    # layout is eligible; symlinked targets are never traversed or removed.
     targets = [
         _model_dir(model),
         _pack_dir(model),
@@ -1262,6 +1470,10 @@ async def delete_quant(model: str) -> float:
     ]
     if not any(t.exists() for t in targets):
         raise StrataError(f"{model} не скачана — удалять нечего")
+    root = data_dir().resolve()
+    for target in targets:
+        if target.is_symlink() or not target.resolve(strict=False).is_relative_to(root):
+            raise StrataError(f"Небезопасный путь установки {model}: {target.name}")
     freed = _size_on_disk_gb(model) or 0.0
     try:
         for target in targets:
@@ -1294,6 +1506,14 @@ async def install_strata(
     vid = vid or desired["id"]
     if vid not in QUANTS:
         raise StrataError(f"Неизвестное квантование: {vid}")
+    if not variant_supported(vid):
+        raise StrataError(f"Runtime profile {vid} не подтверждён — скачивание запрещено")
+    if not QUANTS[vid].get("upstream_present", True):
+        raise StrataError(f"{vid} более не публикуется Strata — повторное скачивание недоступно")
+    family = FAMILIES[QUANTS[vid]["family"]]
+    if not QUANTS[vid].get("available", True) or not family.get("available", True):
+        reason = QUANTS[vid].get("unavailable_reason") or family.get("unavailable_reason")
+        raise StrataError(reason or f"{vid} недоступна в установленной версии Strata")
     if vid in installed_quants():
         raise StrataError(f"{vid} уже скачана")
     running = await strata_lifecycle.installer_variant()
@@ -1315,6 +1535,18 @@ async def install_strata(
         # Qwen3.6's cache is ~40x heavier per token — take setup's own pick.
         context = rec
     check_vram_fit(vid, context, vision=vision)
+    from app.ai.providers.strata_catalog_source import (
+        StrataCatalogSourceError,
+        validate_install_plan,
+    )
+
+    # Bundled membership is only offline availability, not proof that the
+    # installed Strata release accepts this family/variant. Every first install
+    # gets the official dry-run; no server or download is started by it.
+    try:
+        await validate_install_plan(dict(QUANTS[vid]))
+    except StrataCatalogSourceError as exc:
+        raise StrataError(str(exc)) from exc
     env_file = write_install_env(vid, context, vision)
     await strata_lifecycle.run_installer(vid, env_file)
     logger.info("strata_install_started", model=vid)

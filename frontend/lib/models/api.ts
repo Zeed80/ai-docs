@@ -266,6 +266,15 @@ export const verifyModel = (modelKey: string) =>
 export const strataStatus = () =>
   request<StrataStatus>("/api/local-models/strata/status");
 
+export const strataRefreshCatalog = () =>
+  request<{
+    changed: boolean;
+    added: number;
+    updated: number;
+    retired: number;
+    status: StrataStatus["catalog"];
+  }>("/api/local-models/strata/catalog/refresh", { method: "POST" });
+
 export const strataSlotPlan = () =>
   request<StrataSlotPlanItem[]>("/api/local-models/strata/slot-plan");
 
