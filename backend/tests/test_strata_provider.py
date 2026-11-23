@@ -644,6 +644,77 @@ def test_parallel_and_conversation_cache_become_config_keys_and_flags(tmp_path, 
         strata_manager.write_runtime(conversation_cache_mib=1000)
 
 
+def test_inkling_parallel_and_shape_engine_cache_policy(tmp_path, monkeypatch):
+    monkeypatch.setenv("STRATA_DATA_DIR", str(tmp_path))
+    strata_manager.write_desired(
+        model="inkling-2-mini-SQ-20", context=32768, vision=True, reinstall=False
+    )
+    # The global Qwen default 2 is not valid for Inkling: its official default is 1.
+    assert "PARALLEL=1" in (tmp_path / "aiw.env").read_text()
+
+    strata_manager.write_runtime(parallel=4)
+    body = json.loads((tmp_path / "aiw-runtime.json").read_text())
+    assert body["config_keys"]["parallel"] == 4
+    assert body["config_args"] == {
+        "--conversation-cache-mib": None,
+        "--conversation-cache-slots": None,
+    }
+    with pytest.raises(strata_manager.StrataError):
+        strata_manager.write_runtime(parallel=2)
+    with pytest.raises(strata_manager.StrataError, match="не поддерживает"):
+        strata_manager.write_runtime(conversation_cache_mib=2048)
+
+    (tmp_path / "install").mkdir()
+    cfg_path = tmp_path / "install" / "strata-inkling-2-mini-sq-20.json"
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "args": [
+                    "--conversation-cache-mib",
+                    "2048",
+                    "--conversation-cache-slots",
+                    "4",
+                ]
+            }
+        )
+    )
+    assert strata_manager.apply_runtime_keys() == ["inkling-2-mini-SQ-20"]
+    cfg = json.loads(cfg_path.read_text())
+    assert cfg["parallel"] == 4 and cfg["args"] == []
+
+
+@pytest.mark.asyncio
+async def test_even_bundled_variant_gets_official_install_preflight(tmp_path, monkeypatch):
+    monkeypatch.setenv("STRATA_DATA_DIR", str(tmp_path))
+    calls = []
+
+    async def no_installer():
+        return None
+
+    async def container():
+        return {"Id": "c", "State": "stopped"}
+
+    async def version(_container=None):
+        return {"version": "0.2.20"}
+
+    async def preflight(variant):
+        calls.append(variant["id"])
+        return {"ok": True}
+
+    async def run_installer(vid, _env):
+        calls.append(f"run:{vid}")
+
+    monkeypatch.setattr(strata_lifecycle, "installer_variant", no_installer)
+    monkeypatch.setattr(strata_manager, "_find_container", container)
+    monkeypatch.setattr(strata_lifecycle, "server_version", version)
+    monkeypatch.setattr(strata_manager, "check_quant_fits_disk", lambda _vid: None)
+    monkeypatch.setattr("app.ai.providers.strata_catalog_source.validate_install_plan", preflight)
+    monkeypatch.setattr(strata_lifecycle, "run_installer", run_installer)
+
+    assert await strata_manager.install_strata("IQ2_XS") == "IQ2_XS"
+    assert calls == ["IQ2_XS", "run:IQ2_XS"]
+
+
 def test_merge_run_config_sets_replaces_and_removes_flags():
     cfg = {
         "args": ["--pack", "/p", "--conversation-cache-mib", "2048", "--kv", "int8"],

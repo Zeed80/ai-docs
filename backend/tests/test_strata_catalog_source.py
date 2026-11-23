@@ -59,6 +59,151 @@ def test_mcp_adapter_adds_official_variant_and_read_only_family():
     assert "только для чтения" in result.warnings[0]
 
 
+def test_curated_profile_promotes_previously_unknown_family():
+    previous = load_bundled_catalog().model_copy(deep=True)
+    old = next(family for family in previous.families if family.id == "gyro")
+    for field, value in {
+        "kind": "unknown",
+        "catalog_key": "strata_discovered_gyro",
+        "served_name": "unsupported-gyro",
+        "runtime_profile": "unknown",
+        "setup_policy": "unknown",
+        "disk_layout": "unknown",
+    }.items():
+        setattr(old, field, value)
+
+    result = source.parse_model_table(
+        {
+            "families": [
+                {
+                    "family": "gyro",
+                    "title": "Qwen3.8-Flash-Next (Gyro)",
+                    "sizes": [
+                        {
+                            "model": "Gyro-S",
+                            "download_gb": 58.5,
+                            "experts_gb": 25.8,
+                            "ram_needed_gb": 27.6,
+                            "mem_total": True,
+                            "format": "gguf",
+                            "engine_min": "0.1.60",
+                        }
+                    ],
+                }
+            ]
+        },
+        previous=previous,
+        revision="image:new",
+    )
+
+    promoted = result.catalog.families[0]
+    assert promoted.runtime_profile == "gyro_gguf"
+    assert promoted.catalog_key == "strata_qwen3_8_flash_next_gyro"
+    variant = result.catalog.variants[0]
+    assert variant.mem_total is True and variant.format == "gguf"
+    assert variant.engine_min == "0.1.60"
+    assert variant.min_version is None  # engine version is not the server requirement
+
+    from app.ai.providers.strata_catalog import merge_catalogs
+
+    merged, _counts = merge_catalogs(previous, result.catalog)
+    assert next(f for f in merged.families if f.id == "gyro").runtime_profile == "gyro_gguf"
+
+
+def test_profile_promotion_restores_curated_variant_defaults():
+    previous = load_bundled_catalog().model_copy(deep=True)
+    selected = {"nvfp4": "NVFP4-QAD", "inkling-2-mini": "SQ-20"}
+    for family in previous.families:
+        if family.id in selected:
+            family.kind = "unknown"
+            family.runtime_profile = "unknown"
+    for variant in previous.variants:
+        if variant.family in selected:
+            variant.default_context = 65536
+            variant.prepare_gb = None
+            variant.label = "discovered"
+
+    payload = {"families": []}
+    for family in previous.families:
+        if family.id not in selected:
+            continue
+        old = next(
+            variant
+            for variant in previous.variants
+            if variant.family == family.id and variant.model == selected[family.id]
+        )
+        payload["families"].append(
+            {
+                "family": family.id,
+                "sizes": [
+                    {
+                        "model": old.model,
+                        "download_gb": old.download_gb,
+                        "experts_gb": old.experts_gb,
+                        "ram_needed_gb": old.ram_gb,
+                    }
+                ],
+            }
+        )
+
+    result = source.parse_model_table(payload, previous=previous, revision="image:new")
+    qad = next(variant for variant in result.catalog.variants if variant.model == "NVFP4-QAD")
+    inkling = next(variant for variant in result.catalog.variants if variant.model == "SQ-20")
+    assert qad.prepare_gb == 110
+    assert inkling.default_context == 32768
+    assert inkling.label != "discovered"
+
+
+def test_full_bundled_release_round_trips_through_mcp_adapter():
+    bundled = load_bundled_catalog()
+    payload = {
+        "families": [
+            {
+                "family": family.id,
+                "title": family.title,
+                "about": family.about,
+                "sizes": [
+                    {
+                        "model": variant.model,
+                        "about": variant.label,
+                        "download_gb": variant.download_gb,
+                        "experts_gb": variant.experts_gb,
+                        "ram_needed_gb": variant.ram_gb,
+                        "mem_total": variant.mem_total,
+                        "format": variant.format,
+                        "engine_min": variant.engine_min,
+                    }
+                    for variant in bundled.variants
+                    if variant.family == family.id and variant.upstream_present
+                ],
+            }
+            for family in bundled.families
+            if family.upstream_present
+        ]
+    }
+
+    result = source.parse_model_table(payload, previous=bundled, revision="official-v0.2.20-test")
+
+    expected = {variant.id for variant in bundled.variants if variant.upstream_present}
+    assert len(result.catalog.families) == 9
+    assert len(result.catalog.variants) == 44
+    assert {variant.id for variant in result.catalog.variants} == expected
+    assert result.warnings == []
+
+    from app.ai.providers.strata_catalog import merge_catalogs
+
+    merged, counts = merge_catalogs(bundled, result.catalog)
+    # The first MCP refresh changes only the provenance of bundled active entries.
+    assert counts == {"added": 0, "updated": 53, "retired": 0, "changed": True}
+    deepseek = next(family for family in merged.families if family.id == "deepseek41")
+    assert deepseek.origin == "retired" and not deepseek.upstream_present
+    assert all(
+        variant.origin == "retired" and not variant.upstream_present
+        for variant in merged.variants
+        if variant.family == "deepseek41"
+    )
+
+
 def test_discovered_family_cannot_be_written_or_downloaded(monkeypatch, tmp_path):
     from app.ai.providers import strata_manager
 
@@ -91,7 +236,7 @@ async def test_snapshot_registry_and_cache_survive_redis_flush(db_session, monke
     monkeypatch.setattr(store, "_redis_set_json", lambda key, value: cache.__setitem__(key, value))
     monkeypatch.setattr(store, "_MEMORY_CATALOG", None)
     catalog = await store.ensure_strata_catalog(db_session)
-    assert len(catalog.variants) == 13
+    assert len(catalog.variants) == 50
     assert "strata:catalog:v1" in cache
     cache.clear()
     monkeypatch.setattr(store, "_MEMORY_CATALOG", None)
@@ -117,8 +262,39 @@ async def test_snapshot_registry_and_cache_survive_redis_flush(db_session, monke
         .scalars()
         .all()
     )
-    assert len(entries) == 4
-    assert {entry.verification_status for entry in entries} == {"manual"}
+    assert len(entries) == 9
+    assert {entry.verification_status for entry in entries} == {"manual", "discovered"}
+
+
+@pytest.mark.asyncio
+async def test_existing_snapshot_receives_bundled_curated_upgrade(db_session, monkeypatch):
+    cache = {}
+    monkeypatch.setattr(store, "_redis_get_json", lambda key: cache.get(key))
+    monkeypatch.setattr(store, "_redis_set_json", lambda key, value: cache.__setitem__(key, value))
+    monkeypatch.setattr(store, "_MEMORY_CATALOG", None)
+    previous = load_bundled_catalog().model_copy(deep=True)
+    previous.families = [family for family in previous.families if family.id == "qwen"]
+    previous.variants = [variant for variant in previous.variants if variant.family == "qwen"]
+    db_session.add(store._new_snapshot(previous))
+    await db_session.commit()
+
+    upgraded = await store.ensure_strata_catalog(db_session)
+
+    assert len(upgraded.families) == 10 and len(upgraded.variants) == 50
+    assert next(f for f in upgraded.families if f.id == "deepseek41").origin == "retired"
+    snapshots = (
+        (await db_session.execute(__import__("sqlalchemy").select(StrataCatalogSnapshot)))
+        .scalars()
+        .all()
+    )
+    assert len(snapshots) == 2
+    await store.ensure_strata_catalog(db_session)
+    snapshots = (
+        (await db_session.execute(__import__("sqlalchemy").select(StrataCatalogSnapshot)))
+        .scalars()
+        .all()
+    )
+    assert len(snapshots) == 2
 
 
 @pytest.mark.asyncio
@@ -133,7 +309,7 @@ async def test_refresh_keeps_last_known_good_on_source_failure(db_session, monke
 
     with pytest.raises(source.StrataCatalogSourceError):
         await store.refresh_strata_catalog(db_session, broken_loader)
-    assert store.current_catalog().source_revision == "legacy-static-v1"
+    assert store.current_catalog().source_revision == "official-v0.2.20"
     assert "reader unavailable" in store.catalog_status()["last_error"]
 
 

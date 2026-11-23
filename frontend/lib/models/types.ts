@@ -289,7 +289,14 @@ export type StrataPhase =
   "not_created" | "stopped" | "installing" | "loading" | "ready" | "unloaded";
 
 export type StrataRamMode =
-  "auto" | "off" | "resident" | "mmap" | "budget" | "own";
+  | "auto"
+  | "off"
+  | "resident"
+  | "mmap"
+  | "budget"
+  | "own"
+  | "mem_total"
+  | "shape";
 
 export interface StrataQuant {
   /** Имя варианта у setup Strata: «IQ3_S», «qwen36-UD-Q4_K_XL». */

@@ -77,6 +77,29 @@ def test_qwen36_has_no_placement_settings_only_a_fit(data):
     )["fits"]
 
 
+def test_new_families_use_their_own_resource_rules(data):
+    gyro = strata_manager.ram_plan("gyro-Gyro-S", 65536, reserve_gb=4, total_gb=10.0, vram_gb=24.0)
+    assert gyro["mode"] == "mem_total"
+    assert gyro["low_ram"] == "auto" and gyro["resident_budget_gib"] is None
+    assert gyro["fits"] is True  # 6 GB RAM + 24 GB VRAM >= 27.6 GB combined
+    assert not strata_manager.ram_plan(
+        "gyro-Gyro-M", 65536, reserve_gb=4, total_gb=10.0, vram_gb=24.0
+    )["fits"]
+
+    for vid in ("hy4-flash-SQ-64", "inkling-2-mini-SQ-20"):
+        plan = strata_manager.ram_plan(vid, 65536, reserve_gb=4, total_gb=59.0, vram_gb=24.0)
+        assert plan["mode"] == "shape"
+        assert plan["low_ram"] == "auto" and plan["resident_budget_gib"] is None
+        assert strata_manager.disk_need_gb(vid) == strata_manager.QUANTS[vid]["download_gb"]
+        assert plan["fits"] is True  # 55 GB RAM + 24 GB VRAM holds either footprint
+    assert not strata_manager.ram_plan(
+        "hy4-flash-SQ-128", 131072, reserve_gb=4, total_gb=10.0, vram_gb=24.0
+    )["fits"]
+
+    assert strata_manager.disk_need_gb("nvfp4-NVFP4") == 129.0
+    assert strata_manager.disk_need_gb("nvfp4-NVFP4-QAD") == 213.2
+
+
 def test_reserve_reaches_setup_through_the_env_file(data):
     plan = strata_manager.ram_plan("IQ3_XXS", 262144, reserve_gb=12, total_gb=59.0, vram_gb=24.0)
     strata_manager.write_desired(

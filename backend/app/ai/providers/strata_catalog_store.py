@@ -159,7 +159,15 @@ async def ensure_strata_catalog(db: AsyncSession):
         await _publish_families(db, catalog)
         await db.commit()
     else:
+        from app.ai.providers.strata_catalog import merge_curated_bundled
+
         catalog = StrataCatalogV1.model_validate(snapshot.payload)
+        upgraded, counts = merge_curated_bundled(catalog)
+        if counts["changed"]:
+            db.add(_new_snapshot(upgraded))
+            await _publish_families(db, upgraded)
+            await db.commit()
+            catalog = upgraded
     _cache_catalog(catalog)
     return catalog
 

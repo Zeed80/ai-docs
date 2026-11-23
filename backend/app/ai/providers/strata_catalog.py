@@ -32,8 +32,17 @@ _SAFE_TAG = re.compile(r"^(?:[A-Za-z0-9][A-Za-z0-9._-]*)?$")
 _VERSION = re.compile(r"^[0-9]+(?:\.[0-9]+){0,3}(?:[-+][0-9A-Za-z.-]+)?$")
 _CAPABILITY_FIELDS = set(ModelCapability.model_fields) - {"name", "provider", "provider_model"}
 
-FamilyKind = Literal["pack", "budget", "own", "unknown"]
-RuntimeProfile = Literal["flash_next_pack", "unsloth_budget", "qwen36_own", "unknown"]
+FamilyKind = Literal["pack", "budget", "own", "mem_total", "shape", "unknown"]
+RuntimeProfile = Literal[
+    "flash_next_pack",
+    "unsloth_budget",
+    "qwen36_own",
+    "gyro_gguf",
+    "nvfp4_pack",
+    "hy4_shape",
+    "inkling_shape",
+    "unknown",
+]
 SetupPolicy = Literal["default", "disable_experimental_speed_projection", "unknown"]
 DiskLayout = Literal["strata_standard", "unknown"]
 CatalogOrigin = Literal["official", "retired", "bundled"]
@@ -74,6 +83,9 @@ class StrataFamily(_CatalogModel):
     min_version: str | None = Field(default=None, max_length=80)
     upstream_present: bool
     origin: CatalogOrigin
+    available: bool = True
+    unavailable_reason: str | None = Field(default=None, max_length=1000)
+    feed: bool = False
     capability: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("id", "catalog_key")
@@ -121,11 +133,17 @@ class StrataVariant(_CatalogModel):
     model: str = Field(min_length=1, max_length=160)
     label: str = Field(min_length=1, max_length=500)
     download_gb: float = Field(gt=0, le=MAX_MODEL_SIZE_GB, allow_inf_nan=False)
-    experts_gb: float = Field(gt=0, le=MAX_MODEL_SIZE_GB, allow_inf_nan=False)
+    experts_gb: float | None = Field(default=None, gt=0, le=MAX_MODEL_SIZE_GB, allow_inf_nan=False)
     ram_gb: float = Field(gt=0, le=MAX_MODEL_SIZE_GB, allow_inf_nan=False)
+    prepare_gb: float | None = Field(default=None, gt=0, le=MAX_MODEL_SIZE_GB, allow_inf_nan=False)
+    format: str | None = Field(default=None, max_length=40)
+    mem_total: bool = False
+    available: bool = True
+    unavailable_reason: str | None = Field(default=None, max_length=1000)
     default_context: int = Field(default=65536, gt=0, le=MAX_CONTEXT_TOKENS)
     recommended_context: int | None = Field(default=None, gt=0, le=MAX_CONTEXT_TOKENS)
     min_version: str | None = Field(default=None, max_length=80)
+    engine_min: str | None = Field(default=None, max_length=80)
     upstream_present: bool
     origin: CatalogOrigin
 
@@ -134,10 +152,15 @@ class StrataVariant(_CatalogModel):
     def _safe_ids(cls, value: str) -> str:
         return _validate_safe_id(value)
 
-    @field_validator("min_version")
+    @field_validator("min_version", "engine_min")
     @classmethod
     def _valid_version(cls, value: str | None) -> str | None:
         return _validate_version(value)
+
+    @field_validator("format")
+    @classmethod
+    def _safe_format(cls, value: str | None) -> str | None:
+        return _validate_safe_id(value) if value is not None else None
 
 
 class StrataCatalogV1(_CatalogModel):
@@ -248,10 +271,22 @@ _VARIANT_IDENTITY = ("id", "setup_id", "family", "model")
 
 
 def _check_identity(previous: Any, incoming: Any, fields: tuple[str, ...], kind: str) -> None:
+    # A family discovered by an older backend was deliberately persisted with
+    # placeholder identity and runtime="unknown". A later backend may promote
+    # that same official family through its local curated profile. This is the
+    # only permitted identity change; already supported families stay immutable.
+    profile_promotion = (
+        kind == "family"
+        and previous.runtime_profile == "unknown"
+        and incoming.runtime_profile != "unknown"
+        and previous.kind == "unknown"
+        and incoming.kind != "unknown"
+    )
+    promotable = {"catalog_key", "served_name", "runtime_profile", "setup_policy", "disk_layout"}
     for field in fields:
         old_value = getattr(previous, field)
         new_value = getattr(incoming, field)
-        if old_value != new_value:
+        if old_value != new_value and not (profile_promotion and field in promotable):
             raise CatalogValidationError(
                 f"immutable {kind} identity changed for {previous.id!r}: "
                 f"{field} {old_value!r} -> {new_value!r}"
@@ -288,14 +323,14 @@ def _merge_entries(
                 retired += 1
         else:
             _check_identity(old, new, identity, kind)
-            replacement = _active(new)
+            replacement = _active(new) if new.upstream_present else _retired(new)
             if replacement.model_dump(mode="json") != old.model_dump(mode="json"):
                 updated += 1
         merged.append(replacement)
 
     for new in incoming:
         if new.id not in old_by_id:
-            merged.append(_active(new))
+            merged.append(_active(new) if new.upstream_present else _retired(new))
             added += 1
 
     return merged, added, updated, retired
@@ -331,6 +366,73 @@ def merge_catalogs(
     return merged, counts
 
 
+def merge_curated_bundled(
+    previous: CatalogInput,
+) -> tuple[StrataCatalogV1, dict[str, int | bool]]:
+    """Apply a backend upgrade's curated additions without emulating an upstream refresh.
+
+    Existing official entries are never retired by the bundled file. Missing
+    records (including historical tombstones) are added, and a previously
+    discovered unknown family may receive its new curated runtime profile.
+    """
+    old = _as_catalog(previous)
+    bundled = load_bundled_catalog()
+    incoming = old.model_copy(deep=True)
+    bundled_families = {family.id: family for family in bundled.families}
+    bundled_variants = {variant.setup_id: variant for variant in bundled.variants}
+    old_families = {family.id: family for family in old.families}
+    old_variants = {variant.setup_id: variant for variant in old.variants}
+    promoted: set[str] = set()
+
+    families = []
+    for family in old.families:
+        curated = bundled_families.get(family.id)
+        if curated and family.runtime_profile == "unknown" and curated.runtime_profile != "unknown":
+            promoted.add(family.id)
+            families.append(
+                curated.model_copy(
+                    update={
+                        "upstream_present": family.upstream_present,
+                        "origin": family.origin,
+                        "available": family.available,
+                        "unavailable_reason": family.unavailable_reason,
+                        "feed": family.feed,
+                    }
+                )
+            )
+        else:
+            families.append(family.model_copy(deep=True))
+    families.extend(
+        family.model_copy(deep=True) for family in bundled.families if family.id not in old_families
+    )
+
+    variants = []
+    for variant in old.variants:
+        curated = bundled_variants.get(variant.setup_id)
+        if variant.family in promoted and curated:
+            variants.append(
+                curated.model_copy(
+                    update={
+                        "id": variant.id,
+                        "upstream_present": variant.upstream_present,
+                        "origin": variant.origin,
+                        "available": variant.available,
+                        "unavailable_reason": variant.unavailable_reason,
+                    }
+                )
+            )
+        else:
+            variants.append(variant.model_copy(deep=True))
+    variants.extend(
+        variant.model_copy(deep=True)
+        for variant in bundled.variants
+        if variant.setup_id not in old_variants
+    )
+    incoming.families = families
+    incoming.variants = variants
+    return merge_catalogs(old, incoming)
+
+
 __all__ = [
     "BUNDLED_CATALOG_PATH",
     "CatalogValidationError",
@@ -341,5 +443,6 @@ __all__ = [
     "family_map",
     "load_bundled_catalog",
     "merge_catalogs",
+    "merge_curated_bundled",
     "variant_map",
 ]

@@ -18,6 +18,7 @@ from app.ai.providers.strata_catalog import (
     family_map,
     load_bundled_catalog,
     merge_catalogs,
+    merge_curated_bundled,
     variant_map,
 )
 from app.ai.schemas import Modality, ModelStatus, ProviderKind
@@ -33,9 +34,69 @@ VARIANT_IDS = {
     "coder-IQ1_M",
     "unsloth-UD-IQ4_XS",
     "unsloth-UD-Q4_K_XL",
+    "unsloth-UD-IQ1_M",
+    "unsloth-UD-Q2_0",
+    "unsloth-UD-IQ2_XS",
+    "unsloth-UD-Q2_K_XL",
+    "unsloth-UD-IQ3_XXS",
+    "unsloth-UD-Q3_K_XL",
+    "unsloth-UD-IQ4_XS-v31",
+    "unsloth-UD-Q5_K_XL",
+    "unsloth-UD-Q6_K_XL",
+    "unsloth-Q8_0",
     "qwen36-UD-Q4_K_XL",
     "qwen36-UD-Q6_K_XL",
     "qwen36-Q8_0",
+    "gyro-Gyro-S",
+    "gyro-Gyro-M",
+    "nvfp4-NVFP4",
+    "nvfp4-NVFP4-NVIDIA",
+    "nvfp4-NVFP4-QAD",
+    "hy4-flash-SQ-64",
+    "hy4-flash-SQ-96",
+    "hy4-flash-SQ-128",
+    *{
+        f"inkling-2-mini-{model}"
+        for model in (
+            "SQ-20",
+            "SQ-15",
+            "SQ-10",
+            "UD-Q8_K_XL",
+            "UD-Q4_K_XL",
+            "UD-Q4_K_M",
+            "UD-IQ4_XS",
+            "UD-Q3_K_XL",
+            "UD-IQ3_XXS",
+            "UD-Q2_K_XL",
+            "UD-IQ2_XXS",
+            "UD-IQ1_M",
+            "UD-IQ1_S",
+        )
+    },
+    *{
+        f"deepseek-v4.1-flash-{model}"
+        for model in (
+            "IST-DAS-1.75bpw",
+            "IST-DAS-2.00bpw",
+            "IST-DAS-2.25bpw",
+            "UD-IQ1_S",
+            "UD-IQ1_M",
+            "UD-Q8_K_XL",
+        )
+    },
+}
+
+FAMILY_IDS = {
+    "qwen",
+    "swift",
+    "coder",
+    "unsloth",
+    "qwen36",
+    "gyro",
+    "nvfp4",
+    "hy4-flash",
+    "inkling-2-mini",
+    "deepseek41",
 }
 
 EXPECTED_SIZES = {
@@ -138,6 +199,11 @@ EXPECTED_CAPABILITIES = {
         "Pictures through Unsloth's mmproj (Strata 0.1.45+). Read invoices well "
         "as qwen3.6:35b on Ollama. Exclusive with GPU-Ollama.",
     ),
+    "gyro": {},
+    "nvfp4": {},
+    "hy4-flash": {},
+    "inkling-2-mini": {},
+    "deepseek41": {},
 }
 
 
@@ -187,28 +253,30 @@ def test_bundled_snapshot_is_exact_and_legacy_compatible():
 
     assert catalog.schema_version == 1
     assert catalog.source == "bundled"
-    assert catalog.source_revision == "legacy-static-v1"
-    assert {family.id for family in catalog.families} == {
-        "qwen",
-        "swift",
-        "coder",
-        "unsloth",
-        "qwen36",
-    }
-    assert len(catalog.variants) == 13
+    assert catalog.source_revision == "official-v0.2.20"
+    assert {family.id for family in catalog.families} == FAMILY_IDS
+    assert len(catalog.variants) == 50
     assert {variant.id for variant in catalog.variants} == VARIANT_IDS
     assert all(variant.id == variant.setup_id for variant in catalog.variants)
-    assert all(variant.default_context == 65536 for variant in catalog.variants)
     assert all(
-        variant.upstream_present and variant.origin == "bundled" for variant in catalog.variants
+        variant.upstream_present and variant.origin == "bundled"
+        for variant in catalog.variants
+        if variant.family != "deepseek41"
     )
     assert all(
-        family.upstream_present and family.origin == "bundled" for family in catalog.families
+        family.upstream_present and family.origin == "bundled"
+        for family in catalog.families
+        if family.id != "deepseek41"
+    )
+    assert all(
+        not variant.upstream_present and variant.origin == "retired"
+        for variant in catalog.variants
+        if variant.family == "deepseek41"
     )
 
     families = family_map(catalog)
     variants = variant_map(catalog)
-    assert set(families) == {"qwen", "swift", "coder", "unsloth", "qwen36"}
+    assert set(families) == FAMILY_IDS
     assert set(variants) == VARIANT_IDS
     assert families["qwen36"]["min_version"] == "0.1.45"
     assert families["qwen"]["setup_policy"] == "disable_experimental_speed_projection"
@@ -216,6 +284,18 @@ def test_bundled_snapshot_is_exact_and_legacy_compatible():
     assert families["qwen"]["runtime_profile"] == "flash_next_pack"
     assert families["unsloth"]["runtime_profile"] == "unsloth_budget"
     assert families["qwen36"]["runtime_profile"] == "qwen36_own"
+    assert families["gyro"]["runtime_profile"] == "gyro_gguf"
+    assert families["nvfp4"]["runtime_profile"] == "nvfp4_pack"
+    assert families["hy4-flash"]["runtime_profile"] == "hy4_shape"
+    assert families["inkling-2-mini"]["runtime_profile"] == "inkling_shape"
+    assert families["deepseek41"]["runtime_profile"] == "unknown"
+    assert variants["hy4-flash-SQ-64"]["default_context"] == 131072
+    assert variants["inkling-2-mini-SQ-20"]["default_context"] == 32768
+    assert variants["inkling-2-mini-UD-IQ1_S"]["min_version"] == "0.2.20"
+    assert variants["nvfp4-NVFP4-QAD"]["prepare_gb"] == 110.0
+    assert variants["gyro-Gyro-S"]["mem_total"] is True
+    assert variants["deepseek-v4.1-flash-UD-Q8_K_XL"]["available"] is False
+    assert variants["deepseek-v4.1-flash-UD-Q8_K_XL"].get("experts_gb") is None
     assert families["qwen"]["catalog_key"] == families["unsloth"]["catalog_key"]
     assert families["qwen"]["served_name"] == families["unsloth"]["served_name"]
 
@@ -238,12 +318,16 @@ def test_bundled_curated_capabilities_match_registry_values():
         assert capability.name == family.catalog_key
         assert capability.provider is ProviderKind.STRATA
         assert capability.provider_model == family.served_name
-        assert capability.status is ModelStatus.PRODUCTION
-        assert capability.modalities == {
-            Modality.TEXT,
-            Modality.VISION,
-            Modality.TOOL_CALLING,
-        }
+        if family.capability:
+            assert capability.status is ModelStatus.PRODUCTION
+            assert capability.modalities == {
+                Modality.TEXT,
+                Modality.VISION,
+                Modality.TOOL_CALLING,
+            }
+        else:
+            assert capability.status is ModelStatus.CANDIDATE
+            assert capability.capabilities_unknown is True
         for key, expected in family.capability.items():
             if key != "modalities":
                 assert capability.model_dump(mode="json")[key] == expected
@@ -259,10 +343,44 @@ def test_merge_adds_new_family_and_quant_without_mutating_previous():
     merged, counts = merge_catalogs(previous, incoming)
 
     assert counts == {"added": 2, "updated": 0, "retired": 0, "changed": True}
-    assert len(previous.families) == 5 and len(previous.variants) == 13
+    assert len(previous.families) == 10 and len(previous.variants) == 50
     assert set(family_map(merged)) == set(family_map(previous)) | {"newfam"}
     assert set(variant_map(merged)) == set(variant_map(previous)) | {"newfam-Q8_0"}
     assert merged.variants[-1].default_context == 65536
+
+
+def test_bundled_upgrade_adds_history_and_promotes_without_retiring_existing():
+    previous = load_bundled_catalog().model_copy(deep=True)
+    previous.families = [family for family in previous.families if family.id in {"qwen", "gyro"}]
+    previous.variants = [
+        variant for variant in previous.variants if variant.family in {"qwen", "gyro"}
+    ]
+    gyro = next(family for family in previous.families if family.id == "gyro")
+    gyro.kind = "unknown"
+    gyro.runtime_profile = "unknown"
+    gyro.catalog_key = "strata_discovered_gyro"
+    gyro.served_name = "unsupported-gyro"
+    for variant in previous.variants:
+        if variant.family == "gyro":
+            variant.default_context = 65536
+            variant.label = "discovered"
+
+    merged, counts = merge_curated_bundled(previous)
+
+    assert counts["retired"] == 0 and counts["changed"] is True
+    assert len(merged.families) == 10 and len(merged.variants) == 50
+    assert merged.source_revision == previous.source_revision
+    promoted = next(family for family in merged.families if family.id == "gyro")
+    assert promoted.runtime_profile == "gyro_gguf"
+    assert promoted.catalog_key == "strata_qwen3_8_flash_next_gyro"
+    assert all(
+        variant.label != "discovered" for variant in merged.variants if variant.family == "gyro"
+    )
+    deepseek = next(family for family in merged.families if family.id == "deepseek41")
+    assert deepseek.origin == "retired" and not deepseek.upstream_present
+
+    repeated, repeated_counts = merge_curated_bundled(merged)
+    assert repeated_counts["changed"] is False
 
 
 def test_merge_retires_missing_entries_and_reactivates_returned_ones():
@@ -275,7 +393,7 @@ def test_merge_retires_missing_entries_and_reactivates_returned_ones():
 
     # One family and its three variants become tombstones; nothing is deleted.
     assert counts == {"added": 0, "updated": 0, "retired": 4, "changed": True}
-    assert len(retired.families) == 5 and len(retired.variants) == 13
+    assert len(retired.families) == 10 and len(retired.variants) == 50
     retired_family = next(family for family in retired.families if family.id == "swift")
     assert retired_family.origin == "retired" and not retired_family.upstream_present
     assert all(
@@ -283,16 +401,22 @@ def test_merge_retires_missing_entries_and_reactivates_returned_ones():
         for variant in retired.variants
         if variant.family == "swift"
     )
-    assert all(family.upstream_present for family in previous.families)
+    assert all(family.upstream_present for family in previous.families if family.id != "deepseek41")
 
     repeated, repeated_counts = merge_catalogs(retired, incoming)
     assert repeated_counts == {"added": 0, "updated": 0, "retired": 0, "changed": False}
-    assert len(repeated.families) == 5 and len(repeated.variants) == 13
+    assert len(repeated.families) == 10 and len(repeated.variants) == 50
 
     reactivated, reactivated_counts = merge_catalogs(retired, _incoming(previous))
     assert reactivated_counts == {"added": 0, "updated": 4, "retired": 0, "changed": True}
-    assert all(family.upstream_present for family in reactivated.families)
-    assert all(variant.upstream_present for variant in reactivated.variants)
+    assert all(
+        family.upstream_present for family in reactivated.families if family.id != "deepseek41"
+    )
+    assert all(
+        variant.upstream_present
+        for variant in reactivated.variants
+        if variant.family != "deepseek41"
+    )
 
 
 @pytest.mark.parametrize(

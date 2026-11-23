@@ -12,7 +12,34 @@ Strata. Список перечитывается после установки/
   source/image revision и SHA-256. Redis — только hot cache; после его очистки
   каталог восстанавливается из Postgres.
 - `strata_official_catalog.v1.json` — offline snapshot для первого запуска и для
-  просмотра каталога до установки сервера.
+  просмотра каталога до установки сервера. Снимок `official-v0.2.20` содержит
+  10 семейств и 50 вариантов: 9 актуальных семейств с 44 вариантами плюс
+  исторический DeepSeek с 6 вариантами.
+
+| Семейство | Вариантов в 0.2.20 | Профиль приложения |
+|---|---:|---|
+| Qwen3.8-Flash-Next | 4 | `flash_next_pack` |
+| Qwen3.8-Flash-Next Swift 1.5 | 3 | `flash_next_pack` |
+| Qwen3.8-Coder-Next | 1 | `flash_next_pack` |
+| Unsloth Qwen3.8-Flash-Next | 12 | `unsloth_budget` |
+| Qwen3.6-35B-A3B | 3 | `qwen36_own` |
+| Qwen3.8-Flash-Next Gyro | 2 | `gyro_gguf` |
+| Qwen3.8-Flash-Next NVFP4 | 3 | `nvfp4_pack` |
+| Hy4-Flash | 3 | `hy4_shape` |
+| Inkling-2-Mini | 13 | `inkling_shape` |
+| DeepSeek V4.1 Flash | 6 | исторический, read-only |
+
+DeepSeek отсутствует в downloadable-каталоге актуального релиза. Подписанный feed
+0.2.20 содержит только его engine packages, а не скачиваемые варианты модели,
+поэтому записи сохранены как `origin=retired`, `upstream_present=false`,
+`available=false`. Кнопка скачивания для них отключена; неподтверждённый DeepSeek
+Coder в каталог не добавляется. При обновлении backend bundled snapshot также
+добавляет в существующий durable-каталог отсутствующие curated/retired записи и
+переводит ранее обнаруженные unknown-семейства на подтверждённые профили;
+записи, которых нет в bundled file, при этом не помечаются снятыми с публикации. Состав bundled
+snapshot не означает, что более старая установленная Strata уже умеет скачивать
+все новые варианты: `min_version` и preflight выполняются установленной версией.
+
 - Refresh выполняется под process-local и Redis lock, сохраняет snapshot и
   family-level `ModelCatalogRuntimeEntry` в одной транзакции. После commit
   обновляются cache и runtime overlays. При ошибке остаётся last-known-good.
@@ -35,6 +62,22 @@ lifecycle; перед первым скачиванием выполняется
 `capabilities_unknown=true`, но остаётся read-only, пока приложению не добавлен
 подтверждённый runtime profile. Vision/tools не наследуются от Qwen, а перенос
 слотов и действия download/load/delete блокируются fail-closed.
+
+Для семейств, которые прежний backend сохранил как unknown, разрешён только
+явно закодированный переход `unknown → curated supported`: подтверждённый bundled
+profile восстанавливает стабильные identity и включает lifecycle. Для уже
+поддерживаемых семейств identity и runtime/disk profiles остаются immutable.
+
+Правила ресурсов зависят от семейства:
+
+- Gyro использует официальный `mem_total`: проверяется сумма ОЗУ и VRAM.
+- NVFP4/NVFP4-NVIDIA — готовые packs; NVFP4-QAD дополнительно резервирует 110 GB
+  на prepare. Размер expert arena повторно к download size не прибавляется.
+- Hy4 и Inkling используют собственный shape engine: generic low-RAM,
+  resident-budget и conversation-cache flags в их run config не записываются.
+  У Inkling допустимы только официальные значения parallel `1/4/8/32/64`.
+- `min_version` описывает требуемую версию сервера Strata, а `engine_min` —
+  версию engine; эти требования не смешиваются.
 
 Unknown `aiw.env` больше не заменяется молча на `IQ2_XS`: status возвращает
 `known=false`, `served_catalog_key=null`, `ram_plan=null`. Неизвестные локальные

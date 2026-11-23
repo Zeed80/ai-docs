@@ -1,7 +1,9 @@
 """Strata server manager — container state, quantization, GPU switch.
 
-Strata (https://github.com/Niko1221/Strata) serves ONE model,
-Qwen3.8-Flash-Next (125B MoE), in several quantizations. It runs as the
+Strata (https://github.com/Niko1221/Strata) serves one selected official model
+at a time. Its dynamic catalog supplies the supported families and variants;
+runtime-specific resource and setup policies remain curated by this backend.
+Strata runs as the
 optional compose service ``strata`` (profile ``strata``) whose entrypoint reads
 its setup choices (MODEL, CONTEXT, VISION, ...) from the environment. The
 backend never recreates that container: it writes the choices into
@@ -136,10 +138,11 @@ def check_version(vid: str, version: str | None) -> None:
     """Refuse a variant this Strata version cannot set up (setup would fail at its family)."""
     from app.ai.providers.strata_lifecycle import version_tuple
 
-    need = FAMILIES[QUANTS[vid]["family"]].get("min_version")
+    quant = QUANTS[vid]
+    need = quant.get("min_version") or FAMILIES[quant["family"]].get("min_version")
     if need and version and version_tuple(version) < version_tuple(need):
         raise StrataError(
-            f"{FAMILIES[QUANTS[vid]['family']]['title']} работает со Strata {need} и новее, "
+            f"{FAMILIES[quant['family']]['title']} {quant['model']} работает со Strata {need} и новее, "
             f"установлена {version}. Сначала обновите Strata."
         )
 
@@ -161,6 +164,34 @@ IDLE_CHOICES = (0, 60, 300, 600, 1800)
 # RAM: an agent turn after a foreign request read 0.5 s instead of re-reading
 # 60K tokens for 28 s (4 parked chats took 3 GB of the 6 GB budget).
 PARALLEL_CHOICES = (1, 2)
+INKLING_PARALLEL_CHOICES = (1, 4, 8, 32, 64)
+SHAPE_RUNTIME_PROFILES = {"hy4_shape", "inkling_shape"}
+_RUNTIME_CONTEXTS = {
+    "hy4_shape": (8192, 32768, 65536, 131072),
+    "inkling_shape": (8192, 32768, 65536, 131072, 262144),
+}
+
+
+def _runtime_profile(vid: str) -> str:
+    return FAMILIES[QUANTS[vid]["family"]]["runtime_profile"]
+
+
+def context_choices(vid: str) -> tuple[int, ...]:
+    return _RUNTIME_CONTEXTS.get(_runtime_profile(vid), CONTEXTS)
+
+
+def parallel_choices(vid: str) -> tuple[int, ...]:
+    if _runtime_profile(vid) == "inkling_shape":
+        return INKLING_PARALLEL_CHOICES
+    return PARALLEL_CHOICES
+
+
+def _parallel_for(vid: str, runtime: dict) -> int:
+    configured = int(runtime["parallel"])
+    choices = parallel_choices(vid)
+    return configured if configured in choices else choices[0]
+
+
 CONVERSATION_CACHE_CHOICES = (0, 2048, 4096, 6144, 8192)
 CONVERSATION_CACHE_SLOTS = 4
 DEFAULT_RUNTIME = {
@@ -283,10 +314,13 @@ def _env_lines(vid: str, context: int, vision: bool, ram: dict | None) -> list[s
         raise StrataError(f"Неизвестное квантование: {vid}")
     if not variant_supported(vid):
         raise StrataError(f"Runtime profile {vid} приложением не подтверждён — действие запрещено")
-    if context not in CONTEXTS:
-        raise StrataError(f"Контекст должен быть одним из {', '.join(map(str, CONTEXTS))}")
+    if context not in context_choices(vid):
+        raise StrataError(
+            f"Контекст должен быть одним из {', '.join(map(str, context_choices(vid)))}"
+        )
     q = QUANTS[vid]
     ram = ram or ram_plan(vid, context)
+    parallel = _parallel_for(vid, read_runtime())
     lines = [
         "# Written by the AI workspace backend (strata_manager). Sourced by the",
         "# strata container before `strata launch` (Strata's entrypoint.sh).",
@@ -294,7 +328,7 @@ def _env_lines(vid: str, context: int, vision: bool, ram: dict | None) -> list[s
         f"MODEL={q['model']}",
         f"CONTEXT={context}",
         f"VISION={'yes' if vision else 'no'}",
-        f"PARALLEL={read_runtime()['parallel']}",
+        f"PARALLEL={parallel}",
         # setup reads the host's RAM, not the container's limit: with a
         # reserve the mode it must pick is spelled out (see ram_plan); the
         # container passes it to a `strata install` pass before the launch.
@@ -407,6 +441,19 @@ def ram_plan(
     if kind == "own":
         out["mode"] = "own"
         out["fits"] = ram >= q["ram_gb"]
+        return out
+    if kind == "mem_total":
+        # Gyro's official ram_gb is VRAM + RAM together, not a RAM-only arena.
+        out["mode"] = "mem_total"
+        out["fits"] = ram + vram >= q["ram_gb"]
+        return out
+    if kind == "shape":
+        # Hy4/Inkling placement belongs to their official shape engines. Never
+        # pass Flash-Next low-RAM or Unsloth budget flags to those installers.
+        out["mode"] = "shape"
+        # Their official fit is a combined RAM+VRAM residency estimate; the
+        # engine may still stream experts from SSD when this is false.
+        out["fits"] = ram + vram >= q["ram_gb"]
         return out
     if kind == "budget":
         out["mode"] = "budget"
@@ -563,14 +610,17 @@ def write_runtime(
     if free_comfyui is not None:
         runtime["free_comfyui"] = bool(free_comfyui)
     if parallel is not None:
-        if parallel not in PARALLEL_CHOICES:
-            raise StrataError("Параллельных запросов может быть 1 или 2")
         desired = read_desired()
-        check_vram_fit(
-            desired["id"], desired["context"], vision=desired["vision"], parallel=parallel
-        )
+        vid = desired["id"] if desired["known"] else DEFAULT_QUANT
+        choices = parallel_choices(vid)
+        if parallel not in choices:
+            raise StrataError("Параллельных запросов может быть: " + ", ".join(map(str, choices)))
+        check_vram_fit(vid, desired["context"], vision=desired["vision"], parallel=parallel)
         runtime["parallel"] = parallel
     if conversation_cache_mib is not None:
+        desired = read_desired()
+        if desired["known"] and _runtime_profile(desired["id"]) in SHAPE_RUNTIME_PROFILES:
+            raise StrataError("Этот движок Strata не поддерживает общий кэш разговоров")
         if conversation_cache_mib not in CONVERSATION_CACHE_CHOICES:
             raise StrataError(
                 "Кэш разговоров: "
@@ -616,25 +666,30 @@ def _save_runtime(runtime: dict) -> None:
     if not path.parent.is_dir():
         raise StrataError(f"Том Strata не подключён к бэкенду ({path.parent}).")
     body = {k: runtime[k] for k in DEFAULT_RUNTIME}
-    body["config_keys"] = _config_keys(body)
-    body["config_args"] = _config_args(body)
+    desired = read_desired()
+    vid = desired["id"] if desired["known"] else DEFAULT_QUANT
+    body["config_keys"] = _config_keys(body, vid)
+    body["config_args"] = _config_args(body, vid)
     _atomic_write(path, json.dumps(body, indent=1))
 
 
-def _config_keys(runtime: dict) -> dict:
+def _config_keys(runtime: dict, vid: str | None = None) -> dict:
     """Run-config keys for these settings; None means "remove the key"."""
     idle = int(runtime["idle_unload_s"])
+    parallel = _parallel_for(vid or DEFAULT_QUANT, runtime)
     return {
         "idle_unload_s": idle or None,
         "min_free_vram_mib": int(runtime["min_free_vram_mib"]) if idle else None,
         "before_load": _comfyui_free_command() if idle and runtime["free_comfyui"] else None,
-        "parallel": int(runtime["parallel"]) if int(runtime["parallel"]) > 1 else None,
+        "parallel": parallel if parallel > 1 else None,
     }
 
 
-def _config_args(runtime: dict) -> dict:
+def _config_args(runtime: dict, vid: str | None = None) -> dict:
     """Engine flags in the run config's "args"; None means "remove the flag and its value"."""
     mib = int(runtime["conversation_cache_mib"])
+    if _runtime_profile(vid or DEFAULT_QUANT) in SHAPE_RUNTIME_PROFILES:
+        mib = 0
     return {
         "--conversation-cache-mib": str(mib) if mib else None,
         "--conversation-cache-slots": str(CONVERSATION_CACHE_SLOTS) if mib else None,
@@ -686,14 +741,14 @@ def apply_runtime_keys() -> list[str]:
     restart. Returns the quants whose config changed.
     """
     runtime = read_runtime()
-    keys = _config_keys(runtime)
-    args = _config_args(runtime)
     try:
         _save_runtime(runtime)  # the container re-applies these at every start
     except StrataError as exc:
         logger.warning("strata_runtime_file_unwritable", error=str(exc)[:200])
     changed: list[str] = []
     for model in installed_quants():
+        if model not in QUANTS:
+            continue  # orphan run configs have no confirmed runtime policy
         path = _config_path(model)
         if not path.is_file():
             continue  # a 0.1 config: the container's setup pass writes the 0.2 one, keys included
@@ -702,7 +757,7 @@ def apply_runtime_keys() -> list[str]:
         except (OSError, ValueError) as exc:
             logger.warning("strata_config_unreadable", path=str(path), error=str(exc)[:200])
             continue
-        new = merge_run_config(cfg, keys, args)
+        new = merge_run_config(cfg, _config_keys(runtime, model), _config_args(runtime, model))
         if new != cfg:
             try:
                 _atomic_write(path, json.dumps(new, indent=1))
@@ -1045,7 +1100,9 @@ async def status() -> dict:
             if supported
             else None
         )
-        downloadable = bool(meta.get("upstream_present", True)) and supported
+        family = FAMILIES[meta["family"]]
+        available = bool(meta.get("available", True) and family.get("available", True))
+        downloadable = bool(meta.get("upstream_present", True)) and supported and available
         quants.append(
             {
                 "id": vid,
@@ -1054,7 +1111,7 @@ async def status() -> dict:
                 "label": meta["label"],
                 "download_gb": meta["download_gb"],
                 "disk_need_gb": disk_need_gb(vid) if supported else None,
-                "experts_gb": meta["experts_gb"],
+                "experts_gb": meta.get("experts_gb"),
                 "ram_gb": meta["ram_gb"],
                 "installed": vid in installed,
                 # Model files + the expert pack built from them.
@@ -1065,7 +1122,7 @@ async def status() -> dict:
                 "ram_mode": plan["mode"] if plan else None,
                 "fits_ram": plan["fits"] if plan else None,
                 "catalog_key": catalog_key(vid),
-                "min_version": FAMILIES[meta["family"]].get("min_version"),
+                "min_version": meta.get("min_version") or family.get("min_version"),
                 "installed_settings": installed_settings(vid) if vid in installed else None,
                 "origin": meta.get("origin", "official"),
                 "upstream_present": meta.get("upstream_present", True),
@@ -1081,9 +1138,13 @@ async def status() -> dict:
                 "download_blocker": (
                     "Runtime profile не подтверждён"
                     if not supported
-                    else None
-                    if downloadable
                     else "Модель более не публикуется Strata"
+                    if not meta.get("upstream_present", True)
+                    else meta.get("unavailable_reason")
+                    or family.get("unavailable_reason")
+                    or "Strata не разрешает скачивание в этой конфигурации"
+                    if not available
+                    else None
                 ),
                 "load_blocker": (
                     "Runtime profile не подтверждён"
@@ -1173,6 +1234,16 @@ async def status() -> dict:
         installer = await strata_lifecycle.installer_status()
     except Exception as exc:  # noqa: BLE001
         installer = {"stage": "failed", "variant": None, "log_tail": [str(exc)[:200]]}
+    runtime_view = dict(runtime)
+    if desired["known"]:
+        runtime_view["parallel"] = _parallel_for(desired["id"], runtime)
+    contexts = context_choices(desired["id"]) if desired["known"] else CONTEXTS
+    parallels = parallel_choices(desired["id"]) if desired["known"] else PARALLEL_CHOICES
+    cache_choices = (
+        []
+        if desired["known"] and _runtime_profile(desired["id"]) in SHAPE_RUNTIME_PROFILES
+        else list(CONVERSATION_CACHE_CHOICES)
+    )
     return {
         "owner": owner,
         "server": server,
@@ -1188,11 +1259,11 @@ async def status() -> dict:
         "installed": installed,
         "installed_context": active_cfg.get("context") or active_cfg.get("max_context"),
         "quants": quants,
-        "contexts": list(CONTEXTS),
+        "contexts": list(contexts),
         "disk_free_gb": disk_free_gb(),
         "ram_total_gb": ram,
         "log_tail": logs[-12:],
-        "runtime": runtime,
+        "runtime": runtime_view,
         "families": [
             {"family": k, "title": v["title"], "about": v["about"], "catalog_key": v["catalog_key"]}
             for k, v in FAMILIES.items()
@@ -1203,8 +1274,8 @@ async def status() -> dict:
         "ram_plan": desired_plan,
         "reserve_choices": list(RESERVE_CHOICES),
         "idle_choices": list(IDLE_CHOICES),
-        "parallel_choices": list(PARALLEL_CHOICES),
-        "conversation_cache_choices": list(CONVERSATION_CACHE_CHOICES),
+        "parallel_choices": list(parallels),
+        "conversation_cache_choices": cache_choices,
         "external_url": settings.strata_public_url or None,
         "switch_revision": _get_switch_revision() or ("tasks" if get_switch_tasks() else None),
     }
@@ -1241,12 +1312,21 @@ def disk_need_gb(model: str) -> float:
     read in place, + MTP/encoder. "own" (Qwen3.6): the file + its encoder.
     """
     meta = QUANTS[model]
+    profile = _runtime_profile(model)
     kind = FAMILIES[meta["family"]]["kind"]
+    if profile in SHAPE_RUNTIME_PROFILES:
+        # MCP download_gb already includes the native build/GGUF, drafter and
+        # vision. Hy4 also includes its shared Engram shard; no pack is built.
+        return round(meta["download_gb"], 1)
+    if profile == "nvfp4_pack":
+        # NVFP4 and NVFP4-NVIDIA are ready packs. QAD additionally needs the
+        # official prepare workspace, but not a second experts_gb pack.
+        return round(meta["download_gb"] + (meta.get("prepare_gb") or 0) + 1.0, 1)
     if kind == "own":
         return round(meta["download_gb"] + 1.0, 1)
     if kind == "budget":
         return round(meta["download_gb"] + EXTRA_DOWNLOAD_GB, 1)
-    return round(meta["download_gb"] + meta["experts_gb"] + EXTRA_DOWNLOAD_GB, 1)
+    return round(meta["download_gb"] + (meta["experts_gb"] or 0) + EXTRA_DOWNLOAD_GB, 1)
 
 
 _SWITCH_TASKS_KEY = "strata:switch_tasks"
@@ -1430,6 +1510,10 @@ async def install_strata(
         raise StrataError(f"Runtime profile {vid} не подтверждён — скачивание запрещено")
     if not QUANTS[vid].get("upstream_present", True):
         raise StrataError(f"{vid} более не публикуется Strata — повторное скачивание недоступно")
+    family = FAMILIES[QUANTS[vid]["family"]]
+    if not QUANTS[vid].get("available", True) or not family.get("available", True):
+        reason = QUANTS[vid].get("unavailable_reason") or family.get("unavailable_reason")
+        raise StrataError(reason or f"{vid} недоступна в установленной версии Strata")
     if vid in installed_quants():
         raise StrataError(f"{vid} уже скачана")
     running = await strata_lifecycle.installer_variant()
@@ -1451,17 +1535,18 @@ async def install_strata(
         # Qwen3.6's cache is ~40x heavier per token — take setup's own pick.
         context = rec
     check_vram_fit(vid, context, vision=vision)
-    from app.ai.providers.strata_catalog import load_bundled_catalog
     from app.ai.providers.strata_catalog_source import (
         StrataCatalogSourceError,
         validate_install_plan,
     )
 
-    if vid not in {variant.id for variant in load_bundled_catalog().variants}:
-        try:
-            await validate_install_plan(dict(QUANTS[vid]))
-        except StrataCatalogSourceError as exc:
-            raise StrataError(str(exc)) from exc
+    # Bundled membership is only offline availability, not proof that the
+    # installed Strata release accepts this family/variant. Every first install
+    # gets the official dry-run; no server or download is started by it.
+    try:
+        await validate_install_plan(dict(QUANTS[vid]))
+    except StrataCatalogSourceError as exc:
+        raise StrataError(str(exc)) from exc
     env_file = write_install_env(vid, context, vision)
     await strata_lifecycle.run_installer(vid, env_file)
     logger.info("strata_install_started", model=vid)

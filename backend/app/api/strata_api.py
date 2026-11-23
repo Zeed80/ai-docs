@@ -582,7 +582,7 @@ def _load_settings(vid: str) -> tuple[int, bool]:
     installed = strata_manager.installed_settings(vid)
     context = (
         installed["context"]
-        if installed["context"] in strata_manager.CONTEXTS
+        if installed["context"] in strata_manager.context_choices(vid)
         else desired["context"]
     )
     vision = desired["vision"] if installed["vision"] is None else installed["vision"]

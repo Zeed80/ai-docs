@@ -536,6 +536,79 @@ test("a family newer than the installed Strata asks for the update first", async
   ).toBeVisible();
 });
 
+test("official Gyro, Inkling and retired DeepSeek use the dynamic catalog", async ({
+  page,
+  context,
+}) => {
+  await setAuthCookie(context);
+  const updated = status() as StrataStatus;
+  updated.families.push(
+    {
+      family: "gyro",
+      title: "Qwen3.8-Flash-Next (Gyro)",
+      about: "Gyro-S и Gyro-M",
+      catalog_key: "strata_qwen3_8_flash_next_gyro",
+    },
+    {
+      family: "inkling-2-mini",
+      title: "Inkling-2-Mini",
+      about: "Native Strata и Unsloth GGUF",
+      catalog_key: "strata_inkling_2_mini",
+    },
+    {
+      family: "deepseek41",
+      title: "DeepSeek-V4.1-Flash",
+      about: "Исторический каталог",
+      catalog_key: "strata_deepseek_v4_1_flash",
+    },
+  );
+  updated.quants.push(
+    {
+      ...updated.quants[0],
+      id: "gyro-Gyro-S",
+      family: "gyro",
+      model: "Gyro-S",
+      label: "Gyro-S",
+      installed: false,
+      ram_mode: "mem_total",
+    },
+    {
+      ...updated.quants[0],
+      id: "inkling-2-mini-UD-IQ1_S",
+      family: "inkling-2-mini",
+      model: "UD-IQ1_S",
+      label: "UD-IQ1_S",
+      installed: false,
+      ram_mode: "shape",
+    },
+    {
+      ...updated.quants[0],
+      id: "deepseek-v4.1-flash-UD-IQ1_S",
+      family: "deepseek41",
+      model: "UD-IQ1_S",
+      label: "DeepSeek UD-IQ1_S",
+      installed: false,
+      origin: "retired",
+      upstream_present: false,
+      supported: false,
+      unsupported_reason: "Исторический runtime profile",
+      downloadable: false,
+      loadable: false,
+      deletable: false,
+      download_blocker: "Модель более не публикуется Strata",
+    },
+  );
+  await setup(page, [], [], updated as unknown as Record<string, unknown>);
+  await page.goto("/settings/models?tab=overview");
+  await expect(page.getByText("Qwen3.8-Flash-Next (Gyro)")).toBeVisible();
+  await expect(page.getByText("Inkling-2-Mini", { exact: true })).toBeVisible();
+  await expect(page.getByText("Gyro-S", { exact: true })).toBeVisible();
+  await expect(page.getByText("DeepSeek UD-IQ1_S")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Скачать deepseek-v4.1-flash-UD-IQ1_S" }),
+  ).toBeDisabled();
+});
+
 test("catalog refresh shows a dynamic variant and keeps retired entries", async ({
   page,
   context,

@@ -11,7 +11,12 @@ from typing import Any
 import structlog
 
 from app.ai.providers import strata_lifecycle, strata_manager
-from app.ai.providers.strata_catalog import StrataCatalogV1, StrataFamily, StrataVariant
+from app.ai.providers.strata_catalog import (
+    StrataCatalogV1,
+    StrataFamily,
+    StrataVariant,
+    load_bundled_catalog,
+)
 from app.ai.providers.strata_catalog_store import current_catalog
 
 logger = structlog.get_logger()
@@ -135,25 +140,43 @@ async def _run_python_json(code: str, *, write_data: bool = False) -> tuple[dict
         await strata_lifecycle._remove(container_id)
 
 
+_DEFAULT_CONTEXT_BY_RUNTIME = {
+    "hy4_shape": 131072,
+    "inkling_shape": 32768,
+}
+
+
 def parse_model_table(
     payload: dict,
     *,
     previous: StrataCatalogV1,
     revision: str,
 ) -> StrataSourceResult:
-    """Normalize MCP data, retaining only runtime profiles this backend can execute."""
+    """Normalize MCP data using the current code's curated runtime registry.
+
+    The previous snapshot supplies stable IDs and history only. In particular, a
+    family saved as ``unknown`` by an older backend must become supported when
+    this release ships its curated profile.
+    """
+    bundled = load_bundled_catalog()
+    curated_families = {
+        family.id: family for family in bundled.families if family.runtime_profile != "unknown"
+    }
+    curated_variants = {
+        variant.setup_id: variant for variant in bundled.variants if variant.upstream_present
+    }
     previous_families = {family.id: family for family in previous.families}
-    previous_variants = {variant.id: variant for variant in previous.variants}
+    previous_variants = {variant.setup_id: variant for variant in previous.variants}
     families = []
     variants = []
     warnings = []
     for raw_family in payload.get("families") or []:
         family_id = raw_family.get("family")
-        family = previous_families.get(family_id)
+        if not isinstance(family_id, str) or not family_id:
+            warnings.append("Семейство без корректного id пропущено")
+            continue
+        family = curated_families.get(family_id) or previous_families.get(family_id)
         if family is None:
-            if not isinstance(family_id, str) or not family_id:
-                warnings.append("Семейство без корректного id пропущено")
-                continue
             family = StrataFamily(
                 id=family_id,
                 title=str(raw_family.get("title") or family_id),
@@ -173,7 +196,26 @@ def parse_model_table(
             warnings.append(
                 f"Семейство {family_id} показано только для чтения: runtime profile не подтверждён"
             )
-        families.append(family.model_copy(update={"upstream_present": True, "origin": "official"}))
+        available = raw_family.get("available", True) is not False
+        unavailable_reason = raw_family.get("unavailable_reason")
+        families.append(
+            family.model_copy(
+                update={
+                    "title": str(raw_family.get("title") or family.title),
+                    "about": str(raw_family.get("about") or family.about),
+                    "upstream_present": True,
+                    "origin": "official",
+                    "available": available,
+                    "unavailable_reason": unavailable_reason,
+                    "feed": bool(raw_family.get("feed")),
+                }
+            )
+        )
+        if not available:
+            warnings.append(
+                f"Семейство {family_id} недоступно в этой версии Strata: "
+                f"{unavailable_reason or 'причина не указана'}"
+            )
         for size in raw_family.get("sizes") or []:
             model = size.get("model")
             if not isinstance(model, str):
@@ -181,8 +223,34 @@ def parse_model_table(
                 continue
             setup_id = family.tag + model
             old = previous_variants.get(setup_id)
+            curated = curated_variants.get(setup_id)
+            previous_family = previous_families.get(family_id)
+            profile_promoted = bool(
+                previous_family
+                and previous_family.runtime_profile == "unknown"
+                and family.runtime_profile != "unknown"
+            )
             about = size.get("about")
-            label = old.label if old else f"{model} — {about or 'официальный вариант Strata'}"
+            label = (
+                curated.label
+                if curated and profile_promoted
+                else old.label
+                if old
+                else f"{model} — {about or 'официальный вариант Strata'}"
+            )
+            if old is None or profile_promoted:
+                default_context = (
+                    curated.default_context
+                    if curated
+                    else _DEFAULT_CONTEXT_BY_RUNTIME.get(family.runtime_profile, 65536)
+                )
+                recommended_context = curated.recommended_context if curated else None
+                min_version = (curated.min_version if curated else None) or family.min_version
+            else:
+                default_context = old.default_context
+                recommended_context = old.recommended_context
+                min_version = old.min_version
+            variant_available = available and size.get("available", True) is not False
             variants.append(
                 StrataVariant(
                     id=old.id if old else setup_id,
@@ -193,9 +261,15 @@ def parse_model_table(
                     download_gb=size.get("download_gb"),
                     experts_gb=size.get("experts_gb"),
                     ram_gb=size.get("ram_needed_gb"),
-                    default_context=old.default_context if old else 65536,
-                    recommended_context=old.recommended_context if old else None,
-                    min_version=size.get("engine_min") or family.min_version,
+                    prepare_gb=(curated.prepare_gb if curated else old.prepare_gb if old else None),
+                    format=size.get("format"),
+                    mem_total=bool(size.get("mem_total")),
+                    available=variant_available,
+                    unavailable_reason=size.get("unavailable_reason") or unavailable_reason,
+                    default_context=default_context,
+                    recommended_context=recommended_context,
+                    min_version=min_version,
+                    engine_min=size.get("engine_min"),
                     upstream_present=True,
                     origin="official",
                 )
