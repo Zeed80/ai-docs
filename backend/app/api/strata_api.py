@@ -472,6 +472,7 @@ async def strata_delete_quant(model: str) -> dict:
     try:
         freed = await strata_manager.delete_quant(model)
     except strata_manager.StrataError as exc:
+        logger.warning("strata_delete_rejected", model=model, error=str(exc))
         raise HTTPException(409, str(exc)) from exc
     return {"ok": True, "freed_gb": freed, "status": await strata_manager.status()}
 
@@ -675,6 +676,13 @@ async def strata_install(body: InstallIn | None = None) -> dict:
     try:
         vid = await strata_manager.install_strata(body.id, context=body.context, vision=body.vision)
     except strata_manager.StrataError as exc:
+        logger.warning(
+            "strata_install_rejected",
+            requested_model=body.id,
+            context=body.context,
+            vision=body.vision,
+            error=str(exc),
+        )
         raise HTTPException(409, str(exc)) from exc
     return {"ok": True, "id": vid, "status": await strata_manager.status()}
 

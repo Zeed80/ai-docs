@@ -217,7 +217,8 @@ async function setup(
       return route.fulfill({ json: ALL_STATUS });
     if (path === "/api/local-models/strata/status")
       return route.fulfill({ json: status(statusOver) });
-    if (path === "/api/local-models/strata/load-plan")
+    if (path === "/api/local-models/strata/load-plan") {
+      calls.push(`GET ${path}?id=${url.searchParams.get("id")}`);
       return route.fulfill({
         json: {
           id: url.searchParams.get("id"),
@@ -239,6 +240,7 @@ async function setup(
           warnings: [],
         },
       });
+    }
     if (
       [
         "/api/local-models/strata/load",
@@ -437,7 +439,7 @@ test("an available update is offered and started with one button", async ({
     .toEqual(["POST /api/local-models/strata/update"]);
 });
 
-test("a downloaded model of another family is loaded after a plan", async ({
+test("a downloaded model of another family is loaded immediately without confirmation", async ({
   page,
   context,
 }) => {
@@ -454,14 +456,12 @@ test("a downloaded model of another family is loaded after a plan", async ({
   await page
     .getByRole("button", { name: "Загрузить qwen36-UD-Q4_K_XL" })
     .click();
-  await expect(
-    page.getByText(/Перейдут на strata_qwen3_6_35b: Быстрая \(OCR\/VLM\)/),
-  ).toBeVisible();
-  expect(calls).toEqual([]);
-  await page.getByRole("button", { name: "Да, загрузить" }).click();
   await expect
     .poll(() => calls)
     .toEqual(['POST /api/local-models/strata/load {"id":"qwen36-UD-Q4_K_XL"}']);
+  await expect(page.getByRole("button", { name: "Да, загрузить" })).toHaveCount(
+    0,
+  );
 });
 
 test("a model that is not downloaded is fetched beside the server", async ({

@@ -363,6 +363,7 @@ async def test_official_removal_is_plan_then_apply_without_path_interpretation(m
     )
     assert result["plan"]["gb"] == 12.5
     assert [write for _code, write in calls] == [False, True]
+    assert "Strata(root='/data/install', src='/opt/strata/terminal')" in calls[0][0]
     assert "family=" not in calls[0][0]
 
 

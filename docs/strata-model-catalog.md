@@ -75,7 +75,22 @@ profile восстанавливает стабильные identity и вклю
   на prepare. Размер expert arena повторно к download size не прибавляется.
 - Hy4 и Inkling используют собственный shape engine: generic low-RAM,
   resident-budget и conversation-cache flags в их run config не записываются.
-  У Inkling допустимы только официальные значения parallel `1/4/8/32/64`.
+  Контекст side-download приводится к ближайшему меньшему значению из списка
+  целевого семейства: например, запрос с 256K от Swift для Hy4 становится 128K,
+  а не отклоняется после official preflight. У Inkling допустимы только
+  официальные значения parallel `1/4/8/32/64`. Hy4 обслуживает один запрос,
+  поэтому его `parallel` удаляется из run config. Для обоих shape engines
+  entrypoint выставляет официальный `STRATA_NO_AUTO_CONVERSATION_CACHE=1`:
+  serve 0.2 иначе сам добавляет generic cache-флаги уже после очистки run config,
+  и Hy4 завершается с `unknown arg --conversation-cache-mib`. Очистка применяется
+  и к install-config, и к `/data/state/strata/launch/docker.json`: старые значения
+  удаляются как из `args`, так и из `user_args`, который official launcher заново
+  объединяет при каждом старте. Активные значения managed-флагов записываются
+  только в `args`, чтобы это объединение не создавало дубликаты; посторонние
+  ручные параметры `user_args` сохраняются.
+  Прогресс скачивания для shape
+  variants считается по файлам с идентификатором варианта в общем каталоге
+  семейства; соседние variants и общие Engram-файлы в размер не включаются.
 - `min_version` описывает требуемую версию сервера Strata, а `engine_min` —
   версию engine; эти требования не смешиваются.
 
@@ -89,12 +104,17 @@ run configs видны как `legacy__…`/`origin=orphan`; приложени�
 Скачивание по-прежнему идёт в отдельном installer container и не меняет выбранную
 модель или GPU owner. Остановка допускает resume. Retired not installed нельзя
 скачать заново; retired installed можно загрузить при совместимой версии.
+Кнопка «Загрузить» у скачанной модели выполняет переключение сразу, без отдельного
+экрана подтверждения; связанные назначения переходят на её семейство одной ревизией.
 
 Удаление на Strata 0.2 использует официальный `strata_remove`: сначала
-`confirm=false`, затем `confirm=true` после подтверждения оператора. Backend не
-интерпретирует и не исполняет paths из removal plan. Для legacy 0.1 сохранён
-filesystem fallback только для curated layout с containment/symlink checks.
-Selected/downloading/orphan/unsupported записи удалять нельзя.
+`confirm=false`, затем `confirm=true` после подтверждения оператора. В Docker MCP
+получает явные `root=/data/install` (run configs) и `src=/opt/strata/terminal`;
+его default root указывал бы на исходники и не находил установленные модели.
+Backend не интерпретирует и не исполняет paths из removal plan. Для legacy 0.1
+сохранён filesystem fallback только для curated layout с containment/symlink checks.
+Selected/downloading/orphan/unsupported записи удалять нельзя: для удаления selected
+модели сначала загрузите другую скачанную.
 
 API: `POST /api/local-models/strata/catalog/refresh` (admin); 409 — параллельный
 refresh, 422 — невалидный каталог, 502 — локальный source недоступен.

@@ -31,7 +31,6 @@ import {
   strataInstall,
   strataInstallServer,
   strataLoad,
-  strataLoadPlan,
   strataRefreshCatalog,
   strataRetryApply,
   strataRuntime,
@@ -44,7 +43,6 @@ import {
 } from "@/lib/models/api";
 import type {
   StrataAccess,
-  StrataLoadPlan,
   StrataPhase,
   StrataQuant,
   StrataRamMode,
@@ -907,7 +905,6 @@ function StrataModels({
   const [filter, setFilter] = useState<"all" | "installed" | "available">(
     "all",
   );
-  const [loadPlan, setLoadPlan] = useState<StrataLoadPlan | null>(null);
   const installer = st.installer;
   const downloading =
     installer?.stage === "downloading" ? installer.variant : null;
@@ -928,23 +925,13 @@ function StrataModels({
     }
   };
 
-  const openLoad = async (q: StrataQuant) => {
-    try {
-      setLoadPlan(await strataLoadPlan(q.id));
-    } catch (e) {
-      toast.error("Не удалось подготовить смену модели", errText(e));
-    }
-  };
-
-  const load = async () => {
-    if (!loadPlan) return;
+  const load = async (q: StrataQuant) => {
     setBusy(true);
     try {
-      const r = await strataLoad(loadPlan.id);
+      const r = await strataLoad(q.id);
       onStatus(r.status);
-      setLoadPlan(null);
       toast.ok(
-        `Выбрана ${loadPlan.id}`,
+        `Выбрана ${q.id}`,
         (r.restarted
           ? r.setup_pass
             ? "Strata перенастраивается и загружает её (несколько минут)"
@@ -1060,10 +1047,10 @@ function StrataModels({
             <button
               type="button"
               className={btnSecondary}
-              disabled={busy || !!loadPlan || tooOld}
+              disabled={busy || tooOld}
               title={q.load_blocker ?? undefined}
               aria-label={`Загрузить ${q.id}`}
-              onClick={() => void openLoad(q)}
+              onClick={() => void load(q)}
             >
               Загрузить
             </button>
@@ -1192,63 +1179,6 @@ function StrataModels({
           >
             Закрыть
           </button>
-        </div>
-      )}
-
-      {loadPlan && (
-        <div className="rounded border border-blue-800 bg-blue-950/30 p-3 space-y-2 text-xs text-slate-300">
-          <div className="text-sm text-slate-100">
-            {running ? "Выгрузить" : "Вместо"} {st.desired.id}{" "}
-            {running ? "и загрузить" : "выбрать"} {loadPlan.id}
-          </div>
-          <ul className="list-disc pl-5 space-y-0.5">
-            <li>
-              Контекст {ctxLabel(loadPlan.context)}
-              {loadPlan.vision ? ", с картинками" : ", без картинок"} — как
-              модель была установлена.
-            </li>
-            {running && (
-              <li>
-                Strata перезапустится:{" "}
-                {loadPlan.setup_pass
-                  ? "сначала перенастройка под запас ОЗУ (несколько минут), потом "
-                  : ""}
-                загрузка 1–3 минуты, запросы в это время ждут.
-              </li>
-            )}
-            {loadPlan.follow.length > 0 && (
-              <li>
-                Перейдут на {loadPlan.catalog_key}:{" "}
-                {loadPlan.follow.map((f) => f.label).join(", ")}
-              </li>
-            )}
-            {loadPlan.blockers.map((blocker) => (
-              <li key={blocker} className="text-red-300">
-                {blocker}
-              </li>
-            ))}
-            {loadPlan.warnings.map((w) => (
-              <li key={w} className="text-amber-300">
-                {w}
-              </li>
-            ))}
-          </ul>
-          <div className="flex flex-wrap gap-2">
-            <button
-              className={btnPrimary}
-              disabled={busy || loadPlan.blockers.length > 0}
-              onClick={() => void load()}
-            >
-              {busy ? "Загружаю…" : "Да, загрузить"}
-            </button>
-            <button
-              className={btnSecondary}
-              disabled={busy}
-              onClick={() => setLoadPlan(null)}
-            >
-              Отмена
-            </button>
-          </div>
         </div>
       )}
 

@@ -267,31 +267,45 @@ fi
 # (keys it does not own; hand-added args as "user_args").
 "$PY" - "$cfg" <<'PY'
 import json, pathlib, sys
-cfg = pathlib.Path(sys.argv[1])
-rt = pathlib.Path("/data/aiw-runtime.json")
-if cfg.exists() and rt.exists():
-    body = json.loads(rt.read_text())
-    keys = body.get("config_keys") or {}
-    flags = body.get("config_args") or {}
-    c = json.loads(cfg.read_text())
-    for k, v in keys.items():
-        if v is None:
-            c.pop(k, None)
-        else:
-            c[k] = v
-    argv = list(c.get("args") or [])
-    for flag, v in flags.items():
-        if flag in argv:
-            i = argv.index(flag)
-            del argv[i:i + 2]
-        if v is not None:
-            argv += [flag, v]
-    if "args" in c or argv:
-        c["args"] = argv
-    cfg.write_text(json.dumps(c, indent=1))
-    print(f"[aiw] runtime settings applied to {cfg.name}: {sorted(keys) + sorted(flags)}")
+for cfg in (pathlib.Path(sys.argv[1]), pathlib.Path("/data/state/strata/launch/docker.json")):
+    rt = pathlib.Path("/data/aiw-runtime.json")
+    if cfg.exists() and rt.exists():
+        body = json.loads(rt.read_text())
+        keys = body.get("config_keys") or {}
+        flags = body.get("config_args") or {}
+        c = json.loads(cfg.read_text())
+        for k, v in keys.items():
+            if v is None:
+                c.pop(k, None)
+            else:
+                c[k] = v
+        for field in ("args", "user_args"):
+            argv = list(c.get(field) or [])
+            for flag, v in flags.items():
+                while flag in argv:
+                    i = argv.index(flag)
+                    del argv[i:i + 2]
+                # Managed values belong in args only: launch merges user_args
+                # back into args, so storing a value in both duplicates the flag.
+                if v is not None and field == "args":
+                    argv += [flag, v]
+            # The launch state keeps old options in user_args and merges them
+            # back into args. Clean both or a removed flag returns on next start.
+            if field == "user_args" and not argv:
+                c.pop(field, None)
+            elif field in c or argv:
+                c[field] = argv
+        cfg.write_text(json.dumps(c, indent=1))
+        print(f"[aiw] runtime settings applied to {cfg.name}: {sorted(keys) + sorted(flags)}")
 PY
 unset LOW_RAM RESIDENT_BUDGET_GIB REINSTALL HOST INSTALL_ONLY AIW_ENV_FILE
+# The 0.2 serve layer auto-adds Flash-Next conversation-cache flags when its
+# binary probe finds their names. Shape engines reject those flags; Hy4 also
+# accepts only one request, so its config must not grow cache slots via parallel.
+case "$FAMILY" in
+  hy4-flash|inkling-2-mini) export STRATA_NO_AUTO_CONVERSATION_CACHE=1 ;;
+  *) unset STRATA_NO_AUTO_CONVERSATION_CACHE ;;
+esac
 exec /opt/strata/entrypoint.sh run
 """
 

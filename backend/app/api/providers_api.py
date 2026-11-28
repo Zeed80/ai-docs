@@ -2615,7 +2615,23 @@ def _loaded_node_for(cap: ModelCapability, index: dict[tuple[str, str], str]) ->
     if cap.provider not in _LOCAL_KINDS:
         return None
     pv = cap.provider.value
-    return index.get((pv, cap.provider_model)) or index.get((pv, cap.provider_model.split(":")[0]))
+    direct = index.get((pv, cap.provider_model)) or index.get(
+        (pv, cap.provider_model.split(":")[0])
+    )
+    if direct or cap.provider != ProviderKind.STRATA:
+        return direct
+    # Strata accepts the family alias in requests but reports the concrete
+    # variant in /v1/models (for example inkling-2-mini-ud-q4_k_xl). Only a
+    # hyphen-bounded prefix is an alias; unrelated families must not match.
+    prefix = f"{cap.provider_model.rstrip('-')}-"
+    return next(
+        (
+            node
+            for (provider, name), node in index.items()
+            if provider == pv and name.startswith(prefix)
+        ),
+        None,
+    )
 
 
 def _verification_warning(

@@ -10,7 +10,7 @@
 import pytest
 
 from app.ai.schemas import Modality, ModelCapability, ModelStatus, ProviderKind
-from app.api.providers_api import _model_eligibility
+from app.api.providers_api import _loaded_node_for, _model_eligibility
 
 
 def _cap(**kw) -> ModelCapability:
@@ -30,6 +30,17 @@ def test_a_loaded_local_model_that_fits_is_simply_ok():
     verdict, reasons = _model_eligibility("ocr_fast", _cap(), is_loaded=True, slot_local_only=True)
     assert verdict == "ok"
     assert reasons == []
+
+
+def test_strata_variant_id_matches_its_family_alias():
+    cap = _cap(provider=ProviderKind.STRATA, provider_model="inkling-2-mini")
+    index = {("strata", "inkling-2-mini-ud-q4_k_xl"): "strata (default)"}
+
+    assert _loaded_node_for(cap, index) == "strata (default)"
+    assert (
+        _loaded_node_for(_cap(provider=ProviderKind.STRATA, provider_model="inkling-2-min"), index)
+        is None
+    )
 
 
 def test_cloud_model_on_a_confidential_slot_is_forbidden_with_a_fix():
