@@ -33,6 +33,23 @@ def test_side_download_reads_its_own_env_file():
     assert '. "$envfile"' in script
 
 
+def test_shape_launch_disables_generic_parallel_and_auto_conversation_cache(data):
+    runtime = strata_manager.read_runtime()
+    runtime["parallel"] = 2
+    runtime["conversation_cache_mib"] = 4096
+
+    assert strata_manager.parallel_choices("hy4-flash-SQ-64") == (1,)
+    assert strata_manager._config_keys(runtime, "hy4-flash-SQ-64")["parallel"] is None
+    assert strata_manager._config_args(runtime, "hy4-flash-SQ-64") == {
+        "--conversation-cache-mib": None,
+        "--conversation-cache-slots": None,
+    }
+    assert strata_manager.parallel_choices("inkling-2-mini-SQ-20") == (1, 4, 8, 32, 64)
+    assert "hy4-flash|inkling-2-mini) export STRATA_NO_AUTO_CONVERSATION_CACHE=1" in (
+        strata_lifecycle.ENTRYPOINT_SCRIPT
+    )
+
+
 # ── RAM reserve → expert placement ──────────────────────────────────────────
 
 
@@ -98,6 +115,24 @@ def test_new_families_use_their_own_resource_rules(data):
 
     assert strata_manager.disk_need_gb("nvfp4-NVFP4") == 129.0
     assert strata_manager.disk_need_gb("nvfp4-NVFP4-QAD") == 213.2
+
+
+def test_shape_download_size_only_counts_the_selected_variant(data):
+    family = data / "Strata-data" / "models" / "hy4-flash"
+
+    def sized(name: str, size: int) -> None:
+        path = family / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("wb") as stream:
+            stream.truncate(size)
+
+    sized("Hy4-Flash-SQ-64.strata.part", 1_100_000_000)
+    sized("nested/hy4-flash-sq-64-vision.bin", 1_200_000_000)
+    sized("Hy4-Flash-SQ-96.strata.part", 4_800_000_000)
+    sized("shared-engram.bin", 9_700_000_000)
+
+    assert strata_manager._size_on_disk_gb("hy4-flash-SQ-64") == 2.3
+    assert strata_manager._shape_variant_size_gb("hy4-flash-SQ-96") == 4.8
 
 
 def test_reserve_reaches_setup_through_the_env_file(data):
@@ -758,3 +793,41 @@ def test_update_builds_when_the_release_has_only_a_package(monkeypatch):
     monkeypatch.setattr(strata_lifecycle, "start_build", build)
     asyncio.run(strata_lifecycle.start_update())
     assert seen["version"] == "0.2.6" and seen["method"] == "build"
+
+
+def test_install_rejection_is_logged_with_model_and_reason(monkeypatch):
+    from fastapi import HTTPException
+
+    from app.api import strata_api
+
+    async def reject(*args, **kwargs):
+        raise strata_manager.StrataError("Docker отклонил запуск installer")
+
+    events = []
+    monkeypatch.setattr(strata_manager, "install_strata", reject)
+    monkeypatch.setattr(
+        strata_api.logger,
+        "warning",
+        lambda event, **kwargs: events.append((event, kwargs)),
+    )
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(
+            strata_api.strata_install(
+                strata_api.InstallIn(id="unsloth-UD-IQ2_XS", context=65536, vision=True)
+            )
+        )
+
+    assert error.value.status_code == 409
+    assert error.value.detail == "Docker отклонил запуск installer"
+    assert events == [
+        (
+            "strata_install_rejected",
+            {
+                "requested_model": "unsloth-UD-IQ2_XS",
+                "context": 65536,
+                "vision": True,
+                "error": "Docker отклонил запуск installer",
+            },
+        )
+    ]

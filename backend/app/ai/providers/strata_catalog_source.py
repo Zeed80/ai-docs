@@ -299,10 +299,11 @@ async def load_official_catalog() -> StrataSourceResult:
 
 def _remove_code(setup_id: str, *, confirm: bool) -> str:
     # Values come only from the validated local catalog, never directly from HTTP/upstream.
+    # Docker keeps run configs in /data/install; the MCP default root is the source tree.
     return (
         "import json; from tools.strata_mcp import Strata, Tools; "
-        f"print(json.dumps(Tools(Strata()).strata_remove(model={setup_id!r}, "
-        f"confirm={confirm!r}), ensure_ascii=False, default=str))"
+        "print(json.dumps(Tools(Strata(root='/data/install', src='/opt/strata/terminal'))"
+        f".strata_remove(model={setup_id!r}, confirm={confirm!r}), ensure_ascii=False, default=str))"
     )
 
 

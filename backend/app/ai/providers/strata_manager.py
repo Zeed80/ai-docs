@@ -181,6 +181,8 @@ def context_choices(vid: str) -> tuple[int, ...]:
 
 
 def parallel_choices(vid: str) -> tuple[int, ...]:
+    if _runtime_profile(vid) == "hy4_shape":
+        return (1,)
     if _runtime_profile(vid) == "inkling_shape":
         return INKLING_PARALLEL_CHOICES
     return PARALLEL_CHOICES
@@ -708,15 +710,23 @@ def merge_run_config(cfg: dict, keys: dict, args: dict) -> dict:
             new.pop(key, None)
         else:
             new[key] = value
-    argv = list(new.get("args") or [])
-    for flag, value in args.items():
-        if flag in argv:
-            i = argv.index(flag)
-            del argv[i : i + 2]
-        if value is not None:
-            argv += [flag, value]
-    if "args" in new or argv:
-        new["args"] = argv
+    for field in ("args", "user_args"):
+        argv = list(new.get(field) or [])
+        for flag, value in args.items():
+            while flag in argv:
+                i = argv.index(flag)
+                del argv[i : i + 2]
+            # Managed values belong in args only: launch merges user_args back
+            # into args, so storing a value in both would duplicate the flag.
+            if value is not None and field == "args":
+                argv += [flag, value]
+        # Launch moves unknown/generated flags to user_args and merges them back
+        # on every start. Removing a flag only from args therefore does not
+        # disable it: shape engines kept receiving the generic cache options.
+        if field == "user_args" and not argv:
+            new.pop(field, None)
+        elif field in new or argv:
+            new[field] = argv
     return new
 
 
@@ -848,8 +858,31 @@ def _dir_size_gb(path: Path) -> float | None:
     return round(total / 1e9, 1)
 
 
+def _shape_variant_size_gb(model: str) -> float | None:
+    """Variant-owned files in the shared family directory used by shape engines."""
+    meta = QUANTS[model]
+    directory = models_dir() / meta["family"]
+    if not directory.is_dir():
+        return None
+    marker = meta["model"].lower()
+    total = 0
+    for root, _dirs, files in os.walk(directory):
+        for name in files:
+            # Shared Engram/vision files are not attributed to one variant.
+            if marker not in name.lower():
+                continue
+            try:
+                total += os.path.getsize(os.path.join(root, name))
+            except OSError:
+                pass
+    return round(total / 1e9, 1)
+
+
 def _size_on_disk_gb(model: str) -> float | None:
-    parts = [_dir_size_gb(_model_dir(model)), _dir_size_gb(_pack_dir(model))]
+    if _runtime_profile(model) in SHAPE_RUNTIME_PROFILES:
+        parts = [_shape_variant_size_gb(model), _dir_size_gb(_pack_dir(model))]
+    else:
+        parts = [_dir_size_gb(_model_dir(model)), _dir_size_gb(_pack_dir(model))]
     found = [p for p in parts if p is not None]
     return round(sum(found), 1) if found else None
 
@@ -1529,6 +1562,12 @@ async def install_strata(
         )
     context = context or desired["context"]
     vision = desired["vision"] if vision is None else vision
+    choices = context_choices(vid)
+    if context not in choices:
+        # The panel edits the selected model's context. A side download of
+        # another family must clamp it to that family's nearest lower choice
+        # instead of failing after the official install preflight.
+        context = max((choice for choice in choices if choice <= context), default=choices[0])
     rec = recommended_context(vid)
     if rec and context > rec:
         # The panel offers the loaded model's context (Flash-Next: up to 256K);

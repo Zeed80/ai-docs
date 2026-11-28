@@ -684,7 +684,17 @@ def test_inkling_parallel_and_shape_engine_cache_policy(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_even_bundled_variant_gets_official_install_preflight(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("vid", "requested_context", "expected_context"),
+    [
+        ("IQ2_XS", 262144, 262144),
+        ("qwen36-UD-Q4_K_XL", 262144, 65536),
+        ("hy4-flash-SQ-64", 262144, 131072),
+    ],
+)
+async def test_even_bundled_variant_gets_official_install_preflight(
+    tmp_path, monkeypatch, vid, requested_context, expected_context
+):
     monkeypatch.setenv("STRATA_DATA_DIR", str(tmp_path))
     calls = []
 
@@ -711,13 +721,18 @@ async def test_even_bundled_variant_gets_official_install_preflight(tmp_path, mo
     monkeypatch.setattr("app.ai.providers.strata_catalog_source.validate_install_plan", preflight)
     monkeypatch.setattr(strata_lifecycle, "run_installer", run_installer)
 
-    assert await strata_manager.install_strata("IQ2_XS") == "IQ2_XS"
-    assert calls == ["IQ2_XS", "run:IQ2_XS"]
+    assert await strata_manager.install_strata(vid, context=requested_context) == vid
+    assert calls == [vid, f"run:{vid}"]
+    assert (
+        f"CONTEXT={expected_context}"
+        in (tmp_path / strata_manager.INSTALL_ENV_FILE_NAME).read_text()
+    )
 
 
 def test_merge_run_config_sets_replaces_and_removes_flags():
     cfg = {
         "args": ["--pack", "/p", "--conversation-cache-mib", "2048", "--kv", "int8"],
+        "user_args": ["--conversation-cache-mib", "2048"],
         "port": 8080,
     }
     merged = strata_manager.merge_run_config(
@@ -730,6 +745,7 @@ def test_merge_run_config_sets_replaces_and_removes_flags():
         "--pack", "/p", "--kv", "int8",
         "--conversation-cache-mib", "6144", "--conversation-cache-slots", "4",
     ]  # fmt: skip
+    assert "user_args" not in merged
     off = strata_manager.merge_run_config(
         merged,
         {"parallel": None},
@@ -737,7 +753,16 @@ def test_merge_run_config_sets_replaces_and_removes_flags():
     )
     assert "parallel" not in off
     assert off["args"] == ["--pack", "/p", "--kv", "int8"]
+    assert "user_args" not in off
     assert cfg["args"][2] == "--conversation-cache-mib"  # the input is not mutated
+    assert cfg["user_args"] == ["--conversation-cache-mib", "2048"]
+
+    manual = strata_manager.merge_run_config(
+        {"user_args": ["--custom", "x", "--conversation-cache-mib", "2048"]},
+        {},
+        {"--conversation-cache-mib": None},
+    )
+    assert manual["user_args"] == ["--custom", "x"]
 
 
 def test_container_merge_matches_the_backend(tmp_path, monkeypatch):
@@ -755,8 +780,21 @@ def test_container_merge_matches_the_backend(tmp_path, monkeypatch):
     monkeypatch.setenv("STRATA_DATA_DIR", str(tmp_path))
     (tmp_path / "install").mkdir()
     cfg_path = tmp_path / "install" / "strata-iq2_xs.json"
-    cfg = {"args": ["--pack", "/p", "--conversation-cache-mib", "2048"], "idle_unload_s": 60}
+    cfg = {
+        "args": ["--pack", "/p", "--conversation-cache-mib", "2048"],
+        "user_args": ["--conversation-cache-mib", "2048"],
+        "idle_unload_s": 60,
+    }
     cfg_path.write_text(json.dumps(cfg))
+    launch_path = tmp_path / "state" / "strata" / "launch" / "docker.json"
+    launch_path.parent.mkdir(parents=True)
+    launch_cfg = {
+        "args": ["--conversation-cache-mib", "4096", "--conversation-cache-slots", "4"],
+        "user_args": ["--conversation-cache-mib", "4096", "--conversation-cache-slots", "4"],
+        "parallel": 2,
+        "port": 8080,
+    }
+    launch_path.write_text(json.dumps(launch_cfg))
     strata_manager._save_runtime(strata_manager.read_runtime())
     runtime = json.loads((tmp_path / "aiw-runtime.json").read_text())
 
@@ -764,6 +802,12 @@ def test_container_merge_matches_the_backend(tmp_path, monkeypatch):
     container = json.loads(cfg_path.read_text())
     backend = strata_manager.merge_run_config(cfg, runtime["config_keys"], runtime["config_args"])
     assert container == backend
+    launch_container = json.loads(launch_path.read_text())
+    launch_backend = strata_manager.merge_run_config(
+        launch_cfg, runtime["config_keys"], runtime["config_args"]
+    )
+    assert launch_container == launch_backend
+    assert launch_container["port"] == 8080
 
 
 # ── Reload after the idle unload (live 2026-10-07: 86 s vs a 45 s router) ────
